@@ -1,0 +1,55 @@
+{
+  "name": "pi-remote",
+  "version": "0.1.0",
+  "description": "Run pi coding agent headlessly from your messenger (Matrix, Telegram, WhatsApp, Slack, Discord). Slash commands, skills and prompts fully supported via the RPC protocol.",
+  "type": "module",
+  "main": "dist/standalone.js",
+  "bin": {
+    "pi-remote": "dist/standalone.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "clean": "rm -rf dist",
+    "start": "node dist/standalone.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --fix src/"
+  },
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "messenger",
+    "bridge",
+    "matrix",
+    "telegram",
+    "rpc",
+    "remote",
+    "chat",
+    "bot"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.83.0",
+    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "@slack/bolt": "^4.6.0",
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "discord.js": "^14.25.1",
+    "matrix-bot-sdk": "^0.8.0",
+    "node-telegram-bot-api": "^0.67.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.14",
+    "@types/node": "^25.6.2",
+    "@types/node-telegram-bot-api": "^0.64.14",
+    "@types/qrcode-terminal": "^0.12.2",
+    "fast-check": "^4.5.3",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  }
+}
