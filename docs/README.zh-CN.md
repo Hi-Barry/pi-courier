@@ -19,23 +19,40 @@ Messenger <── 回复 <────────────── <── age
 - 🔄 `/reload` 重启 pi 进程:装新插件、改配置后一条命令生效,会话无损
 - ⚙️ 自带 pi:pi 作为项目依赖内置,RPC 客户端与子进程版本永远一致
 
+## 环境要求
+
+- Node.js **>= 20**(检查:`node --version`)
+- 无需全局安装 pi
+
 ## 快速开始
 
 ```bash
-# 1. 获取代码(或 git clone 你的仓库)
-npm install        # 不要加 --ignore-scripts(Matrix E2EE 原生库需要 postinstall)
+# 1. 获取代码
+git clone https://github.com/Hi-Barry/pi-remote.git
+cd pi-remote
+
+# 2. 安装依赖并构建(不要加 --ignore-scripts)
+npm install
 npm run build
 
-# 2. 配置 pi 的模型 provider(见 docs/DEPLOYMENT.md §3.3)
-#    ~/.pi/agent/models.json  模型元数据
-#    ~/.pi/agent/auth.json    API key
-#    ~/.pi/agent/settings.json 默认 provider 与模型
+# 3. 配置 pi 的模型 provider —— 详见 docs/DEPLOYMENT.md §3.3
+#    ~/.pi/agent/models.json    模型元数据(推荐从 models.dev 提取)
+#    ~/.pi/agent/auth.json      API key
+#    ~/.pi/agent/settings.json  defaultProvider / defaultModel
 
-# 3. 配置 messenger(见 docs/DEPLOYMENT.md §3.4)
-#    ~/.pi/msg-bridge.json    Matrix homeserver + access token 等
+# 4. 配置 messenger —— 详见 docs/DEPLOYMENT.md §3.4
+#    ~/.pi/msg-bridge.json      Matrix homeserver + access token 等
 
-# 4. 启动
-node dist/standalone.js --workdir /path/to/project [--session-dir /path] [--debug]
+# 5. 启动(--workdir 是 pi 的工作目录,必填)
+node dist/standalone.js --workdir /path/to/project [--debug]
+```
+
+启动成功标志:
+
+```
+✅ Matrix connected as @bot:你的homeserver (2 rooms, E2EE enabled)
+✅ pi RPC connected (model: deepseek-v4-flash, session: 019f...)
+🚀 msg-bridge standalone ready. Waiting for messages...
 ```
 
 ## 升级 pi(零代码改动)
@@ -78,7 +95,7 @@ sudo systemctl restart pi-msg-bridge
 
 ```bash
 sudo cp deploy/pi-msg-bridge.service /etc/systemd/system/
-# 按需修改 User / WorkingDirectory / Environment
+sudo systemctl edit --full pi-msg-bridge   # 修改 User / WorkingDirectory / NVM_DIR
 sudo systemctl daemon-reload
 sudo systemctl enable --now pi-msg-bridge
 ```
@@ -90,7 +107,7 @@ sudo systemctl enable --now pi-msg-bridge
 - **Element 客户端**:`/` 开头的消息会被客户端当作命令拦截,要发送字面文本用 `//` 转义(如 `//compact` 会发送 `/compact`)
 - **E2EE 房间**:建议在 Element 中验证一次 bot 设备;不验证也能收发新消息,但历史消息无法解密
 - **群聊**:需先 `/enable <roomId> all` 启用;DM 无需配置
-- **代理环境**:设置 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量(systemd 的 Environment 或 EnvironmentFile)
+- **代理环境**:设置 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量(systemd 用 EnvironmentFile)
 
 ## 故障排查
 
@@ -98,13 +115,13 @@ sudo systemctl enable --now pi-msg-bridge
 |---|---|---|
 | 日志大量 `Decryption error` | 历史消息重放,无密钥 | 正常,不影响新消息 |
 | `model: unknown` | provider 未配置 | 检查 `~/.pi/agent/{models,auth,settings}.json` |
+| 启动报原生库找不到 | E2EE 库未下载 | 见 docs/DEPLOYMENT.md §3.2 手动下载 |
 | `pi RPC did not become ready` | pi 启动失败 | 手动跑 `pi --mode rpc` 看报错 |
-| `Cannot locate the pi CLI` | 本地依赖缺失 | `npm install` 或设 `PI_CLI_PATH` |
 | `no transports configured` | bridge 未配置 | 检查 `~/.pi/msg-bridge.json` 或 `PI_*` 环境变量 |
 
 ## 完整文档
 
-- [docs/DEPLOYMENT.md](DEPLOYMENT.md) — 详细部署与使用指南
+- [docs/DEPLOYMENT.md](DEPLOYMENT.md) — 详细部署与使用指南(含真实配置示例)
 - 上游 messenger bridge 项目:[tintinweb/pi-messenger-bridge](https://github.com/tintinweb/pi-messenger-bridge)
 
 ## License
