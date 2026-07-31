@@ -250,7 +250,33 @@ node dist/standalone.js --workdir /path/to/project [--session-dir /path/to/sessi
 
 ## 4. systemd 部署(开机自启)
 
-1. 复制模板并按你的环境修改**三处必改项**:
+### 方式一:用户级 systemd(推荐,无需 sudo)
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/pi-msg-bridge.user.service ~/.config/systemd/user/pi-msg-bridge.service
+systemctl --user daemon-reload
+systemctl --user enable --now pi-msg-bridge
+```
+
+按需修改 `~/.config/systemd/user/pi-msg-bridge.service` 中的 `WorkingDirectory`(项目目录)
+和 `ExecStart` 的 `--workdir`(pi 的工作目录)。
+
+彻底无人值守(注销后继续运行),执行一次:
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+常用命令:
+
+```bash
+systemctl --user status pi-msg-bridge          # 状态
+journalctl --user -u pi-msg-bridge -f          # 实时日志
+systemctl --user restart pi-msg-bridge         # 重启(会话持久,无损)
+```
+
+### 方式二:系统级 systemd(需要 sudo)
 
 ```bash
 sudo cp deploy/pi-msg-bridge.service /etc/systemd/system/
@@ -271,14 +297,12 @@ Restart=on-failure
 RestartSec=5
 ```
 
-2. 启用并启动:
-
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now pi-msg-bridge
 ```
 
-3. 常用命令:
+常用命令:
 
 ```bash
 sudo systemctl status pi-msg-bridge       # 状态

@@ -1,0 +1,37 @@
+# User-level systemd unit — no sudo required.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/pi-msg-bridge.user.service ~/.config/systemd/user/pi-msg-bridge.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now pi-msg-bridge
+#
+# To keep running after you log out (fully headless):
+#   sudo loginctl enable-linger $USER
+#
+# Logs: journalctl --user -u pi-msg-bridge -f
+
+[Unit]
+Description=pi-remote (messengers -> pi RPC)
+# The bridge spawns `pi --mode rpc` itself as a child process, so only this
+# one unit is needed. pi sessions persist to disk and are resumed on restart.
+After=default.target
+
+[Service]
+Type=simple
+# WorkingDirectory is where the agent works (bash tool, project context).
+# Change to your project dir.
+WorkingDirectory=%h/Projects/pi-remote
+Environment=NVM_DIR=%h/.nvm
+# Optional: PI_MATRIX_HOMESERVER / PI_MATRIX_ACCESS_TOKEN etc. can live here
+# instead of ~/.pi/msg-bridge.json
+EnvironmentFile=-%h/.config/pi-bridge.env
+ExecStart=/bin/bash -lc 'source "$NVM_DIR/nvm.sh" && exec node dist/standalone.js --workdir %h/Projects'
+Restart=on-failure
+RestartSec=5
+# Basic hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

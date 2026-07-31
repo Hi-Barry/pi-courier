@@ -99,14 +99,20 @@ sudo systemctl restart pi-msg-bridge
 
 ## systemd 部署(开机自启)
 
+**用户级(推荐,无需 sudo):**
+
 ```bash
-sudo cp deploy/pi-msg-bridge.service /etc/systemd/system/
-sudo systemctl edit --full pi-msg-bridge   # 修改 User / WorkingDirectory / NVM_DIR
-sudo systemctl daemon-reload
-sudo systemctl enable --now pi-msg-bridge
+mkdir -p ~/.config/systemd/user
+cp deploy/pi-msg-bridge.user.service ~/.config/systemd/user/pi-msg-bridge.service
+systemctl --user daemon-reload
+systemctl --user enable --now pi-msg-bridge
 ```
 
-常用命令:`sudo systemctl status pi-msg-bridge`、`sudo journalctl -u pi-msg-bridge -f`、`sudo systemctl restart pi-msg-bridge`。
+常用命令:`systemctl --user status pi-msg-bridge`、`journalctl --user -u pi-msg-bridge -f`、`systemctl --user restart pi-msg-bridge`。
+
+注销后继续运行(无人值守)需执行一次:`sudo loginctl enable-linger $USER`。
+
+**系统级(需要 sudo):** `sudo cp deploy/pi-msg-bridge.service /etc/systemd/system/` 后按注释修改三处必改项,再 `sudo systemctl enable --now pi-msg-bridge`。
 
 ## 使用提示
 
