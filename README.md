@@ -11,16 +11,16 @@ Messenger <── replies <─────────────────�
 
 ## Why a standalone project
 
-- **Bundles pi as a dependency** — `@earendil-works/pi-coding-agent` is a regular dependency, so the RPC client and the spawned pi process are always the same version. Upgrading pi is a one-line dependency bump, **no code changes**:
+- **pi is installed independently** — `pi` (>= 0.83) lives on the system, upgraded on its own (`npm i -g @earendil-works/pi-coding-agent@latest`). This project is a companion app that connects to it over RPC — **no code changes when pi upgrades**:
 
   ```bash
-  npm update @earendil-works/pi-coding-agent @earendil-works/pi-ai
-  npm run build
+  npm install -g @earendil-works/pi-coding-agent@latest
   sudo systemctl restart pi-msg-bridge
   ```
 
 - **No TUI required** — pi runs headless (`--mode rpc`); the terminal is optional.
 - **Session persistence** — pi sessions live on disk and resume across restarts, so `/reload` (restarting the pi process after installing extensions) is lossless.
+- **First-run setup wizard** — `node dist/standalone.js --setup` interactively configures Matrix credentials and trusted users.
 
 ## Quick start
 

@@ -57,18 +57,8 @@ export class PiRpc {
     // 1. Explicit env override
     if (process.env.PI_CLI_PATH) return process.env.PI_CLI_PATH;
 
-    // 2. Bundled pi from local node_modules (same version as the RpcClient).
-    //    The package exports block subpath resolution, so resolve the entry
-    //    and derive dist/cli.js from its directory.
-    try {
-      const entryUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
-      const entry = fileURLToPath(entryUrl);
-      return path.join(path.dirname(entry), "cli.js");
-    } catch {
-      // fall through
-    }
-
-    // 3. `which pi` — resolve symlink to the real dist/cli.js
+    // 2. System-installed pi (`which pi`, resolve symlink to dist/cli.js).
+    //    Preferred: pi is installed independently and upgraded on its own.
     try {
       const bin = execFileSync("which", ["pi"], { encoding: "utf-8" }).trim();
       if (bin) {
@@ -78,8 +68,19 @@ export class PiRpc {
       // fall through
     }
 
+    // 3. Local node_modules copy (dev setup / peer auto-install). The package
+    //    exports block subpath resolution, so resolve the entry and derive
+    //    dist/cli.js from its directory.
+    try {
+      const entryUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
+      const entry = fileURLToPath(entryUrl);
+      return path.join(path.dirname(entry), "cli.js");
+    } catch {
+      // fall through
+    }
+
     throw new Error(
-      "Cannot locate the pi CLI. Install @earendil-works/pi-coding-agent or set PI_CLI_PATH."
+      "Cannot locate the pi CLI. Install @earendil-works/pi-coding-agent globally (npm i -g @earendil-works/pi-coding-agent) or set PI_CLI_PATH."
     );
   }
 

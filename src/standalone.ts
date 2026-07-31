@@ -29,9 +29,10 @@ function parseArgs(argv: string[]): {
   workdir?: string;
   cliPath?: string;
   sessionDir?: string;
+  setup: boolean;
   debug: boolean;
 } {
-  const out = { debug: false };
+  const out = { setup: false, debug: false };
   const result = out as typeof out & { workdir?: string; cliPath?: string; sessionDir?: string };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -45,6 +46,10 @@ function parseArgs(argv: string[]): {
         break;
       case "--session-dir":
         result.sessionDir = next();
+        break;
+      case "--setup":
+      case "--configure":
+        result.setup = true;
         break;
       case "--debug":
         result.debug = true;
@@ -62,6 +67,13 @@ function log(...args: unknown[]): void {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  // First-run setup wizard (interactive; writes ~/.pi/msg-bridge.json)
+  if (args.setup) {
+    const { runSetup } = await import("./setup.js");
+    await runSetup();
+    return;
+  }
 
   // Single-instance guard (same lock file as the extension mode)
   if (!acquireLock()) {

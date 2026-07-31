@@ -39,9 +39,18 @@
 |---|---|---|
 | Node.js | **>= 20**(实测 24.x) | `node --version` |
 | npm | 随 Node.js | `npm --version` |
+| pi | **>= 0.83,全局安装**(项目不内置) | `pi --version` |
 | 网络 | 能访问 homeserver 与 LLM provider 端点 | — |
 
-> 使用 nvm 的注意:每次新终端先 `source ~/.nvm/nvm.sh`(或按你的 nvm 初始化方式)。
+**先装 pi**(bridge 是 pi 的伴侣程序,通过 RPC 协议连接系统安装的 pi):
+
+```bash
+npm install -g @earendil-works/pi-coding-agent
+pi --version
+```
+
+> 使用 nvm 的注意:每次新终端先 `source ~/.nvm/nvm.sh`(或按你的 nvm 初始化方式),
+> 并确认 `pi` 在 PATH 中(`which pi`)。
 
 ---
 
@@ -72,6 +81,9 @@ cd ../..
 ```
 
 构建成功标志:出现 `dist/standalone.js`。
+
+> bridge 通过 `which pi` 定位系统安装的 pi;也可用 `PI_CLI_PATH` 环境变量显式指定。
+> pi 由系统独立管理、独立升级,bridge 不重复打包。
 
 ### 3.3 配置 pi 的 LLM provider
 
@@ -165,17 +177,16 @@ await c.stop();
 
 ### 3.4 配置 messenger(Matrix 为例)
 
-**a) 获取 bot 账号的 access token**(POST 登录,或 Element 设置 → 帮助与关于 → 高级):
+**方式一(推荐):首次运行配置向导**
 
 ```bash
-curl -s -X POST "https://你的homeserver/_matrix/client/v3/login" \
-  -H "Content-Type: application/json" \
-  -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"bot账号"},"password":"bot密码"}'
+node dist/standalone.js --setup
 ```
 
-返回 JSON 中的 `access_token` 即为 token(形如 `syt_...`)。
+按提示依次输入:平台 → homeserver URL → token(用户名密码登录或粘贴已有 token)→
+信任用户 MXID → 是否启用 E2EE。向导会验证 token 并自动写入 `~/.pi/msg-bridge.json`。
 
-**b) 写 bridge 配置 `~/.pi/msg-bridge.json`**(权限 600):
+**方式二:手动编辑 `~/.pi/msg-bridge.json`**(权限 600):
 
 ```json
 {
@@ -193,6 +204,16 @@ curl -s -X POST "https://你的homeserver/_matrix/client/v3/login" \
 }
 ```
 
+- `accessToken` 获取:POST 登录或 Element 设置页:
+
+  ```bash
+  curl -s -X POST "https://你的homeserver/_matrix/client/v3/login" \
+    -H "Content-Type: application/json" \
+    -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"bot账号"},"password":"bot密码"}'
+  ```
+
+  返回 JSON 中的 `access_token` 即为 token(形如 `syt_...`)。
+
 - `trustedUsers` / `adminUserId` 格式:`<transport>:<完整userId>`,Matrix 的 userId 是完整 MXID(如 `@barry:matrix.example.com`)
 - `encryption: true` 用于加密房间;普通房间保持 true 也可用
 - 环境变量替代:`PI_MATRIX_HOMESERVER` / `PI_MATRIX_ACCESS_TOKEN`(其他平台见 README)
@@ -209,7 +230,8 @@ node dist/standalone.js --workdir /path/to/project [--session-dir /path/to/sessi
 | 参数 | 说明 |
 |---|---|
 | `--workdir <dir>` | pi 的工作目录(必填,bash 工具、项目上下文都基于它) |
-| `--pi-cli <path>` | 指定 pi 的 cli.js(默认自动:本地 node_modules → `which pi` → `PI_CLI_PATH`) |
+| `--setup` | 首次运行配置向导(交互式生成 `~/.pi/msg-bridge.json`) |
+| `--pi-cli <path>` | 指定 pi 的 cli.js(默认自动:`which pi` → 本地 node_modules → `PI_CLI_PATH`) |
 | `--session-dir <dir>` | 会话目录(默认 `~/.pi/agent/sessions`) |
 | `--debug` | 详细日志 |
 
@@ -301,16 +323,18 @@ sudo systemctl restart pi-msg-bridge      # 重启(会话持久,无损)
 
 **透传:** 其他 `/` 开头的命令直接交给 pi(扩展命令、`/skill:名称`、提示词模板由 pi 展开);普通文本 = 正常对话。
 
-### 5.3 升级 pi(零代码改动)
+### 5.3 升级 pi(独立升级,零代码改动)
+
+pi 由系统独立管理,bridge 不打包 pi。升级 pi 只需全局更新,bridge 无需任何改动:
 
 ```bash
-cd pi-remote
-npm update @earendil-works/pi-coding-agent @earendil-works/pi-ai
-npm run build
+npm install -g @earendil-works/pi-coding-agent@latest
+pi --version
 sudo systemctl restart pi-msg-bridge
 ```
 
-- 小版本(`0.83.x`)自动跟上;大版本(如 `0.84`)改 `package.json` 中版本号后重复以上步骤
+- bridge 通过 `which pi` 始终连接系统最新版 pi
+- 大版本升级时,npm 的 peer 依赖检查会提示 bridge 是否兼容
 - 仅当 pi 的 RPC 协议破坏性变更时才需要改代码(协议为文档化稳定接口,从未破坏性变更)
 
 ---

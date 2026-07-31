@@ -17,12 +17,17 @@ Messenger <── 回复 <────────────── <── age
 - 🧩 技能与提示词模板透传:`/skill:名称`、`/模板名` 直接生效
 - 💾 会话持久化:pi 会话存磁盘,重启自动恢复
 - 🔄 `/reload` 重启 pi 进程:装新插件、改配置后一条命令生效,会话无损
-- ⚙️ 自带 pi:pi 作为项目依赖内置,RPC 客户端与子进程版本永远一致
+- 🔌 不打包 pi:作为 pi 的伴侣程序独立部署,通过 RPC 连接系统安装的 pi,pi 独立升级
 
 ## 环境要求
 
 - Node.js **>= 20**(检查:`node --version`)
-- 无需全局安装 pi
+- **pi >= 0.83 全局安装**(bridge 不打包 pi,通过 RPC 连接系统安装的 pi):
+
+  ```bash
+  npm install -g @earendil-works/pi-coding-agent
+  pi --version
+  ```
 
 ## 快速开始
 
@@ -40,8 +45,8 @@ npm run build
 #    ~/.pi/agent/auth.json      API key
 #    ~/.pi/agent/settings.json  defaultProvider / defaultModel
 
-# 4. 配置 messenger —— 详见 docs/DEPLOYMENT.md §3.4
-#    ~/.pi/msg-bridge.json      Matrix homeserver + access token 等
+# 4. 首次运行配置向导(Matrix 账号、信任用户等,交互式生成配置)
+node dist/standalone.js --setup
 
 # 5. 启动(--workdir 是 pi 的工作目录,必填)
 node dist/standalone.js --workdir /path/to/project [--debug]
@@ -57,14 +62,15 @@ node dist/standalone.js --workdir /path/to/project [--debug]
 
 ## 升级 pi(零代码改动)
 
+pi 由系统独立管理。升级只需全局更新,无需改 bridge 代码:
+
 ```bash
-npm update @earendil-works/pi-coding-agent @earendil-works/pi-ai
-npm run build
+npm install -g @earendil-works/pi-coding-agent@latest
+pi --version
 sudo systemctl restart pi-msg-bridge
 ```
 
-- 小版本(`0.83.x`)自动跟上;大版本改 `package.json` 中版本号即可
-- 客户端与子进程版本必然一致,不会协议不匹配
+- bridge 通过 `which pi` 始终连接系统最新版 pi
 - 仅当 pi 的 RPC 协议发生破坏性变更时才需要改代码(协议为文档化稳定接口)
 
 ## 命令一览(DM 中直接发送)
