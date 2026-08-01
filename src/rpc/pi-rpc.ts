@@ -87,6 +87,12 @@ export class PiRpc {
   async start(): Promise<void> {
     if (this.client) return;
 
+    // The workdir becomes the pi child process's cwd; spawn requires it to
+    // exist, so create it on demand.
+    if (this.options.cwd) {
+      fs.mkdirSync(this.options.cwd, { recursive: true });
+    }
+
     const cliPath = this.options.cliPath ?? (await PiRpc.resolveCliPath());
     const client = new RpcClient({
       cliPath,
