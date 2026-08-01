@@ -17,7 +17,7 @@
 - 💾 会话持久化:pi 会话存磁盘,重启自动恢复
 - 🔄 `/reload` 重启 pi 进程:装新插件、改配置后一条命令生效,会话无损
 - 🔌 不打包 pi:作为 pi 的伴侣程序独立部署,通过 RPC 连接系统安装的 pi,pi 独立升级
-- 🧭 首次运行配置向导:`--setup` 交互式配置 Matrix 账号与信任用户
+- 🧭 一条命令搞定: `pi-remote setup` 配置向导、`pi-remote enable` 开机自启、`pi-remote update` 自更新
 
 ## 架构
 
@@ -123,10 +123,10 @@ await c.stop();
 **方式一(推荐):首次运行配置向导**
 
 ```bash
-node dist/standalone.js --setup
+pi-remote setup
 ```
 
-按提示依次输入:平台 → homeserver URL → token(用户名密码登录或粘贴已有 token)→ 信任用户 MXID → 是否启用 E2EE。向导会验证 token 并自动写入 `~/.pi/msg-bridge.json`。
+按提示依次输入:平台 → homeserver URL → token(用户名密码登录或粘贴已有 token)→ 信任用户 MXID → 是否启用 E2EE → pi 工作目录。向导会验证 token 并自动写入 `~/.pi/msg-bridge.json`。
 
 **方式二:手动编辑 `~/.pi/msg-bridge.json`**(权限 600):
 
@@ -141,6 +141,7 @@ node dist/standalone.js --setup
     "trustedUsers": ["matrix:@你的账号:你的homeserver域名"],
     "adminUserId": "matrix:@你的账号:你的homeserver域名"
   },
+  "workdir": "/path/to/pi/workdir",
   "autoConnect": true,
   "debug": true
 }
@@ -148,6 +149,8 @@ node dist/standalone.js --setup
 
 - `accessToken` 获取:`POST /_matrix/client/v3/login`(密码登录)或 Element 设置页
 - `trustedUsers` / `adminUserId` 格式:`<transport>:<完整userId>`,Matrix 的 userId 是完整 MXID(如 `@barry:matrix.example.com`)
+- `workdir`:pi 的工作目录(不存在会自动创建);`pi-remote run --workdir <目录>` 可覆盖
+- `sessionDir` / `cliPath`:可选覆盖(默认:pi 的会话目录、`which pi` 定位 CLI)
 - `encryption: true` 用于加密房间;普通房间保持 true 也可用
 - 环境变量替代:`PI_MATRIX_HOMESERVER` / `PI_MATRIX_ACCESS_TOKEN`(其他平台:`PI_TELEGRAM_TOKEN`、`PI_SLACK_BOT_TOKEN`+`PI_SLACK_APP_TOKEN`、`PI_DISCORD_TOKEN`、`PI_WHATSAPP_AUTH_PATH`)
 
@@ -220,15 +223,12 @@ pi-remote enable       # 开机自启,以当前用户运行
 **用户级(推荐,无需 sudo):**
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp deploy/pi-msg-bridge.user.service ~/.config/systemd/user/pi-msg-bridge.service
-systemctl --user daemon-reload
-systemctl --user enable --now pi-msg-bridge
+pi-remote enable
 ```
 
-按需修改 `~/.config/systemd/user/pi-msg-bridge.service` 中的 `WorkingDirectory`(项目目录)和 `ExecStart` 的 `--workdir`(pi 的工作目录)。彻底无人值守(注销后继续运行)执行一次:`sudo loginctl enable-linger $USER`。
+一条命令搞定 —— 自动写入 `~/.config/systemd/user/pi-msg-bridge.service`(使用绝对 node 路径和配置的工作目录)、启用开机自启并立即启动。彻底无人值守(注销后继续运行)执行一次:`sudo loginctl enable-linger $USER`。
 
-常用命令:`systemctl --user status pi-msg-bridge`、`journalctl --user -u pi-msg-bridge -f`、`systemctl --user restart pi-msg-bridge`。
+常用命令:`pi-remote status`、`pi-remote logs`、`pi-remote stop`、`pi-remote start`(或 `systemctl --user restart pi-msg-bridge`)。
 
 **系统级(需要 sudo):** 复制 `deploy/pi-msg-bridge.service` 到 `/etc/systemd/system/`,按注释修改三处必改项(`User`、`WorkingDirectory`、`NVM_DIR`),再 `sudo systemctl enable --now pi-msg-bridge`。
 
@@ -239,7 +239,7 @@ pi 由系统独立管理,升级只需全局更新,bridge 无需任何改动:
 ```bash
 npm install -g @earendil-works/pi-coding-agent@latest
 pi --version
-systemctl --user restart pi-msg-bridge
+pi-remote stop && pi-remote start    # 或: systemctl --user restart pi-msg-bridge
 ```
 
 bridge 通过 `which pi` 始终连接系统最新版 pi。仅当 pi 的 RPC 协议发生破坏性变更时才需要改 bridge 代码(协议为文档化稳定接口,从未破坏性变更)。

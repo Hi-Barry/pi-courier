@@ -17,7 +17,7 @@ Unlike the classic extension mode, this project drives pi over the [RPC protocol
 - 💾 Session persistence: pi sessions live on disk, resume across restarts
 - 🔄 `/reload` restarts the pi process (after installing extensions/config) — lossless
 - 🔌 pi is **not bundled**: installed independently on the system, upgraded on its own
-- 🧭 First-run setup wizard: `--setup` interactively configures Matrix credentials & trusted users
+- 🧭 One-command CLI: `pi-remote setup` wizard, `pi-remote enable` auto-start, `pi-remote update` self-update
 
 ## Architecture
 
@@ -123,10 +123,10 @@ await c.stop();
 **Option A (recommended): setup wizard**
 
 ```bash
-node dist/standalone.js --setup
+pi-remote setup
 ```
 
-Follow the prompts: platform → homeserver URL → token (password login or paste an existing one) → trusted admin user MXID → E2EE toggle. The wizard verifies the token and writes `~/.pi/msg-bridge.json`.
+Follow the prompts: platform → homeserver URL → token (password login or paste an existing one) → trusted admin user MXID → E2EE toggle → pi workdir. The wizard verifies the token and writes `~/.pi/msg-bridge.json`.
 
 **Option B: manual `~/.pi/msg-bridge.json`** (chmod 600):
 
@@ -141,6 +141,7 @@ Follow the prompts: platform → homeserver URL → token (password login or pas
     "trustedUsers": ["matrix:@you:your-homeserver"],
     "adminUserId": "matrix:@you:your-homeserver"
   },
+  "workdir": "/path/to/pi/workdir",
   "autoConnect": true,
   "debug": true
 }
@@ -148,6 +149,8 @@ Follow the prompts: platform → homeserver URL → token (password login or pas
 
 - Get an access token: `POST /_matrix/client/v3/login` (password login) or from Element's settings page
 - `trustedUsers`/`adminUserId` format: `<transport>:<full userId>`, e.g. `matrix:@barry:matrix.example.com`
+- `workdir`: pi's working directory (spawned automatically if missing); `pi-remote run --workdir <dir>` overrides it
+- `sessionDir` / `cliPath`: optional overrides (defaults: pi's session dir, and `which pi` for the CLI)
 - `encryption: true` for encrypted rooms (works for plain rooms too)
 - Env var alternatives: `PI_MATRIX_HOMESERVER` / `PI_MATRIX_ACCESS_TOKEN` (other platforms: `PI_TELEGRAM_TOKEN`, `PI_SLACK_BOT_TOKEN`+`PI_SLACK_APP_TOKEN`, `PI_DISCORD_TOKEN`, `PI_WHATSAPP_AUTH_PATH`)
 
@@ -220,15 +223,12 @@ Users pre-listed in `msg-bridge.json` → `auth.trustedUsers` skip this step.
 **User-level (recommended, no sudo):**
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp deploy/pi-msg-bridge.user.service ~/.config/systemd/user/pi-msg-bridge.service
-systemctl --user daemon-reload
-systemctl --user enable --now pi-msg-bridge
+pi-remote enable
 ```
 
-Adjust `WorkingDirectory` (project dir) and the `--workdir` in `ExecStart` as needed. For fully headless operation (keep running after logout), run once: `sudo loginctl enable-linger $USER`.
+That's it — it writes a systemd unit to `~/.config/systemd/user/pi-msg-bridge.service` (using the absolute node path and your configured workdir), enables auto-start and starts the service. For fully headless operation (keep running after logout), run once: `sudo loginctl enable-linger $USER`.
 
-Commands: `systemctl --user status pi-msg-bridge`, `journalctl --user -u pi-msg-bridge -f`, `systemctl --user restart pi-msg-bridge`.
+Commands: `pi-remote status`, `pi-remote logs`, `pi-remote stop`, `pi-remote start` (or `systemctl --user restart pi-msg-bridge`).
 
 **System-level (needs sudo):** copy `deploy/pi-msg-bridge.service` to `/etc/systemd/system/`, adjust the three marked values (`User`, `WorkingDirectory`, `NVM_DIR`), then `sudo systemctl enable --now pi-msg-bridge`.
 
@@ -239,7 +239,7 @@ pi is managed independently on the system — upgrade it, no bridge code changes
 ```bash
 npm install -g @earendil-works/pi-coding-agent@latest
 pi --version
-systemctl --user restart pi-msg-bridge
+pi-remote stop && pi-remote start    # or: systemctl --user restart pi-msg-bridge
 ```
 
 pi-remote always connects to the system pi via `which pi`. Only a breaking change to pi's RPC protocol would require bridge code changes (the protocol is a documented stable interface and has never broken).
