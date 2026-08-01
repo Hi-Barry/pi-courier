@@ -176,17 +176,32 @@ function cmdService(action: "start" | "stop" | "status" | "logs"): void {
 
 function cmdUpdate(): void {
   const projDir = projectDir();
-  console.log("🔄 更新 pi-remote …");
-  for (const [cmd, args] of [
-    ["git", ["pull"]],
-    ["npm", ["install"]],
-    ["npm", ["run", "build"]],
-  ] as const) {
-    console.log(`\n$ ${cmd} ${args.join(" ")}`);
-    const res = spawnSync(cmd, args, { cwd: projDir, stdio: "inherit" });
+  const installedViaNpm = !fs.existsSync(path.join(projDir, ".git"));
+
+  if (installedViaNpm) {
+    // Installed with `npm install -g @hi-barry/pi-remote` → upgrade via npm.
+    console.log("🔄 通过 npm 升级 @hi-barry/pi-remote …");
+    const res = spawnSync("npm", ["install", "-g", "@hi-barry/pi-remote@latest"], {
+      stdio: "inherit",
+    });
     if (res.status !== 0) {
-      console.error(`❌ ${cmd} 失败(退出码 ${res.status})`);
+      console.error(`❌ npm 升级失败(退出码 ${res.status})`);
       process.exit(res.status ?? 1);
+    }
+  } else {
+    // Installed from a git clone → pull + install + build.
+    console.log("🔄 更新 pi-remote(git)…");
+    for (const [cmd, args] of [
+      ["git", ["pull"]],
+      ["npm", ["install"]],
+      ["npm", ["run", "build"]],
+    ] as const) {
+      console.log(`\n$ ${cmd} ${args.join(" ")}`);
+      const res = spawnSync(cmd, args, { cwd: projDir, stdio: "inherit" });
+      if (res.status !== 0) {
+        console.error(`❌ ${cmd} 失败(退出码 ${res.status})`);
+        process.exit(res.status ?? 1);
+      }
     }
   }
 

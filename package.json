@@ -1,5 +1,5 @@
 {
-  "name": "pi-remote",
+  "name": "@hi-barry/pi-remote",
   "version": "0.1.0",
   "description": "Run pi coding agent headlessly from your messenger (Matrix, Telegram, WhatsApp, Slack, Discord). Slash commands, skills and prompts fully supported via the RPC protocol.",
   "type": "module",
@@ -7,8 +7,15 @@
   "bin": {
     "pi-remote": "dist/cli.js"
   },
+  "files": [
+    "dist/",
+    "deploy/",
+    "README.md",
+    "README.zh-CN.md"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
     "watch": "tsc --watch",
     "clean": "rm -rf dist",
     "start": "node dist/standalone.js",
@@ -32,6 +39,13 @@
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hi-Barry/pi-remote.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@slack/bolt": "^4.6.0",
