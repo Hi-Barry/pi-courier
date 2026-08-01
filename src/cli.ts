@@ -179,9 +179,9 @@ function cmdUpdate(): void {
   const installedViaNpm = !fs.existsSync(path.join(projDir, ".git"));
 
   if (installedViaNpm) {
-    // Installed with `npm install -g @hi-barry/pi-remote` → upgrade via npm.
-    console.log("🔄 通过 npm 升级 @hi-barry/pi-remote …");
-    const res = spawnSync("npm", ["install", "-g", "@hi-barry/pi-remote@latest"], {
+    // Installed with `npm install -g @barryfan2045/pi-remote` → upgrade via npm.
+    console.log("🔄 通过 npm 升级 @barryfan2045/pi-remote …");
+    const res = spawnSync("npm", ["install", "-g", "@barryfan2045/pi-remote@latest"], {
       stdio: "inherit",
     });
     if (res.status !== 0) {
