@@ -139,7 +139,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
 
   // ---- pi RPC -------------------------------------------------------------
-  const rpcArgs: string[] = [];
+  // --continue: resume the most recent session on restart (same as `pi -c`),
+  // so bridge/service restarts and /reload keep the conversation context.
+  const rpcArgs: string[] = ["--continue"];
   if (sessionDir) {
     rpcArgs.push("--session-dir", sessionDir);
   }
