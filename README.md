@@ -53,6 +53,7 @@ pi --version
 git clone https://github.com/Hi-Barry/pi-remote.git
 cd pi-remote
 npm install
+npm link          # make the `pi-remote` command available globally
 npm run build
 ```
 
@@ -152,17 +153,27 @@ Follow the prompts: platform → homeserver URL → token (password login or pas
 
 ## Usage
 
-```bash
-node dist/standalone.js --workdir /path/to/project [--session-dir /path] [--debug]
+Everything goes through a single command:
+
+```
+pi-remote setup      first-run configuration wizard (Matrix account, trusted user, workdir)
+pi-remote run        run in the foreground (workdir from config; --workdir overrides)
+pi-remote enable     install a user-level systemd service (auto-start) and start it
+pi-remote start      start the service
+pi-remote stop       stop the service
+pi-remote status     show service status + recent logs
+pi-remote logs       tail the service logs
+pi-remote update     update this project (git pull + npm install + build)
 ```
 
-| Option | Description |
-|---|---|
-| `--workdir <dir>` | pi's working directory (required; bash tool & project context) |
-| `--setup` | First-run configuration wizard |
-| `--pi-cli <path>` | Explicit pi cli.js (default: `which pi` → local node_modules → `PI_CLI_PATH`) |
-| `--session-dir <dir>` | Session directory (default `~/.pi/agent/sessions`) |
-| `--debug` | Verbose logging |
+Typical first deployment:
+
+```bash
+pi-remote setup        # answer the prompts (or edit ~/.pi/msg-bridge.json manually)
+pi-remote enable       # auto-start on boot, running as your user
+```
+
+For a quick foreground test: `pi-remote run` (Ctrl+C to stop). The old `node dist/standalone.js --workdir ...` form still works if you prefer it.
 
 Startup success looks like:
 

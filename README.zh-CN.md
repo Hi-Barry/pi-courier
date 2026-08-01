@@ -53,6 +53,7 @@ pi --version
 git clone https://github.com/Hi-Barry/pi-remote.git
 cd pi-remote
 npm install
+npm link          # 把 `pi-remote` 命令全局化,之后任何目录都能用
 npm run build
 ```
 
@@ -152,17 +153,27 @@ node dist/standalone.js --setup
 
 ## 使用
 
-```bash
-node dist/standalone.js --workdir /path/to/project [--session-dir /path] [--debug]
+全部操作走一个命令:
+
+```
+pi-remote setup      首次运行配置向导(Matrix 账号、信任用户、工作目录)
+pi-remote run        前台运行(工作目录从配置读,--workdir 可覆盖)
+pi-remote enable     安装用户级 systemd 服务并开机自启、立即启动
+pi-remote start      启动服务
+pi-remote stop       停止服务
+pi-remote status     查看服务状态与最近日志
+pi-remote logs       跟踪服务日志(Ctrl+C 退出)
+pi-remote update     更新本项目(git pull + 安装依赖 + 重新构建)
 ```
 
-| 参数 | 说明 |
-|---|---|
-| `--workdir <dir>` | pi 的工作目录(必填,bash 工具、项目上下文都基于它) |
-| `--setup` | 首次运行配置向导(交互式生成 `~/.pi/msg-bridge.json`) |
-| `--pi-cli <path>` | 指定 pi 的 cli.js(默认自动:`which pi` → 本地 node_modules → `PI_CLI_PATH`) |
-| `--session-dir <dir>` | 会话目录(默认 `~/.pi/agent/sessions`) |
-| `--debug` | 详细日志 |
+典型首次部署:
+
+```bash
+pi-remote setup        # 按提示配置(或手动编辑 ~/.pi/msg-bridge.json)
+pi-remote enable       # 开机自启,以当前用户运行
+```
+
+前台快速测试:`pi-remote run`(Ctrl+C 停止)。旧的 `node dist/standalone.js --workdir ...` 方式仍然可用。
 
 **启动成功的标志日志:**
 

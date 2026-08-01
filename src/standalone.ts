@@ -10,6 +10,7 @@
  *   Messenger <── replies <────────── bridge <── agent events (stdout JSONL)
  */
 
+import { fileURLToPath, pathToFileURL } from "node:url";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -25,34 +26,39 @@ import { SlackProvider } from "./transports/slack.js";
 import { TelegramProvider } from "./transports/telegram.js";
 import { WhatsAppProvider } from "./transports/whatsapp.js";
 
-function parseArgs(argv: string[]): {
-  workdir?: string;
-  cliPath?: string;
-  sessionDir?: string;
-  setup: boolean;
-  debug: boolean;
-} {
-  const out = { setup: false, debug: false };
-  const result = out as typeof out & { workdir?: string; cliPath?: string; sessionDir?: string };
+// Suppress the known `util._extend` deprecation warning emitted by some
+// transport dependencies at load time — it pollutes interactive output.
+{
+  const orig = process.emitWarning;
+  process.emitWarning = ((warning: unknown, ...rest: unknown[]): void => {
+    const msg = typeof warning === "string" ? warning : (warning as Error | undefined)?.message ?? "";
+    if (msg.includes("util._extend")) return;
+    (orig as (...args: unknown[]) => void).call(process, warning, ...rest);
+  }) as typeof process.emitWarning;
+}
+
+function parseArgs(argv: string[]): { workdir?: string } {
+  const result: { workdir?: string } = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    const next = (): string | undefined => argv[++i];
     switch (arg) {
       case "--workdir":
-        result.workdir = next();
-        break;
-      case "--pi-cli":
-        result.cliPath = next();
-        break;
-      case "--session-dir":
-        result.sessionDir = next();
+        result.workdir = argv[++i];
         break;
       case "--setup":
       case "--configure":
-        result.setup = true;
+        console.warn("⚠️  旧参数已废弃,请用 `pi-remote setup`");
+        break;
+      case "--pi-cli":
+        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/msg-bridge.json 配置 cliPath,或设 PI_CLI_PATH");
+        i++;
+        break;
+      case "--session-dir":
+        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/msg-bridge.json 配置 sessionDir");
+        i++;
         break;
       case "--debug":
-        result.debug = true;
+        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/msg-bridge.json 配置 debug: true");
         break;
       default:
         console.warn(`[bridge] ignoring unknown argument: ${arg}`);
@@ -65,15 +71,8 @@ function log(...args: unknown[]): void {
   console.log(`[${new Date().toISOString()}]`, ...args);
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-
-  // First-run setup wizard (interactive; writes ~/.pi/msg-bridge.json)
-  if (args.setup) {
-    const { runSetup } = await import("./setup.js");
-    await runSetup();
-    return;
-  }
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const args = parseArgs(argv);
 
   // Single-instance guard (same lock file as the extension mode)
   if (!acquireLock()) {
@@ -82,7 +81,10 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig();
-  const debug = args.debug || config.debug === true;
+  const debug = config.debug === true;
+  const workdir = args.workdir ?? config.workdir;
+  const sessionDir = config.sessionDir;
+  const cliPath = config.cliPath;
 
   const auth = new ChallengeAuth(
     (code, username) => log(`🔐 Challenge code for @${username}: ${code}`),
@@ -138,12 +140,12 @@ async function main(): Promise<void> {
 
   // ---- pi RPC -------------------------------------------------------------
   const rpcArgs: string[] = [];
-  if (args.sessionDir) {
-    rpcArgs.push("--session-dir", args.sessionDir);
+  if (sessionDir) {
+    rpcArgs.push("--session-dir", sessionDir);
   }
   const rpc = new PiRpc({
-    cliPath: args.cliPath,
-    cwd: args.workdir,
+    cliPath,
+    cwd: workdir,
     args: rpcArgs,
   });
 
@@ -221,8 +223,11 @@ async function main(): Promise<void> {
   log("🚀 msg-bridge standalone ready. Waiting for messages...");
 }
 
-main().catch((err) => {
-  console.error("[bridge] fatal:", err);
-  releaseLock();
-  process.exit(1);
-});
+// Direct execution: `node dist/standalone.js [--workdir ...]`
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error("[bridge] fatal:", err);
+    releaseLock();
+    process.exit(1);
+  });
+}

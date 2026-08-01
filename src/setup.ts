@@ -7,6 +7,7 @@
  * admin user → E2EE toggle, then writes ~/.pi/msg-bridge.json.
  */
 
+import * as os from "node:os";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline";
 import { saveConfig } from "./config.js";
@@ -147,12 +148,16 @@ export async function runSetup(): Promise<void> {
 
     const encryption = (await ask("启用 E2EE 加密? [y/N]: ")).trim().toLowerCase() === "y";
 
+    const workdirDefault = `${os.homedir()}/Projects`;
+    const workdir = (await ask(`pi 工作目录 [默认 ${workdirDefault}]: `)).trim() || workdirDefault;
+
     saveConfig({
       matrix: { homeserverUrl: homeserver, accessToken, encryption },
       auth: {
         trustedUsers: [`matrix:${adminRaw}`],
         adminUserId: `matrix:${adminRaw}`,
       },
+      workdir,
       autoConnect: true,
       debug: true,
     });
@@ -161,7 +166,8 @@ export async function runSetup(): Promise<void> {
     console.log(`   账号: ${botUserId}`);
     console.log(`   信任用户: ${adminRaw}`);
     console.log(`   E2EE: ${encryption ? "开启" : "关闭"}`);
-    console.log("\n现在可以启动: node dist/standalone.js --workdir /path/to/project");
+    console.log(`   工作目录: ${workdir}`);
+    console.log("\n下一步: pi-remote enable(开机自启)或 pi-remote run(前台运行)");
   } catch (err) {
     console.error(`\n❌ 配置失败: ${(err as Error).message}`);
     process.exitCode = 1;

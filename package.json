@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/standalone.js",
   "bin": {
-    "pi-remote": "dist/standalone.js"
+    "pi-remote": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
