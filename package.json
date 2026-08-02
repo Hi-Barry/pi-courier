@@ -1,6 +1,6 @@
 {
   "name": "@barryfan2045/pi-remote",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Run pi coding agent headlessly from your messenger (Matrix, Telegram, WhatsApp, Slack, Discord). Slash commands, skills and prompts fully supported via the RPC protocol.",
   "type": "module",
   "main": "dist/standalone.js",
