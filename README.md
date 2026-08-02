@@ -164,6 +164,7 @@ pi-remote run        run in the foreground (workdir from config; --workdir overr
 pi-remote enable     install a user-level systemd service (auto-start) and start it
 pi-remote start      start the service
 pi-remote stop       stop the service
+pi-remote restart    restart the service
 pi-remote status     show service status + recent logs
 pi-remote logs       tail the service logs
 pi-remote update     update this project (git pull + npm install + build)
@@ -239,7 +240,7 @@ pi is managed independently on the system — upgrade it, no bridge code changes
 ```bash
 npm install -g @earendil-works/pi-coding-agent@latest
 pi --version
-pi-remote stop && pi-remote start    # or: systemctl --user restart pi-msg-bridge
+pi-remote restart    # or: systemctl --user restart pi-msg-bridge
 ```
 
 pi-remote always connects to the system pi via `which pi`. Only a breaking change to pi's RPC protocol would require bridge code changes (the protocol is a documented stable interface and has never broken).

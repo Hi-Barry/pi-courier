@@ -49,9 +49,10 @@ function usage(): void {
   pi-remote setup     首次运行配置向导(Matrix 账号、信任用户、工作目录)
   pi-remote run       前台运行(--workdir 可覆盖配置里的工作目录)
   pi-remote enable    安装用户级 systemd 服务并开机自启、立即启动
-  pi-remote start     启动服务
-  pi-remote stop      停止服务
-  pi-remote status    查看服务状态与最近日志
+  pi-remote start      启动服务
+  pi-remote stop       停止服务
+  pi-remote restart    重启服务
+  pi-remote status     查看服务状态与最近日志
   pi-remote logs      跟踪服务日志(Ctrl+C 退出)
   pi-remote update    更新本项目(git pull + 安装依赖 + 重新构建)
 
@@ -157,7 +158,7 @@ function runSystemctl(args: string[]): void {
   }
 }
 
-function cmdService(action: "start" | "stop" | "status" | "logs"): void {
+function cmdService(action: "start" | "stop" | "restart" | "status" | "logs"): void {
   const unitPath = userUnitPath();
   if (!fs.existsSync(unitPath)) {
     console.error(`❌ 服务未安装。先运行 \`pi-remote enable\` 安装。`);
@@ -242,6 +243,7 @@ async function main(): Promise<void> {
       break;
     case "start":
     case "stop":
+    case "restart":
     case "status":
     case "logs":
       cmdService(cmd);

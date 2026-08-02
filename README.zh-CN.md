@@ -164,6 +164,7 @@ pi-remote run        前台运行(工作目录从配置读,--workdir 可覆盖)
 pi-remote enable     安装用户级 systemd 服务并开机自启、立即启动
 pi-remote start      启动服务
 pi-remote stop       停止服务
+pi-remote restart    重启服务
 pi-remote status     查看服务状态与最近日志
 pi-remote logs       跟踪服务日志(Ctrl+C 退出)
 pi-remote update     更新本项目(git pull + 安装依赖 + 重新构建)
@@ -239,7 +240,7 @@ pi 由系统独立管理,升级只需全局更新,bridge 无需任何改动:
 ```bash
 npm install -g @earendil-works/pi-coding-agent@latest
 pi --version
-pi-remote stop && pi-remote start    # 或: systemctl --user restart pi-msg-bridge
+pi-remote restart    # 或: systemctl --user restart pi-msg-bridge
 ```
 
 bridge 通过 `which pi` 始终连接系统最新版 pi。仅当 pi 的 RPC 协议发生破坏性变更时才需要改 bridge 代码(协议为文档化稳定接口,从未破坏性变更)。
