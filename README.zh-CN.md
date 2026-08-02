@@ -354,6 +354,8 @@ npm run test         # 单元测试(vitest)
 npm run lint         # biome lint
 ```
 
+完整的开发历程 —— 调研、设计决策、真实部署中踩过的每一个坑 —— 见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
+
 ## License
 
 MIT

@@ -354,6 +354,9 @@ npm run test         # unit tests (vitest)
 npm run lint         # biome lint
 ```
 
+The full development history — research, design decisions, every pitfall hit in
+real deployments — is documented in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
 ## License
 
 MIT
