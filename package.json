@@ -10,6 +10,7 @@
   "files": [
     "dist/",
     "deploy/",
+    "extensions/",
     "README.md",
     "README.zh-CN.md"
   ],
@@ -25,6 +26,7 @@
     "lint:fix": "biome check --fix src/"
   },
   "keywords": [
+    "pi-package",
     "pi",
     "pi-coding-agent",
     "messenger",
@@ -36,6 +38,11 @@
     "chat",
     "bot"
   ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
