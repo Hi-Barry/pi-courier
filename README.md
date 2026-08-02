@@ -167,6 +167,7 @@ pi-remote stop       stop the service
 pi-remote restart    restart the service
 pi-remote status     show service status + recent logs
 pi-remote logs       tail the service logs
+pi-remote disable    uninstall the service (stop + remove autostart + delete unit file)
 pi-remote update     update this project (git pull + npm install + build)
 ```
 

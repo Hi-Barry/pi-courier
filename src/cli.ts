@@ -54,6 +54,7 @@ function usage(): void {
   pi-remote restart    重启服务
   pi-remote status     查看服务状态与最近日志
   pi-remote logs      跟踪服务日志(Ctrl+C 退出)
+  pi-remote disable   卸载服务(停止 + 取消自启 + 删除 unit 文件)
   pi-remote update    更新本项目(git pull + 安装依赖 + 重新构建)
 
 说明:pi 由系统独立安装与升级(npm i -g @earendil-works/pi-coding-agent),
@@ -181,6 +182,19 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs"): v
   }
 }
 
+function cmdDisable(): void {
+  const unitPath = userUnitPath();
+  if (!fs.existsSync(unitPath)) {
+    console.error("❌ 服务未安装(unit 文件不存在)。");
+    process.exit(1);
+  }
+  // Stop + remove from autostart, then delete the unit file (full uninstall).
+  runSystemctl(["disable", "--now", SERVICE_NAME]);
+  fs.rmSync(unitPath, { force: true });
+  runSystemctl(["daemon-reload"]);
+  console.log("✅ 服务已停止并卸载。以后要恢复:`pi-remote enable`(配置不受影响)。");
+}
+
 // ===========================================================================
 // update
 // ===========================================================================
@@ -247,6 +261,9 @@ async function main(): Promise<void> {
     case "status":
     case "logs":
       cmdService(cmd);
+      break;
+    case "disable":
+      cmdDisable();
       break;
     case "update":
       cmdUpdate();

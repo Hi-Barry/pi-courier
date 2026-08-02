@@ -167,6 +167,7 @@ pi-remote stop       停止服务
 pi-remote restart    重启服务
 pi-remote status     查看服务状态与最近日志
 pi-remote logs       跟踪服务日志(Ctrl+C 退出)
+pi-remote disable    卸载服务(停止 + 取消自启 + 删除 unit 文件)
 pi-remote update     更新本项目(git pull + 安装依赖 + 重新构建)
 ```
 
