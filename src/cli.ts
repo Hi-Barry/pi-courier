@@ -101,17 +101,22 @@ function userUnitPath(): string {
   return path.join(os.homedir(), ".config", "systemd", "user", SERVICE_UNIT);
 }
 
-function buildUnit(projectDir: string, workdir: string): string {
+function buildUnit(projDir: string, workdir: string): string {
   const nodeBin = process.execPath;
+  // The pi child process is spawned via PATH ("node" lookup), so the nvm bin
+  // dir must come first — otherwise systemd's default PATH finds a system
+  // node (e.g. v20) that pi's undici is incompatible with.
+  const nodeDir = path.dirname(nodeBin);
   return `[Unit]
 Description=pi-remote (messengers -> pi RPC)
 After=default.target
 
 [Service]
 Type=simple
-WorkingDirectory=${projectDir}
+WorkingDirectory=${projDir}
+Environment=PATH=${nodeDir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=-%h/.config/pi-bridge.env
-ExecStart=${nodeBin} ${projectDir}/dist/standalone.js --workdir ${workdir}
+ExecStart=${nodeBin} ${projDir}/dist/standalone.js --workdir ${workdir}
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -123,6 +128,11 @@ WantedBy=default.target
 }
 
 function cmdEnable(): void {
+  const major = Number(process.versions.node.split(".")[0]);
+  if (major < 21) {
+    console.warn(`⚠️  当前 Node 版本为 v${process.versions.node},pi 的 undici 需要 Node >= 21。建议用 nvm 安装 v24 后重新执行本命令。`);
+  }
+
   const config = loadConfig();
   const projDir = projectDir();
   const workdir = config.workdir ?? process.cwd();
