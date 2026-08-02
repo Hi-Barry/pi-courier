@@ -2,61 +2,61 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-通过 **Matrix** 远程操控 [pi coding agent](https://pi.dev),slash 命令、技能、提示词模板在聊天客户端里完整可用。
+通过 **Matrix** 远程使用 [pi coding agent](https://pi.dev)。在聊天里发消息,pi 回复 —— 而且 slash 命令、技能、提示词模板**全部可用**,和终端里一模一样。
 
-与传统的 pi 扩展模式不同,本项目通过 [RPC 协议](https://pi.dev/docs/latest/rpc)驱动 pi,因此 **messenger 里可以直接执行 slash 命令**(`/new`、`/compact`、`/model`、`/skill:name`、提示词模板、扩展命令)—— 这是扩展模式做不到的,因为 pi 的 `sendUserMessage()` 刻意跳过了命令解析。
+与 pi 经典的扩展模式不同,pi-courier 通过 [RPC 协议](https://pi.dev/docs/latest/rpc)驱动 pi,这是命令能在聊天里生效的原因:扩展模式做不到,因为 pi 的 `sendUserMessage()` 刻意跳过了命令解析。
 
-> **上游来源**:本项目改造自 [tintinweb/pi-messenger-bridge](https://github.com/tintinweb/pi-messenger-bridge) —— Matrix 传输层与挑战码认证来自上游;基于 RPC 的独立架构、slash 命令映射、CLI 与配置向导为本项目新增。
+## 1. 是什么
 
-## 特性
-
-- 📱 Matrix 传输(支持 E2EE)、6 位验证码挑战认证
-- 🎛️ slash 命令全支持:`/new`、`/compact`、`/model`、`/thinking`、`/bash`、`/reload` 等
-- 🧩 技能与提示词模板透传:`/skill:名称`、`/模板名` 直接生效
-- 💾 会话持久化:pi 会话存磁盘,重启自动恢复
-- 🔄 `/reload` 重启 pi 进程:装新插件、改配置后一条命令生效,会话无损
-- 🔌 不打包 pi:作为 pi 的伴侣程序独立部署,通过 RPC 连接系统安装的 pi,pi 独立升级
-- 🧭 一条命令搞定: `pi-courier setup` 配置向导、`pi-courier enable` 开机自启、`pi-courier update` 自更新
-
-## 架构
+pi-courier 是一个把 Matrix 桥接到本机 pi 的轻量独立服务:
 
 ```
-Messenger ──> pi-courier (dist/standalone.js) ──> pi --mode rpc(系统安装)
-Messenger <── 回复 <────────────────────────── <── agent 事件流(stdout JSONL)
+Matrix bot ←→ pi-courier ←→ pi --mode rpc(系统安装)
 ```
 
-- pi-courier 负责 spawn 并管理 `pi --mode rpc` 子进程
-- 会话持久化到 `~/.pi/agent/sessions`,重启自动恢复
-- systemd 只需托管 pi-courier 一个服务
+- **你和 Matrix bot 账号对话**;消息通过 RPC 协议转发给 pi
+- **命令全支持**:`/new`、`/compact`、`/model`、`/thinking`、`/skill:名称`、提示词模板、扩展命令
+- **不捆绑 pi** —— pi 独立安装、独立升级
+- **会话持久化**到 `~/.pi/agent/sessions`,重启自动恢复
+- **一条命令的 CLI**:配置向导、systemd 开机自启、自动更新
 
-## 环境要求
+## 2. 怎么装
 
-| 组件 | 要求 | 检查命令 |
-|---|---|---|
-| Node.js | **>= 20**(实测 24.x) | `node --version` |
-| pi | **>= 0.83,全局安装**(项目不打包) | `pi --version` |
-| 网络 | 能访问 homeserver 与 LLM provider 端点 | — |
+### 前置条件
 
-**先装 pi**(bridge 是 pi 的伴侣程序,通过 RPC 协议连接系统安装的 pi):
+| 组件 | 要求 |
+|---|---|
+| Node.js | >= 20(实测 24.x) |
+| pi | >= 0.83,**全局安装** |
+
+先装 pi —— pi-courier 连接的是它:
 
 ```bash
 npm install -g @earendil-works/pi-coding-agent
 pi --version
 ```
 
-> 使用 nvm 的注意:每次新终端先 `source ~/.nvm/nvm.sh`(或按你的 nvm 初始化方式),并确认 `pi` 在 PATH 中(`which pi`)。
+用 nvm 的话,每个新终端先 `source ~/.nvm/nvm.sh`,确保 `pi` 和 `node` 在 PATH 里。
 
-## 安装
+### 方式 A:普通用户 —— 一条命令
+
+```bash
+npm install -g pi-courier
+```
+
+完事。验证:`pi-courier help`。
+
+### 方式 B:开发人员 —— 源码构建
 
 ```bash
 git clone https://github.com/Hi-Barry/pi-courier.git
 cd pi-courier
 npm install
-npm link          # 把 `pi-courier` 命令全局化,之后任何目录都能用
 npm run build
+npm link          # 让 `pi-courier` 命令全局可用
 ```
 
-**重要:不要加 `--ignore-scripts`**。Matrix 的 E2EE 加密库(`@matrix-org/matrix-sdk-crypto-nodejs`)的原生二进制由 postinstall 脚本下载。若你的 npm 配置了 allow-scripts 拦截导致安装后报 `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'`,手动补下载:
+**不要用 `--ignore-scripts`**:Matrix E2EE 库的 postinstall 会下载原生二进制。如果被 npm 拦截,报 `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'` 时手动补:
 
 ```bash
 cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs
@@ -64,299 +64,168 @@ node download-lib.js
 cd ../..
 ```
 
-构建成功标志:出现 `dist/standalone.js`。
+下载很慢(20-60 kB/s)?这个二进制来自 GitHub Releases,**不走 npm 代理** —— 先 `export https_proxy=... http_proxy=...` 再装。
 
-## 配置
+## 3. 怎么用
 
-### pi 的 LLM provider(`~/.pi/agent/`)
+### 第 0 步 —— 确认 pi 能对话(一次性)
 
-**a) models.json** — 模型元数据。推荐从 models.dev 提取(字段完整正确),以 opencode-go 为例:
+pi 需要在 `~/.pi/agent/` 里配好 LLM provider(`models.json`、`auth.json`、`settings.json`)。最快的检查方式:跑 `pi`,随便发条消息,能回复就行。不能回复就先配好(参考 pi 官方文档;注意 `settings.json` 的字段名是 `defaultProvider` / `defaultModel`)。
 
-```bash
-curl -s https://models.dev/api.json -o /tmp/modelsdev.json
-python3 -c "
-import json, os
-md = json.load(open('/tmp/modelsdev.json'))   # 顶层直接是 provider 字典
-out = {'providers': {'opencode-go': md['opencode-go']}}
-json.dump(out, open(os.path.expanduser('~/.pi/agent/models.json'), 'w'), indent=2)
-"
-```
-
-**b) auth.json** — API key(权限 600):
-
-```json
-{
-  "opencode-go": { "type": "api_key", "key": "sk-你的密钥" }
-}
-```
-
-**c) settings.json** — 默认 provider 与模型:
-
-```json
-{
-  "defaultProvider": "opencode-go",
-  "defaultModel": "deepseek-v4-flash"
-}
-```
-
-> 字段名是 `defaultProvider` / `defaultModel`(不是 `provider` / `model`)。
-
-验证配置(在 pi-courier 项目目录内执行):
-
-```bash
-node --input-type=module -e "
-import { RpcClient } from '@earendil-works/pi-coding-agent';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-const entry = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'));
-const c = new RpcClient({ cliPath: path.join(path.dirname(entry), 'cli.js') });
-await c.start();
-console.log('可用模型数:', (await c.getAvailableModels()).length);
-console.log('当前模型:', (await c.getState()).model?.id);
-await c.stop();
-"
-```
-
-### 配置 messenger(Matrix 为例)
-
-**方式一(推荐):首次运行配置向导**
+### 第 1 步 —— 运行配置向导
 
 ```bash
 pi-courier setup
 ```
 
-按提示依次输入:平台 → homeserver URL → token(用户名密码登录或粘贴已有 token)→ 信任用户 MXID → 是否启用 E2EE → pi 工作目录。向导会验证 token 并自动写入 `~/.pi/msg-bridge.json`。
+向导会逐步询问,照着输入(方括号里是默认值,直接回车接受):
 
-**方式二:手动编辑 `~/.pi/msg-bridge.json`**(权限 600):
+```
+=== pi-courier 首次配置向导 ===
+将生成 ~/.pi/msg-bridge.json(权限 600)
+
+Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https://matrix.example.com
+获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1):  ← 1 或 2(回车默认 1)
+  [方式 1] bot 用户名 (如 test2):                        ← bot 账号名,如 test3
+           bot 密码:                                     ← 密码(不回显)
+  [方式 2] 粘贴 access token (syt_...):                  ← 已有 token
+✅ 登录成功,账号: @test3:matrix.example.com
+信任用户(管理员)MXID [默认 @test3:matrix.example.com]:   ← 你的账号,如 @barry:matrix.example.com
+启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间选 y 也没问题)
+pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输入其他目录
+
+✅ 配置已写入 ~/.pi/msg-bridge.json
+   账号: @test3:...
+   信任用户: @barry:...
+   E2EE: 开启
+   工作目录: /home/你/Projects
+```
+
+向导会验证 token 并写入 `~/.pi/msg-bridge.json`。不想用向导的话,手动创建这个文件也行 —— 格式见[常见问题](#4-常见问题)。
+
+### 第 2 步 —— 启动
+
+```bash
+pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
+```
+
+想先快速前台测试:`pi-courier run`(Ctrl+C 停止)。
+
+启动成功长这样:
+
+```
+✅ Matrix connected as @test3:... (2 rooms, E2EE enabled)
+✅ pi RPC connected (model: deepseek-v4-flash, session: 019f...)
+🚀 msg-bridge standalone ready. Waiting for messages...
+```
+
+### 第 3 步 —— 在 Matrix 里使用
+
+1. **给 bot 账号发私聊消息**
+2. **仅首次**:bridge 日志里会打印**6 位验证码**(`pi-courier logs` 查看);把验证码回复给 bot,你就成为 trusted user(第一个 trusted 用户自动成为管理员)
+3. 正常对话,或发命令:
+
+| 命令 | 作用 |
+|---|---|
+| `/new` `/clear` | 新会话 |
+| `/compact [说明]` | 压缩上下文 |
+| `/model` / `/model <provider/id>` | 查看 / 切换模型 |
+| `/models` | 列出模型 |
+| `/thinking [级别]` | 查看 / 设置思考级别 |
+| `/session` `/cost` | 会话统计与费用 |
+| `/status` | 当前模型与状态 |
+| `/name <名字>` | 会话命名 |
+| `/export [路径]` | 导出会话 HTML |
+| `/bash <命令>` | 执行 shell 命令 |
+| `/abort` | 中止当前操作 |
+| `/reload` | 重启 pi(装完扩展/配置后) |
+| `/help` | 完整帮助 |
+
+**bridge 管理命令**:`/trusted`、`/revoke <userId>`、`/channels`、`/enable <chatId> <mode>`、`/disable <chatId>`、`/toggletools`
+
+**其他任何 `/` 开头的内容**都直接透传给 pi —— 扩展命令、`/skill:名称`、提示词模板由 pi 展开。普通文本就是正常对话。
+
+**群聊**:先给 bot 发 `/enable <roomId> all` 启用该房间。
+
+### 服务管理
+
+```bash
+pi-courier status     # 状态 + 最近日志
+pi-courier logs       # 跟踪日志
+pi-courier restart    # 重启
+pi-courier stop       # 停止
+pi-courier start      # 启动
+pi-courier disable    # 卸载服务
+pi-courier update     # 更新 pi-courier 自身
+```
+
+**升级 pi** 是独立的事 —— pi-courier 始终通过 `which pi` 连接系统 pi:
+
+```bash
+npm install -g @earendil-works/pi-coding-agent@latest
+pi-courier restart
+```
+
+## 4. 常见问题
+
+**Q: `npm install` 卡住 / 只有 20-60 kB/s?**
+A: 21MB 的 E2EE 原生库从 GitHub Releases 下载,不走 npm 代理。先 `export https_proxy=... http_proxy=...`(写进 `~/.bashrc` 永久生效)再装。
+
+**Q: 报 `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'`?**
+A: 原生二进制没下载(postinstall 被拦)。手动补:`cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs && node download-lib.js`。
+
+**Q: `npm install -g pi-courier` 报 EEXIST?**
+A: 之前 `npm link` 过,bin 冲突。`npm unlink -g pi-courier && rm -f $(npm prefix -g)/bin/pi-courier && npm install -g pi-courier`。
+
+**Q: systemd 服务反复重启?**
+A: 几乎都是 Node 版本不匹配 —— pi 子进程在系统 node v20 上崩溃(报 `webidl.util.markAsUncloneable is not a function`)。加载 nvm 后重新 `pi-courier enable`(0.1.2+ 会自动写入正确的 PATH)。全机统一一个 Node 版本。
+
+**Q: 启动显示 `model: unknown`?**
+A: pi 的 provider 没配。检查 `~/.pi/agent/`:`models.json` + `auth.json` + `settings.json`(字段名是 `defaultProvider` / `defaultModel`)。
+
+**Q: 日志大量 `Decryption error`?**
+A: 历史消息无法解密(新设备没有旧密钥)。**正常**,新消息不受影响。
+
+**Q: 加密房间:发消息没回复 / 新消息解不开?**
+A: bot 的新设备没拿到房间密钥。bot 账号没有交叉签名,最可靠的解法是**用非加密房间**(新建房间时不勾选加密,把 bot 拉进来)—— 配置 `encryption: true` 也照常处理非加密房间。
+
+**Q: 报 `M_BAD_JSON: Provided device_id in device_keys does not match...`?**
+A: 加密存储里是旧设备身份,而 token 属于新设备(重新登录过)。删除重启:`rm -rf ~/.pi/msg-bridge-matrix-crypto && pi-courier restart`。**每次重跑 setup / 换 token 都顺手删一次。**
+
+**Q: 第一次发消息要 6 位验证码?**
+A: 这是挑战认证 —— 把验证码回复给 bot 即成为 trusted user。
+
+**Q: 消息完全没有回复?**
+A: 按顺序排查:(1) `pi-courier status` —— Matrix 连上了吗?有 Decryption error 吗(加密房间)?(2) pi RPC 连上了吗?(3) 模型调用本身 —— 用 curl 直接测 provider 端点。
+
+**Q: `pi RPC did not become ready`?**
+A: pi 启动失败。手动跑 `node node_modules/@earendil-works/pi-coding-agent/dist/cli.js --mode rpc` 看真实报错。常见原因:Node 版本不匹配、provider 配置错误、无法访问 provider。
+
+**Q: 重启后对话上下文丢了?**
+A: 0.1.1 起 bridge 会给 pi 传 `--continue`,按 workdir 恢复最近会话。升级并重启即可;`/new` 开新会话,下次重启恢复新会话。
+
+**Q: Element(网页客户端)拦截 `/` 开头的消息?**
+A: 用 `//` 转义发送字面文本(如 `//compact` 会发出 `/compact`)。
+
+**Q: `~/.pi/msg-bridge.json` 里到底有什么?**
+A: 向导生成的配置,示例:
 
 ```json
 {
-  "matrix": {
-    "homeserverUrl": "https://你的homeserver",
-    "accessToken": "syt_你的token",
-    "encryption": true
-  },
-  "auth": {
-    "trustedUsers": ["matrix:@你的账号:你的homeserver域名"],
-    "adminUserId": "matrix:@你的账号:你的homeserver域名"
-  },
-  "workdir": "/path/to/pi/workdir",
+  "matrix": { "homeserverUrl": "https://matrix.example.com", "accessToken": "syt_...", "encryption": true },
+  "auth": { "trustedUsers": ["matrix:@你:matrix.example.com"], "adminUserId": "matrix:@你:matrix.example.com" },
+  "workdir": "/home/你/Projects",
   "autoConnect": true,
   "debug": true
 }
 ```
 
-- `accessToken` 获取:`POST /_matrix/client/v3/login`(密码登录)或 Element 设置页
-- `trustedUsers` / `adminUserId` 格式:`<transport>:<完整userId>`,Matrix 的 userId 是完整 MXID(如 `@barry:matrix.example.com`)
-- `workdir`:pi 的工作目录(不存在会自动创建);`pi-courier run --workdir <目录>` 可覆盖
-- `sessionDir` / `cliPath`:可选覆盖(默认:pi 的会话目录、`which pi` 定位 CLI)
-- `encryption: true` 用于加密房间;普通房间保持 true 也可用
-- 环境变量替代:`PI_MATRIX_HOMESERVER` / `PI_MATRIX_ACCESS_TOKEN`
+环境变量替代:`PI_MATRIX_HOMESERVER` / `PI_MATRIX_ACCESS_TOKEN`。
 
-## 使用
+## 5. 协议与声明
 
-全部操作走一个命令:
+MIT License —— 见 [LICENSE](LICENSE)。
 
-```
-pi-courier setup      首次运行配置向导(Matrix 账号、信任用户、工作目录)
-pi-courier run        前台运行(工作目录从配置读,--workdir 可覆盖)
-pi-courier enable     安装用户级 systemd 服务并开机自启、立即启动
-pi-courier start      启动服务
-pi-courier stop       停止服务
-pi-courier restart    重启服务
-pi-courier status     查看服务状态与最近日志
-pi-courier logs       跟踪服务日志(Ctrl+C 退出)
-pi-courier disable    卸载服务(停止 + 取消自启 + 删除 unit 文件)
-pi-courier update     更新本项目(git pull + 安装依赖 + 重新构建)
-```
+**上游来源**:本项目改造自 [tintinweb/pi-messenger-bridge](https://github.com/tintinweb/pi-messenger-bridge)(MIT)。Matrix 传输层与挑战码认证来自上游;基于 RPC 的独立架构、slash 命令映射、CLI、配置向导与文档为本项目新增。
 
-典型首次部署:
-
-```bash
-pi-courier setup        # 按提示配置(或手动编辑 ~/.pi/msg-bridge.json)
-pi-courier enable       # 开机自启,以当前用户运行
-```
-
-前台快速测试:`pi-courier run`(Ctrl+C 停止)。旧的 `node dist/standalone.js --workdir ...` 方式仍然可用。
-
-**启动成功的标志日志:**
-
-```
-✅ Matrix connected as @bot:你的homeserver (2 rooms, E2EE enabled)
-✅ pi RPC connected (model: deepseek-v4-flash, session: 019f...)
-🚀 msg-bridge standalone ready. Waiting for messages...
-```
-
-### 命令一览(DM 中直接发送)
-
-**Pi 命令(映射到 RPC):**
-
-| 命令 | 说明 |
-|---|---|
-| `/new` `/clear` | 新会话 |
-| `/compact [说明]` | 压缩上下文 |
-| `/model` / `/model <provider/id>` | 查看 / 切换模型 |
-| `/models` | 列出可用模型 |
-| `/thinking [level]` | 查看 / 设置思考级别 |
-| `/session` `/cost` | 会话统计与费用 |
-| `/status` | 当前模型与状态 |
-| `/name <名字>` | 会话命名 |
-| `/export [路径]` | 导出会话 HTML |
-| `/bash <命令>` | 执行 shell 命令(写入上下文) |
-| `/abort` | 中止当前操作 |
-| `/reload` | 重启 pi 进程(装插件 / 改配置后使用) |
-| `/help` | 完整帮助 |
-
-**Bridge 管理命令:** `/trusted`、`/revoke <userId>`、`/channels`、`/enable <chatId> <mode>`、`/disable <chatId>`、`/toggletools`
-
-**透传:** 其他 `/` 开头的命令直接交给 pi(扩展命令、`/skill:名称`、提示词模板由 pi 展开);普通文本 = 正常对话。
-
-### 首次使用:认证
-
-1. 你的账号给 bot 账号发第一条 DM
-2. bridge 终端(或 `journalctl --user -u pi-msg-bridge -f`)会打印 6 位验证码
-3. 把验证码发回给 bot → 成为 trusted user(第一个 trusted 用户自动成为 admin)
-
-已在 `msg-bridge.json` 的 `auth.trustedUsers` 里预置的账号跳过此步骤。
-
-## systemd 部署(开机自启)
-
-**用户级(推荐,无需 sudo):**
-
-```bash
-pi-courier enable
-```
-
-一条命令搞定 —— 自动写入 `~/.config/systemd/user/pi-msg-bridge.service`(使用绝对 node 路径和配置的工作目录)、启用开机自启并立即启动。彻底无人值守(注销后继续运行)执行一次:`sudo loginctl enable-linger $USER`。
-
-常用命令:`pi-courier status`、`pi-courier logs`、`pi-courier stop`、`pi-courier start`(或 `systemctl --user restart pi-msg-bridge`)。
-
-**系统级(需要 sudo):** 复制 `deploy/pi-msg-bridge.service` 到 `/etc/systemd/system/`,按注释修改三处必改项(`User`、`WorkingDirectory`、`NVM_DIR`),再 `sudo systemctl enable --now pi-msg-bridge`。
-
-## 升级 pi
-
-pi 由系统独立管理,升级只需全局更新,bridge 无需任何改动:
-
-```bash
-npm install -g @earendil-works/pi-coding-agent@latest
-pi --version
-pi-courier restart    # 或: systemctl --user restart pi-msg-bridge
-```
-
-bridge 通过 `which pi` 始终连接系统最新版 pi。仅当 pi 的 RPC 协议发生破坏性变更时才需要改 bridge 代码(协议为文档化稳定接口,从未破坏性变更)。
-
-## FAQ(常见问题)
-
-### 安装与部署
-
-**Q: `git clone` 报 404?**
-A: 仓库地址写错。用 `https://github.com/Hi-Barry/pi-courier.git`(或直接 `npm install -g pi-courier` 安装)。
-
-**Q: `npm install` 卡住 / 只有 20-60 kB/s?**
-A: 涉及两个下载,要分开配代理:
-- npm registry 的包 → 配 npm 代理:`npm config set proxy http://...` 和 `npm config set https-proxy http://...`
-- 21MB 的 E2EE 原生库(由 matrix-sdk-crypto-nodejs 从 GitHub Releases 下载)→ **不走 npm 代理**,需先 `export https_proxy=http://...` `export http_proxy=http://...` 再安装(想永久生效写进 `~/.bashrc`)
-
-**Q: 报 `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'`?**
-A: 原生二进制没下载成功(postinstall 被拦或中断)。手动补(必要时先设置代理环境变量):
-```bash
-cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs
-node download-lib.js
-cd ../..
-```
-
-**Q: `npm install -g pi-courier` 报 EEXIST?**
-A: 之前 `npm link` 过,bin 冲突。先清理:
-```bash
-npm unlink -g pi-courier
-rm -f ~/.nvm/versions/node/v24.18.1/bin/pi-courier
-npm install -g pi-courier
-```
-
-**Q: `npm link` 后 `pi-courier` 命令找不到?**
-A: link 在 `npm run build` 之前执行,`dist/cli.js` 还不存在。build 后重新 `npm link`(或直接改用 npm 安装)。
-
-**Q: systemd 服务反复重启循环?**
-A: pi 子进程崩溃,几乎都是 **Node 版本不匹配**:bridge 通过 PATH 找 node 启动 pi,systemd 默认 PATH 可能命中系统 node(如 v20),而 pi 的 undici 与 Node 20 不兼容(报 `webidl.util.markAsUncloneable is not a function`)。修复:`source ~/.nvm/nvm.sh` 后重新 `pi-courier enable`(0.1.2+ 会自动把 `Environment=PATH=<nvm bin 优先>` 写进 unit)。**全机统一用一个 Node 版本(nvm v24)**,别和系统 node 混用。
-
-### 配置
-
-**Q: 启动日志显示 `model: unknown`?**
-A: pi 的 provider 没配置。检查 `~/.pi/agent/` 三个文件:`models.json`(模型元数据)、`auth.json`(API key,权限 600)、`settings.json`(`defaultProvider` / `defaultModel` —— 注意字段名是这两个,不是 provider/model)。
-
-**Q: `getAvailableModels` 为空?**
-A: `models.json` 格式错误。用配置章节的 models.dev 提取命令重新生成。
-
-**Q: 启动报 `no transports configured`?**
-A: bridge 配置为空。运行 `pi-courier setup` 生成 `~/.pi/msg-bridge.json`,或检查 `PI_*` 环境变量。
-
-**Q: setup 向导里出现奇怪的 `DeprecationWarning: util._extend`?**
-A: 传输层依赖的已知噪音,0.1.0 起已过滤。更新 pi-courier 后仍看到就说明版本太旧。
-
-### 消息与加密
-
-**Q: 日志大量 `Decryption error`?**
-A: 历史消息无法解密(新设备没有旧密钥)。**正常**,不影响新消息。
-
-**Q: 加密房间:发消息没回复 / 新消息解不开?**
-A: bot 的新设备没拿到你客户端的房间密钥。处理:
-- Element(网页:设置 → 安全与隐私 → 加密):确保 **"仅向已验证设备共享密钥"未勾选**,然后在房间里发一条消息
-- bot 账号没有交叉签名,"用户验证"显示不可用是正常的;最省心的可靠方案:**直接用非加密房间**(新建房间时不要勾选加密,把 bot 拉进来)。bridge 配置 `encryption: true` 也照常处理非加密房间。
-
-**Q: 启动报 `M_BAD_JSON: Provided device_id in device_keys does not match...`?**
-A: 加密存储里是旧设备身份,而 access token 属于新设备(重新登录过)。删掉存储重启:
-```bash
-rm -rf ~/.pi/msg-bridge-matrix-crypto
-pi-courier restart
-```
-**以后每次重跑 setup / 换 token,都顺手删一次这个目录。**
-
-**Q: Matrix 连接失败(homeserver/token 错误)?**
-A: 验证 token:`curl -H "Authorization: Bearer <token>" https://homeserver/_matrix/client/v3/account/whoami`。
-
-**Q: 第一次给 bot 发消息要 6 位验证码?**
-A: 这是 challenge 认证 —— 把验证码回复给 bot 即成为 trusted user(第一个 trusted 用户自动成为 admin)。已在 `auth.trustedUsers` 里的用户跳过此步骤。
-
-**Q: 消息完全没有回复?**
-A: 按顺序排查:(1) `pi-courier status` / 日志 —— Matrix 连上了吗?有没有 Decryption error(加密房间)?(2) pi RPC 连上了吗?(3) 模型调用本身 —— 用 curl 直接测 provider 端点,排除网络/密钥问题。
-
-### 运行与维护
-
-**Q: `pi RPC did not become ready`?**
-A: pi 子进程启动失败。手动跑它看真实报错:
-```bash
-node node_modules/@earendil-works/pi-coding-agent/dist/cli.js --mode rpc
-```
-常见原因:Node 版本不匹配(见上面重启循环)、provider 配置错误、无法访问 provider 端点。
-
-**Q: 重启后对话上下文丢了?**
-A: 0.1.1 起 bridge 会给 pi 传 `--continue`(等价 `pi -c`),按 workdir 恢复最近会话。升级并重启即可;`/new` 开新会话,下次重启恢复的是新会话。
-
-**Q: Element(网页客户端)拦截 `/` 开头的消息?**
-A: 用 `//` 转义发送字面文本(如 `//compact` 会发出 `/compact`)。
-
-**Q: 代理环境有什么讲究?**
-A: npm registry → `npm config set proxy/https-proxy`;GitHub 下载与 bridge 运行 → `export https_proxy` / `http_proxy`(systemd 里加进 EnvironmentFile)。
-
-## 使用提示
-
-- **Element 客户端**:`/` 开头的消息会被客户端当作命令拦截,要发送字面文本用 `//` 转义(如 `//compact` 会发送 `/compact`)
-- **代理环境**:设置 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量(systemd 用 EnvironmentFile)
-- **群聊**:需先 `/enable <roomId> all` 启用;DM 无需配置
-
-## 开发
-
-```bash
-npm run build        # 编译
-npm run typecheck    # 类型检查
-npm run test         # 单元测试(vitest)
-npm run lint         # biome lint
-```
-
-完整的开发历程 —— 调研、设计决策、真实部署中踩过的每一个坑 —— 见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
-
-## License
-
-MIT
-
-上游:[tintinweb/pi-messenger-bridge](https://github.com/tintinweb/pi-messenger-bridge)(MIT)
+pi-courier 是 [pi](https://pi.dev) 的独立伴侣应用,与 Earendil Inc. 无隶属关系。

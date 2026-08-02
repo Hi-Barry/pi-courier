@@ -106,7 +106,7 @@ async function matrixWhoami(homeserver: string, accessToken: string): Promise<st
 export async function runSetup(): Promise<void> {
   const { ask, close } = createPrompter();
   console.log("");
-  console.log("=== pi-remote 首次配置向导 ===");
+  console.log("=== pi-courier 首次配置向导 ===");
   console.log("将生成 ~/.pi/msg-bridge.json(权限 600)\n");
 
   try {
@@ -160,7 +160,7 @@ export async function runSetup(): Promise<void> {
     console.log(`   信任用户: ${adminRaw}`);
     console.log(`   E2EE: ${encryption ? "开启" : "关闭"}`);
     console.log(`   工作目录: ${workdir}`);
-    console.log("\n下一步: pi-remote enable(开机自启)或 pi-remote run(前台运行)");
+    console.log("\n下一步: pi-courier enable(开机自启)或 pi-courier run(前台运行)");
   } catch (err) {
     console.error(`\n❌ 配置失败: ${(err as Error).message}`);
     process.exitCode = 1;
