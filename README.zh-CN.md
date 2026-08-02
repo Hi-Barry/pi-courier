@@ -246,20 +246,98 @@ pi-remote restart    # 或: systemctl --user restart pi-msg-bridge
 
 bridge 通过 `which pi` 始终连接系统最新版 pi。仅当 pi 的 RPC 协议发生破坏性变更时才需要改 bridge 代码(协议为文档化稳定接口,从未破坏性变更)。
 
-## 故障排查
+## FAQ(常见问题)
 
-| 现象 | 原因 | 解决 |
-|---|---|---|
-| `git clone` 404 | 仓库地址错误 | 用 `https://github.com/Hi-Barry/pi-remote.git` |
-| `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'` | E2EE 原生库没下载 | 执行安装章节的手动下载命令 |
-| 启动报 `model: unknown` | provider 未配置 | 检查 `~/.pi/agent/` 三个文件 |
-| `getAvailableModels` 为空 | models.json 格式错 | 用 models.dev 提取命令重新生成 |
-| 日志大量 `Decryption error` | 历史消息重放,无密钥 | 正常,不影响新消息 |
-| 加密房间收不到新消息 | bot 设备未验证 | 在 Element 中验证 bot 设备(或换非加密房间) |
-| `pi RPC did not become ready` | pi 启动失败 | 手动 `node node_modules/@earendil-works/pi-coding-agent/dist/cli.js --mode rpc` 看报错 |
-| `no transports configured` | bridge 配置为空 | 检查 `~/.pi/msg-bridge.json` 或 `PI_*` 环境变量 |
-| Matrix 连接失败 | homeserver/token 错误 | `curl -H "Authorization: Bearer <token>" https://homeserver/_matrix/client/v3/account/whoami` |
-| 消息无回复 | 模型调用失败 | `--debug` 看日志;curl 直接测 provider 端点 |
+### 安装与部署
+
+**Q: `git clone` 报 404?**
+A: 仓库地址写错。用 `https://github.com/Hi-Barry/pi-remote.git`(或直接 `npm install -g @barryfan2045/pi-remote` 安装)。
+
+**Q: `npm install` 卡住 / 只有 20-60 kB/s?**
+A: 涉及两个下载,要分开配代理:
+- npm registry 的包 → 配 npm 代理:`npm config set proxy http://...` 和 `npm config set https-proxy http://...`
+- 21MB 的 E2EE 原生库(由 matrix-sdk-crypto-nodejs 从 GitHub Releases 下载)→ **不走 npm 代理**,需先 `export https_proxy=http://...` `export http_proxy=http://...` 再安装(想永久生效写进 `~/.bashrc`)
+
+**Q: 报 `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'`?**
+A: 原生二进制没下载成功(postinstall 被拦或中断)。手动补(必要时先设置代理环境变量):
+```bash
+cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs
+node download-lib.js
+cd ../..
+```
+
+**Q: `npm install -g @barryfan2045/pi-remote` 报 EEXIST?**
+A: 之前 `npm link` 过,bin 冲突。先清理:
+```bash
+npm unlink -g pi-remote
+rm -f ~/.nvm/versions/node/v24.18.1/bin/pi-remote
+npm install -g @barryfan2045/pi-remote
+```
+
+**Q: `npm link` 后 `pi-remote` 命令找不到?**
+A: link 在 `npm run build` 之前执行,`dist/cli.js` 还不存在。build 后重新 `npm link`(或直接改用 npm 安装)。
+
+**Q: systemd 服务反复重启循环?**
+A: pi 子进程崩溃,几乎都是 **Node 版本不匹配**:bridge 通过 PATH 找 node 启动 pi,systemd 默认 PATH 可能命中系统 node(如 v20),而 pi 的 undici 与 Node 20 不兼容(报 `webidl.util.markAsUncloneable is not a function`)。修复:`source ~/.nvm/nvm.sh` 后重新 `pi-remote enable`(0.1.2+ 会自动把 `Environment=PATH=<nvm bin 优先>` 写进 unit)。**全机统一用一个 Node 版本(nvm v24)**,别和系统 node 混用。
+
+### 配置
+
+**Q: 启动日志显示 `model: unknown`?**
+A: pi 的 provider 没配置。检查 `~/.pi/agent/` 三个文件:`models.json`(模型元数据)、`auth.json`(API key,权限 600)、`settings.json`(`defaultProvider` / `defaultModel` —— 注意字段名是这两个,不是 provider/model)。
+
+**Q: `getAvailableModels` 为空?**
+A: `models.json` 格式错误。用配置章节的 models.dev 提取命令重新生成。
+
+**Q: 启动报 `no transports configured`?**
+A: bridge 配置为空。运行 `pi-remote setup` 生成 `~/.pi/msg-bridge.json`,或检查 `PI_*` 环境变量。
+
+**Q: setup 向导里出现奇怪的 `DeprecationWarning: util._extend`?**
+A: 传输层依赖的已知噪音,0.1.0 起已过滤。更新 pi-remote 后仍看到就说明版本太旧。
+
+### 消息与加密
+
+**Q: 日志大量 `Decryption error`?**
+A: 历史消息无法解密(新设备没有旧密钥)。**正常**,不影响新消息。
+
+**Q: 加密房间:发消息没回复 / 新消息解不开?**
+A: bot 的新设备没拿到你客户端的房间密钥。处理:
+- Element(网页:设置 → 安全与隐私 → 加密):确保 **"仅向已验证设备共享密钥"未勾选**,然后在房间里发一条消息
+- bot 账号没有交叉签名,"用户验证"显示不可用是正常的;最省心的可靠方案:**直接用非加密房间**(新建房间时不要勾选加密,把 bot 拉进来)。bridge 配置 `encryption: true` 也照常处理非加密房间。
+
+**Q: 启动报 `M_BAD_JSON: Provided device_id in device_keys does not match...`?**
+A: 加密存储里是旧设备身份,而 access token 属于新设备(重新登录过)。删掉存储重启:
+```bash
+rm -rf ~/.pi/msg-bridge-matrix-crypto
+pi-remote restart
+```
+**以后每次重跑 setup / 换 token,都顺手删一次这个目录。**
+
+**Q: Matrix 连接失败(homeserver/token 错误)?**
+A: 验证 token:`curl -H "Authorization: Bearer <token>" https://homeserver/_matrix/client/v3/account/whoami`。
+
+**Q: 第一次给 bot 发消息要 6 位验证码?**
+A: 这是 challenge 认证 —— 把验证码回复给 bot 即成为 trusted user(第一个 trusted 用户自动成为 admin)。已在 `auth.trustedUsers` 里的用户跳过此步骤。
+
+**Q: 消息完全没有回复?**
+A: 按顺序排查:(1) `pi-remote status` / 日志 —— Matrix 连上了吗?有没有 Decryption error(加密房间)?(2) pi RPC 连上了吗?(3) 模型调用本身 —— 用 curl 直接测 provider 端点,排除网络/密钥问题。
+
+### 运行与维护
+
+**Q: `pi RPC did not become ready`?**
+A: pi 子进程启动失败。手动跑它看真实报错:
+```bash
+node node_modules/@earendil-works/pi-coding-agent/dist/cli.js --mode rpc
+```
+常见原因:Node 版本不匹配(见上面重启循环)、provider 配置错误、无法访问 provider 端点。
+
+**Q: 重启后对话上下文丢了?**
+A: 0.1.1 起 bridge 会给 pi 传 `--continue`(等价 `pi -c`),按 workdir 恢复最近会话。升级并重启即可;`/new` 开新会话,下次重启恢复的是新会话。
+
+**Q: Element(网页客户端)拦截 `/` 开头的消息?**
+A: 用 `//` 转义发送字面文本(如 `//compact` 会发出 `/compact`)。
+
+**Q: 代理环境有什么讲究?**
+A: npm registry → `npm config set proxy/https-proxy`;GitHub 下载与 bridge 运行 → `export https_proxy` / `http_proxy`(systemd 里加进 EnvironmentFile)。
 
 ## 使用提示
 
