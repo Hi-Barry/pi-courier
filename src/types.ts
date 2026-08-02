@@ -26,19 +26,6 @@ export interface ExternalMessage {
  * Configuration for msg-bridge extension
  */
 export interface MsgBridgeConfig {
-  telegram?: {
-    token: string;
-  };
-  whatsapp?: {
-    authPath?: string;
-  };
-  slack?: {
-    botToken: string;
-    appToken: string;
-  };
-  discord?: {
-    token: string;
-  };
   matrix?: {
     homeserverUrl: string;
     accessToken: string;

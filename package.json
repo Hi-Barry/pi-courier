@@ -1,11 +1,11 @@
 {
-  "name": "@barryfan2045/pi-remote",
-  "version": "0.1.6",
-  "description": "Run pi coding agent headlessly from your messenger (Matrix, Telegram, WhatsApp, Slack, Discord). Slash commands, skills and prompts fully supported via the RPC protocol.",
+  "name": "pi-courier",
+  "version": "0.1.0",
+  "description": "Run pi coding agent from Matrix. Slash commands, skills and prompts fully work from messengers via the RPC protocol.",
   "type": "module",
   "main": "dist/standalone.js",
   "bin": {
-    "pi-remote": "dist/cli.js"
+    "pi-courier": "dist/cli.js"
   },
   "files": [
     "dist/",
@@ -55,12 +55,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@slack/bolt": "^4.6.0",
-    "@whiskeysockets/baileys": "^7.0.0-rc.9",
-    "discord.js": "^14.25.1",
-    "matrix-bot-sdk": "^0.8.0",
-    "node-telegram-bot-api": "^0.67.0",
-    "qrcode-terminal": "^0.12.0"
+    "matrix-bot-sdk": "^0.8.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.83",
@@ -69,8 +64,6 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
     "@types/node": "^25.6.2",
-    "@types/node-telegram-bot-api": "^0.64.14",
-    "@types/qrcode-terminal": "^0.12.2",
     "fast-check": "^4.5.3",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"

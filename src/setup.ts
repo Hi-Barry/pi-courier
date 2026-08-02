@@ -110,13 +110,6 @@ export async function runSetup(): Promise<void> {
   console.log("将生成 ~/.pi/msg-bridge.json(权限 600)\n");
 
   try {
-    const platform = ((await ask("选择 messenger 平台 [matrix]: ")) || "matrix").toLowerCase();
-
-    if (platform !== "matrix") {
-      console.log(`\n⚠️  向导目前仅支持 matrix。请手动编辑 ~/.pi/msg-bridge.json 配置 ${platform}(格式见 docs/DEPLOYMENT.md §3.4)。`);
-      return;
-    }
-
     const homeserver = (await ask("Matrix homeserver URL (如 https://matrix.example.com): ")).trim();
     if (!homeserver) throw new Error("homeserver URL 不能为空");
 

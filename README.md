@@ -1,34 +1,33 @@
-# pi-remote
+# pi-courier
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Run the [pi coding agent](https://pi.dev) headlessly from your messenger — Matrix, Telegram, WhatsApp, Slack, Discord.
+Run the [pi coding agent](https://pi.dev) headlessly from **Matrix**. Slash commands, skills and prompt templates fully work from your chat client.
 
 Unlike the classic extension mode, this project drives pi over the [RPC protocol](https://pi.dev/docs/latest/rpc), so **slash commands work from messengers** (`/new`, `/compact`, `/model`, `/skill:name`, prompt templates, extension commands) — the extension mode can't do this because pi's `sendUserMessage()` deliberately skips command handling.
 
-> **Upstream**: this project is a rework of [tintinweb/pi-messenger-bridge](https://github.com/tintinweb/pi-messenger-bridge) — the messenger transport layer (Matrix/Telegram/WhatsApp/Slack/Discord) and challenge auth come from there; the RPC-based standalone architecture, slash-command mapping and setup wizard are new.
+> **Upstream**: this project is a rework of [tintinweb/pi-messenger-bridge](https://github.com/tintinweb/pi-messenger-bridge) — the Matrix transport layer and challenge auth come from there; the RPC-based standalone architecture, slash-command mapping, CLI and setup wizard are new.
 
 ## Features
 
-- 📱 Multi-messenger: Matrix, Telegram, WhatsApp, Slack, Discord
-- 🔐 Challenge-based auth (6-digit codes), transport-namespaced user IDs
+- 📱 Matrix transport (E2EE-capable), challenge-based auth (6-digit codes)
 - 🎛️ Full slash-command support: `/new`, `/compact`, `/model`, `/thinking`, `/bash`, `/reload`, ...
 - 🧩 Skills & prompt templates pass through: `/skill:name`, `/template`
 - 💾 Session persistence: pi sessions live on disk, resume across restarts
 - 🔄 `/reload` restarts the pi process (after installing extensions/config) — lossless
 - 🔌 pi is **not bundled**: installed independently on the system, upgraded on its own
-- 🧭 One-command CLI: `pi-remote setup` wizard, `pi-remote enable` auto-start, `pi-remote update` self-update
+- 🧭 One-command CLI: `pi-courier setup` wizard, `pi-courier enable` auto-start, `pi-courier update` self-update
 
 ## Architecture
 
 ```
-Messenger ──> pi-remote (dist/standalone.js) ──> pi --mode rpc (system-installed)
+Messenger ──> pi-courier (dist/standalone.js) ──> pi --mode rpc (system-installed)
 Messenger <── replies <────────────────────── <── agent events (stdout JSONL)
 ```
 
-- pi-remote spawns and manages the `pi --mode rpc` child process
+- pi-courier spawns and manages the `pi --mode rpc` child process
 - Sessions persist to `~/.pi/agent/sessions`, resumed automatically after restarts
-- systemd only needs to manage the pi-remote service
+- systemd only needs to manage the pi-courier service
 
 ## Requirements
 
@@ -38,7 +37,7 @@ Messenger <── replies <─────────────────�
 | pi | >= 0.83, **installed globally** (not bundled) | `pi --version` |
 | Network | access to your homeserver and LLM provider | — |
 
-Install pi first — pi-remote is a companion app that connects to it over RPC:
+Install pi first — pi-courier is a companion app that connects to it over RPC:
 
 ```bash
 npm install -g @earendil-works/pi-coding-agent
@@ -50,10 +49,10 @@ pi --version
 ## Installation
 
 ```bash
-git clone https://github.com/Hi-Barry/pi-remote.git
-cd pi-remote
+git clone https://github.com/Hi-Barry/pi-courier.git
+cd pi-courier
 npm install
-npm link          # make the `pi-remote` command available globally
+npm link          # make the `pi-courier` command available globally
 npm run build
 ```
 
@@ -102,7 +101,7 @@ json.dump(out, open(os.path.expanduser('~/.pi/agent/models.json'), 'w'), indent=
 
 > Field names are `defaultProvider`/`defaultModel` (not `provider`/`model`).
 
-Verify (run inside the pi-remote project dir):
+Verify (run inside the pi-courier project dir):
 
 ```bash
 node --input-type=module -e "
@@ -123,7 +122,7 @@ await c.stop();
 **Option A (recommended): setup wizard**
 
 ```bash
-pi-remote setup
+pi-courier setup
 ```
 
 Follow the prompts: platform → homeserver URL → token (password login or paste an existing one) → trusted admin user MXID → E2EE toggle → pi workdir. The wizard verifies the token and writes `~/.pi/msg-bridge.json`.
@@ -149,36 +148,36 @@ Follow the prompts: platform → homeserver URL → token (password login or pas
 
 - Get an access token: `POST /_matrix/client/v3/login` (password login) or from Element's settings page
 - `trustedUsers`/`adminUserId` format: `<transport>:<full userId>`, e.g. `matrix:@barry:matrix.example.com`
-- `workdir`: pi's working directory (spawned automatically if missing); `pi-remote run --workdir <dir>` overrides it
+- `workdir`: pi's working directory (spawned automatically if missing); `pi-courier run --workdir <dir>` overrides it
 - `sessionDir` / `cliPath`: optional overrides (defaults: pi's session dir, and `which pi` for the CLI)
 - `encryption: true` for encrypted rooms (works for plain rooms too)
-- Env var alternatives: `PI_MATRIX_HOMESERVER` / `PI_MATRIX_ACCESS_TOKEN` (other platforms: `PI_TELEGRAM_TOKEN`, `PI_SLACK_BOT_TOKEN`+`PI_SLACK_APP_TOKEN`, `PI_DISCORD_TOKEN`, `PI_WHATSAPP_AUTH_PATH`)
+- Env var alternatives: `PI_MATRIX_HOMESERVER` / `PI_MATRIX_ACCESS_TOKEN`
 
 ## Usage
 
 Everything goes through a single command:
 
 ```
-pi-remote setup      first-run configuration wizard (Matrix account, trusted user, workdir)
-pi-remote run        run in the foreground (workdir from config; --workdir overrides)
-pi-remote enable     install a user-level systemd service (auto-start) and start it
-pi-remote start      start the service
-pi-remote stop       stop the service
-pi-remote restart    restart the service
-pi-remote status     show service status + recent logs
-pi-remote logs       tail the service logs
-pi-remote disable    uninstall the service (stop + remove autostart + delete unit file)
-pi-remote update     update this project (git pull + npm install + build)
+pi-courier setup      first-run configuration wizard (Matrix account, trusted user, workdir)
+pi-courier run        run in the foreground (workdir from config; --workdir overrides)
+pi-courier enable     install a user-level systemd service (auto-start) and start it
+pi-courier start      start the service
+pi-courier stop       stop the service
+pi-courier restart    restart the service
+pi-courier status     show service status + recent logs
+pi-courier logs       tail the service logs
+pi-courier disable    uninstall the service (stop + remove autostart + delete unit file)
+pi-courier update     update this project (git pull + npm install + build)
 ```
 
 Typical first deployment:
 
 ```bash
-pi-remote setup        # answer the prompts (or edit ~/.pi/msg-bridge.json manually)
-pi-remote enable       # auto-start on boot, running as your user
+pi-courier setup        # answer the prompts (or edit ~/.pi/msg-bridge.json manually)
+pi-courier enable       # auto-start on boot, running as your user
 ```
 
-For a quick foreground test: `pi-remote run` (Ctrl+C to stop). The old `node dist/standalone.js --workdir ...` form still works if you prefer it.
+For a quick foreground test: `pi-courier run` (Ctrl+C to stop). The old `node dist/standalone.js --workdir ...` form still works if you prefer it.
 
 Startup success looks like:
 
@@ -225,12 +224,12 @@ Users pre-listed in `msg-bridge.json` → `auth.trustedUsers` skip this step.
 **User-level (recommended, no sudo):**
 
 ```bash
-pi-remote enable
+pi-courier enable
 ```
 
 That's it — it writes a systemd unit to `~/.config/systemd/user/pi-msg-bridge.service` (using the absolute node path and your configured workdir), enables auto-start and starts the service. For fully headless operation (keep running after logout), run once: `sudo loginctl enable-linger $USER`.
 
-Commands: `pi-remote status`, `pi-remote logs`, `pi-remote stop`, `pi-remote start` (or `systemctl --user restart pi-msg-bridge`).
+Commands: `pi-courier status`, `pi-courier logs`, `pi-courier stop`, `pi-courier start` (or `systemctl --user restart pi-msg-bridge`).
 
 **System-level (needs sudo):** copy `deploy/pi-msg-bridge.service` to `/etc/systemd/system/`, adjust the three marked values (`User`, `WorkingDirectory`, `NVM_DIR`), then `sudo systemctl enable --now pi-msg-bridge`.
 
@@ -241,17 +240,17 @@ pi is managed independently on the system — upgrade it, no bridge code changes
 ```bash
 npm install -g @earendil-works/pi-coding-agent@latest
 pi --version
-pi-remote restart    # or: systemctl --user restart pi-msg-bridge
+pi-courier restart    # or: systemctl --user restart pi-msg-bridge
 ```
 
-pi-remote always connects to the system pi via `which pi`. Only a breaking change to pi's RPC protocol would require bridge code changes (the protocol is a documented stable interface and has never broken).
+pi-courier always connects to the system pi via `which pi`. Only a breaking change to pi's RPC protocol would require bridge code changes (the protocol is a documented stable interface and has never broken).
 
 ## FAQ
 
 ### Installation & deployment
 
 **Q: `git clone` fails with 404?**
-A: Wrong repo URL. Use `https://github.com/Hi-Barry/pi-remote.git` (install from npm instead: `npm install -g @barryfan2045/pi-remote`).
+A: Wrong repo URL. Use `https://github.com/Hi-Barry/pi-courier.git` (install from npm instead: `npm install -g pi-courier`).
 
 **Q: `npm install` hangs / crawls at ~20-60 kB/s?**
 A: Two downloads are involved:
@@ -266,19 +265,19 @@ node download-lib.js
 cd ../..
 ```
 
-**Q: `npm install -g @barryfan2045/pi-remote` fails with EEXIST?**
-A: A previous `npm link` left a conflicting `pi-remote` bin. Remove it first:
+**Q: `npm install -g pi-courier` fails with EEXIST?**
+A: A previous `npm link` left a conflicting `pi-courier` bin. Remove it first:
 ```bash
-npm unlink -g pi-remote
-rm -f ~/.nvm/versions/node/v24.18.1/bin/pi-remote
-npm install -g @barryfan2045/pi-remote
+npm unlink -g pi-courier
+rm -f ~/.nvm/versions/node/v24.18.1/bin/pi-courier
+npm install -g pi-courier
 ```
 
-**Q: `pi-remote` command not found after `npm link`?**
+**Q: `pi-courier` command not found after `npm link`?**
 A: The link was created before `npm run build`, so `dist/cli.js` didn't exist yet. Re-run `npm link` after building (or just install via npm instead).
 
 **Q: The systemd service keeps restarting in a loop?**
-A: The pi child process crashed — almost always a Node version mismatch. The bridge spawns pi via PATH, and systemd's default PATH may find a system node (e.g. v20) that pi's undici is incompatible with (`webidl.util.markAsUncloneable is not a function`). Fix: load nvm (`source ~/.nvm/nvm.sh`) and re-run `pi-remote enable` (v0.1.2+ writes `Environment=PATH=<nvm bin first>` into the unit automatically). Stick to one Node version (nvm v24) everywhere.
+A: The pi child process crashed — almost always a Node version mismatch. The bridge spawns pi via PATH, and systemd's default PATH may find a system node (e.g. v20) that pi's undici is incompatible with (`webidl.util.markAsUncloneable is not a function`). Fix: load nvm (`source ~/.nvm/nvm.sh`) and re-run `pi-courier enable` (v0.1.2+ writes `Environment=PATH=<nvm bin first>` into the unit automatically). Stick to one Node version (nvm v24) everywhere.
 
 ### Configuration
 
@@ -289,10 +288,10 @@ A: pi's provider isn't configured. Check the three files in `~/.pi/agent/`: `mod
 A: `models.json` is malformed. Regenerate it with the models.dev extraction command in the Configuration section.
 
 **Q: `no transports configured` at startup?**
-A: The bridge config is empty. Check `~/.pi/msg-bridge.json` (run `pi-remote setup`) or the `PI_*` env vars.
+A: The bridge config is empty. Check `~/.pi/msg-bridge.json` (run `pi-courier setup`) or the `PI_*` env vars.
 
 **Q: Weird `DeprecationWarning: util._extend` appears during setup?**
-A: Known noise from a transport dependency, filtered since v0.1.0 — update pi-remote if you still see it.
+A: Known noise from a transport dependency, filtered since v0.1.0 — update pi-courier if you still see it.
 
 ### Messaging & encryption
 
@@ -308,7 +307,7 @@ A: The bot's new device never received the room keys from your client. Options:
 A: The crypto store holds an old device identity but your access token belongs to a newer device (token was re-logged). Delete the store and restart:
 ```bash
 rm -rf ~/.pi/msg-bridge-matrix-crypto
-pi-remote restart
+pi-courier restart
 ```
 Remember this whenever you re-run setup / change the token.
 
@@ -319,7 +318,7 @@ A: Verify the token: `curl -H "Authorization: Bearer <token>" https://homeserver
 A: That's the challenge auth — reply with the code to become a trusted user (the first trusted user becomes admin). Users pre-listed in `auth.trustedUsers` skip this.
 
 **Q: No reply to messages at all?**
-A: Check in order: (1) `pi-remote status` / logs — is Matrix connected? any Decryption errors (encrypted room)? (2) is pi RPC connected? (3) the model call itself — run `curl` against the provider endpoint with your key to isolate it.
+A: Check in order: (1) `pi-courier status` / logs — is Matrix connected? any Decryption errors (encrypted room)? (2) is pi RPC connected? (3) the model call itself — run `curl` against the provider endpoint with your key to isolate it.
 
 ### Running & maintenance
 
@@ -331,7 +330,7 @@ node node_modules/@earendil-works/pi-coding-agent/dist/cli.js --mode rpc
 Common causes: Node version mismatch (see service restart loop above), invalid provider config, no network access to the provider.
 
 **Q: After a restart the conversation context is gone?**
-A: Since v0.1.1 the bridge passes `--continue` to pi, resuming the most recent session per workdir (same as `pi -c`). Update pi-remote and restart; `/new` starts a fresh session and the next restart resumes that one.
+A: Since v0.1.1 the bridge passes `--continue` to pi, resuming the most recent session per workdir (same as `pi -c`). Update pi-courier and restart; `/new` starts a fresh session and the next restart resumes that one.
 
 **Q: Element (web client) intercepts `/`-prefixed messages?**
 A: Prefix with `//` to send a literal slash (`//compact` sends `/compact`).

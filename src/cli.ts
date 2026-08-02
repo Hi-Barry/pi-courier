@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
- * pi-remote CLI — one command for everything.
+ * pi-courier CLI — one command for everything.
  *
- *   pi-remote setup    first-run configuration wizard (Matrix account,
+ *   pi-courier setup    first-run configuration wizard (Matrix account,
  *                      trusted user, workdir; writes ~/.pi/msg-bridge.json)
- *   pi-remote run      run in the foreground (workdir from config, --workdir overrides)
- *   pi-remote enable   install a user-level systemd service (auto-start) and start it
- *   pi-remote start    start the systemd service
- *   pi-remote stop     stop the systemd service
- *   pi-remote status   show service status + recent logs
- *   pi-remote logs     tail the service logs
- *   pi-remote update   update this project (git pull + npm install + build)
+ *   pi-courier run      run in the foreground (workdir from config, --workdir overrides)
+ *   pi-courier enable   install a user-level systemd service (auto-start) and start it
+ *   pi-courier start    start the systemd service
+ *   pi-courier stop     stop the systemd service
+ *   pi-courier status   show service status + recent logs
+ *   pi-courier logs     tail the service logs
+ *   pi-courier update   update this project (git pull + npm install + build)
  *
  * pi itself is managed independently on the system (npm i -g ...); this
  * project only ever updates itself.
@@ -43,19 +43,19 @@ function projectDir(): string {
 }
 
 function usage(): void {
-  console.log(`pi-remote — run the pi coding agent from your messenger
+  console.log(`pi-courier — run the pi coding agent from your messenger
 
 用法:
-  pi-remote setup     首次运行配置向导(Matrix 账号、信任用户、工作目录)
-  pi-remote run       前台运行(--workdir 可覆盖配置里的工作目录)
-  pi-remote enable    安装用户级 systemd 服务并开机自启、立即启动
-  pi-remote start      启动服务
-  pi-remote stop       停止服务
-  pi-remote restart    重启服务
-  pi-remote status     查看服务状态与最近日志
-  pi-remote logs      跟踪服务日志(Ctrl+C 退出)
-  pi-remote disable   卸载服务(停止 + 取消自启 + 删除 unit 文件)
-  pi-remote update    更新本项目(git pull + 安装依赖 + 重新构建)
+  pi-courier setup     首次运行配置向导(Matrix 账号、信任用户、工作目录)
+  pi-courier run       前台运行(--workdir 可覆盖配置里的工作目录)
+  pi-courier enable    安装用户级 systemd 服务并开机自启、立即启动
+  pi-courier start      启动服务
+  pi-courier stop       停止服务
+  pi-courier restart    重启服务
+  pi-courier status     查看服务状态与最近日志
+  pi-courier logs      跟踪服务日志(Ctrl+C 退出)
+  pi-courier disable   卸载服务(停止 + 取消自启 + 删除 unit 文件)
+  pi-courier update    更新本项目(git pull + 安装依赖 + 重新构建)
 
 说明:pi 由系统独立安装与升级(npm i -g @earendil-works/pi-coding-agent),
 本项目只更新自身。`);
@@ -87,7 +87,7 @@ async function cmdRun(args: string[]): Promise<void> {
   }
   const finalWorkdir = workdir ?? config.workdir;
   if (!finalWorkdir) {
-    console.error("❌ 未配置工作目录。先运行 `pi-remote setup`,或用 `pi-remote run --workdir <目录>` 指定。");
+    console.error("❌ 未配置工作目录。先运行 `pi-courier setup`,或用 `pi-courier run --workdir <目录>` 指定。");
     process.exit(1);
   }
 
@@ -110,7 +110,7 @@ function buildUnit(projDir: string, workdir: string): string {
   // node (e.g. v20) that pi's undici is incompatible with.
   const nodeDir = path.dirname(nodeBin);
   return `[Unit]
-Description=pi-remote (messengers -> pi RPC)
+Description=pi-courier (messengers -> pi RPC)
 After=default.target
 
 [Service]
@@ -162,7 +162,7 @@ function runSystemctl(args: string[]): void {
 function cmdService(action: "start" | "stop" | "restart" | "status" | "logs"): void {
   const unitPath = userUnitPath();
   if (!fs.existsSync(unitPath)) {
-    console.error(`❌ 服务未安装。先运行 \`pi-remote enable\` 安装。`);
+    console.error(`❌ 服务未安装。先运行 \`pi-courier enable\` 安装。`);
     process.exit(1);
   }
   const cmd =
@@ -192,7 +192,7 @@ function cmdDisable(): void {
   runSystemctl(["disable", "--now", SERVICE_NAME]);
   fs.rmSync(unitPath, { force: true });
   runSystemctl(["daemon-reload"]);
-  console.log("✅ 服务已停止并卸载。以后要恢复:`pi-remote enable`(配置不受影响)。");
+  console.log("✅ 服务已停止并卸载。以后要恢复:`pi-courier enable`(配置不受影响)。");
 }
 
 // ===========================================================================
@@ -204,9 +204,9 @@ function cmdUpdate(): void {
   const installedViaNpm = !fs.existsSync(path.join(projDir, ".git"));
 
   if (installedViaNpm) {
-    // Installed with `npm install -g @barryfan2045/pi-remote` → upgrade via npm.
-    console.log("🔄 通过 npm 升级 @barryfan2045/pi-remote …");
-    const res = spawnSync("npm", ["install", "-g", "@barryfan2045/pi-remote@latest"], {
+    // Installed with `npm install -g pi-courier` → upgrade via npm.
+    console.log("🔄 通过 npm 升级 pi-courier …");
+    const res = spawnSync("npm", ["install", "-g", "pi-courier@latest"], {
       stdio: "inherit",
     });
     if (res.status !== 0) {
@@ -215,7 +215,7 @@ function cmdUpdate(): void {
     }
   } else {
     // Installed from a git clone → pull + install + build.
-    console.log("🔄 更新 pi-remote(git)…");
+    console.log("🔄 更新 pi-courier(git)…");
     for (const [cmd, args] of [
       ["git", ["pull"]],
       ["npm", ["install"]],
@@ -281,6 +281,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("[pi-remote] fatal:", (err as Error).message);
+  console.error("[pi-courier] fatal:", (err as Error).message);
   process.exit(1);
 });

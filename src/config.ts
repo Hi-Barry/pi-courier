@@ -28,21 +28,6 @@ export function loadConfig(): MsgBridgeConfig {
   }
 
   // Environment variables override file config (higher priority)
-  if (process.env.PI_TELEGRAM_TOKEN) {
-    config.telegram = { token: process.env.PI_TELEGRAM_TOKEN };
-  }
-  if (process.env.PI_WHATSAPP_AUTH_PATH) {
-    config.whatsapp = { authPath: process.env.PI_WHATSAPP_AUTH_PATH };
-  }
-  if (process.env.PI_SLACK_BOT_TOKEN && process.env.PI_SLACK_APP_TOKEN) {
-    config.slack = {
-      botToken: process.env.PI_SLACK_BOT_TOKEN,
-      appToken: process.env.PI_SLACK_APP_TOKEN,
-    };
-  }
-  if (process.env.PI_DISCORD_TOKEN) {
-    config.discord = { token: process.env.PI_DISCORD_TOKEN };
-  }
   if (process.env.PI_MATRIX_HOMESERVER && process.env.PI_MATRIX_ACCESS_TOKEN) {
     config.matrix = {
       homeserverUrl: process.env.PI_MATRIX_HOMESERVER,

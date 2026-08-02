@@ -19,12 +19,8 @@ import { loadConfig, saveConfig } from "./config.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
-import { DiscordProvider } from "./transports/discord.js";
 import { TransportManager } from "./transports/manager.js";
 import { MatrixProvider } from "./transports/matrix.js";
-import { SlackProvider } from "./transports/slack.js";
-import { TelegramProvider } from "./transports/telegram.js";
-import { WhatsAppProvider } from "./transports/whatsapp.js";
 
 // Suppress the known `util._extend` deprecation warning emitted by some
 // transport dependencies at load time — it pollutes interactive output.
@@ -108,24 +104,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     transportManager.addTransport(transport);
   };
 
-  if (config.telegram?.token) {
-    addTransport(new TelegramProvider(config.telegram.token, auth));
-  }
-  if (config.whatsapp) {
-    const authPath = config.whatsapp.authPath || path.join(os.homedir(), ".pi", "msg-bridge-whatsapp-auth");
-    if (fs.existsSync(path.join(authPath, "creds.json"))) {
-      addTransport(new WhatsAppProvider({ ...config.whatsapp, debug }, auth));
-    } else {
-      delete config.whatsapp;
-      saveConfig(config);
-    }
-  }
-  if (config.slack?.botToken && config.slack?.appToken) {
-    addTransport(new SlackProvider(config.slack, auth));
-  }
-  if (config.discord?.token) {
-    addTransport(new DiscordProvider(config.discord, auth));
-  }
   if (config.matrix?.homeserverUrl && config.matrix?.accessToken) {
     addTransport(new MatrixProvider(config.matrix, auth));
   }

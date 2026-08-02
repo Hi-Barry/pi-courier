@@ -1,7 +1,7 @@
-# pi-remote 开发全记录
+# pi-courier 开发全记录
 
 > 从"Matrix 里发不出 `/` 命令"的一个疑问,到一个可发布的 npm 包。
-> 本文记录 pi-remote 从调研、设计、开发、部署到发布的全过程,以及过程中踩过的每一个坑。
+> 本文记录 pi-courier 从调研、设计、开发、部署到发布的全过程,以及过程中踩过的每一个坑。
 
 ---
 
@@ -342,7 +342,7 @@ json.dump(out, open(os.path.expanduser('~/.pi/agent/models.json'), 'w'), indent=
 
 ### 8.2 独立项目方案
 
-新建 `~/Projects/pi-remote`:
+新建 `~/Projects/pi-courier`:
 
 - 只保留 standalone 需要的代码(砍掉扩展模式专属的 `src/index.ts`、`src/ui/`)
 - **pi-coding-agent 从 peerDependencies 移到 dependencies**(锁 `^0.83`)
@@ -392,19 +392,19 @@ json.dump(out, open(os.path.expanduser('~/.pi/agent/models.json'), 'w'), indent=
 
 ### 9.2 命令设计
 
-实现了一个统一的 CLI(`src/cli.ts`,bin 名 `pi-remote`):
+实现了一个统一的 CLI(`src/cli.ts`,bin 名 `pi-courier`):
 
 ```
-pi-remote setup      首次运行配置向导
-pi-remote run        前台运行(--workdir 可覆盖)
-pi-remote enable     安装用户级 systemd 服务 + 开机自启 + 启动
-pi-remote start      启动服务
-pi-remote stop       停止服务
-pi-remote restart    重启服务
-pi-remote status     服务状态 + 最近日志
-pi-remote logs       跟踪日志
-pi-remote disable    卸载服务(停止 + 取消自启 + 删 unit)
-pi-remote update     更新本项目(自动走 npm)
+pi-courier setup      首次运行配置向导
+pi-courier run        前台运行(--workdir 可覆盖)
+pi-courier enable     安装用户级 systemd 服务 + 开机自启 + 启动
+pi-courier start      启动服务
+pi-courier stop       停止服务
+pi-courier restart    重启服务
+pi-courier status     服务状态 + 最近日志
+pi-courier logs       跟踪日志
+pi-courier disable    卸载服务(停止 + 取消自启 + 删 unit)
+pi-courier update     更新本项目(自动走 npm)
 ```
 
 关键设计:
@@ -418,9 +418,9 @@ pi-remote update     更新本项目(自动走 npm)
 从最初的 8+ 步,简化为:
 
 ```
-npm install -g @barryfan2045/pi-remote
-→ pi-remote setup
-→ pi-remote enable
+npm install -g pi-courier
+→ pi-courier setup
+→ pi-courier enable
 → 完成
 ```
 
@@ -434,21 +434,21 @@ npm install -g @barryfan2045/pi-remote
 
 用户希望 `npm install -g` 一键安装。检查发现:
 
-- `pi-remote`:**已被占用**(且是个废弃包,description 写着 "Deprecated - Please use @wherever-dev/pi instead",没有 bin)
+- `pi-courier`:**已被占用**(且是个废弃包,description 写着 "Deprecated - Please use @wherever-dev/pi instead",没有 bin)
 - `pi-bridge`:被占用
 - `pi-msg-bridge`:可用
 
-方案:scoped 包 **`@barryfan2045/pi-remote`**(账号名 scope,免费,命令名 `pi-remote` 不受影响)。
+方案:scoped 包 **`pi-courier`**(账号名 scope,免费,命令名 `pi-courier` 不受影响)。
 
 ### 10.2 两个发布坑
 
-**坑 1:scope 不存在。** 最初定的 `@hi-barry/pi-remote`(GitHub 登录名),发布报:
+**坑 1:scope 不存在。** 最初定的 `@hi-barry/pi-courier`(GitHub 登录名),发布报:
 
 ```
 404 Scope not found
 ```
 
-因为 npm 账号是 `barryfan2045`,scope 必须与账号名一致(或自己注册的组织)。改名 `@barryfan2045/pi-remote` 后成功。
+因为 npm 账号是 `barryfan2045`,scope 必须与账号名一致(或自己注册的组织)。改名 `pi-courier` 后成功。
 
 **坑 2:2FA。** 用户账号开了两步验证,普通 token 发布被拒:
 
@@ -465,11 +465,11 @@ npm install -g @barryfan2045/pi-remote
 - `files`: 只发 `dist/`、`deploy/`、两个 README(不泄漏源码)
 - `prepare: npm run build`:发布前自动构建
 - `publishConfig.access: public`
-- `update` 命令自动检测安装来源:npm 装的就 `npm i -g @barryfan2045/pi-remote@latest`,git clone 的就 pull+build
+- `update` 命令自动检测安装来源:npm 装的就 `npm i -g pi-courier@latest`,git clone 的就 pull+build
 
 ### 10.4 发布后的问题
 
-**EEXIST**:用户机器上之前 `npm link` 过,全局 bin 已有 `pi-remote` 链接,`npm install -g` 冲突。解决:先 `npm unlink -g pi-remote` + 删 bin 文件再装。
+**EEXIST**:用户机器上之前 `npm link` 过,全局 bin 已有 `pi-courier` 链接,`npm install -g` 冲突。解决:先 `npm unlink -g pi-courier` + 删 bin 文件再装。
 
 ---
 
@@ -522,7 +522,7 @@ TypeError: webidl.util.markAsUncloneable is not a function
 
 | 坑 | 现象 | 解决 |
 |---|---|---|
-| link 在 build 前 | `pi-remote` 命令找不到 | build 后重新 link |
+| link 在 build 前 | `pi-courier` 命令找不到 | build 后重新 link |
 | EEXIST | `npm install -g` 报文件已存在 | `npm unlink -g` + 删 bin |
 | allow-scripts 拦截 | 原生库 postinstall 被跳 | 手动下载或 approve |
 
@@ -552,18 +552,18 @@ TypeError: webidl.util.markAsUncloneable is not a function
 ### 12.1 运行时架构
 
 ```
-┌──────────────┐    Matrix/Telegram/WhatsApp/Slack/Discord
+┌──────────────┐    Matrix
 │  你的客户端   │◄───────────────────────────────────────┐
 └──────┬───────┘                                        │
        │ 消息                                            │ 回复
        ▼                                                │
 ┌──────────────────┐    RPC 协议(stdio JSONL)    ┌──────┴───────┐
-│  pi-remote       │ ──────────────────────────► │ pi --mode rpc│
+│  pi-courier       │ ──────────────────────────► │ pi --mode rpc│
 │  (bridge 进程)   │ ◄────────────────────────── │ (系统安装)    │
 └──────────────────┘     事件流(agent 事件)      └──────────────┘
 ```
 
-- pi-remote 负责:messenger 接入、认证、命令映射、事件回发、进程管理
+- pi-courier 负责:messenger 接入、认证、命令映射、事件回发、进程管理
 - pi 负责:LLM 对话、工具调用、会话管理、技能/模板展开
 - 两者通过 stdio 上的 JSONL(RPC 协议)通信
 
@@ -612,13 +612,14 @@ Matrix 消息
 | 0.1.0 | 首个 npm 发布;独立项目、setup 向导、CLI 雏形 |
 | 0.1.1 | `--continue` 会话恢复;workdir 自动创建 |
 | 0.1.2 | systemd unit 带 PATH(修复 pi 子进程 node 版本不匹配) |
-| 0.1.3 | `pi-remote restart` 命令 |
-| 0.1.4 | `pi-remote disable` 命令(完全卸载) |
+| 0.1.3 | `pi-courier restart` 命令 |
+| 0.1.4 | `pi-courier disable` 命令(完全卸载) |
 | 0.1.5 | README 全面 FAQ 化 |
+| 0.1.6 | 注册为 pi 包(pi.dev/packages 目录,`pi install` 可装) |
+| 0.2.0 | **改名 pi-courier + 专精 Matrix**:移除 Telegram/WhatsApp/Slack/Discord 四个 transport,依赖从 596MB 降至仅 matrix-bot-sdk;npm 包名改为 unscoped `pi-courier`,命令名 `pi-courier`;旧包 `@barryfan2045/pi-remote` 标记 deprecated |
 
-GitHub 仓库:[github.com/Hi-Barry/pi-remote](https://github.com/Hi-Barry/pi-remote)(私有)
-npm 包:[@barryfan2045/pi-remote](https://www.npmjs.com/package/@barryfan2045/pi-remote)
-
+GitHub 仓库:[github.com/Hi-Barry/pi-courier](https://github.com/Hi-Barry/pi-courier)(私有)
+npm 包:[pi-courier](https://www.npmjs.com/package/pi-courier)
 ---
 
 ## 15. 经验与反思
@@ -642,7 +643,7 @@ npm 包:[@barryfan2045/pi-remote](https://www.npmjs.com/package/@barryfan2045/pi
 ## 16. 未来展望
 
 - **上游演进**:matrix-sdk-crypto-nodejs 未来若改用每平台 optionalDependencies 包(esbuild 模式),21MB 下载坑自动消失,我们零成本受益。
-- **更多 messenger**:transports 层已预留 Telegram/WhatsApp/Slack/Discord,配置即用。
+- **更多平台**:0.2.0 起专注 Matrix,transports 层已精简;若未来需要 Telegram/WhatsApp/Slack/Discord,可从上游 pi-messenger-bridge 重新引入对应 transport。
 - **E2EE 深度支持**:加密房间目前建议非加密房间绕行;若未来需要,可探索 bot 交叉签名方案。
 - **更多平台打包**:当前是 npm 包 + systemd 用户级服务,可考虑容器化。
 

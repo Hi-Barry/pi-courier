@@ -1,34 +1,33 @@
-# pi-remote
+# pi-courier
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-通过 Matrix、Telegram、WhatsApp、Slack、Discord 等即时通讯工具,**远程操控 [pi coding agent](https://pi.dev)**。
+通过 **Matrix** 远程操控 [pi coding agent](https://pi.dev),slash 命令、技能、提示词模板在聊天客户端里完整可用。
 
 与传统的 pi 扩展模式不同,本项目通过 [RPC 协议](https://pi.dev/docs/latest/rpc)驱动 pi,因此 **messenger 里可以直接执行 slash 命令**(`/new`、`/compact`、`/model`、`/skill:name`、提示词模板、扩展命令)—— 这是扩展模式做不到的,因为 pi 的 `sendUserMessage()` 刻意跳过了命令解析。
 
-> **上游来源**:本项目改造自 [tintinweb/pi-messenger-bridge](https://github.com/tintinweb/pi-messenger-bridge) —— messenger 传输层(Matrix/Telegram/WhatsApp/Slack/Discord)与挑战码认证来自上游;基于 RPC 的独立架构、slash 命令映射与配置向导为本项目新增。
+> **上游来源**:本项目改造自 [tintinweb/pi-messenger-bridge](https://github.com/tintinweb/pi-messenger-bridge) —— Matrix 传输层与挑战码认证来自上游;基于 RPC 的独立架构、slash 命令映射、CLI 与配置向导为本项目新增。
 
 ## 特性
 
-- 📱 多 messenger 支持:Matrix、Telegram、WhatsApp、Slack、Discord
-- 🔐 6 位验证码认证,传输层命名空间防冒充
+- 📱 Matrix 传输(支持 E2EE)、6 位验证码挑战认证
 - 🎛️ slash 命令全支持:`/new`、`/compact`、`/model`、`/thinking`、`/bash`、`/reload` 等
 - 🧩 技能与提示词模板透传:`/skill:名称`、`/模板名` 直接生效
 - 💾 会话持久化:pi 会话存磁盘,重启自动恢复
 - 🔄 `/reload` 重启 pi 进程:装新插件、改配置后一条命令生效,会话无损
 - 🔌 不打包 pi:作为 pi 的伴侣程序独立部署,通过 RPC 连接系统安装的 pi,pi 独立升级
-- 🧭 一条命令搞定: `pi-remote setup` 配置向导、`pi-remote enable` 开机自启、`pi-remote update` 自更新
+- 🧭 一条命令搞定: `pi-courier setup` 配置向导、`pi-courier enable` 开机自启、`pi-courier update` 自更新
 
 ## 架构
 
 ```
-Messenger ──> pi-remote (dist/standalone.js) ──> pi --mode rpc(系统安装)
+Messenger ──> pi-courier (dist/standalone.js) ──> pi --mode rpc(系统安装)
 Messenger <── 回复 <────────────────────────── <── agent 事件流(stdout JSONL)
 ```
 
-- pi-remote 负责 spawn 并管理 `pi --mode rpc` 子进程
+- pi-courier 负责 spawn 并管理 `pi --mode rpc` 子进程
 - 会话持久化到 `~/.pi/agent/sessions`,重启自动恢复
-- systemd 只需托管 pi-remote 一个服务
+- systemd 只需托管 pi-courier 一个服务
 
 ## 环境要求
 
@@ -50,10 +49,10 @@ pi --version
 ## 安装
 
 ```bash
-git clone https://github.com/Hi-Barry/pi-remote.git
-cd pi-remote
+git clone https://github.com/Hi-Barry/pi-courier.git
+cd pi-courier
 npm install
-npm link          # 把 `pi-remote` 命令全局化,之后任何目录都能用
+npm link          # 把 `pi-courier` 命令全局化,之后任何目录都能用
 npm run build
 ```
 
@@ -102,7 +101,7 @@ json.dump(out, open(os.path.expanduser('~/.pi/agent/models.json'), 'w'), indent=
 
 > 字段名是 `defaultProvider` / `defaultModel`(不是 `provider` / `model`)。
 
-验证配置(在 pi-remote 项目目录内执行):
+验证配置(在 pi-courier 项目目录内执行):
 
 ```bash
 node --input-type=module -e "
@@ -123,7 +122,7 @@ await c.stop();
 **方式一(推荐):首次运行配置向导**
 
 ```bash
-pi-remote setup
+pi-courier setup
 ```
 
 按提示依次输入:平台 → homeserver URL → token(用户名密码登录或粘贴已有 token)→ 信任用户 MXID → 是否启用 E2EE → pi 工作目录。向导会验证 token 并自动写入 `~/.pi/msg-bridge.json`。
@@ -149,36 +148,36 @@ pi-remote setup
 
 - `accessToken` 获取:`POST /_matrix/client/v3/login`(密码登录)或 Element 设置页
 - `trustedUsers` / `adminUserId` 格式:`<transport>:<完整userId>`,Matrix 的 userId 是完整 MXID(如 `@barry:matrix.example.com`)
-- `workdir`:pi 的工作目录(不存在会自动创建);`pi-remote run --workdir <目录>` 可覆盖
+- `workdir`:pi 的工作目录(不存在会自动创建);`pi-courier run --workdir <目录>` 可覆盖
 - `sessionDir` / `cliPath`:可选覆盖(默认:pi 的会话目录、`which pi` 定位 CLI)
 - `encryption: true` 用于加密房间;普通房间保持 true 也可用
-- 环境变量替代:`PI_MATRIX_HOMESERVER` / `PI_MATRIX_ACCESS_TOKEN`(其他平台:`PI_TELEGRAM_TOKEN`、`PI_SLACK_BOT_TOKEN`+`PI_SLACK_APP_TOKEN`、`PI_DISCORD_TOKEN`、`PI_WHATSAPP_AUTH_PATH`)
+- 环境变量替代:`PI_MATRIX_HOMESERVER` / `PI_MATRIX_ACCESS_TOKEN`
 
 ## 使用
 
 全部操作走一个命令:
 
 ```
-pi-remote setup      首次运行配置向导(Matrix 账号、信任用户、工作目录)
-pi-remote run        前台运行(工作目录从配置读,--workdir 可覆盖)
-pi-remote enable     安装用户级 systemd 服务并开机自启、立即启动
-pi-remote start      启动服务
-pi-remote stop       停止服务
-pi-remote restart    重启服务
-pi-remote status     查看服务状态与最近日志
-pi-remote logs       跟踪服务日志(Ctrl+C 退出)
-pi-remote disable    卸载服务(停止 + 取消自启 + 删除 unit 文件)
-pi-remote update     更新本项目(git pull + 安装依赖 + 重新构建)
+pi-courier setup      首次运行配置向导(Matrix 账号、信任用户、工作目录)
+pi-courier run        前台运行(工作目录从配置读,--workdir 可覆盖)
+pi-courier enable     安装用户级 systemd 服务并开机自启、立即启动
+pi-courier start      启动服务
+pi-courier stop       停止服务
+pi-courier restart    重启服务
+pi-courier status     查看服务状态与最近日志
+pi-courier logs       跟踪服务日志(Ctrl+C 退出)
+pi-courier disable    卸载服务(停止 + 取消自启 + 删除 unit 文件)
+pi-courier update     更新本项目(git pull + 安装依赖 + 重新构建)
 ```
 
 典型首次部署:
 
 ```bash
-pi-remote setup        # 按提示配置(或手动编辑 ~/.pi/msg-bridge.json)
-pi-remote enable       # 开机自启,以当前用户运行
+pi-courier setup        # 按提示配置(或手动编辑 ~/.pi/msg-bridge.json)
+pi-courier enable       # 开机自启,以当前用户运行
 ```
 
-前台快速测试:`pi-remote run`(Ctrl+C 停止)。旧的 `node dist/standalone.js --workdir ...` 方式仍然可用。
+前台快速测试:`pi-courier run`(Ctrl+C 停止)。旧的 `node dist/standalone.js --workdir ...` 方式仍然可用。
 
 **启动成功的标志日志:**
 
@@ -225,12 +224,12 @@ pi-remote enable       # 开机自启,以当前用户运行
 **用户级(推荐,无需 sudo):**
 
 ```bash
-pi-remote enable
+pi-courier enable
 ```
 
 一条命令搞定 —— 自动写入 `~/.config/systemd/user/pi-msg-bridge.service`(使用绝对 node 路径和配置的工作目录)、启用开机自启并立即启动。彻底无人值守(注销后继续运行)执行一次:`sudo loginctl enable-linger $USER`。
 
-常用命令:`pi-remote status`、`pi-remote logs`、`pi-remote stop`、`pi-remote start`(或 `systemctl --user restart pi-msg-bridge`)。
+常用命令:`pi-courier status`、`pi-courier logs`、`pi-courier stop`、`pi-courier start`(或 `systemctl --user restart pi-msg-bridge`)。
 
 **系统级(需要 sudo):** 复制 `deploy/pi-msg-bridge.service` 到 `/etc/systemd/system/`,按注释修改三处必改项(`User`、`WorkingDirectory`、`NVM_DIR`),再 `sudo systemctl enable --now pi-msg-bridge`。
 
@@ -241,7 +240,7 @@ pi 由系统独立管理,升级只需全局更新,bridge 无需任何改动:
 ```bash
 npm install -g @earendil-works/pi-coding-agent@latest
 pi --version
-pi-remote restart    # 或: systemctl --user restart pi-msg-bridge
+pi-courier restart    # 或: systemctl --user restart pi-msg-bridge
 ```
 
 bridge 通过 `which pi` 始终连接系统最新版 pi。仅当 pi 的 RPC 协议发生破坏性变更时才需要改 bridge 代码(协议为文档化稳定接口,从未破坏性变更)。
@@ -251,7 +250,7 @@ bridge 通过 `which pi` 始终连接系统最新版 pi。仅当 pi 的 RPC 协�
 ### 安装与部署
 
 **Q: `git clone` 报 404?**
-A: 仓库地址写错。用 `https://github.com/Hi-Barry/pi-remote.git`(或直接 `npm install -g @barryfan2045/pi-remote` 安装)。
+A: 仓库地址写错。用 `https://github.com/Hi-Barry/pi-courier.git`(或直接 `npm install -g pi-courier` 安装)。
 
 **Q: `npm install` 卡住 / 只有 20-60 kB/s?**
 A: 涉及两个下载,要分开配代理:
@@ -266,19 +265,19 @@ node download-lib.js
 cd ../..
 ```
 
-**Q: `npm install -g @barryfan2045/pi-remote` 报 EEXIST?**
+**Q: `npm install -g pi-courier` 报 EEXIST?**
 A: 之前 `npm link` 过,bin 冲突。先清理:
 ```bash
-npm unlink -g pi-remote
-rm -f ~/.nvm/versions/node/v24.18.1/bin/pi-remote
-npm install -g @barryfan2045/pi-remote
+npm unlink -g pi-courier
+rm -f ~/.nvm/versions/node/v24.18.1/bin/pi-courier
+npm install -g pi-courier
 ```
 
-**Q: `npm link` 后 `pi-remote` 命令找不到?**
+**Q: `npm link` 后 `pi-courier` 命令找不到?**
 A: link 在 `npm run build` 之前执行,`dist/cli.js` 还不存在。build 后重新 `npm link`(或直接改用 npm 安装)。
 
 **Q: systemd 服务反复重启循环?**
-A: pi 子进程崩溃,几乎都是 **Node 版本不匹配**:bridge 通过 PATH 找 node 启动 pi,systemd 默认 PATH 可能命中系统 node(如 v20),而 pi 的 undici 与 Node 20 不兼容(报 `webidl.util.markAsUncloneable is not a function`)。修复:`source ~/.nvm/nvm.sh` 后重新 `pi-remote enable`(0.1.2+ 会自动把 `Environment=PATH=<nvm bin 优先>` 写进 unit)。**全机统一用一个 Node 版本(nvm v24)**,别和系统 node 混用。
+A: pi 子进程崩溃,几乎都是 **Node 版本不匹配**:bridge 通过 PATH 找 node 启动 pi,systemd 默认 PATH 可能命中系统 node(如 v20),而 pi 的 undici 与 Node 20 不兼容(报 `webidl.util.markAsUncloneable is not a function`)。修复:`source ~/.nvm/nvm.sh` 后重新 `pi-courier enable`(0.1.2+ 会自动把 `Environment=PATH=<nvm bin 优先>` 写进 unit)。**全机统一用一个 Node 版本(nvm v24)**,别和系统 node 混用。
 
 ### 配置
 
@@ -289,10 +288,10 @@ A: pi 的 provider 没配置。检查 `~/.pi/agent/` 三个文件:`models.json`(
 A: `models.json` 格式错误。用配置章节的 models.dev 提取命令重新生成。
 
 **Q: 启动报 `no transports configured`?**
-A: bridge 配置为空。运行 `pi-remote setup` 生成 `~/.pi/msg-bridge.json`,或检查 `PI_*` 环境变量。
+A: bridge 配置为空。运行 `pi-courier setup` 生成 `~/.pi/msg-bridge.json`,或检查 `PI_*` 环境变量。
 
 **Q: setup 向导里出现奇怪的 `DeprecationWarning: util._extend`?**
-A: 传输层依赖的已知噪音,0.1.0 起已过滤。更新 pi-remote 后仍看到就说明版本太旧。
+A: 传输层依赖的已知噪音,0.1.0 起已过滤。更新 pi-courier 后仍看到就说明版本太旧。
 
 ### 消息与加密
 
@@ -308,7 +307,7 @@ A: bot 的新设备没拿到你客户端的房间密钥。处理:
 A: 加密存储里是旧设备身份,而 access token 属于新设备(重新登录过)。删掉存储重启:
 ```bash
 rm -rf ~/.pi/msg-bridge-matrix-crypto
-pi-remote restart
+pi-courier restart
 ```
 **以后每次重跑 setup / 换 token,都顺手删一次这个目录。**
 
@@ -319,7 +318,7 @@ A: 验证 token:`curl -H "Authorization: Bearer <token>" https://homeserver/_mat
 A: 这是 challenge 认证 —— 把验证码回复给 bot 即成为 trusted user(第一个 trusted 用户自动成为 admin)。已在 `auth.trustedUsers` 里的用户跳过此步骤。
 
 **Q: 消息完全没有回复?**
-A: 按顺序排查:(1) `pi-remote status` / 日志 —— Matrix 连上了吗?有没有 Decryption error(加密房间)?(2) pi RPC 连上了吗?(3) 模型调用本身 —— 用 curl 直接测 provider 端点,排除网络/密钥问题。
+A: 按顺序排查:(1) `pi-courier status` / 日志 —— Matrix 连上了吗?有没有 Decryption error(加密房间)?(2) pi RPC 连上了吗?(3) 模型调用本身 —— 用 curl 直接测 provider 端点,排除网络/密钥问题。
 
 ### 运行与维护
 
