@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import * as readline from "readline";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { acquireLock, releaseLock } from "./lock.js";
@@ -71,6 +72,39 @@ function log(...args: unknown[]): void {
   logger.info(...args);
 }
 
+/**
+ * Resolve the pi working directory.
+ *
+ * Priority: CLI --workdir > config.workdir > prompt/default. When neither the
+ * CLI nor the config provides one (first run), ask on an interactive terminal
+ * (default: ~/Projects); in non-interactive contexts (systemd service) use the
+ * default silently. Either way the resolved value is persisted to the config,
+ * so the config stays the single source of truth and later edits take effect
+ * on restart (LLM-friendly).
+ */
+async function resolveWorkdir(cliWorkdir: string | undefined, configWorkdir: string | undefined): Promise<string> {
+  if (cliWorkdir) return cliWorkdir;
+  if (configWorkdir) return configWorkdir;
+
+  const fallback = path.join(os.homedir(), "Projects");
+  let workdir = fallback;
+
+  if (process.stdin.isTTY) {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await new Promise<string>((resolve) => {
+      rl.question(`未配置工作目录。请输入 pi 工作目录 [默认 ${fallback}]: `, (a) => resolve(a.trim()));
+    });
+    rl.close();
+    if (answer) workdir = answer;
+  }
+
+  const cfg = loadConfig();
+  cfg.workdir = workdir;
+  saveConfig(cfg);
+  logger.info(`工作目录: ${workdir}(已保存到 ~/.pi/msg-bridge.json,改配置后重启即生效)`);
+  return workdir;
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv);
 
@@ -82,7 +116,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   const config = loadConfig();
   const debug = config.debug === true;
-  const workdir = args.workdir ?? config.workdir;
+  const workdir = await resolveWorkdir(args.workdir, config.workdir);
   const sessionDir = config.sessionDir;
   const cliPath = config.cliPath;
 

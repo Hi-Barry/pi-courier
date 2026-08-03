@@ -89,13 +89,10 @@ async function cmdRun(args: string[]): Promise<void> {
     }
   }
   const finalWorkdir = workdir ?? config.workdir;
-  if (!finalWorkdir) {
-    console.error("❌ 未配置工作目录。先运行 `pi-courier setup`,或用 `pi-courier run --workdir <目录>` 指定。");
-    process.exit(1);
-  }
 
   const { main } = await import("./standalone.js");
-  const standaloneArgs = ["--workdir", finalWorkdir];
+  const standaloneArgs: string[] = [];
+  if (workdir) standaloneArgs.push("--workdir", workdir);
   if (level) standaloneArgs.push("--level", level);
   await main(standaloneArgs);
 }
@@ -108,12 +105,15 @@ function userUnitPath(): string {
   return path.join(os.homedir(), ".config", "systemd", "user", SERVICE_UNIT);
 }
 
-function buildUnit(projDir: string, workdir: string): string {
+function buildUnit(projDir: string): string {
   const nodeBin = process.execPath;
   // The pi child process is spawned via PATH ("node" lookup), so the nvm bin
   // dir must come first — otherwise systemd's default PATH finds a system
   // node (e.g. v20) that pi's undici is incompatible with.
   const nodeDir = path.dirname(nodeBin);
+  // Note: no --workdir here — the service reads the workdir from
+  // ~/.pi/msg-bridge.json at startup (single source of truth). Editing the
+  // config and restarting is enough; `pi-courier enable` does not snapshot it.
   return `[Unit]
 Description=pi-courier (messengers -> pi RPC)
 After=default.target
@@ -123,7 +123,7 @@ Type=simple
 WorkingDirectory=${projDir}
 Environment=PATH=${nodeDir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=-%h/.config/pi-bridge.env
-ExecStart=${nodeBin} ${projDir}/dist/standalone.js --workdir ${workdir}
+ExecStart=${nodeBin} ${projDir}/dist/standalone.js
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -142,9 +142,8 @@ function cmdEnable(): void {
 
   const config = loadConfig();
   const projDir = projectDir();
-  const workdir = config.workdir ?? process.cwd();
 
-  const unit = buildUnit(projDir, workdir);
+  const unit = buildUnit(projDir);
   const unitPath = userUnitPath();
   fs.mkdirSync(path.dirname(unitPath), { recursive: true });
   fs.writeFileSync(unitPath, unit);
