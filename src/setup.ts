@@ -10,7 +10,8 @@
 import * as os from "node:os";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline";
-import { saveConfig } from "./config.js";
+import { loadConfig, saveConfig } from "./config.js";
+import type { MsgBridgeConfig } from "./types.js";
 
 /**
  * Input abstraction that works in both modes:
@@ -103,57 +104,106 @@ async function matrixWhoami(homeserver: string, accessToken: string): Promise<st
   return data.user_id ?? "unknown";
 }
 
+/**
+ * Acquire a Matrix access token: password login (mode 1) or pasted token (mode 2).
+ */
+async function acquireToken(
+  ask: (prompt: string) => Promise<string>,
+  homeserver: string
+): Promise<{ accessToken: string; botUserId: string }> {
+  const authMode = ((await ask("获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1): ")).trim() || "1");
+
+  if (authMode === "2") {
+    const accessToken = (await ask("粘贴 access token (syt_...): ")).trim();
+    if (!accessToken) throw new Error("token 不能为空");
+    const botUserId = await matrixWhoami(homeserver, accessToken);
+    console.log(`✅ token 有效,账号: ${botUserId}`);
+    return { accessToken, botUserId };
+  }
+
+  const username = (await ask("bot 用户名 (如 test2): ")).trim();
+  // 密码不回显(终端模式);普通模式会显示,注意遮挡
+  const password = await ask("bot 密码: ");
+  if (!username || !password) throw new Error("用户名/密码不能为空");
+  console.log("登录中…");
+  const login = await matrixLogin(homeserver, username, password);
+  console.log(`✅ 登录成功,账号: ${login.userId}`);
+  return { accessToken: login.accessToken, botUserId: login.userId };
+}
+
 export async function runSetup(): Promise<void> {
   const { ask, close } = createPrompter();
   console.log("");
-  console.log("=== pi-courier 首次配置向导 ===");
-  console.log("将生成 ~/.pi/msg-bridge.json(权限 600)\n");
+  console.log("=== pi-courier 配置向导 ===");
+  console.log("将写入 ~/.pi/msg-bridge.json(权限 600;已有配置作为默认值,直接回车沿用)\n");
 
   try {
-    const homeserver = (await ask("Matrix homeserver URL (如 https://matrix.example.com): ")).trim();
+    // Existing config → prefill defaults on repeated runs.
+    const existing = loadConfig();
+
+    // ---- 1. homeserver ----------------------------------------------------
+    const hsDefault = existing.matrix?.homeserverUrl ?? "";
+    const hsPrompt = hsDefault
+      ? `Matrix homeserver URL [默认 ${hsDefault}]: `
+      : "Matrix homeserver URL (如 https://matrix.example.com): ";
+    const homeserver = (await ask(hsPrompt)).trim() || hsDefault;
     if (!homeserver) throw new Error("homeserver URL 不能为空");
 
-    const authMode =
-      (await ask("获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1): ")).trim() || "1";
+    // ---- 2. token ----------------------------------------------------------
+    // Keep the existing token when the homeserver is unchanged; otherwise it
+    // belongs to another server and must be re-acquired.
+    const hsChanged = Boolean(hsDefault) && homeserver !== hsDefault;
+    const existingToken = existing.matrix?.accessToken;
 
     let accessToken: string;
     let botUserId: string;
-    if (authMode === "2") {
-      accessToken = (await ask("粘贴 access token (syt_...): ")).trim();
-      if (!accessToken) throw new Error("token 不能为空");
-      botUserId = await matrixWhoami(homeserver, accessToken);
-      console.log(`✅ token 有效,账号: ${botUserId}`);
+    if (existingToken && !hsChanged) {
+      const keep = ((await ask("保留现有 token? [Y/n]: ")).trim() || "y").toLowerCase();
+      if (keep === "y") {
+        accessToken = existingToken;
+        botUserId = await matrixWhoami(homeserver, accessToken).catch(() => "unknown");
+        console.log(`✅ 沿用现有 token,账号: ${botUserId}`);
+      } else {
+        ({ accessToken, botUserId } = await acquireToken(ask, homeserver));
+      }
     } else {
-      const username = (await ask("bot 用户名 (如 test2): ")).trim();
-      // 密码不回显(终端模式);普通模式会显示,注意遮挡
-      const password = await ask("bot 密码: ");
-      if (!username || !password) throw new Error("用户名/密码不能为空");
-      console.log("登录中…");
-      const login = await matrixLogin(homeserver, username, password);
-      accessToken = login.accessToken;
-      botUserId = login.userId;
-      console.log(`✅ 登录成功,账号: ${botUserId}`);
+      if (hsChanged) console.log("ℹ️  homeserver 已变更,需要重新获取 token");
+      ({ accessToken, botUserId } = await acquireToken(ask, homeserver));
     }
 
-    const adminDefault = botUserId.replace(/^@/, "").split(":")[0];
-    const adminRaw = (await ask(`信任用户(管理员)MXID [默认 ${botUserId}]: `)).trim() || botUserId;
+    // ---- 3. trusted admin user ---------------------------------------------
+    const trustedDefault = existing.auth?.trustedUsers?.[0]?.replace(/^matrix:/, "") ?? botUserId;
+    const adminRaw = (await ask(`信任用户(管理员)MXID [默认 ${trustedDefault}]: `)).trim() || trustedDefault;
     if (!adminRaw.startsWith("@")) throw new Error("MXID 应以 @ 开头,如 @barry:matrix.example.com");
 
-    const encryption = (await ask("启用 E2EE 加密? [y/N]: ")).trim().toLowerCase() === "y";
+    // ---- 4. E2EE ------------------------------------------------------------
+    const encDefault = existing.matrix?.encryption === true;
+    const encPrompt = encDefault
+      ? "启用 E2EE 加密? [Y/n] [默认 是]: "
+      : "启用 E2EE 加密? [y/N]: ";
+    const encAnswer = (await ask(encPrompt)).trim().toLowerCase();
+    const encryption = encAnswer === "" ? encDefault : encAnswer === "y";
 
-    const workdirDefault = `${os.homedir()}/Projects`;
+    // ---- 5. workdir ----------------------------------------------------------
+    const workdirDefault = existing.workdir ?? `${os.homedir()}/Projects`;
     const workdir = (await ask(`pi 工作目录 [默认 ${workdirDefault}]: `)).trim() || workdirDefault;
 
-    saveConfig({
+    // ---- merge & save --------------------------------------------------------
+    // Keep untouched fields (sessionDir / cliPath / logLevel / hideToolCalls …)
+    // from the existing config instead of overwriting the whole file.
+    const merged: MsgBridgeConfig = {
+      ...existing,
       matrix: { homeserverUrl: homeserver, accessToken, encryption },
       auth: {
+        ...existing.auth,
         trustedUsers: [`matrix:${adminRaw}`],
         adminUserId: `matrix:${adminRaw}`,
       },
       workdir,
-      autoConnect: true,
-      debug: true,
-    });
+      autoConnect: existing.autoConnect ?? true,
+      debug: existing.debug ?? true,
+    };
+    saveConfig(merged);
 
     console.log("\n✅ 配置已写入 ~/.pi/msg-bridge.json");
     console.log(`   账号: ${botUserId}`);
