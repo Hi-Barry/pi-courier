@@ -15,7 +15,7 @@
     "README.zh-CN.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && tsc",
     "prepare": "npm run build",
     "watch": "tsc --watch",
     "clean": "rm -rf dist",
