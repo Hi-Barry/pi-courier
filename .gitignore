@@ -31,3 +31,6 @@ Thumbs.db
 .claude
 .vscode
 .pi-lens/
+
+# Private dev log (not published)
+docs/DEVLOG.md
