@@ -90,7 +90,7 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
            bot 密码:                                     ← 密码(不回显)
   [方式 2] 粘贴 access token (syt_...):                  ← 已有 token
 ✅ 登录成功,账号: @test3:matrix.example.com
-信任用户(管理员)MXID [默认 @test3:matrix.example.com]:   ← 你的账号,如 @barry:matrix.example.com
+信任用户(管理员)MXID [默认 @test3:matrix.example.com]:   ← 直接回车 = 只有 bot 自己可信;建议填你的账号,如 @barry:matrix.example.com
 启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间选 y 也没问题)
 pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输入其他目录
 
@@ -121,9 +121,24 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 
 ### 第 3 步 —— 在 Matrix 里使用
 
-1. **给 bot 账号发私聊消息**
-2. **仅首次**:bridge 日志里会打印**6 位验证码**(`pi-courier logs` 查看);把验证码回复给 bot,你就成为 trusted user(第一个 trusted 用户自动成为管理员)
-3. 正常对话,或发命令:
+**首次接触(一次性配对):**
+
+1. 用你的账号**给 bot 发私聊消息**(随便发什么都行)
+2. 此时你还不是 trusted user,bridge 会在日志里打印验证码(`pi-courier logs` 或 `journalctl --user -u pi-msg-bridge -f`):
+
+```
+🔐 Challenge code for @barry: 138949
+```
+
+3. **在聊天里回复这串数字**(只发数字),日志确认配对成功:
+
+```
+[auth:info] ✅ barry authenticated
+```
+
+你就成为 trusted user(第一个 trusted 用户自动成为管理员)。不在 `auth.trustedUsers` 里的用户都会走一次这个流程;预信任用户完全跳过。
+
+**之后**正常对话,或发命令:
 
 | 命令 | 作用 |
 |---|---|

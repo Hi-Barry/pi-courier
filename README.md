@@ -90,7 +90,7 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
            bot 密码:                                     ← 密码(不回显)
   [方式 2] 粘贴 access token (syt_...):                  ← 已有 token
 ✅ 登录成功,账号: @test3:matrix.example.com
-信任用户(管理员)MXID [默认 @test3:matrix.example.com]:   ← 你的账号,如 @barry:matrix.example.com
+信任用户(管理员)MXID [默认 @test3:matrix.example.com]:   ← 直接回车 = 只有 bot 自己可信;建议填你的账号,如 @barry:matrix.example.com
 启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间也选 y 无妨)
 pi 工作目录 [默认 /home/you/Projects]:                   ← Enter 或输入其他目录
 
@@ -121,9 +121,24 @@ Startup success looks like:
 
 ### Step 3 — Use it from Matrix
 
-1. **DM the bot** from your account
-2. First time only: the bridge prints a **6-digit code** in its log (`pi-courier logs`); reply with the code to become a trusted user (the first trusted user becomes admin)
-3. Chat normally, or send commands:
+**First contact (one-time pairing):**
+
+1. **DM the bot** from your account and send any message
+2. The bot is not yet a trusted user, so the bridge prints a challenge code in its log (`pi-courier logs` or `journalctl --user -u pi-msg-bridge -f`):
+
+```
+🔐 Challenge code for @barry: 138949
+```
+
+3. **Reply with that code** in the chat (just the digits) — the log confirms the pairing:
+
+```
+[auth:info] ✅ barry authenticated
+```
+
+You are now a trusted user (the first trusted user also becomes admin). Any user not in `auth.trustedUsers` goes through this flow once; pre-listed users skip it entirely.
+
+**Then** chat normally, or send commands:
 
 | Command | Action |
 |---|---|
