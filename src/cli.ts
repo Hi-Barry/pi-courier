@@ -227,8 +227,11 @@ function cmdUpdate(): void {
   // 2. Upgrade the code.
   if (installedViaNpm) {
     // Installed with `npm install -g pi-courier` → upgrade via npm.
+    // --foreground-scripts: postinstall output (e.g. the E2EE native lib
+    // download progress from matrix-sdk-crypto-nodejs) streams to the
+    // terminal in real time instead of being buffered by npm until the end.
     console.log("🔄 通过 npm 升级 pi-courier …");
-    const res = spawnSync("npm", ["install", "-g", "pi-courier@latest"], {
+    const res = spawnSync("npm", ["install", "-g", "pi-courier@latest", "--foreground-scripts"], {
       stdio: "inherit",
     });
     if (res.status !== 0) {
