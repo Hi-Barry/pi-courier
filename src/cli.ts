@@ -253,9 +253,16 @@ function cmdUpdate(): void {
   }
 
   // 3. Start the service again if it was running, so the update takes effect.
+  //    If it wasn't running before the update (manually stopped, or a previous
+  //    update was interrupted), tell the user — never silently leave it dead,
+  //    and never override an intentional stop.
   if (wasActive) {
     console.log("🔄 重新启动服务…");
     runSystemctl(["start", SERVICE_NAME]);
+    console.log("✅ 服务已重新启动。");
+  } else {
+    console.log("\nℹ️  更新前服务未运行,已跳过启动。");
+    console.log("   如需启动服务: pi-courier start");
   }
   console.log("\n✅ 更新完成。");
 }
