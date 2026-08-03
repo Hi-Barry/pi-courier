@@ -76,11 +76,14 @@ async function cmdSetup(): Promise<void> {
 
 async function cmdRun(args: string[]): Promise<void> {
   const config = loadConfig();
-  // Only --workdir is supported as a positional override.
+  // Supported overrides: --workdir, --level.
   let workdir: string | undefined;
+  let level: string | undefined;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--workdir") {
       workdir = args[++i];
+    } else if (args[i] === "--level") {
+      level = args[++i];
     } else {
       console.warn(`⚠️  忽略未知参数: ${args[i]}(旧参数已废弃,请用配置或子命令)`);
     }
@@ -92,7 +95,9 @@ async function cmdRun(args: string[]): Promise<void> {
   }
 
   const { main } = await import("./standalone.js");
-  await main(["--workdir", finalWorkdir]);
+  const standaloneArgs = ["--workdir", finalWorkdir];
+  if (level) standaloneArgs.push("--level", level);
+  await main(standaloneArgs);
 }
 
 // ===========================================================================
@@ -159,16 +164,24 @@ function runSystemctl(args: string[]): void {
   }
 }
 
-function cmdService(action: "start" | "stop" | "restart" | "status" | "logs"): void {
+function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", args: string[] = []): void {
   const unitPath = userUnitPath();
   if (!fs.existsSync(unitPath)) {
     console.error(`❌ 服务未安装。先运行 \`pi-courier enable\` 安装。`);
     process.exit(1);
   }
-  const cmd =
-    action === "logs"
-      ? ["journalctl", "--user", "-u", SERVICE_NAME, "-f"]
-      : ["systemctl", "--user", action, SERVICE_NAME];
+  let cmd: string[];
+  if (action === "logs") {
+    // `--level debug|info|warn|error` maps to journalctl priority (default: info)
+    let level = "info";
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--level") level = args[++i] ?? level;
+    }
+    const prio: Record<string, string> = { debug: "debug", info: "info", warn: "warning", error: "err" };
+    cmd = ["journalctl", "--user", "-u", SERVICE_NAME, "-f", "-p", prio[level] ?? "info"];
+  } else {
+    cmd = ["systemctl", "--user", action, SERVICE_NAME];
+  }
   const res = spawnSync(cmd[0], cmd.slice(1), { stdio: "inherit" });
   if (res.status !== 0 && action !== "logs") {
     process.exit(res.status ?? 1);
@@ -259,8 +272,10 @@ async function main(): Promise<void> {
     case "stop":
     case "restart":
     case "status":
-    case "logs":
       cmdService(cmd);
+      break;
+    case "logs":
+      cmdService("logs", rest);
       break;
     case "disable":
       cmdDisable();

@@ -165,14 +165,22 @@ You are now a trusted user (the first trusted user also becomes admin). Any user
 ### Managing the service
 
 ```bash
-pi-courier status     # status + recent logs
-pi-courier logs       # tail logs
-pi-courier restart    # restart
-pi-courier stop       # stop
-pi-courier start      # start
-pi-courier disable    # uninstall the service
-pi-courier update     # update pi-courier itself
+pi-courier status          # status + recent logs
+pi-courier logs            # tail logs (INFO and above)
+pi-courier logs --level debug   # tail ALL logs (incl. thinking, stream deltas)
+pi-courier logs --level error   # errors only
+pi-courier run --level debug    # foreground with full detail
+pi-courier restart        # restart
+pi-courier stop           # stop
+pi-courier start          # start
+pi-courier disable        # uninstall the service
+pi-courier update         # update pi-courier itself
 ```
+
+Log levels: `debug < info < warn < error`. The service writes everything;
+`logs` shows INFO+ by default, `--level debug` shows the full session replay
+(user messages, thinking, tool calls, replies). The complete conversation is
+always stored in pi's session files (`~/.pi/agent/sessions/`).
 
 Upgrading **pi** is independent — pi-courier always uses the system pi via `which pi`:
 

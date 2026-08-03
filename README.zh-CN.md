@@ -165,14 +165,19 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 ### 服务管理
 
 ```bash
-pi-courier status     # 状态 + 最近日志
-pi-courier logs       # 跟踪日志
-pi-courier restart    # 重启
-pi-courier stop       # 停止
-pi-courier start      # 启动
-pi-courier disable    # 卸载服务
-pi-courier update     # 更新 pi-courier 自身
+pi-courier status              # 状态 + 最近日志
+pi-courier logs                # 跟踪日志(INFO 及以上)
+pi-courier logs --level debug  # 跟踪全部日志(含思考、流式增量)
+pi-courier logs --level error  # 只看错误
+pi-courier run --level debug   # 前台运行,全量显示
+pi-courier restart             # 重启
+pi-courier stop                # 停止
+pi-courier start               # 启动
+pi-courier disable             # 卸载服务
+pi-courier update              # 更新 pi-courier 自身
 ```
+
+日志级别:`debug < info < warn < error`。服务会把全部内容写入日志;`logs` 默认显示 INFO 及以上,`--level debug` 显示完整会话回放(用户消息、思考、工具调用、回复)。完整对话始终保存在 pi 的会话文件(`~/.pi/agent/sessions/`)。
 
 **升级 pi** 是独立的事 —— pi-courier 始终通过 `which pi` 连接系统 pi:
 

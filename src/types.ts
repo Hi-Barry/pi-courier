@@ -46,6 +46,8 @@ export interface MsgBridgeConfig {
   sessionDir?: string;
   /** 显式指定 pi 的 cli.js 路径(默认:PI_CLI_PATH → which pi → 本地 node_modules) */
   cliPath?: string;
+  /** 日志级别:debug | info | warn | error(默认 info;`pi-courier logs --level debug` 可查看全量) */
+  logLevel?: string;
 }
 
 /**

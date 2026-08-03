@@ -17,6 +17,7 @@ import * as path from "path";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { acquireLock, releaseLock } from "./lock.js";
+import { logger, parseLogLevel, setLogLevel } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { TransportManager } from "./transports/manager.js";
@@ -33,17 +34,20 @@ import { MatrixProvider } from "./transports/matrix.js";
   }) as typeof process.emitWarning;
 }
 
-function parseArgs(argv: string[]): { workdir?: string } {
-  const result: { workdir?: string } = {};
+function parseArgs(argv: string[]): { workdir?: string; logLevel?: string } {
+  const result: { workdir?: string; logLevel?: string } = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
       case "--workdir":
         result.workdir = argv[++i];
         break;
+      case "--level":
+        result.logLevel = argv[++i];
+        break;
       case "--setup":
       case "--configure":
-        console.warn("⚠️  旧参数已废弃,请用 `pi-remote setup`");
+        console.warn("⚠️  旧参数已废弃,请用 `pi-courier setup`");
         break;
       case "--pi-cli":
         console.warn("⚠️  旧参数已废弃,请在 ~/.pi/msg-bridge.json 配置 cliPath,或设 PI_CLI_PATH");
@@ -64,7 +68,7 @@ function parseArgs(argv: string[]): { workdir?: string } {
 }
 
 function log(...args: unknown[]): void {
-  console.log(`[${new Date().toISOString()}]`, ...args);
+  logger.info(...args);
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
@@ -82,9 +86,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const sessionDir = config.sessionDir;
   const cliPath = config.cliPath;
 
+  // Log level: CLI --level > config.logLevel > default "info"
+  const cliLevel = args.logLevel ? parseLogLevel(args.logLevel) : undefined;
+  const configLevel = typeof config.logLevel === "string" ? parseLogLevel(config.logLevel) : undefined;
+  setLogLevel(cliLevel ?? configLevel ?? "info");
+
   const auth = new ChallengeAuth(
-    (code, username) => log(`🔐 Challenge code for @${username}: ${code}`),
-    (message, level) => log(`[auth:${level ?? "info"}] ${message}`),
+    (code, username) => logger.info(`🔐 Challenge code for @${username}: ${code}`),
+    (message, level) => logger.info(`[auth:${level ?? "info"}] ${message}`),
     async (_chatId, _message) => {
       // Challenge prompts are sent via the transport's sendMessage
     },
@@ -133,8 +142,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const sendReply = async (chatId: string, transport: string, text: string): Promise<void> => {
     try {
       await transportManager.sendMessage(chatId, transport, text);
+      const short = text.replace(/\s+/g, " ").trim();
+      logger.debug(`📤 [${transport}] ${short.slice(0, 500)}${short.length > 500 ? "…" : ""}`);
     } catch (err) {
-      log(`⚠️ failed to send reply via ${transport}:`, (err as Error).message);
+      logger.error(`发送失败 (${transport}): ${(err as Error).message}`);
     }
   };
 
@@ -149,12 +160,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   transportManager.onMessage((msg) => {
     router.handleIncoming(msg).catch((err) => {
-      log("❌ message handling error:", (err as Error).message);
+      logger.error("❌ message handling error:", (err as Error).message);
     });
   });
 
   transportManager.onError((err, transport) => {
-    log(`❌ ${transport} error:`, err.message);
+    logger.error(`❌ ${transport} error:`, (err as Error).message);
   });
 
   // ---- agent events → replies ------------------------------------------------
@@ -172,15 +183,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         .join(", ")}`
     );
   } catch (err) {
-    log("⚠️ some transports failed to connect:", (err as Error).message);
+    logger.warn("⚠️ some transports failed to connect:", (err as Error).message);
   }
 
   try {
     await rpc.start();
     const state = await rpc.getState();
-    log(`✅ pi RPC connected (model: ${state.model?.id ?? "unknown"}, session: ${state.sessionId ?? "?"})`);
+    logger.info(`✅ pi RPC connected (model: ${state.model?.id ?? "unknown"}, session: ${state.sessionId ?? "?"})`);
   } catch (err) {
-    console.error("[bridge] failed to start pi RPC:", (err as Error).message);
+    logger.error("[bridge] failed to start pi RPC:", (err as Error).message);
     await transportManager.disconnectAll();
     releaseLock();
     process.exit(1);
@@ -191,7 +202,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    log(`🛑 ${signal} received — shutting down`);
+    logger.info(`🛑 ${signal} received — shutting down`);
     await rpc.stop().catch(() => {});
     await transportManager.disconnectAll();
     releaseLock();
@@ -200,7 +211,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
 
-  log("🚀 msg-bridge standalone ready. Waiting for messages...");
+  logger.info("🚀 msg-bridge standalone ready. Waiting for messages...");
 }
 
 // Direct execution: `node dist/standalone.js [--workdir ...]`

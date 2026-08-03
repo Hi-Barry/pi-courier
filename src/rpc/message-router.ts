@@ -15,6 +15,7 @@ import {
   hasToolCalls,
   splitMessage,
 } from "../formatting.js";
+import { isEnabled, logger } from "../logger.js";
 import type { TransportManager } from "../transports/manager.js";
 import type { ExternalMessage, PendingRemoteChat } from "../types.js";
 import { handleSlashCommand } from "./command-map.js";
@@ -59,7 +60,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       const text = msg.content.trim();
       if (!text) return;
 
-      if (debug) log(`📥 [${msg.transport}] @${msg.username}: ${text.slice(0, 200)}`);
+      if (isEnabled("debug")) {
+        logger.debug(`📥 [${msg.transport}] @${msg.username}: ${text.slice(0, 500)}${text.length > 500 ? "…" : ""}`);
+      } else {
+        logger.info(`📥 [${msg.transport}] @${msg.username}: ${text.slice(0, 200)}${text.length > 200 ? "…" : ""}`);
+      }
 
       // Authorization (initiates 6-digit challenge for unknown users in DMs)
       const isAuthorized = await auth.checkAuthorization(
@@ -113,9 +118,91 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       const event = rawEvent as {
         type: string;
         message?: AssistantMessage;
+        assistantMessageEvent?: unknown;
+        toolName?: string;
+        args?: unknown;
+        result?: unknown;
+        partialResult?: unknown;
+        isError?: boolean;
+        willRetry?: boolean;
+        attempt?: number;
+        maxAttempts?: number;
+        delayMs?: number;
+        errorMessage?: string;
+        finalError?: string;
+        success?: boolean;
+        reason?: string;
+        aborted?: boolean;
+        level?: unknown;
+        name?: string;
+        steering?: readonly string[];
+        followUp?: readonly string[];
         extensionPath?: string;
         error?: string;
       };
+
+      // ---- full session replay log (leveled) -----------------------------
+      switch (event.type) {
+        case "agent_start":
+          logger.debug("[agent] run 开始");
+          break;
+        case "agent_end":
+          logger.debug(`[agent] run 结束(willRetry: ${event.willRetry ?? false})`);
+          break;
+        case "agent_settled":
+          logger.debug("[agent] 已收敛");
+          break;
+        case "message_start":
+          logger.debug("[agent] 消息开始");
+          break;
+        case "message_update":
+          // Streaming delta (includes thinking deltas). DEBUG level, truncated.
+          logger.debug(`[agent] 流式增量: ${summarizeStreamDelta(event)}`);
+          break;
+        case "message_end":
+          logger.debug("[agent] 消息完成");
+          break;
+        case "tool_execution_start":
+          logger.info(`[agent] 🔧 工具调用: ${event.toolName ?? "?"}(${summarizeArg(event.args)})`);
+          break;
+        case "tool_execution_update":
+          logger.debug(`[agent] 工具进度: ${event.toolName ?? "?"} → ${summarizeArg(event.partialResult, 300)}`);
+          break;
+        case "tool_execution_end":
+          logger.info(
+            `[agent] 工具完成: ${event.toolName ?? "?"} → ${event.isError ? "❌ 错误" : "✅ 成功"} ${summarizeArg(event.result, 500)}`
+          );
+          break;
+        case "compaction_start":
+          logger.warn(`[agent] 上下文压缩开始(${event.reason ?? "?"})`);
+          break;
+        case "compaction_end":
+          logger.warn(
+            `[agent] 上下文压缩${event.aborted ? "中止" : "结束"}(${event.reason ?? "?"}${event.errorMessage ? `, 错误: ${event.errorMessage}` : ""})`
+          );
+          break;
+        case "auto_retry_start":
+          logger.warn(`[agent] 自动重试 ${event.attempt}/${event.maxAttempts}(${event.errorMessage ?? ""})`);
+          break;
+        case "auto_retry_end":
+          logger.warn(`[agent] 自动重试结束: ${event.success ? "成功" : `失败(${event.finalError ?? ""})`}`);
+          break;
+        case "queue_update":
+          logger.debug(`[agent] 队列更新(steer: ${event.steering?.length ?? 0}, followUp: ${event.followUp?.length ?? 0})`);
+          break;
+        case "thinking_level_changed":
+          logger.info(`[agent] 思考级别: ${String(event.level ?? "?")}`);
+          break;
+        case "session_info_changed":
+          logger.debug(`[agent] 会话名称: ${event.name ?? "(清除)"}`);
+          break;
+        case "entry_appended":
+          logger.debug("[agent] 会话条目已写入");
+          break;
+        default:
+          logger.debug(`[agent] 事件: ${event.type}`);
+          break;
+      }
 
       if (event.type === "turn_start") {
         if (pendingRemoteChat) {
@@ -133,6 +220,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         const toolCallsText = formatToolCalls(message);
         const pendingTools = hasToolCalls(message);
         const cfg = loadConfig();
+
+        // Reply summary at INFO level — the full conversation is also in pi's
+        // session file (path logged below).
+        logger.info(
+          `[agent] 回复 @${pendingRemoteChat.username}: ${responseText.trim().slice(0, 500)}${responseText.trim().length > 500 ? "…" : ""}`
+        );
 
         const parts: string[] = [];
         const trimmed = responseText.trim();
@@ -157,6 +250,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
 
       if (event.type === "extension_error") {
+        logger.error(`[agent] 扩展错误 (${event.extensionPath ?? "unknown"}): ${event.error ?? "unknown"}`);
         if (pendingRemoteChat) {
           sendReply(
             pendingRemoteChat.chatId,
@@ -164,8 +258,40 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             `⚠️ 扩展错误 (${event.extensionPath ?? "unknown"}): ${event.error ?? "unknown"}`
           ).catch(() => {});
         }
-        log("⚠️ extension_error:", event.extensionPath, event.error);
       }
     },
   };
+}
+
+/** Compact one-line summary of a streamed delta event (thinking/text/tool deltas). */
+function summarizeStreamDelta(event: {
+  assistantMessageEvent?: unknown;
+  message?: AssistantMessage;
+}): string {
+  const e = event.assistantMessageEvent as
+    | { type?: string; text?: string; thinking?: string; delta?: string; toolCall?: unknown }
+    | undefined;
+  if (!e) return "(无增量)";
+  if (e.type === "text" && e.text) return e.text.slice(0, 300);
+  if (e.type === "thinking" && e.thinking) return `思考: ${e.thinking.slice(0, 300)}`;
+  if (e.type === "tool_call") return "工具调用增量";
+  if (e.delta) return e.delta.slice(0, 300);
+  return `(${e.type ?? "unknown"})`;
+}
+
+/** One-line, bounded representation of a tool argument/result payload. */
+function summarizeArg(arg: unknown, max = 500): string {
+  if (arg === undefined || arg === null) return "";
+  if (typeof arg === "string") {
+    const s = arg.replace(/\s+/g, " ").trim();
+    return s.length > max ? `${s.slice(0, max)}…` : s;
+  }
+  try {
+    const s = JSON.stringify(arg);
+    if (!s) return "";
+    const oneLine = s.replace(/\s+/g, " ").trim();
+    return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
+  } catch {
+    return String(arg);
+  }
 }
