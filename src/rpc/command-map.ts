@@ -183,16 +183,11 @@ export async function handleSlashCommand(
 
       // --- Fallthrough: extension commands, skills, prompt templates -----------
       default: {
-        // /skill:name, /template and extension commands are expanded by pi itself.
-        const commands = await rpc.getCommands();
-        const known = commands.some((c) => `/${c.name}` === name);
-        if (known) {
-          await rpc.prompt(trimmed);
-          return true;
-        }
-        await reply(
-          `❌ 未知命令: ${name}\n${helpText()}`
-        );
+        // /skill:name, /template and extension commands are expanded by pi
+        // itself. Always forward: pi's prompt treats unknown commands as plain
+        // text and expands skills/templates, so a whitelist here would break
+        // /skill: (skills are never in get_commands).
+        await rpc.prompt(trimmed);
         return true;
       }
     }
