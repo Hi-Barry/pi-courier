@@ -216,6 +216,16 @@ function cmdUpdate(): void {
   const projDir = projectDir();
   const installedViaNpm = !fs.existsSync(path.join(projDir, ".git"));
 
+  // 1. Stop the service first (if running) so the upgrade happens on a clean
+  //    state — the old process never touches partially-replaced files.
+  const active = spawnSync("systemctl", ["--user", "is-active", SERVICE_NAME], { encoding: "utf-8" });
+  const wasActive = active.stdout?.trim() === "active";
+  if (wasActive) {
+    console.log("🛑 停止服务…");
+    runSystemctl(["stop", SERVICE_NAME]);
+  }
+
+  // 2. Upgrade the code.
   if (installedViaNpm) {
     // Installed with `npm install -g pi-courier` → upgrade via npm.
     console.log("🔄 通过 npm 升级 pi-courier …");
@@ -243,11 +253,10 @@ function cmdUpdate(): void {
     }
   }
 
-  // Restart the service if it's running, so the update takes effect.
-  const active = spawnSync("systemctl", ["--user", "is-active", SERVICE_NAME], { encoding: "utf-8" });
-  if (active.stdout?.trim() === "active") {
-    console.log("\n🔄 服务运行中,自动重启…");
-    runSystemctl(["restart", SERVICE_NAME]);
+  // 3. Start the service again if it was running, so the update takes effect.
+  if (wasActive) {
+    console.log("🔄 重新启动服务…");
+    runSystemctl(["start", SERVICE_NAME]);
   }
   console.log("\n✅ 更新完成。");
 }
