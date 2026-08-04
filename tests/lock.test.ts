@@ -95,17 +95,18 @@ describe('lock', () => {
     expect(acquireLock()).toBe(true);
   });
 
-  it('blocks when a live process holds the lock (layer 2)', async () => {
+  it('takes over a same-PID lock (PID reuse after restart, layer 2)', async () => {
     const piDir = join(tmpDir, '.pi');
     mkdirSync(piDir, { recursive: true });
-    // Use current PID with a different owner — simulates another instance in
-    // a different process that happens to be alive
+    // Same PID with a different owner — simulates container restarts where
+    // the main process is PID 1 every time and the old lock file survived
+    // in the mounted volume. A process can't be a live competitor to itself.
     writeFileSync(join(piDir, 'pi-courier.lock'), `${process.pid}:other-instance`);
 
-    // Layer 1 passes (no global flag set).
-    // Layer 2: same PID, different owner → blocked.
-    const { acquireLock } = await importLock(tmpDir);
-    expect(acquireLock()).toBe(false);
+    const { acquireLock, releaseLock } = await importLock(tmpDir);
+    expect(acquireLock()).toBe(true);
+    releaseLock();
+    expect(existsSync(join(piDir, 'pi-courier.lock'))).toBe(false);
   });
 
   it('releaseLock is a no-op for non-owner', async () => {

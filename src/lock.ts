@@ -31,10 +31,6 @@ export function acquireLock(): boolean {
     if (fs.existsSync(LOCK_PATH)) {
       const raw = fs.readFileSync(LOCK_PATH, "utf-8").trim().split(":");
       const pid = parseInt(raw[0], 10);
-      const owner = raw[1] ?? "";
-      if (!Number.isNaN(pid) && pid === process.pid && owner !== instanceId) {
-        return false;
-      }
       if (!Number.isNaN(pid) && pid !== process.pid) {
         try {
           process.kill(pid, 0); // throws if process does not exist
@@ -43,6 +39,9 @@ export function acquireLock(): boolean {
           // stale lock from a dead process — overwrite below
         }
       }
+      // pid === process.pid: PID reuse or our own leftover lock. A process
+      // can't be a live competitor to itself, and containers restart with
+      // the main process as PID 1 every time — so take over the lock.
     }
     const configDir = path.join(os.homedir(), ".pi");
     if (!fs.existsSync(configDir)) {
