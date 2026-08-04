@@ -46,11 +46,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 从 builder 只带 node_modules 与 pi/pi-courier 两个可执行链接
-# (COPY 保留相对符号链接,指向的 lib 内容已一并复制)
+# 从 builder 只带 node_modules,然后在 runtime 重建 bin 符号链接
+# (docker COPY 会把符号链接解引用成普通文件,导致相对 import 解析错误,
+#  所以不能直接 COPY /usr/local/bin/pi)
 COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=builder /usr/local/bin/pi /usr/local/bin/pi
-COPY --from=builder /usr/local/bin/pi-courier /usr/local/bin/pi-courier
+RUN ln -s /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js /usr/local/bin/pi \
+    && ln -s /usr/local/lib/node_modules/pi-courier/dist/cli.js /usr/local/bin/pi-courier
 
 # 验证安装(失败则构建失败)
 RUN pi --version \
