@@ -4,16 +4,35 @@
 # 运行: docker compose up -d(见 docker-compose.yml 与 README.md)
 #
 # 说明:
-#  - 基于 node:24(避开 Node 20 与 pi 的 undici 不兼容问题)
-#  - 全局安装 pi(peer 依赖)+ pi-courier
+#  - 基于 node:24-slim(避开 Node 20 与 pi 的 undici 不兼容问题;glibc 标准
+#    环境保证 agent 的 bash 工具与宿主行为一致)
+#  - 多阶段构建:builder 层装依赖后丢弃(npm 缓存/构建垃圾不进最终镜像),
+#    runtime 只带 node_modules + 运行时工具 → 体积约省 200-300MB
+#  - defaults/ 预置 LLM 三件套模板(entrypoint 首次启动自动拷贝到 /root/.pi/agent)
 #  - 构建期间 npm 会从 GitHub Releases 下载 E2EE 原生库(约 21MB),
-#    如果 VPS 网络受限,用 --build-arg HTTPS_PROXY/HTTP_PROXY 传代理
-#  - defaults/ 预置 LLM 三件套模板(models.json/auth.json/settings.json),
-#    entrypoint 首次启动自动拷贝到 /root/.pi/agent(用户只需改 auth.json 的 key)
+#    网络受限时用 --build-arg HTTPS_PROXY/HTTP_PROXY 传代理
 
+# ============================== builder ======================================
+FROM node:24-slim AS builder
+
+ARG HTTPS_PROXY=
+ARG HTTP_PROXY=
+ENV https_proxy=${HTTPS_PROXY} \
+    http_proxy=${HTTP_PROXY}
+
+# 仅需要 ca-certificates(npm install 走 https;git 由 runtime 层负责)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 pi 与 pi-courier(pi 先装,pi-courier 的 peer 依赖即满足);
+# 安装后清 npm 缓存(此层最终不会进入 runtime 镜像)
+RUN npm install -g @earendil-works/pi-coding-agent pi-courier \
+    && npm cache clean --force
+
+# ============================== runtime ======================================
 FROM node:24-slim
 
-# 构建期代理(可选,仅当 VPS 需要代理访问外网时)
 ARG HTTPS_PROXY=
 ARG HTTP_PROXY=
 ENV https_proxy=${HTTPS_PROXY} \
@@ -21,18 +40,22 @@ ENV https_proxy=${HTTPS_PROXY} \
 
 # 系统依赖:
 #  - git:pi 的 bash 工具 / `pi install` 需要(slim 基础镜像没有)
-#  - ca-certificates:HTTPS 证书(下载/校验需要)
+#  - ca-certificates:HTTPS 证书
 #  - curl:排查网络问题用(可选)
-# (apt 请求也走上面的代理 ENV,受限网络下可代理)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 pi 与 pi-courier(pi 先装,pi-courier 的 peer 依赖即满足)
-RUN npm install -g @earendil-works/pi-coding-agent pi-courier \
-    && pi --version \
+# 从 builder 只带 node_modules 与 pi/pi-courier 两个可执行链接
+# (COPY 保留相对符号链接,指向的 lib 内容已一并复制)
+COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=builder /usr/local/bin/pi /usr/local/bin/pi
+COPY --from=builder /usr/local/bin/pi-courier /usr/local/bin/pi-courier
+
+# 验证安装(失败则构建失败)
+RUN pi --version \
     && pi-courier help >/dev/null 2>&1 \
-    && echo "node $(node --version), pi and pi-courier installed OK"
+    && echo "OK: node $(node --version), pi + pi-courier installed"
 
 # 默认配置模板 + 首次启动初始化脚本
 COPY defaults/ /opt/pi-courier/defaults/
