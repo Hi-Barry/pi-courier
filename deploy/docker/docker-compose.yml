@@ -1,0 +1,27 @@
+services:
+  pi-courier:
+    build:
+      context: .
+      # 构建期代理(可选,仅当 VPS 需要代理访问外网时)
+      args:
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+    image: pi-courier:latest
+    container_name: pi-courier
+    restart: unless-stopped
+    volumes:
+      # 数据目录:配置 + 会话 + 加密存储(必须持久化)
+      - ./data:/root/.pi
+      # 可选:把宿主机项目目录映射到容器内 workdir
+      # (这样 pi 可以在容器里直接操作宿主机上的项目文件)
+      # - ./projects:/root/Projects
+    environment:
+      - TZ=Asia/Shanghai
+      # 运行时代理(可选,仅当 Matrix / LLM provider 需要代理访问时)
+      # - https_proxy=http://<host>:<port>
+      # - http_proxy=http://<host>:<port>
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
