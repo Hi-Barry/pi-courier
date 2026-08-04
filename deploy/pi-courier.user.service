@@ -24,7 +24,7 @@ Type=simple
 WorkingDirectory=%h/Projects/pi-courier
 Environment=NVM_DIR=%h/.nvm
 # Optional: PI_MATRIX_HOMESERVER / PI_MATRIX_ACCESS_TOKEN etc. can live here
-# instead of ~/.pi/msg-bridge.json
+# instead of ~/.pi/pi-courier.json
 EnvironmentFile=-%h/.config/pi-bridge.env
 ExecStart=/bin/bash -lc 'source "$NVM_DIR/nvm.sh" && exec node dist/standalone.js --workdir %h/Projects'
 Restart=on-failure

@@ -13,7 +13,7 @@ User=hermes
 WorkingDirectory=/home/hermes/Projects/pi-courier
 Environment=NVM_DIR=/home/hermes/.nvm
 # Optional: PI_MATRIX_HOMESERVER / PI_MATRIX_ACCESS_TOKEN etc. can live here
-# instead of ~/.pi/msg-bridge.json
+# instead of ~/.pi/pi-courier.json
 EnvironmentFile=-/etc/pi-bridge.env
 ExecStart=/bin/bash -lc 'source "$NVM_DIR/nvm.sh" && exec node dist/standalone.js --workdir /home/hermes/Projects'
 Restart=on-failure

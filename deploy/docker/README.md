@@ -48,9 +48,9 @@ docker logs pi-courier   # 查看启动日志
 docker exec -it pi-courier pi-courier setup
 ```
 
-向导写入容器内 `/root/.pi/msg-bridge.json`(宿主 `./data/msg-bridge.json`)。
+向导写入容器内 `/root/.pi/pi-courier.json`(宿主 `./data/pi-courier.json`)。
 
-> 也可以不用向导:直接在宿主 `./data/` 下创建 `msg-bridge.json` 和 `agent/` 目录(对应容器 `/root/.pi/`),格式见项目 README FAQ。
+> 也可以不用向导:直接在宿主 `./data/` 下创建 `pi-courier.json` 和 `agent/` 目录(对应容器 `/root/.pi/`),格式见项目 README FAQ。
 
 ### 4. 使用
 
@@ -78,7 +78,7 @@ git pull && docker compose build --no-cache && docker compose up -d
 
 ```bash
 docker exec -it pi-courier pi-courier setup   # workdir 填 /root/Projects/<你的项目>
-# 或直接改 ./data/msg-bridge.json 的 workdir 后 docker compose restart
+# 或直接改 ./data/pi-courier.json 的 workdir 后 docker compose restart
 ```
 
 宿主机代码放 `./projects/<你的项目>`,pi 的工作目录就是 `/root/Projects/<你的项目>`。
@@ -91,4 +91,4 @@ docker exec -it pi-courier pi-courier setup   # workdir 填 /root/Projects/<你�
 | `M_BAD_JSON: device_id does not match` | 重登录过,删 `./data/msg-bridge-matrix-crypto` 重启 |
 | 加密房间解不开新消息 | bot 无交叉签名,改用非加密房间 |
 | 会话重启丢失 | 0.1.1+ 自动 `--continue`,确认 `./data` 卷没被删 |
-| 想用新配置 | 改 `./data/msg-bridge.json` → `docker compose restart` |
+| 想用新配置 | 改 `./data/pi-courier.json` → `docker compose restart` |

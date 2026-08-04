@@ -82,7 +82,7 @@ It walks you through, prompting for each value (defaults in brackets; press Ente
 
 ```
 === pi-courier 首次配置向导 ===
-将生成 ~/.pi/msg-bridge.json(权限 600)
+将生成 ~/.pi/pi-courier.json(权限 600)
 
 Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https://matrix.example.com
 获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1):  ← 1 或 2(Enter 默认 1)
@@ -94,14 +94,14 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
 启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间也选 y 无妨)
 pi 工作目录 [默认 /home/you/Projects]:                   ← Enter 或输入其他目录
 
-✅ 配置已写入 ~/.pi/msg-bridge.json
+✅ 配置已写入 ~/.pi/pi-courier.json
    账号: @test3:...
    信任用户: @barry:...
    E2EE: 开启
    工作目录: /home/you/Projects
 ```
 
-The wizard verifies the token and writes `~/.pi/msg-bridge.json`. To skip the wizard, create that file manually — the format is in the [FAQ](#4-faq).
+The wizard verifies the token and writes `~/.pi/pi-courier.json`. To skip the wizard, create that file manually — the format is in the [FAQ](#4-faq).
 
 ### Step 2 — Start it
 
@@ -230,7 +230,7 @@ A: Since v0.1.1 the bridge passes `--continue` to pi, resuming the most recent s
 **Q: Element (web client) intercepts `/`-prefixed messages?**
 A: Prefix with `//` to send a literal slash (`//compact` sends `/compact`).
 
-**Q: What exactly is in `~/.pi/msg-bridge.json`?**
+**Q: What exactly is in `~/.pi/pi-courier.json`?**
 A: The wizard-generated config. Example:
 
 ```json

@@ -82,7 +82,7 @@ pi-courier setup
 
 ```
 === pi-courier 首次配置向导 ===
-将生成 ~/.pi/msg-bridge.json(权限 600)
+将生成 ~/.pi/pi-courier.json(权限 600)
 
 Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https://matrix.example.com
 获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1):  ← 1 或 2(回车默认 1)
@@ -94,14 +94,14 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
 启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间选 y 也没问题)
 pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输入其他目录
 
-✅ 配置已写入 ~/.pi/msg-bridge.json
+✅ 配置已写入 ~/.pi/pi-courier.json
    账号: @test3:...
    信任用户: @barry:...
    E2EE: 开启
    工作目录: /home/你/Projects
 ```
 
-向导会验证 token 并写入 `~/.pi/msg-bridge.json`。不想用向导的话,手动创建这个文件也行 —— 格式见[常见问题](#4-常见问题)。
+向导会验证 token 并写入 `~/.pi/pi-courier.json`。不想用向导的话,手动创建这个文件也行 —— 格式见[常见问题](#4-常见问题)。
 
 ### 第 2 步 —— 启动
 
@@ -227,7 +227,7 @@ A: 0.1.1 起 bridge 会给 pi 传 `--continue`,按 workdir 恢复最近会话。
 **Q: Element(网页客户端)拦截 `/` 开头的消息?**
 A: 用 `//` 转义发送字面文本(如 `//compact` 会发出 `/compact`)。
 
-**Q: `~/.pi/msg-bridge.json` 里到底有什么?**
+**Q: `~/.pi/pi-courier.json` 里到底有什么?**
 A: 向导生成的配置,示例:
 
 ```json

@@ -58,7 +58,7 @@ describe('config', () => {
     const { saveConfig } = await importConfig();
     saveConfig({});
 
-    const stats = statSync(join(tmpDir, '.pi', 'msg-bridge.json'));
+    const stats = statSync(join(tmpDir, '.pi', 'pi-courier.json'));
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
@@ -90,7 +90,7 @@ describe('config', () => {
   it('handles corrupted config file gracefully', async () => {
     const piDir = join(tmpDir, '.pi');
     mkdirSync(piDir, { recursive: true });
-    writeFileSync(join(piDir, 'msg-bridge.json'), '{invalid json!!!');
+    writeFileSync(join(piDir, 'pi-courier.json'), '{invalid json!!!');
 
     const { loadConfig } = await importConfig();
     // Should not throw, returns empty config
@@ -101,7 +101,7 @@ describe('config', () => {
   it('still applies env vars when config file is corrupted', async () => {
     const piDir = join(tmpDir, '.pi');
     mkdirSync(piDir, { recursive: true });
-    writeFileSync(join(piDir, 'msg-bridge.json'), 'not json');
+    writeFileSync(join(piDir, 'pi-courier.json'), 'not json');
 
     process.env.PI_MATRIX_HOMESERVER = 'https://matrix.example.com';
     process.env.PI_MATRIX_ACCESS_TOKEN = 'syt-env';

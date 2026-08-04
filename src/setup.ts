@@ -4,7 +4,7 @@
  * Usage: node dist/standalone.js --setup
  *
  * Walks through: Matrix homeserver → bot login (or pasted token) → trusted
- * admin user → E2EE toggle, then writes ~/.pi/msg-bridge.json.
+ * admin user → E2EE toggle, then writes ~/.pi/pi-courier.json.
  */
 
 import * as os from "node:os";
@@ -135,7 +135,7 @@ export async function runSetup(): Promise<void> {
   const { ask, close } = createPrompter();
   console.log("");
   console.log("=== pi-courier 配置向导 ===");
-  console.log("将写入 ~/.pi/msg-bridge.json(权限 600;已有配置作为默认值,直接回车沿用)\n");
+  console.log("将写入 ~/.pi/pi-courier.json(权限 600;已有配置作为默认值,直接回车沿用)\n");
 
   try {
     // Existing config → prefill defaults on repeated runs.
@@ -205,7 +205,7 @@ export async function runSetup(): Promise<void> {
     };
     saveConfig(merged);
 
-    console.log("\n✅ 配置已写入 ~/.pi/msg-bridge.json");
+    console.log("\n✅ 配置已写入 ~/.pi/pi-courier.json");
     console.log(`   账号: ${botUserId}`);
     console.log(`   信任用户: ${adminRaw}`);
     console.log(`   E2EE: ${encryption ? "开启" : "关闭"}`);

@@ -4,7 +4,7 @@ import * as path from "path";
 import type { MsgBridgeConfig } from "./types.js";
 
 const CONFIG_DIR = path.join(os.homedir(), ".pi");
-const CONFIG_PATH = path.join(CONFIG_DIR, "msg-bridge.json");
+const CONFIG_PATH = path.join(CONFIG_DIR, "pi-courier.json");
 
 /**
  * Load config from file and env vars (env vars override file).

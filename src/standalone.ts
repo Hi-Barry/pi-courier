@@ -51,15 +51,15 @@ function parseArgs(argv: string[]): { workdir?: string; logLevel?: string } {
         console.warn("⚠️  旧参数已废弃,请用 `pi-courier setup`");
         break;
       case "--pi-cli":
-        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/msg-bridge.json 配置 cliPath,或设 PI_CLI_PATH");
+        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 cliPath,或设 PI_CLI_PATH");
         i++;
         break;
       case "--session-dir":
-        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/msg-bridge.json 配置 sessionDir");
+        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 sessionDir");
         i++;
         break;
       case "--debug":
-        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/msg-bridge.json 配置 debug: true");
+        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 debug: true");
         break;
       default:
         console.warn(`[bridge] ignoring unknown argument: ${arg}`);
@@ -101,7 +101,7 @@ async function resolveWorkdir(cliWorkdir: string | undefined, configWorkdir: str
   const cfg = loadConfig();
   cfg.workdir = workdir;
   saveConfig(cfg);
-  logger.info(`工作目录: ${workdir}(已保存到 ~/.pi/msg-bridge.json,改配置后重启即生效)`);
+  logger.info(`工作目录: ${workdir}(已保存到 ~/.pi/pi-courier.json,改配置后重启即生效)`);
   return workdir;
 }
 
@@ -153,7 +153,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   if (transportManager.getAllTransports().length === 0) {
     console.error(
-      "[bridge] no transports configured. Configure ~/.pi/msg-bridge.json or set PI_* env vars (see README)."
+      "[bridge] no transports configured. Configure ~/.pi/pi-courier.json or set PI_* env vars (see README)."
     );
     releaseLock();
     process.exit(1);

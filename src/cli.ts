@@ -3,7 +3,7 @@
  * pi-courier CLI — one command for everything.
  *
  *   pi-courier setup    first-run configuration wizard (Matrix account,
- *                      trusted user, workdir; writes ~/.pi/msg-bridge.json)
+ *                      trusted user, workdir; writes ~/.pi/pi-courier.json)
  *   pi-courier run      run in the foreground (workdir from config, --workdir overrides)
  *   pi-courier enable   install a user-level systemd service (auto-start) and start it
  *   pi-courier start    start the systemd service
@@ -112,7 +112,7 @@ function buildUnit(projDir: string): string {
   // node (e.g. v20) that pi's undici is incompatible with.
   const nodeDir = path.dirname(nodeBin);
   // Note: no --workdir here — the service reads the workdir from
-  // ~/.pi/msg-bridge.json at startup (single source of truth). Editing the
+  // ~/.pi/pi-courier.json at startup (single source of truth). Editing the
   // config and restarting is enough; `pi-courier enable` does not snapshot it.
   return `[Unit]
 Description=pi-courier (messengers -> pi RPC)
