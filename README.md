@@ -213,7 +213,7 @@ A: Historical events that can't be decrypted (new device without old keys). Norm
 A: The bot's new device never received the room keys. The bot account has no cross-signing, so the most reliable fix is to **use a non-encrypted room** (create a room without encryption and invite the bot) — the bridge handles plain rooms fine even with `encryption: true`.
 
 **Q: `M_BAD_JSON: Provided device_id in device_keys does not match...`?**
-A: The crypto store holds an old device identity but the token belongs to a newer device (re-logged). Delete and restart: `rm -rf ~/.pi/msg-bridge-matrix-crypto && pi-courier restart`. Do this whenever you re-run setup / change the token.
+A: The crypto store holds an old device identity but the token belongs to a newer device (re-logged). Delete and restart: `rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart`. Do this whenever you re-run setup / change the token.
 
 **Q: First message asks for a 6-digit code?**
 A: That's the challenge auth — reply with the code to become a trusted user.

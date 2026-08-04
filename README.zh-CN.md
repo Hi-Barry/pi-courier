@@ -210,7 +210,7 @@ A: 历史消息无法解密(新设备没有旧密钥)。**正常**,新消息不�
 A: bot 的新设备没拿到房间密钥。bot 账号没有交叉签名,最可靠的解法是**用非加密房间**(新建房间时不勾选加密,把 bot 拉进来)—— 配置 `encryption: true` 也照常处理非加密房间。
 
 **Q: 报 `M_BAD_JSON: Provided device_id in device_keys does not match...`?**
-A: 加密存储里是旧设备身份,而 token 属于新设备(重新登录过)。删除重启:`rm -rf ~/.pi/msg-bridge-matrix-crypto && pi-courier restart`。**每次重跑 setup / 换 token 都顺手删一次。**
+A: 加密存储里是旧设备身份,而 token 属于新设备(重新登录过)。删除重启:`rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart`。**每次重跑 setup / 换 token 都顺手删一次。**
 
 **Q: 第一次发消息要 6 位验证码?**
 A: 这是挑战认证 —— 把验证码回复给 bot 即成为 trusted user。

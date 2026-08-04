@@ -112,7 +112,7 @@ git pull && docker compose build && docker compose up -d
 | 构建很慢 / 卡在下载 | 构建期网络问题,设 `export HTTPS_PROXY` 再 build |
 | 启动显示 `model: unknown` | `./data/agent/auth.json` 没填 key,或 settings.json 的模型不在 models.json |
 | 发消息没有回复 | 按顺序查:`docker logs` 看 Matrix 连接、pi RPC 连接、模型是否 unknown |
-| `M_BAD_JSON: device_id does not match` | 重登录过,删 `./data/msg-bridge-matrix-crypto` 重启 |
+| `M_BAD_JSON: device_id does not match` | 重登录过,删 `./data/pi-courier-matrix-crypto` 重启 |
 | 加密房间解不开新消息 | bot 无交叉签名,改用非加密房间 |
 | 会话重启丢失 | 0.1.1+ 自动 `--continue`,确认 `./data` 卷没被删 |
 | 想用新配置 | 改 `./data/pi-courier.json` → `docker compose restart` |
