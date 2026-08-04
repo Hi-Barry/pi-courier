@@ -14,7 +14,8 @@ CONFIG_DIR=/root/.pi
 if [ ! -d "$CONFIG_DIR/agent" ] || [ -z "$(ls -A "$CONFIG_DIR/agent" 2>/dev/null)" ]; then
   echo "[pi-courier] first run: initializing $CONFIG_DIR/agent from template"
   mkdir -p "$CONFIG_DIR/agent"
-  cp -n "$DEFAULTS/agent/." "$CONFIG_DIR/agent/" 2>/dev/null || true
+  # -r is required: GNU cp refuses to copy a directory (even 'dir/.') without it
+  cp -rn "$DEFAULTS/agent/." "$CONFIG_DIR/agent/" || echo "[pi-courier] WARN: template copy failed"
 fi
 
 exec "$@"
