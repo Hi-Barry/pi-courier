@@ -88,8 +88,13 @@ docker logs pi-courier      # 应看到 ✅ Matrix connected + ✅ pi RPC connec
 # 方式 A:容器内自更新(npm 全局方式)
 docker exec pi-courier pi-courier update
 
-# 方式 B:重建镜像
+# 方式 B:重建镜像(Dockerfile 里 PI_COURIER_VERSION 已更新到新版时)
 git pull && docker compose build && docker compose up -d
+
+# 注意:升级 pi-courier 后,确保 Dockerfile 顶部的
+# ARG PI_COURIER_VERSION 已是新版本号 —— 该值变了 npm 层缓存自动失效;
+# 若确认 Dockerfile 没动但想强制装最新版,用:
+# docker compose build --no-cache
 ```
 
 ### 7. 映射宿主机项目目录(可选)

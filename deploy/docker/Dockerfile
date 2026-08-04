@@ -20,14 +20,19 @@ ARG HTTP_PROXY=
 ENV https_proxy=${HTTPS_PROXY} \
     http_proxy=${HTTP_PROXY}
 
+# pi-courier 版本:发新版本后更新此值 —— RUN 层指令文本随之变化,
+# docker 缓存自动失效,不会装到旧版(避免"升级了但镜像还是旧代码"的坑)
+ARG PI_COURIER_VERSION=0.1.13
+
 # 仅需要 ca-certificates(npm install 走 https;git 由 runtime 层负责)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 pi 与 pi-courier(pi 先装,pi-courier 的 peer 依赖即满足);
+# 安装 pi 与 pi-courier(pi 先装,pi-courier 的 peer 依赖即满足;
+# 版本由上方 ARG PI_COURIER_VERSION 固定,避免层缓存装到旧版);
 # 安装后清 npm 缓存(此层最终不会进入 runtime 镜像)
-RUN npm install -g @earendil-works/pi-coding-agent pi-courier \
+RUN npm install -g @earendil-works/pi-coding-agent pi-courier@${PI_COURIER_VERSION} \
     && npm cache clean --force
 
 # ============================== runtime ======================================
