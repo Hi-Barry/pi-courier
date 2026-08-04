@@ -73,7 +73,7 @@ export class MatrixProvider implements ITransportProvider {
         const cryptoStorePath = path.join(
           os.homedir(),
           ".pi",
-          "msg-bridge-matrix-crypto"
+          "pi-courier-matrix-crypto"
         );
         cryptoProvider = new RustSdkCryptoStorageProvider(cryptoStorePath, RustSdkCryptoStoreType.Sqlite);
         console.log("[Matrix] E2EE crypto storage enabled (Rust/SQLite)");
