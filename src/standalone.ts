@@ -152,11 +152,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
 
   if (transportManager.getAllTransports().length === 0) {
-    console.error(
-      "[bridge] no transports configured. Configure ~/.pi/pi-courier.json or set PI_* env vars (see README)."
-    );
-    releaseLock();
-    process.exit(1);
+    // No Matrix config yet — do NOT exit. Under systemd/docker restart
+    // policies an exit(1) here crash-loops the service and makes
+    // `pi-courier setup` unreachable (exec fails while restarting).
+    // Stay up and wait for configuration instead.
+    logger.warn("⚠️ 未配置 Matrix 连接(缺少 homeserver 或 access token)。");
+    logger.warn("   请运行 `pi-courier setup` 完成配置,然后重启服务。");
+    logger.warn("   等待配置中… (Ctrl+C / SIGTERM 退出)");
+    await new Promise<never>(() => {
+      // Keep the event loop alive — a bare promise has no handles, so the
+      // process would exit immediately instead of waiting for configuration.
+      setInterval(() => {}, 60_000);
+    });
   }
 
   // ---- pi RPC -------------------------------------------------------------
