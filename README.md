@@ -215,6 +215,9 @@ A: The bot's new device never received the room keys. The bot account has no cro
 **Q: `M_BAD_JSON: Provided device_id in device_keys does not match...`?**
 A: The crypto store holds an old device identity but the token belongs to a newer device (re-logged). Delete and restart: `rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart`. Do this whenever you re-run setup / change the token.
 
+**Q: `One time key signed_curve25519:... already exists` (M_UNKNOWN)?**
+A: The token is bound to an old device on the server and the local OTK bookkeeping is out of sync — **deleting the local crypto store does NOT help** (the server assigns the device ID from the token, so a rebuilt store uses the same device). **You must get a new token**: re-run `pi-courier setup` and answer `n` to "keep the existing token?" (or log in with the password); a new token = a new device = clean server state. Pair with a crypto-store delete if device residue persists.
+
 **Q: First message asks for a 6-digit code?**
 A: That's the challenge auth — reply with the code to become a trusted user.
 

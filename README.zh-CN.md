@@ -212,6 +212,9 @@ A: bot 的新设备没拿到房间密钥。bot 账号没有交叉签名,最可�
 **Q: 报 `M_BAD_JSON: Provided device_id in device_keys does not match...`?**
 A: 加密存储里是旧设备身份,而 token 属于新设备(重新登录过)。删除重启:`rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart`。**每次重跑 setup / 换 token 都顺手删一次。**
 
+**Q: 报 `One time key signed_curve25519:... already exists`(M_UNKNOWN)?**
+A: token 在服务器上已绑定旧设备,但本地与服务器的 OTK 记账错位 —— **删本地 crypto store 无效**(device ID 由服务器按 token 指定,删了重建还是同一个)。**必须换 token**:重跑 `pi-courier setup`,在"保留现有 token?"处输 `n` 重新获取(或直接密码登录),新 token = 新设备 = 服务器干净。换 token 后如遇 device 残留问题再配合删 crypto store。
+
 **Q: 第一次发消息要 6 位验证码?**
 A: 这是挑战认证 —— 把验证码回复给 bot 即成为 trusted user。
 
