@@ -1,0 +1,4 @@
+# 运行时数据目录(容器 /root/.pi 的宿主挂载点)
+# 包含用户的 API key / token,禁止提交进 git
+*
+!.gitignore

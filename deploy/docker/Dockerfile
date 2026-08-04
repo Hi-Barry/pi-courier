@@ -1,14 +1,15 @@
 # pi-courier — Matrix → pi 桥接服务
 #
-# 构建: docker build -t pi-courier .
-# 运行: docker compose up -d --build(见 docker-compose.yml)
+# 构建: docker compose build(只构建,不运行)
+# 运行: docker compose up -d(见 docker-compose.yml 与 README.md)
 #
 # 说明:
 #  - 基于 node:24(避开 Node 20 与 pi 的 undici 不兼容问题)
 #  - 全局安装 pi(peer 依赖)+ pi-courier
 #  - 构建期间 npm 会从 GitHub Releases 下载 E2EE 原生库(约 21MB),
 #    如果 VPS 网络受限,用 --build-arg HTTPS_PROXY/HTTP_PROXY 传代理
-#  - 首次配置(LLM 三件套 + Matrix)见同目录 README.md,务必先配 LLM
+#  - defaults/ 预置 LLM 三件套模板(models.json/auth.json/settings.json),
+#    entrypoint 首次启动自动拷贝到 /root/.pi/agent(用户只需改 auth.json 的 key)
 
 FROM node:24-slim
 
@@ -33,12 +34,15 @@ RUN npm install -g @earendil-works/pi-coding-agent pi-courier \
     && pi-courier help >/dev/null 2>&1 \
     && echo "node $(node --version), pi and pi-courier installed OK"
 
-# 数据卷:配置 + 会话 + 加密存储(全部在容器内 ~/.pi)
-VOLUME ["/root/.pi"]
+# 默认配置模板 + 首次启动初始化脚本
+COPY defaults/ /opt/pi-courier/defaults/
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-# 进程存活检查:pid 1 即 pi-courier run 主进程(kill -0 无需额外工具)
+# 进程存活检查:pid 1 即 entrypoint exec 的 pi-courier run 主进程(kill -0 无需额外工具)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD kill -0 1 || exit 1
 
-# 前台运行(容器主进程;Ctrl+C/SIGTERM 优雅关闭)
+# entrypoint:首次启动把模板拷进 /root/.pi/agent;随后前台运行主进程
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["pi-courier", "run"]
