@@ -41,7 +41,33 @@ docker ps                # 确认 pi-courier 容器 running
 docker logs pi-courier   # 查看启动日志
 ```
 
-### 3. 首次配置(向导)
+### 3. 首次配置(关键:先配 LLM,再配 Matrix)
+
+**第 3.1 步:LLM 三件套(必配,否则模型不可用)**
+
+pi 需要三个文件(`models.json` / `auth.json` / `settings.json`),放在宿主 `./data/agent/`(对应容器 `/root/.pi/agent/`)。**不配的话启动后 `model: unknown`,发消息不会有回复。**
+
+在宿主 `./data/agent/` 下创建(最小示例,opencode-go provider):
+
+```bash
+mkdir -p data/agent
+
+# auth.json — API key(注意权限 600)
+cat > data/agent/auth.json <<'EOF'
+{ "opencode-go": { "type": "api_key", "key": "sk-你的key" } }
+EOF
+chmod 600 data/agent/auth.json
+
+# settings.json — 默认 provider 与模型
+cat > data/agent/settings.json <<'EOF'
+{ "defaultProvider": "opencode-go", "defaultModel": "deepseek-v4-flash" }
+EOF
+
+# models.json — 模型元数据(建议从 models.dev 提取,见项目 README 配置章节)
+# 至少包含你 provider 的模型定义
+```
+
+**第 3.2 步:Matrix 配置(向导)**
 
 ```bash
 # 容器运行后,进入交互向导(和本机一样,逐步输入)
@@ -51,6 +77,8 @@ docker exec -it pi-courier pi-courier setup
 向导写入容器内 `/root/.pi/pi-courier.json`(宿主 `./data/pi-courier.json`)。
 
 > 也可以不用向导:直接在宿主 `./data/` 下创建 `pi-courier.json` 和 `agent/` 目录(对应容器 `/root/.pi/`),格式见项目 README FAQ。
+
+**验证**:`docker logs pi-courier` 应看到 `✅ pi RPC connected (model: deepseek-v4-flash, ...)` —— 模型不再是 unknown。
 
 ### 4. 使用
 
@@ -88,7 +116,9 @@ docker exec -it pi-courier pi-courier setup   # workdir 填 /root/Projects/<你�
 | 问题 | 解决 |
 |---|---|
 | 构建很慢 / 卡在下载 | 构建期网络问题,设 `export HTTPS_PROXY` 再 build |
+| 启动显示 `model: unknown` | **LLM 三件套没配**:检查 `./data/agent/` 下 models.json/auth.json/settings.json |
 | `M_BAD_JSON: device_id does not match` | 重登录过,删 `./data/msg-bridge-matrix-crypto` 重启 |
 | 加密房间解不开新消息 | bot 无交叉签名,改用非加密房间 |
 | 会话重启丢失 | 0.1.1+ 自动 `--continue`,确认 `./data` 卷没被删 |
 | 想用新配置 | 改 `./data/pi-courier.json` → `docker compose restart` |
+| workdir 文件丢失(容器重建后) | 未映射 projects 卷;取消注释 `- ./projects:/root/Projects` |
