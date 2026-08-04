@@ -49,7 +49,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Hi-Barry/pi-remote.git"
+    "url": "git+https://github.com/Hi-Barry/pi-courier.git"
   },
   "publishConfig": {
     "access": "public"

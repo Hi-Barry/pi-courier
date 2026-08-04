@@ -34,7 +34,7 @@ function suppressDeprecationWarnings(): void {
 }
 suppressDeprecationWarnings();
 
-const SERVICE_NAME = "pi-msg-bridge";
+const SERVICE_NAME = "pi-courier";
 const SERVICE_UNIT = `${SERVICE_NAME}.service`;
 
 /** Project root (parent of the dist/ directory this file is compiled into). */

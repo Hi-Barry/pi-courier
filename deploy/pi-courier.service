@@ -1,5 +1,5 @@
 [Unit]
-Description=pi-remote (messengers -> pi RPC)
+Description=pi-courier (messengers -> pi RPC)
 # The bridge spawns `pi --mode rpc` itself as a child process, so only this
 # one unit is needed. pi sessions persist to disk and are resumed on restart.
 After=network-online.target
@@ -10,7 +10,7 @@ Type=simple
 # Adjust User/WorkingDirectory to your setup.
 # WorkingDirectory is where the agent works (bash tool, project context).
 User=hermes
-WorkingDirectory=/home/hermes/Projects/pi-remote
+WorkingDirectory=/home/hermes/Projects/pi-courier
 Environment=NVM_DIR=/home/hermes/.nvm
 # Optional: PI_MATRIX_HOMESERVER / PI_MATRIX_ACCESS_TOKEN etc. can live here
 # instead of ~/.pi/msg-bridge.json

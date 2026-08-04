@@ -23,7 +23,7 @@ export interface ExternalMessage {
 }
 
 /**
- * Configuration for msg-bridge extension
+ * Configuration for pi-courier
  */
 export interface MsgBridgeConfig {
   matrix?: {

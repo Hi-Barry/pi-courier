@@ -8,7 +8,7 @@ describe('config', () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'msg-bridge-config-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'pi-courier-config-'));
     delete process.env.PI_TELEGRAM_TOKEN;
     delete process.env.PI_WHATSAPP_AUTH_PATH;
     delete process.env.PI_SLACK_BOT_TOKEN;

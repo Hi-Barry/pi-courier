@@ -116,7 +116,7 @@ Startup success looks like:
 ```
 ✅ Matrix connected as @test3:... (2 rooms, E2EE enabled)
 ✅ pi RPC connected (model: deepseek-v4-flash, session: 019f...)
-🚀 msg-bridge standalone ready. Waiting for messages...
+🚀 pi-courier ready. Waiting for messages...
 ```
 
 ### Step 3 — Use it from Matrix
@@ -124,7 +124,7 @@ Startup success looks like:
 **First contact (one-time pairing):**
 
 1. **DM the bot** from your account and send any message
-2. The bot is not yet a trusted user, so the bridge prints a challenge code in its log (`pi-courier logs` or `journalctl --user -u pi-msg-bridge -f`):
+2. The bot is not yet a trusted user, so the bridge prints a challenge code in its log (`pi-courier logs` or `journalctl --user -u pi-courier -f`):
 
 ```
 🔐 Challenge code for @barry: 138949

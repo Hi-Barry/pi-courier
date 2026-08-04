@@ -8,7 +8,7 @@ describe('lock', () => {
   const g = global as any;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'msg-bridge-lock-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'pi-courier.lock-'));
     delete g.__msgBridgeInstanceId;
     delete g.__msgBridgeConnected;
     delete g.__msgBridgeOwner;
@@ -36,7 +36,7 @@ describe('lock', () => {
     expect(g.__msgBridgeConnected).toBe(true);
 
     // Verify lock file content
-    const lockPath = join(tmpDir, '.pi', 'msg-bridge.lock');
+    const lockPath = join(tmpDir, '.pi', 'pi-courier.lock');
     const content = readFileSync(lockPath, 'utf-8');
     const [pid, owner] = content.split(':');
     expect(parseInt(pid, 10)).toBe(process.pid);
@@ -56,7 +56,7 @@ describe('lock', () => {
     releaseLock();
     expect(g.__msgBridgeConnected).toBe(false);
     expect(g.__msgBridgeOwner).toBeUndefined();
-    expect(existsSync(join(tmpDir, '.pi', 'msg-bridge.lock'))).toBe(false);
+    expect(existsSync(join(tmpDir, '.pi', 'pi-courier.lock'))).toBe(false);
   });
 
   it('acquire → release → re-acquire works', async () => {
@@ -69,7 +69,7 @@ describe('lock', () => {
     // Should be able to re-acquire after release
     expect(acquireLock()).toBe(true);
     expect(g.__msgBridgeConnected).toBe(true);
-    expect(existsSync(join(tmpDir, '.pi', 'msg-bridge.lock'))).toBe(true);
+    expect(existsSync(join(tmpDir, '.pi', 'pi-courier.lock'))).toBe(true);
   });
 
   it('blocks a different instance in the same process (layer 1)', async () => {
@@ -89,7 +89,7 @@ describe('lock', () => {
     const piDir = join(tmpDir, '.pi');
     mkdirSync(piDir, { recursive: true });
     // Use PID 2^30 — well above any real PID on Linux/macOS
-    writeFileSync(join(piDir, 'msg-bridge.lock'), '1073741824:stale-owner');
+    writeFileSync(join(piDir, 'pi-courier.lock'), '1073741824:stale-owner');
 
     const { acquireLock } = await importLock(tmpDir);
     expect(acquireLock()).toBe(true);
@@ -100,7 +100,7 @@ describe('lock', () => {
     mkdirSync(piDir, { recursive: true });
     // Use current PID with a different owner — simulates another instance in
     // a different process that happens to be alive
-    writeFileSync(join(piDir, 'msg-bridge.lock'), `${process.pid}:other-instance`);
+    writeFileSync(join(piDir, 'pi-courier.lock'), `${process.pid}:other-instance`);
 
     // Layer 1 passes (no global flag set).
     // Layer 2: same PID, different owner → blocked.
@@ -119,7 +119,7 @@ describe('lock', () => {
     // Lock should still be held
     g.__msgBridgeOwner = realOwner;
     expect(g.__msgBridgeConnected).toBe(true);
-    expect(existsSync(join(tmpDir, '.pi', 'msg-bridge.lock'))).toBe(true);
+    expect(existsSync(join(tmpDir, '.pi', 'pi-courier.lock'))).toBe(true);
   });
 
   it('creates .pi directory if missing', async () => {

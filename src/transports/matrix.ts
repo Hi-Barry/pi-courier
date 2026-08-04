@@ -59,7 +59,7 @@ export class MatrixProvider implements ITransportProvider {
     const storagePath = path.join(
       os.homedir(),
       ".pi",
-      "msg-bridge-matrix-store.json"
+      "pi-courier-matrix-store.json"
     );
     const storage = new SimpleFsStorageProvider(storagePath);
 

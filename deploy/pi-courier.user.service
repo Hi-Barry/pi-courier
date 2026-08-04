@@ -2,17 +2,17 @@
 #
 # Install:
 #   mkdir -p ~/.config/systemd/user
-#   cp deploy/pi-msg-bridge.user.service ~/.config/systemd/user/pi-msg-bridge.service
+#   cp deploy/pi-pi-courier.user.service ~/.config/systemd/user/pi-pi-courier.service
 #   systemctl --user daemon-reload
-#   systemctl --user enable --now pi-msg-bridge
+#   systemctl --user enable --now pi-pi-courier
 #
 # To keep running after you log out (fully headless):
 #   sudo loginctl enable-linger $USER
 #
-# Logs: journalctl --user -u pi-msg-bridge -f
+# Logs: journalctl --user -u pi-pi-courier -f
 
 [Unit]
-Description=pi-remote (messengers -> pi RPC)
+Description=pi-courier (messengers -> pi RPC)
 # The bridge spawns `pi --mode rpc` itself as a child process, so only this
 # one unit is needed. pi sessions persist to disk and are resumed on restart.
 After=default.target
@@ -21,7 +21,7 @@ After=default.target
 Type=simple
 # WorkingDirectory is where the agent works (bash tool, project context).
 # Change to your project dir.
-WorkingDirectory=%h/Projects/pi-remote
+WorkingDirectory=%h/Projects/pi-courier
 Environment=NVM_DIR=%h/.nvm
 # Optional: PI_MATRIX_HOMESERVER / PI_MATRIX_ACCESS_TOKEN etc. can live here
 # instead of ~/.pi/msg-bridge.json

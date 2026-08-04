@@ -12,7 +12,7 @@ import * as path from "path";
  *                    launched as child processes with different PIDs).
  */
 
-const LOCK_PATH = path.join(os.homedir(), ".pi", "msg-bridge.lock");
+const LOCK_PATH = path.join(os.homedir(), ".pi", "pi-courier.lock");
 
 const g = global as any;
 if (!g.__msgBridgeInstanceId) {

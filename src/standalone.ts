@@ -110,7 +110,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   // Single-instance guard (same lock file as the extension mode)
   if (!acquireLock()) {
-    console.error("[bridge] another msg-bridge instance is already running — exiting");
+    console.error("[bridge] another pi-courier instance is already running — exiting");
     process.exit(1);
   }
 
@@ -245,7 +245,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
 
-  logger.info("🚀 msg-bridge standalone ready. Waiting for messages...");
+  logger.info("🚀 pi-courier ready. Waiting for messages...");
 }
 
 // Direct execution: `node dist/standalone.js [--workdir ...]`

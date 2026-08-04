@@ -116,7 +116,7 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 ```
 ✅ Matrix connected as @test3:... (2 rooms, E2EE enabled)
 ✅ pi RPC connected (model: deepseek-v4-flash, session: 019f...)
-🚀 msg-bridge standalone ready. Waiting for messages...
+🚀 pi-courier ready. Waiting for messages...
 ```
 
 ### 第 3 步 —— 在 Matrix 里使用
@@ -124,7 +124,7 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 **首次接触(一次性配对):**
 
 1. 用你的账号**给 bot 发私聊消息**(随便发什么都行)
-2. 此时你还不是 trusted user,bridge 会在日志里打印验证码(`pi-courier logs` 或 `journalctl --user -u pi-msg-bridge -f`):
+2. 此时你还不是 trusted user,bridge 会在日志里打印验证码(`pi-courier logs` 或 `journalctl --user -u pi-courier -f`):
 
 ```
 🔐 Challenge code for @barry: 138949
