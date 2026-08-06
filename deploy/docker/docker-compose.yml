@@ -17,6 +17,25 @@ services:
       # - ./projects:/root/Projects
     environment:
       - TZ=Asia/Shanghai
+      # ---- 一键配置(推荐):设置这些变量后,无需 exec setup/编辑文件 ----
+      # Matrix(必须:PI_MATRIX_HOMESERVER + PI_MATRIX_ACCESS_TOKEN 同时设置)
+      - PI_MATRIX_HOMESERVER=${PI_MATRIX_HOMESERVER:-}
+      - PI_MATRIX_ACCESS_TOKEN=${PI_MATRIX_ACCESS_TOKEN:-}
+      # 信任用户(逗号分隔 MXID,预信任可跳过验证码;不设则走验证码配对)
+      - PI_MATRIX_TRUSTED_USERS=${PI_MATRIX_TRUSTED_USERS:-}
+      # 加密开关(true/false,默认 true)
+      - PI_MATRIX_ENCRYPTION=${PI_MATRIX_ENCRYPTION:-}
+      # 工作目录(容器内路径,默认 /root/Projects)
+      - PI_WORKDIR=${PI_WORKDIR:-}
+      # LLM API key(auth.json 模板已引用此变量)
+      - PI_LLM_API_KEY=${PI_LLM_API_KEY:-}
+      # 默认 provider/模型(可选,entrypoint 写入 settings.json)
+      - PI_DEFAULT_PROVIDER=${PI_DEFAULT_PROVIDER:-}
+      - PI_DEFAULT_MODEL=${PI_DEFAULT_MODEL:-}
+      # 日志级别(debug/info/warn/error,可选)
+      - PI_LOG_LEVEL=${PI_LOG_LEVEL:-}
+      # GitHub CLI token(可选,gh auth 用)
+      - GH_TOKEN=${GH_TOKEN:-}
       # 运行时代理(可选,仅当 Matrix / LLM provider 需要代理访问时)
       # - https_proxy=http://<host>:<port>
       # - http_proxy=http://<host>:<port>

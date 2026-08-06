@@ -59,6 +59,8 @@ docker compose up -d
 [WARN]    等待配置中… (Ctrl+C / SIGTERM 退出)
 ```
 
+> **也可以完全跳过 4-5 步**:用环境变量一键配置(见文末"环境变量一键部署"),`up -d` 后直接就是就绪状态。
+
 ### 4. 配置 LLM 模型(pi TUI,推荐)
 
 ```bash
@@ -147,7 +149,44 @@ git pull && docker compose build && docker compose up -d
 
 1. compose 里取消注释 `- ./projects:/root/Projects`
 2. 配置 `workdir` 指向容器内路径(`pi-courier setup` 的 workdir 填 `/root/Projects/<你的项目>`)
-3. 宿主机代码放 `./projects/<你的项目>`
+3. 宿主机代码放 `./projects/<你的项目>`,pi 的工作目录就是 `/root/Projects/<你的项目>`。
+
+## 环境变量一键部署(推荐)
+
+不碰 TUI、不 exec setup —— 所有配置走环境变量,`up -d` 后直接就绪。
+
+### 1. 创建 .env(复制模板填真实值)
+
+```bash
+cp .env.example .env
+nano .env     # 填:PI_MATRIX_HOMESERVER / PI_MATRIX_ACCESS_TOKEN / PI_LLM_API_KEY 等
+```
+
+> `.env` 含敏感信息(token/key),已被 gitignore,不要提交。
+
+### 2. 启动即就绪
+
+```bash
+docker compose up -d
+docker logs -f pi-courier
+# 直接看到:✅ Matrix connected + ✅ pi RPC connected (model: ...) + 🚀 ready
+```
+
+### 支持的变量
+
+| 变量 | 作用 | 必填 |
+|---|---|---|
+| `PI_MATRIX_HOMESERVER` | Matrix 服务器地址 | ✅(与 token 成对) |
+| `PI_MATRIX_ACCESS_TOKEN` | Matrix bot token | ✅ |
+| `PI_MATRIX_TRUSTED_USERS` | 预信任用户(逗号分隔 MXID,如 `@barry:matrix.purplelin.com`);不设则走验证码配对 | 可选 |
+| `PI_MATRIX_ENCRYPTION` | E2EE 开关(`true`/`false`,默认 true) | 可选 |
+| `PI_WORKDIR` | 工作目录(容器内路径,默认 /root/Projects) | 可选 |
+| `PI_LLM_API_KEY` | LLM API key(auth.json 模板引用此变量) | ✅ |
+| `PI_DEFAULT_PROVIDER` / `PI_DEFAULT_MODEL` | 默认 provider/模型(entrypoint 写入 settings.json) | 可选 |
+| `PI_LOG_LEVEL` | 日志级别(debug/info/warn/error) | 可选 |
+| `GH_TOKEN` | GitHub CLI token | 可选 |
+
+**优先级**:环境变量 > 配置文件 > 交互向导。env 未设置时走原有流程(setup 向导),完全兼容。
 
 ## 常见问题
 

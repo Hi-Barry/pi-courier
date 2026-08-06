@@ -34,3 +34,6 @@ Thumbs.db
 
 # Private dev log (not published)
 docs/DEVLOG.md
+
+# Local env (secrets)
+deploy/docker/.env

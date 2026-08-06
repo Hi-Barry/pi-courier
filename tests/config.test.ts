@@ -35,6 +35,40 @@ describe('config', () => {
     expect(loadConfig()).toEqual({});
   });
 
+  it('env overrides matrix + trusted users + workdir + logLevel', async () => {
+    process.env.PI_MATRIX_HOMESERVER = 'https://env.example.com';
+    process.env.PI_MATRIX_ACCESS_TOKEN = 'syt-env-token';
+    process.env.PI_MATRIX_ENCRYPTION = 'false';
+    process.env.PI_MATRIX_TRUSTED_USERS = '@barry:matrix.example.com, @alice:matrix.example.com';
+    process.env.PI_WORKDIR = '/env/work';
+    process.env.PI_LOG_LEVEL = 'debug';
+    const { loadConfig } = await importConfig();
+
+    const cfg = loadConfig();
+    expect(cfg.matrix).toEqual({
+      homeserverUrl: 'https://env.example.com',
+      accessToken: 'syt-env-token',
+      encryption: false,
+    });
+    expect(cfg.auth?.trustedUsers).toEqual([
+      'matrix:@barry:matrix.example.com',
+      'matrix:@alice:matrix.example.com',
+    ]);
+    expect(cfg.auth?.adminUserId).toBe('matrix:@barry:matrix.example.com');
+    expect(cfg.workdir).toBe('/env/work');
+    expect(cfg.logLevel).toBe('debug');
+  });
+
+  it('env trusted users without matrix leaves file config intact', async () => {
+    const { loadConfig, saveConfig } = await importConfig();
+    saveConfig({ matrix: { homeserverUrl: 'https://file.example.com', accessToken: 'syt-file' }, workdir: '/file/work' });
+    process.env.PI_MATRIX_TRUSTED_USERS = '@barry:matrix.example.com';
+    const cfg = loadConfig();
+    expect(cfg.matrix?.homeserverUrl).toBe('https://file.example.com');
+    expect(cfg.auth?.trustedUsers).toEqual(['matrix:@barry:matrix.example.com']);
+    expect(cfg.workdir).toBe('/file/work');
+  });
+
   it('saves and loads config roundtrip', async () => {
     const { loadConfig, saveConfig } = await importConfig();
 

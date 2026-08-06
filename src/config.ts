@@ -27,12 +27,45 @@ export function loadConfig(): MsgBridgeConfig {
     }
   }
 
-  // Environment variables override file config (higher priority)
+  // Environment variables override file config (higher priority).
+  // Matrix connection requires both PI_MATRIX_HOMESERVER and
+  // PI_MATRIX_ACCESS_TOKEN to be set; the other PI_* vars apply individually.
   if (process.env.PI_MATRIX_HOMESERVER && process.env.PI_MATRIX_ACCESS_TOKEN) {
     config.matrix = {
       homeserverUrl: process.env.PI_MATRIX_HOMESERVER,
       accessToken: process.env.PI_MATRIX_ACCESS_TOKEN,
+      ...(process.env.PI_MATRIX_ENCRYPTION !== undefined
+        ? { encryption: process.env.PI_MATRIX_ENCRYPTION === "true" }
+        : {}),
     };
+  } else if (process.env.PI_MATRIX_ENCRYPTION !== undefined && config.matrix) {
+    config.matrix.encryption = process.env.PI_MATRIX_ENCRYPTION === "true";
+  }
+
+  // Trusted users via env: comma-separated MXIDs, e.g.
+  // "PI_MATRIX_TRUSTED_USERS=@barry:matrix.purplelin.com,@alice:matrix.purplelin.com"
+  if (process.env.PI_MATRIX_TRUSTED_USERS) {
+    const users = process.env.PI_MATRIX_TRUSTED_USERS.split(",")
+      .map((u) => u.trim())
+      .filter(Boolean)
+      .map((u) => (u.startsWith("matrix:") ? u : `matrix:${u}`));
+    if (users.length > 0) {
+      config.auth = {
+        ...(config.auth ?? {}),
+        trustedUsers: users,
+        adminUserId: config.auth?.adminUserId ?? users[0],
+      };
+    }
+  }
+
+  // Working directory via env (container deployments: /root/Projects etc.)
+  if (process.env.PI_WORKDIR) {
+    config.workdir = process.env.PI_WORKDIR;
+  }
+
+  // Log level via env (debug/info/warn/error)
+  if (process.env.PI_LOG_LEVEL) {
+    config.logLevel = process.env.PI_LOG_LEVEL;
   }
 
   return config;

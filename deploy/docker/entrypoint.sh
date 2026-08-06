@@ -18,4 +18,19 @@ if [ ! -d "$CONFIG_DIR/agent" ] || [ -z "$(ls -A "$CONFIG_DIR/agent" 2>/dev/null
   cp -rn "$DEFAULTS/agent/." "$CONFIG_DIR/agent/" || echo "[pi-courier] WARN: template copy failed"
 fi
 
+# env-driven defaults for pi settings (pi itself has no env support for
+# defaultProvider/defaultModel, so render them into settings.json).
+# env wins over whatever is in the file (idempotent on every start).
+if [ -n "$PI_DEFAULT_PROVIDER" ] || [ -n "$PI_DEFAULT_MODEL" ]; then
+  node -e '
+    const fs = require("fs");
+    const p = "/root/.pi/agent/settings.json";
+    const s = JSON.parse(fs.readFileSync(p, "utf8"));
+    if (process.env.PI_DEFAULT_PROVIDER) s.defaultProvider = process.env.PI_DEFAULT_PROVIDER;
+    if (process.env.PI_DEFAULT_MODEL) s.defaultModel = process.env.PI_DEFAULT_MODEL;
+    fs.writeFileSync(p, JSON.stringify(s, null, 2));
+    console.log("[pi-courier] settings.json updated from env");
+  '
+fi
+
 exec "$@"
