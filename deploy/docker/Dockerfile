@@ -22,7 +22,7 @@ ENV https_proxy=${HTTPS_PROXY} \
 
 # pi-courier 版本:发新版本后更新此值 —— RUN 层指令文本随之变化,
 # docker 缓存自动失效,不会装到旧版(避免"升级了但镜像还是旧代码"的坑)
-ARG PI_COURIER_VERSION=0.1.15
+ARG PI_COURIER_VERSION=0.1.16
 
 # 仅需要 ca-certificates(npm install 走 https;git 由 runtime 层负责)
 RUN apt-get update \
