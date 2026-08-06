@@ -124,16 +124,23 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 **首次接触(一次性配对):**
 
 1. 用你的账号**给 bot 发私聊消息**(随便发什么都行)
-2. 此时你还不是 trusted user,bridge 会在日志里打印验证码(`pi-courier logs` 或 `journalctl --user -u pi-courier -f`):
+2. 此时你还不是 trusted user(比如 setup 时信任用户回车用了默认的 bot 自己),bridge 会在日志里打印验证码(`pi-courier logs` 或 `journalctl --user -u pi-courier -f`):
 
 ```
-🔐 Challenge code for @barry: 138949
+[2026-08-06T02:38:34.833Z] [INFO] 🔐 Challenge code for @barry: 529311
 ```
 
 3. **在聊天里回复这串数字**(只发数字),日志确认配对成功:
 
 ```
-[auth:info] ✅ barry authenticated
+[2026-08-06T02:38:44.487Z] [INFO] [auth:info] ✅ barry authenticated
+```
+
+配对成功后立刻可以正常对话:
+
+```
+[2026-08-06T02:38:55.685Z] [INFO] 📥 [matrix] @barry: 你好,收到请回复!
+[2026-08-06T02:38:57.884Z] [INFO] [agent] 回复 @barry: 你好!收到,我在线。...
 ```
 
 你就成为 trusted user(第一个 trusted 用户自动成为管理员)。不在 `auth.trustedUsers` 里的用户都会走一次这个流程;预信任用户完全跳过。

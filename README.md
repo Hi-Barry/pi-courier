@@ -124,16 +124,23 @@ Startup success looks like:
 **First contact (one-time pairing):**
 
 1. **DM the bot** from your account and send any message
-2. The bot is not yet a trusted user, so the bridge prints a challenge code in its log (`pi-courier logs` or `journalctl --user -u pi-courier -f`):
+2. You are not a trusted user yet (e.g. you pressed Enter on the trusted-user prompt in setup, leaving only the bot itself trusted), so the bridge prints a challenge code in its log (`pi-courier logs` or `journalctl --user -u pi-courier -f`):
 
 ```
-🔐 Challenge code for @barry: 138949
+[2026-08-06T02:38:34.833Z] [INFO] 🔐 Challenge code for @barry: 529311
 ```
 
 3. **Reply with that code** in the chat (just the digits) — the log confirms the pairing:
 
 ```
-[auth:info] ✅ barry authenticated
+[2026-08-06T02:38:44.487Z] [INFO] [auth:info] ✅ barry authenticated
+```
+
+You can chat normally right away:
+
+```
+[2026-08-06T02:38:55.685Z] [INFO] 📥 [matrix] @barry: 你好,收到请回复!
+[2026-08-06T02:38:57.884Z] [INFO] [agent] 回复 @barry: 你好!收到,我在线。...
 ```
 
 You are now a trusted user (the first trusted user also becomes admin). Any user not in `auth.trustedUsers` goes through this flow once; pre-listed users skip it entirely.
