@@ -46,10 +46,28 @@ ENV https_proxy=${HTTPS_PROXY} \
 # 系统依赖:
 #  - git:pi 的 bash 工具 / `pi install` 需要(slim 基础镜像没有)
 #  - ca-certificates:HTTPS 证书
-#  - curl:排查网络问题用(可选)
+#  - curl:下载/排查
+#  - jq:JSON 处理(API 调试/日志分析)
+#  - wget/unzip:下载与解压(项目包/发布物)
+#  - openssl:证书/密钥操作
+#  - procps:ps/pgrep 排查进程
+#  - python3:脚本/数据处理(node:slim 默认没有 python)
+# (apt 请求也走上面的代理 ENV,受限网络下可代理)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates curl \
+    && apt-get install -y --no-install-recommends \
+       git ca-certificates curl jq wget unzip openssl procps python3 \
     && rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI(gh):Debian 官方源没有,从 GitHub Releases 下载二进制。
+# 动态取 latest 版本;amd64 为主流 VPS 架构(TARGETARCH 可覆盖 arm64)。
+ARG TARGETARCH
+RUN GH_TAG=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r .tag_name) \
+    && ARCH=$(case "${TARGETARCH}" in arm64) echo arm64 ;; *) echo amd64 ;; esac) \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/${GH_TAG}/gh_${GH_TAG#v}_linux_${ARCH}.tar.gz" -o /tmp/gh.tgz \
+    && tar xzf /tmp/gh.tgz -C /tmp \
+    && cp /tmp/gh_*/bin/gh /usr/local/bin/gh \
+    && gh --version \
+    && rm -rf /tmp/gh*
 
 # 从 builder 只带 node_modules,然后在 runtime 重建 bin 符号链接
 # (docker COPY 会把符号链接解引用成普通文件,导致相对 import 解析错误,

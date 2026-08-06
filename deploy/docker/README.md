@@ -124,6 +124,7 @@ docker logs -f pi-courier
 - 查看日志: `docker logs -f pi-courier`(或 `docker exec pi-courier pi-courier logs --level debug`)
 - 重启: `docker compose restart`
 - 停止: `docker compose down`(数据保留在 ./data)
+- **GitHub CLI(gh)**:镜像内置。交互登录:`docker exec -it pi-courier bash` → `gh auth login`(device flow);或注入 token(compose environment 加 `GH_TOKEN: ghp_xxx`,适合自动化)
 
 ### 9. 升级
 
