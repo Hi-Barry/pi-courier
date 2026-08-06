@@ -23,7 +23,8 @@ Type=simple
 # Change to your project dir.
 WorkingDirectory=%h/Projects/pi-courier
 Environment=NVM_DIR=%h/.nvm
-# Optional: PI_MATRIX_HOMESERVER / PI_MATRIX_ACCESS_TOKEN etc. can live here
+# Optional: PI_MATRIX_HOMESERVER / PI_MATRIX_ACCESS_TOKEN / PI_MATRIX_TRUSTED_USERS /
+# PI_MATRIX_ENCRYPTION / PI_WORKDIR / PI_LOG_LEVEL / PI_LLM_API_KEY can live here
 # instead of ~/.pi/pi-courier.json
 EnvironmentFile=-%h/.config/pi-bridge.env
 ExecStart=/bin/bash -lc 'source "$NVM_DIR/nvm.sh" && exec node dist/standalone.js --workdir %h/Projects'

@@ -253,7 +253,17 @@ A: The wizard-generated config. Example:
 }
 ```
 
-Env var alternatives: `PI_MATRIX_HOMESERVER` / `PI_MATRIX_ACCESS_TOKEN`.
+Env var alternatives (priority: env vars > config file > wizard):
+
+| Variable | Maps to |
+|---|---|
+| `PI_MATRIX_HOMESERVER` + `PI_MATRIX_ACCESS_TOKEN` | matrix.homeserverUrl / accessToken (both must be set) |
+| `PI_MATRIX_ENCRYPTION` | matrix.encryption (`true`/`false`) |
+| `PI_MATRIX_TRUSTED_USERS` | auth.trustedUsers (comma-separated MXIDs, e.g. `@barry:matrix.example.com`) |
+| `PI_WORKDIR` | workdir |
+| `PI_LOG_LEVEL` | logLevel (debug/info/warn/error) |
+
+The LLM key can also come from an env var: write `"key": "${PI_LLM_API_KEY}"` in auth.json and pi reads it from the environment at startup (the Docker template does this by default).
 
 ## 5. License & Acknowledgements
 

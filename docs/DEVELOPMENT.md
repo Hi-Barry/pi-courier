@@ -617,6 +617,10 @@ Matrix 消息
 | 0.1.5 | README 全面 FAQ 化 |
 | 0.1.6 | 注册为 pi 包(pi.dev/packages 目录,`pi install` 可装) |
 | 0.2.0 | **改名 pi-courier + 专精 Matrix**:移除 Telegram/WhatsApp/Slack/Discord 四个 transport,依赖从 596MB 降至仅 matrix-bot-sdk;npm 包名改为 unscoped `pi-courier`,命令名 `pi-courier`;旧包 `@barryfan2045/pi-remote` 标记 deprecated |
+| 0.1.13 | 无配置时等待而非退出(systemd/docker 不再 crash 循环) |
+| 0.1.14 | 容器 PID 复用锁接管;Docker 多阶段构建瘦身 + bin 符号链接重建 |
+| 0.1.15 | 加密存储目录改名 pi-courier-matrix-crypto;Docker 版本号进 Dockerfile |
+| 0.1.16 | **环境变量一键部署**:Matrix 配置全 env 化(PI_MATRIX_TRUSTED_USERS/ENCRYPTION/WORKDIR/LOG_LEVEL);LLM key 走 pi 原生 `${ENV}` 模板(PI_LLM_API_KEY);settings env 由 entrypoint 渲染;compose + .env.example |
 
 GitHub 仓库:[github.com/Hi-Barry/pi-courier](https://github.com/Hi-Barry/pi-courier)(私有)
 npm 包:[pi-courier](https://www.npmjs.com/package/pi-courier)

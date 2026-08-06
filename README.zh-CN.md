@@ -250,7 +250,17 @@ A: 向导生成的配置,示例:
 }
 ```
 
-环境变量替代:`PI_MATRIX_HOMESERVER` / `PI_MATRIX_ACCESS_TOKEN`。
+环境变量替代(优先级:环境变量 > 配置文件 > 向导):
+
+| 变量 | 对应字段 |
+|---|---|
+| `PI_MATRIX_HOMESERVER` + `PI_MATRIX_ACCESS_TOKEN` | matrix.homeserverUrl / accessToken(两者同时设置才生效) |
+| `PI_MATRIX_ENCRYPTION` | matrix.encryption(`true`/`false`) |
+| `PI_MATRIX_TRUSTED_USERS` | auth.trustedUsers(逗号分隔 MXID,如 `@barry:matrix.example.com`) |
+| `PI_WORKDIR` | workdir |
+| `PI_LOG_LEVEL` | logLevel(debug/info/warn/error) |
+
+LLM key 也可用环境变量:auth.json 里写 `"key": "${PI_LLM_API_KEY}"`,pi 启动时从环境变量读取(Docker 部署的模板已默认如此)。
 
 ## 5. 协议与声明
 
