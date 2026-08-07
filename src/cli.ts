@@ -42,6 +42,23 @@ function projectDir(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 }
 
+/**
+ * Whether the E2EE native binary (matrix-sdk-crypto *.node) is already
+ * installed in the global node_modules. Used to skip the 21MB re-download
+ * during `pi-courier update` (the upstream postinstall always re-downloads
+ * with override:true).
+ */
+function e2eNativeBinaryExists(): boolean {
+  const globalNodeModules = path.join(path.dirname(process.execPath), "..", "lib", "node_modules");
+  const cryptoPkgDir = path.join(globalNodeModules, "@matrix-org", "matrix-sdk-crypto-nodejs");
+  if (!fs.existsSync(cryptoPkgDir)) return false;
+  try {
+    return fs.readdirSync(cryptoPkgDir).some((f) => f.endsWith(".node"));
+  } catch {
+    return false;
+  }
+}
+
 function usage(): void {
   console.log(`pi-courier — run the pi coding agent from your messenger
 
@@ -231,7 +248,16 @@ function cmdUpdate(): void {
     // download progress from matrix-sdk-crypto-nodejs) streams to the
     // terminal in real time instead of being buffered by npm until the end.
     console.log("🔄 通过 npm 升级 pi-courier …");
-    const res = spawnSync("npm", ["install", "-g", "pi-courier@latest", "--foreground-scripts"], {
+    const npmArgs = ["install", "-g", "pi-courier@latest", "--foreground-scripts"];
+    // The E2EE native lib (21MB from GitHub Releases) is re-downloaded on
+    // every npm install because the upstream postinstall uses override:true.
+    // When the binary already exists, skip lifecycle scripts — the lib is
+    // kept as-is and the update finishes in seconds instead of minutes.
+    if (e2eNativeBinaryExists()) {
+      console.log("   (E2EE 原生库已存在,跳过 21MB 下载)");
+      npmArgs.push("--ignore-scripts");
+    }
+    const res = spawnSync("npm", npmArgs, {
       stdio: "inherit",
     });
     if (res.status !== 0) {
