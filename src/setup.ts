@@ -102,17 +102,24 @@ function createPrompter(): {
 async function matrixLogin(
   homeserver: string,
   username: string,
-  password: string
+  password: string,
+  deviceId?: string
 ): Promise<{ accessToken: string; userId: string }> {
   const url = `${homeserver.replace(/\/$/, "")}/_matrix/client/v3/login`;
+  const body: Record<string, unknown> = {
+    type: "m.login.password",
+    identifier: { type: "m.id.user", user: username },
+    password,
+  };
+  if (deviceId) {
+    // 固定 device_id:同一 bot 账号重跑 setup 时复用同一个设备身份,
+    // 避免换 token 后设备变化导致 M_BAD_JSON / 历史密钥丢失。
+    body.device_id = deviceId;
+  }
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      type: "m.login.password",
-      identifier: { type: "m.id.user", user: username },
-      password,
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -131,12 +138,23 @@ async function matrixWhoami(homeserver: string, accessToken: string): Promise<st
   return data.user_id ?? "unknown";
 }
 
+/** Random 8-char uppercase alnum suffix for the fixed device ID. */
+function randomDeviceSuffix(): string {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let out = "";
+  for (let i = 0; i < 8; i++) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
+}
+
 /**
  * Acquire a Matrix access token: password login (mode 1) or pasted token (mode 2).
  */
 async function acquireToken(
   ask: (prompt: string, opts?: { silent?: boolean }) => Promise<string>,
-  homeserver: string
+  homeserver: string,
+  deviceId?: string
 ): Promise<{ accessToken: string; botUserId: string }> {
   const authMode = ((await ask("获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1): ")).trim() || "1");
 
@@ -153,8 +171,8 @@ async function acquireToken(
   const password = await ask("bot 密码: ", { silent: true });
   if (!username || !password) throw new Error("用户名/密码不能为空");
   console.log("登录中…");
-  const login = await matrixLogin(homeserver, username, password);
-  console.log(`✅ 登录成功,账号: ${login.userId}`);
+  const login = await matrixLogin(homeserver, username, password, deviceId);
+  console.log(`✅ 登录成功,账号: ${login.userId}${deviceId ? `(设备 ${deviceId})` : ""}`);
   return { accessToken: login.accessToken, botUserId: login.userId };
 }
 
@@ -176,7 +194,16 @@ export async function runSetup(): Promise<void> {
     const homeserver = (await ask(hsPrompt)).trim() || hsDefault;
     if (!homeserver) throw new Error("homeserver URL 不能为空");
 
-    // ---- 2. token ----------------------------------------------------------
+    // ---- 2.5 fixed device id ------------------------------------------------
+    // Same bot account re-running setup reuses the same device (identity is
+    // kept, history keys survive); delete the field to force a new device.
+    // Only password login uses it; a pasted token keeps its own device.
+    let deviceId = existing.deviceId;
+    if (!deviceId) {
+      deviceId = `PICOURIER${randomDeviceSuffix()}`;
+    }
+
+    // ---- 3. token ----------------------------------------------------------
     // Keep the existing token when the homeserver is unchanged; otherwise it
     // belongs to another server and must be re-acquired.
     const hsChanged = Boolean(hsDefault) && homeserver !== hsDefault;
@@ -191,19 +218,19 @@ export async function runSetup(): Promise<void> {
         botUserId = await matrixWhoami(homeserver, accessToken).catch(() => "unknown");
         console.log(`✅ 沿用现有 token,账号: ${botUserId}`);
       } else {
-        ({ accessToken, botUserId } = await acquireToken(ask, homeserver));
+        ({ accessToken, botUserId } = await acquireToken(ask, homeserver, deviceId));
       }
     } else {
       if (hsChanged) console.log("ℹ️  homeserver 已变更,需要重新获取 token");
-      ({ accessToken, botUserId } = await acquireToken(ask, homeserver));
+      ({ accessToken, botUserId } = await acquireToken(ask, homeserver, deviceId));
     }
 
-    // ---- 3. trusted admin user ---------------------------------------------
+    // ---- 4. trusted admin user ---------------------------------------------
     const trustedDefault = existing.auth?.trustedUsers?.[0]?.replace(/^matrix:/, "") ?? botUserId;
     const adminRaw = (await ask(`信任用户(管理员)MXID [默认 ${trustedDefault}]: `)).trim() || trustedDefault;
     if (!adminRaw.startsWith("@")) throw new Error("MXID 应以 @ 开头,如 @barry:matrix.example.com");
 
-    // ---- 4. E2EE ------------------------------------------------------------
+    // ---- 5. E2EE ------------------------------------------------------------
     const encDefault = existing.matrix?.encryption === true;
     const encPrompt = encDefault
       ? "启用 E2EE 加密? [Y/n] [默认 是]: "
@@ -211,7 +238,7 @@ export async function runSetup(): Promise<void> {
     const encAnswer = (await ask(encPrompt)).trim().toLowerCase();
     const encryption = encAnswer === "" ? encDefault : encAnswer === "y";
 
-    // ---- 5. workdir ----------------------------------------------------------
+    // ---- 6. workdir ----------------------------------------------------------
     const workdirDefault = existing.workdir ?? `${os.homedir()}/Projects`;
     const workdir = (await ask(`pi 工作目录 [默认 ${workdirDefault}]: `)).trim() || workdirDefault;
 
@@ -227,6 +254,7 @@ export async function runSetup(): Promise<void> {
         adminUserId: `matrix:${adminRaw}`,
       },
       workdir,
+      deviceId,
       autoConnect: existing.autoConnect ?? true,
       debug: existing.debug ?? true,
     };
@@ -237,6 +265,7 @@ export async function runSetup(): Promise<void> {
     console.log(`   信任用户: ${adminRaw}`);
     console.log(`   E2EE: ${encryption ? "开启" : "关闭"}`);
     console.log(`   工作目录: ${workdir}`);
+    console.log(`   设备 ID: ${deviceId}(固定,重跑 setup 复用;想换设备就删掉此字段)`);
     console.log("\n下一步: pi-courier enable(开机自启)或 pi-courier run(前台运行)");
   } catch (err) {
     console.error(`\n❌ 配置失败: ${(err as Error).message}`);

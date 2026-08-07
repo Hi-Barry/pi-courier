@@ -48,6 +48,12 @@ export interface MsgBridgeConfig {
   cliPath?: string;
   /** 日志级别:debug | info | warn | error(默认 info;`pi-courier logs --level debug` 可查看全量) */
   logLevel?: string;
+  /**
+   * 固定设备 ID(仅密码登录适用):重跑 setup 时复用同一个设备,
+   * 避免换 token 后设备身份变化导致 M_BAD_JSON / 历史密钥丢失。
+   * 由 setup 生成并持久化;删除此字段可重新生成(新设备身份)。
+   */
+  deviceId?: string;
 }
 
 /**

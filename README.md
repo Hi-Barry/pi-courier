@@ -220,7 +220,7 @@ A: Historical events that can't be decrypted (new device without old keys). Norm
 A: The bot's new device never received the room keys. The bot account has no cross-signing, so the most reliable fix is to **use a non-encrypted room** (create a room without encryption and invite the bot) — the bridge handles plain rooms fine even with `encryption: true`.
 
 **Q: `M_BAD_JSON: Provided device_id in device_keys does not match...`?**
-A: The crypto store holds an old device identity but the token belongs to a newer device (re-logged). Delete and restart: `rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart`. Do this whenever you re-run setup / change the token.
+A: The crypto store's device identity doesn't match the token's device (re-logged, or a pasted token from another device). **Since 0.1.20 password login uses a fixed device ID, so re-running setup no longer triggers this.** If it still happens: delete the crypto store and restart — `rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart` (do this whenever you re-run setup / change the token).
 
 **Q: `One time key signed_curve25519:... already exists` (M_UNKNOWN)?**
 A: The token is bound to an old device on the server and the local OTK bookkeeping is out of sync — **deleting the local crypto store does NOT help** (the server assigns the device ID from the token, so a rebuilt store uses the same device). **You must get a new token**: re-run `pi-courier setup` and answer `n` to "keep the existing token?" (or log in with the password); a new token = a new device = clean server state. Pair with a crypto-store delete if device residue persists.
