@@ -225,6 +225,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     );
   } catch (err) {
     logger.warn("⚠️ some transports failed to connect:", (err as Error).message);
+    // Friendly diagnostics for the two common E2EE/device-state failures so
+    // users get the fix instead of a raw stack trace.
+    const msg = (err as Error).message ?? "";
+    if (msg.includes("M_BAD_JSON") && msg.includes("device_id")) {
+      logger.warn("   → 本地加密存储与 token 的设备身份不一致(换过 token / 重登过)。");
+      logger.warn("     解法:删除加密存储后重启 — rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart");
+    } else if (msg.includes("One time key") || msg.includes("already exists")) {
+      logger.warn("   → 服务器端 device 的 one-time key 记账与本地不一致。");
+      logger.warn("     解法:重跑 `pi-courier setup`,在\"保留现有 token?\"处输 n 换新 token(新设备=服务器干净)。");
+    }
   }
 
   try {

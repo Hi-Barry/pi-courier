@@ -22,13 +22,13 @@ import type { MsgBridgeConfig } from "./types.js";
  * can exit naturally after setup finishes.
  */
 function createPrompter(): {
-  ask: (prompt: string) => Promise<string>;
+  ask: (prompt: string, opts?: { silent?: boolean }) => Promise<string>;
   close: () => void;
 } {
   if (stdin.isTTY) {
     const rl = createInterface({ input: stdin, output: stdout });
     return {
-      ask: (prompt) =>
+      ask: (prompt, opts) =>
         new Promise((resolve) => {
           let done = false;
           const finish = (answer: string): void => {
@@ -37,7 +37,21 @@ function createPrompter(): {
               resolve(answer);
             }
           };
-          rl.question(prompt, finish);
+          if (opts?.silent) {
+            // Suppress echo while typing (classic readline mute trick):
+            // redirect the output writer so typed characters are not shown.
+            const output = rl as unknown as { _writeToOutput: (s: string) => void };
+            const origWrite = output._writeToOutput;
+            output._writeToOutput = () => {};
+            stdout.write(prompt);
+            rl.question("", (answer) => {
+              output._writeToOutput = origWrite;
+              stdout.write("\n");
+              finish(answer);
+            });
+          } else {
+            rl.question(prompt, finish);
+          }
           rl.once("close", () => finish(""));
         }),
       close: () => {
@@ -108,7 +122,7 @@ async function matrixWhoami(homeserver: string, accessToken: string): Promise<st
  * Acquire a Matrix access token: password login (mode 1) or pasted token (mode 2).
  */
 async function acquireToken(
-  ask: (prompt: string) => Promise<string>,
+  ask: (prompt: string, opts?: { silent?: boolean }) => Promise<string>,
   homeserver: string
 ): Promise<{ accessToken: string; botUserId: string }> {
   const authMode = ((await ask("获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1): ")).trim() || "1");
@@ -123,7 +137,7 @@ async function acquireToken(
 
   const username = (await ask("bot 用户名 (如 test2): ")).trim();
   // 密码不回显(终端模式);普通模式会显示,注意遮挡
-  const password = await ask("bot 密码: ");
+  const password = await ask("bot 密码: ", { silent: true });
   if (!username || !password) throw new Error("用户名/密码不能为空");
   console.log("登录中…");
   const login = await matrixLogin(homeserver, username, password);
