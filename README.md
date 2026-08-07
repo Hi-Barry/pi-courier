@@ -159,7 +159,7 @@ You are now a trusted user (the first trusted user also becomes admin). Any user
 | `/name <name>` | Name the session |
 | `/export [path]` | Export session HTML |
 | `/bash <cmd>` | Run a shell command |
-| `/abort` | Abort current operation |
+| `/stop` | Stop all tasks immediately (like Esc in the TUI; alias `/abort`) |
 | `/reload` | Restart pi (after installing extensions/config) |
 | `/help` | Full help |
 

@@ -159,7 +159,7 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 | `/name <名字>` | 会话命名 |
 | `/export [路径]` | 导出会话 HTML |
 | `/bash <命令>` | 执行 shell 命令 |
-| `/abort` | 中止当前操作 |
+| `/stop` | 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`) |
 | `/reload` | 重启 pi(装完扩展/配置后) |
 | `/help` | 完整帮助 |
 

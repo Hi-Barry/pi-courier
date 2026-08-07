@@ -50,9 +50,10 @@ export async function handleSlashCommand(
         return true;
       }
 
+      case "/stop":
       case "/abort": {
         await rpc.abort();
-        await reply("🛑 已中止当前操作");
+        await reply("🛑 已停止所有任务,等待下一步指示。");
         return true;
       }
 
@@ -220,7 +221,7 @@ function helpText(): string {
     "• `/name <名字>` — 会话命名",
     "• `/export [路径]` — 导出会话 HTML",
     "• `/bash <命令>` — 执行 shell 命令(写入上下文)",
-    "• `/abort` — 中止当前操作",
+    "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)",
     "• `/reload` — 重启 pi 进程(装插件/改配置后使用)",
     "",
     "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。",
