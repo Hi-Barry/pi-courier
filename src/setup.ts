@@ -38,15 +38,28 @@ function createPrompter(): {
             }
           };
           if (opts?.silent) {
-            // Suppress echo while typing (classic readline mute trick):
-            // redirect the output writer so typed characters are not shown.
+            // Hidden password input (Node's documented _writeToOutput pattern):
+            // let the prompt through, render typed characters as stars.
             const output = rl as unknown as { _writeToOutput: (s: string) => void };
             const origWrite = output._writeToOutput;
-            output._writeToOutput = () => {};
-            stdout.write(prompt);
-            rl.question("", (answer) => {
+            let stars = 0;
+            output._writeToOutput = (str: string) => {
+              if (str === prompt) {
+                origWrite.call(rl, prompt); // show the prompt itself
+              } else if (str === "\x7f" || str === "\b") {
+                if (stars > 0) {
+                  origWrite.call(rl, "\b \b"); // backspace: erase one star
+                  stars--;
+                }
+              } else if (/^[\x20-\x7e\u00a0-\uffff]$/.test(str)) {
+                origWrite.call(rl, "*"); // printable input -> star
+                stars++;
+              }
+              // control sequences are swallowed (no echo, no cursor noise)
+            };
+            rl.question(prompt, (answer) => {
               output._writeToOutput = origWrite;
-              stdout.write("\n");
+              origWrite.call(rl, "\n");
               finish(answer);
             });
           } else {
