@@ -108,15 +108,17 @@ export class PiRpc {
     }
 
     // Cold start handshake: the process may need a moment before answering.
+    // 15 attempts x 2s backoff (up to ~30s): cold starts load models and
+    // extensions, which can exceed a short timeout on slow VPSs/debians.
     let lastError: unknown;
-    for (let attempt = 1; attempt <= 5; attempt++) {
+    for (let attempt = 1; attempt <= 15; attempt++) {
       try {
         await client.getState();
         this.client = client;
         return;
       } catch (err) {
         lastError = err;
-        await new Promise((r) => setTimeout(r, 1000));
+        await new Promise((r) => setTimeout(r, 2000));
       }
     }
     await client.stop().catch(() => {});

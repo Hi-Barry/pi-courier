@@ -97,11 +97,16 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       // Slash commands → RPC mapping (builtin) or passthrough (extensions/skills/templates)
       if (text.startsWith("/")) {
-        const handled = await handleSlashCommand(text, {
-          rpc,
-          reply: async (replyText) => sendReply(msg.chatId, msg.transport, replyText),
-        });
-        if (handled) return;
+        try {
+          const handled = await handleSlashCommand(text, {
+            rpc,
+            reply: async (replyText) => sendReply(msg.chatId, msg.transport, replyText),
+          });
+          if (handled) return;
+        } catch (err) {
+          await sendReply(msg.chatId, msg.transport, `❌ 命令执行失败: ${(err as Error).message}`);
+          return;
+        }
       }
 
       // Plain message → prompt

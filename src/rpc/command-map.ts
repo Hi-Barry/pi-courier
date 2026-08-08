@@ -59,9 +59,13 @@ export async function handleSlashCommand(
 
       case "/reload": {
         await reply("🔄 正在重启 pi 进程(扩展/技能/配置将重新加载)…");
-        await rpc.restart();
-        const state = await rpc.getState();
-        await reply(`✅ pi 已重启,模型: ${state.model?.id ?? "unknown"}`);
+        try {
+          await rpc.restart();
+          const state = await rpc.getState();
+          await reply(`✅ pi 已重启,模型: ${state.model?.id ?? "unknown"}`);
+        } catch (err) {
+          await reply(`❌ 重启失败: ${(err as Error).message}`);
+        }
         return true;
       }
 
