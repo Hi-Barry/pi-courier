@@ -91,6 +91,7 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
   [方式 2] 粘贴 access token (syt_...):                  ← 已有 token
 ✅ 登录成功,账号: @test3:matrix.example.com
 信任用户(管理员)MXID [默认 @test3:matrix.example.com]:   ← 直接回车 = 只有 bot 自己可信;建议填你的账号,如 @barry:matrix.example.com
+信任房间 ID(可选,回车跳过;多个逗号分隔,如 !abc:server 或 !abc:server:mentions):   ← 群聊用;默认模式 trusted-only;可跳过,之后用 /enable 添加
 启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间选 y 也没问题)
 pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输入其他目录
 
@@ -99,7 +100,11 @@ pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输
    信任用户: @barry:...
    E2EE: 开启
    工作目录: /home/你/Projects
+   设备 ID: PICOURIERXXXXXXXX(固定,重跑 setup 复用)
+   信任房间: !abc:server (trusted-only) 或无(群聊默认不回应)
 ```
+
+> **群聊授权**:信任用户体系只作用于私聊;多人房间里默认**所有人都不回应**(包括信任用户),需要把房间加入信任列表(`setup` 的信任房间步骤,或之后发 `/enable <房间ID> <all|mentions|trusted-only>`)。房间 ID 格式 `!xxx:服务器`(日志里可见)。
 
 向导会验证 token 并写入 `~/.pi/pi-courier.json`。不想用向导的话,手动创建这个文件也行 —— 格式见[常见问题](#4-常见问题)。
 

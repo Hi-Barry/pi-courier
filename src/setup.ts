@@ -230,6 +230,34 @@ export async function runSetup(): Promise<void> {
     const adminRaw = (await ask(`信任用户(管理员)MXID [默认 ${trustedDefault}]: `)).trim() || trustedDefault;
     if (!adminRaw.startsWith("@")) throw new Error("MXID 应以 @ 开头,如 @barry:matrix.example.com");
 
+    // ---- 4.5 trusted rooms (optional) ---------------------------------------
+    // Group chats need explicit channel authorization: trusted users in a
+    // group are ignored unless the room is enabled. Format per room:
+    //   !room:server            (mode defaults to trusted-only)
+    //   !room:server:all|mentions|trusted-only
+    const roomsRaw = (
+      await ask("信任房间 ID(可选,回车跳过;多个逗号分隔,如 !abc:server 或 !abc:server:trusted-only): ")
+    ).trim();
+    const rooms: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }> = {};
+    if (roomsRaw) {
+      for (const part of roomsRaw.split(",")) {
+        const p = part.trim();
+        if (!p) continue;
+        let room = p;
+        let mode: "all" | "mentions" | "trusted-only" = "trusted-only";
+        const last = p.split(":").pop() ?? "";
+        if (last === "all" || last === "mentions" || last === "trusted-only") {
+          room = p.slice(0, p.length - last.length - 1);
+          mode = last;
+        }
+        if (!room.startsWith("!")) {
+          console.log(`   ⚠️ 跳过无效房间 ID: ${p}(应以 ! 开头)`);
+          continue;
+        }
+        rooms[room] = { enabled: true, mode };
+      }
+    }
+
     // ---- 5. E2EE ------------------------------------------------------------
     const encDefault = existing.matrix?.encryption === true;
     const encPrompt = encDefault
@@ -252,6 +280,7 @@ export async function runSetup(): Promise<void> {
         ...existing.auth,
         trustedUsers: [`matrix:${adminRaw}`],
         adminUserId: `matrix:${adminRaw}`,
+        ...(roomsRaw ? { channels: rooms } : {}),
       },
       workdir,
       deviceId,
@@ -266,6 +295,8 @@ export async function runSetup(): Promise<void> {
     console.log(`   E2EE: ${encryption ? "开启" : "关闭"}`);
     console.log(`   工作目录: ${workdir}`);
     console.log(`   设备 ID: ${deviceId}(固定,重跑 setup 复用;想换设备就删掉此字段)`);
+    const roomList = Object.entries(rooms).map(([id, c]) => `${id} (${c.mode})`).join(", ");
+    console.log(`   信任房间: ${roomList || "无(群聊默认不回应;可后续用 /enable 添加)"}`);
     console.log("\n下一步: pi-courier enable(开机自启)或 pi-courier run(前台运行)");
   } catch (err) {
     console.error(`\n❌ 配置失败: ${(err as Error).message}`);
