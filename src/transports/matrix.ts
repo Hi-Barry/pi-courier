@@ -137,8 +137,8 @@ export class MatrixProvider implements ITransportProvider {
             this.sendMessage(
               roomId,
               `🤖 我已加入这个群聊,但默认不回应群消息。\n\n` +
-                `启用方式:私聊给我发 /enable ${roomId} trusted-only\n` +
-                `(或 all = 回应所有人 / mentions = 只回应 @我)`
+                `启用方式:直接在群里发 /enable trusted-only\n` +
+                `(或 all = 回应所有人 / mentions = 只回应 @我;仅信任用户可启用)`
             ).catch(() => {});
           }
         })

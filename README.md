@@ -167,7 +167,7 @@ You are now a trusted user (the first trusted user also becomes admin). Any user
 
 **Anything else** starting with `/` passes through to pi directly — extension commands, `/skill:name`, prompt templates. Plain text is a normal conversation turn.
 
-**Group chats**: rooms with **more than 2 members** are silent by default — the bot posts a one-time hint when invited, then answers nothing until the admin enables the room: `/enable <roomId> <all|mentions|trusted-only>` (in a DM to the bot), or add it during `setup` (trusted-room step; default mode `trusted-only`). Two-person rooms (you + the bot) answer automatically. Room IDs look like `!xxx:server`.
+**Group chats**: rooms with **more than 2 members** are silent by default — the bot posts a one-time hint when invited, then answers nothing until enabled. **Enable without the room ID**: send `/enable <all|mentions|trusted-only>` right in the group (trusted users only, defaults to `trusted-only`), or in a DM with `/enable <roomId> <mode>` (or add it during `setup`). Two-person rooms (you + the bot) answer automatically. Room IDs look like `!xxx:server`.
 
 ### Multi-project rooms (project isolation)
 

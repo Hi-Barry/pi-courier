@@ -97,6 +97,25 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         }
       }
 
+      // Group chats: a trusted user can enable the current room without
+      // knowing its ID — send "/enable <mode>" right in the room. This must
+      // run BEFORE authorization (unenabled rooms are not authorized).
+      if (msg.isGroupChat && text.startsWith("/enable")) {
+        const isTrusted = auth.isTrustedUser(msg.userId, msg.transport);
+        if (isTrusted) {
+          const parts = text.split(/\s+/);
+          const mode = (parts[1] || "trusted-only") as "all" | "mentions" | "trusted-only";
+          if (mode !== "all" && mode !== "mentions" && mode !== "trusted-only") {
+            await sendReply(msg.chatId, msg.transport, "用法: /enable <all|mentions|trusted-only>(本房间)");
+            return;
+          }
+          auth.enableChannel(msg.chatId, mode);
+          await sendReply(msg.chatId, msg.transport, `✅ 本房间已启用 (mode: ${mode})`);
+          logger.info(`[auth] 房间 ${msg.chatId} 已由 ${msg.username} 启用 (${mode})`);
+          return;
+        }
+      }
+
       if (!isAuthorized) return;
 
       // DM management-room branding: on the first trusted DM message, rename

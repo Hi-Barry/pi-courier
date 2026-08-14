@@ -139,9 +139,21 @@ export class ChallengeAuth {
     }
   }
 
+  /** Whether a user is in the trusted list (per transport). */
+  isTrustedUser(userId: string, transport?: string): boolean {
+    const namespaced = transport ? `${transport}:${userId}` : userId;
+    return this.trustedUsers.has(namespaced);
+  }
+
   /** Whether a group chat has been explicitly enabled by the admin. */
   isChannelEnabled(chatId: string): boolean {
     return this.channelAuth.get(chatId)?.enabled === true;
+  }
+
+  /** Enable a group chat with a mode (used by /enable in the room itself). */
+  enableChannel(chatId: string, mode: "all" | "mentions" | "trusted-only"): void {
+    this.channelAuth.set(chatId, { enabled: true, mode });
+    if (this.onSaveAuth) this.onSaveAuth();
   }
 
   /**
