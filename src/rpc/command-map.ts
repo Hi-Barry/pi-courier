@@ -9,11 +9,19 @@
  *  4. Unknown commands get a helpful error listing what is available
  */
 import type { PiRpc } from "./pi-rpc.js";
+import type { ProjectManager } from "./project-manager.js";
+import { loadConfig } from "../config.js";
 
 export interface SlashCommandContext {
   rpc: PiRpc;
   /** Send a reply back to the originating chat */
   reply: (text: string) => Promise<void>;
+  /** Multi-project management (project rooms). Optional. */
+  projectManager?: ProjectManager;
+  /** Create a private room + invite a user (Matrix). Optional. */
+  createProjectRoom?: (name: string, inviteUserId: string) => Promise<string | null>;
+  /** Admin user MXID (invite target for /newproject), e.g. matrix:@barry:server. */
+  adminUserId?: string;
 }
 
 /** Returns true if the command was handled (something was done / replied). */
@@ -66,6 +74,59 @@ export async function handleSlashCommand(
         } catch (err) {
           await reply(`❌ 重启失败: ${(err as Error).message}`);
         }
+        return true;
+      }
+
+      // --- Project management ------------------------------------------------
+      case "/newproject": {
+        if (!ctx.projectManager || !ctx.createProjectRoom) {
+          await reply("❌ /newproject 不可用(仅 Matrix 部署支持)");
+          return true;
+        }
+        const space = args.indexOf(" ");
+        const name = (space === -1 ? args : args.slice(0, space)).trim();
+        const workdir = (space === -1 ? "" : args.slice(space + 1)).trim();
+        if (!name || !workdir) {
+          await reply(
+            "用法: /newproject <项目名> <项目路径>\n例: /newproject myapp /home/you/Projects/myapp\n项目路径必须是绝对路径。"
+          );
+          return true;
+        }
+        if (!workdir.startsWith("/")) {
+          await reply(`❌ 路径必须是绝对路径(以 / 开头): ${workdir}`);
+          return true;
+        }
+        // Create a private room named after the project and invite the admin.
+        const inviteMxid = (ctx.adminUserId ?? "").replace(/^matrix:/, "");
+        if (!inviteMxid) {
+          await reply("❌ 缺少邀请对象(未配置信任用户)");
+          return true;
+        }
+        try {
+          const roomId = await ctx.createProjectRoom(name, inviteMxid);
+          if (!roomId) {
+            await reply("❌ 房间创建失败(Matrix 未连接?)");
+            return true;
+          }
+          ctx.projectManager.registerProject(roomId, workdir);
+          await reply(
+            `✅ 项目「${name}」创建完成!\n\n` +
+              `• 房间: ${roomId}\n` +
+              `• 工作目录: ${workdir}\n` +
+              `• 已邀请你进入新房间\n\n` +
+              `项目对话请到新房间进行(独立上下文与工作目录)。`
+          );
+        } catch (err) {
+          await reply(`❌ 创建项目失败: ${(err as Error).message}`);
+        }
+        return true;
+      }
+
+      case "/projects": {
+        const projects = ctx.projectManager
+          ? loadProjectsText()
+          : "无(未启用多项目)";
+        await reply(projects);
         return true;
       }
 
@@ -212,6 +273,13 @@ function parseModelArg(arg: string): { provider: string; modelId: string } {
   return { provider: "", modelId: trimmed };
 }
 
+/** One-line list of configured projects (roomId -> workdir). */
+function loadProjectsText(): string {
+  const projects = loadConfig().projects ?? {};
+  const lines = Object.entries(projects).map(([roomId, p]) => `• ${roomId} → ${p.workdir}`);
+  return lines.length > 0 ? `**项目列表**:\n${lines.join("\n")}` : "暂无项目(用 /newproject 创建)";
+}
+
 function helpText(): string {
   return [
     "**Pi 命令**(通过 RPC 执行):",
@@ -227,6 +295,8 @@ function helpText(): string {
     "• `/bash <命令>` — 执行 shell 命令(写入上下文)",
     "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)",
     "• `/reload` — 重启 pi 进程(装插件/改配置后使用)",
+    "• `/newproject <项目名> <路径>` — 创建新项目(自动建私有房间;DM 里使用)",
+    "• `/projects` — 查看项目列表",
     "",
     "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。",
     "**Bridge 管理命令**: `/help`(本帮助)、`/trusted`、`/revoke`、`/channels`、`/enable`、`/disable`、`/toggletools`",

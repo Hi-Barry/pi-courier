@@ -54,6 +54,17 @@ export interface MsgBridgeConfig {
    * 由 setup 生成并持久化;删除此字段可重新生成(新设备身份)。
    */
   deviceId?: string;
+  /**
+   * 多项目映射:房间 ID → 项目配置(工作目录)。
+   * 每个映射的房间独立跑一个 pi 进程(独立 cwd/会话/bash 环境)。
+   * 未映射的私聊(DM)走默认 workdir。
+   */
+  projects?: Record<string, { workdir: string }>;
+  /**
+   * 已初始化为"项目管理"房间的 DM 房间 ID 列表(幂等标记,
+   * 避免重启后重复改名/重复发送使用说明)。
+   */
+  managementRooms?: string[];
 }
 
 /**

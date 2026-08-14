@@ -21,6 +21,7 @@ import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
+import { ProjectManager } from "./rpc/project-manager.js";
 import { TransportManager } from "./transports/manager.js";
 import { MatrixProvider } from "./transports/matrix.js";
 
@@ -190,8 +191,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
   };
 
+  // ---- multi-project routing -------------------------------------------------
+  // Project rooms get their own pi process (isolated cwd/session); DM and
+  // unmapped rooms use the shared default Rpc. Agent events from a project
+  // process are routed back to the owning room.
+  const projectManager = new ProjectManager({
+    defaultRpc: rpc,
+    baseOptions: { cliPath, args: ["--continue"] },
+    onRoomEvent: (roomId, event) => {
+      router.handleEvent(event, roomId);
+    },
+  });
+
   const router = createMessageRouter({
     rpc,
+    projectManager,
     auth,
     transportManager,
     sendReply,

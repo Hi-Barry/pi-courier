@@ -104,7 +104,26 @@ pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输
    信任房间: !abc:server (trusted-only) 或无(群聊默认不回应)
 ```
 
-> **群聊授权**:信任用户体系只作用于私聊;多人房间里默认**所有人都不回应**(包括信任用户),需要把房间加入信任列表(`setup` 的信任房间步骤,或之后发 `/enable <房间ID> <all|mentions|trusted-only>`)。房间 ID 格式 `!xxx:服务器`(日志里可见)。
+> **群聊**:先在 DM 里发 `/enable <房间ID> <all|mentions|trusted-only>` 启用房间(或 setup 的"信任房间"步骤,默认 trusted-only)。未启用的房间**所有人都不回应**(包括信任用户)。房间 ID 形如 `!xxx:服务器`(日志可见)。
+
+### 多项目房间(项目隔离)
+
+同一个 bot 账号可以服务多个项目 —— 每个项目一个私有房间(房间名=项目名),有独立的 pi 进程、工作目录和会话历史。
+
+- **DM = 管理房间**:首次私聊 bot 时,房间自动改名为"项目管理"并发送使用说明。DM 服务默认项目(`workdir`,通常 `~/Projects`)。
+- **创建项目**(在 DM 里发):
+  ```
+  /newproject <项目名> <绝对路径>
+  ```
+  bot 创建以项目命名的私有房间、邀请管理员进入、把映射写入 `pi-courier.json`(`projects` 字段)并回复确认。项目对话在新房间进行 —— 上下文和 bash 工作目录完全隔离。
+- **查看项目**:`/projects`
+- **手动配置**也可以:直接编辑 `pi-courier.json` 加 `projects` 映射:
+  ```json
+  "projects": {
+    "!房间ID:服务器": { "workdir": "/home/你/Projects/myapp" }
+  }
+  ```
+- 每个项目房间按需 lazy 启动自己的 pi 进程(约 300MB/项目),session 存于 `<workdir>/.pi-session`,重启后各项目会话独立恢复。
 
 向导会验证 token 并写入 `~/.pi/pi-courier.json`。不想用向导的话,手动创建这个文件也行 —— 格式见[常见问题](#4-常见问题)。
 

@@ -8,7 +8,7 @@
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, saveConfig } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -20,9 +20,12 @@ import type { TransportManager } from "../transports/manager.js";
 import type { ExternalMessage, PendingRemoteChat } from "../types.js";
 import { handleSlashCommand } from "./command-map.js";
 import type { PiRpc } from "./pi-rpc.js";
+import type { ProjectManager } from "./project-manager.js";
 
 export interface MessageRouterDeps {
   rpc: PiRpc;
+  /** Multi-project routing: resolves the PiRpc for a room (default when unmapped). */
+  projectManager: ProjectManager;
   auth: ChallengeAuth;
   transportManager: TransportManager;
   /** Send a text reply to a chat via a transport (errors swallowed by caller) */
@@ -34,14 +37,15 @@ export interface MessageRouterDeps {
 export interface MessageRouter {
   /** Handle an incoming messenger message */
   handleIncoming(msg: ExternalMessage): Promise<void>;
-  /** Handle an agent event (from pi RPC) */
-  handleEvent(event: unknown): void;
+  /** Handle an agent event (from pi RPC). roomId = the room that owns the
+   *  pi process (project rooms); omitted for the shared default Rpc. */
+  handleEvent(event: unknown, roomId?: string): void;
   /** Chat that the current/last turn belongs to */
   pendingRemoteChat: PendingRemoteChat | null;
 }
 
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
-  const { rpc, auth, transportManager, sendReply, log, debug } = deps;
+  const { rpc, projectManager, auth, transportManager, sendReply, log, debug } = deps;
   let pendingRemoteChat: PendingRemoteChat | null = null;
 
   return {
@@ -95,12 +99,26 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       if (!isAuthorized) return;
 
+      // DM management-room branding: on the first trusted DM message, rename
+      // the room to "项目管理" and send a usage guide (idempotent via config).
+      if (!msg.isGroupChat) {
+        void maybeInitManagementRoom(msg, sendReply, transportManager);
+      }
+
+      // Resolve the pi process for this room: project rooms get their own,
+      // everything else (DM) uses the shared default Rpc.
+      const roomRpc = projectManager.getRpcForRoom(msg.chatId);
+
       // Slash commands → RPC mapping (builtin) or passthrough (extensions/skills/templates)
       if (text.startsWith("/")) {
         try {
           const handled = await handleSlashCommand(text, {
-            rpc,
+            rpc: roomRpc,
             reply: async (replyText) => sendReply(msg.chatId, msg.transport, replyText),
+            projectManager,
+            createProjectRoom: async (name, inviteMxid) =>
+              transportManager.createProjectRoom(name, inviteMxid),
+            adminUserId: auth.exportConfig().adminUserId,
           });
           if (handled) return;
         } catch (err) {
@@ -111,13 +129,20 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       // Plain message → prompt
       try {
-        await rpc.prompt(text);
+        await roomRpc.prompt(text);
       } catch (err) {
         await sendReply(msg.chatId, msg.transport, `❌ 无法发送给 pi: ${(err as Error).message}`);
       }
     },
 
-    handleEvent(rawEvent: unknown): void {
+    handleEvent(rawEvent: unknown, roomId?: string): void {
+      // For project rooms the reply target is the room itself (the pi
+      // process is owned by that room). For the shared default Rpc we use
+      // pendingRemoteChat as before.
+      const target = roomId
+        ? { chatId: roomId, transport: "matrix", username: "user" }
+        : pendingRemoteChat;
+
       // extension_error is emitted by the RPC layer but is not part of the
       // typed AgentSessionEvent union — widen for runtime event checking.
       const event = rawEvent as {
@@ -210,16 +235,16 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
 
       if (event.type === "turn_start") {
-        if (pendingRemoteChat) {
+        if (target) {
           transportManager
-            .sendTyping(pendingRemoteChat.chatId, pendingRemoteChat.transport)
+            .sendTyping(target.chatId, target.transport)
             .catch(() => {});
         }
         return;
       }
 
       if (event.type === "turn_end") {
-        if (!pendingRemoteChat) return;
+        if (!target) return;
         const message = event.message as AssistantMessage;
         const responseText = extractTextFromMessage(message);
         const toolCallsText = formatToolCalls(message);
@@ -229,7 +254,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // Reply summary at INFO level — the full conversation is also in pi's
         // session file (path logged below).
         logger.info(
-          `[agent] 回复 @${pendingRemoteChat.username}: ${responseText.trim().slice(0, 500)}${responseText.trim().length > 500 ? "…" : ""}`
+          `[agent] 回复 @${target.username}: ${responseText.trim().slice(0, 500)}${responseText.trim().length > 500 ? "…" : ""}`
         );
 
         const parts: string[] = [];
@@ -245,10 +270,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         const fullText = parts.join("\n\n");
         const chunks = splitMessage(fullText, 4000);
         for (const chunk of chunks) {
-          sendReply(pendingRemoteChat.chatId, pendingRemoteChat.transport, chunk).catch(() => {});
+          sendReply(target.chatId, target.transport, chunk).catch(() => {});
         }
 
-        if (!pendingTools) {
+        if (!pendingTools && !roomId) {
           pendingRemoteChat = null;
         }
         return;
@@ -256,10 +281,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       if (event.type === "extension_error") {
         logger.error(`[agent] 扩展错误 (${event.extensionPath ?? "unknown"}): ${event.error ?? "unknown"}`);
-        if (pendingRemoteChat) {
+        if (target) {
           sendReply(
-            pendingRemoteChat.chatId,
-            pendingRemoteChat.transport,
+            target.chatId,
+            target.transport,
             `⚠️ 扩展错误 (${event.extensionPath ?? "unknown"}): ${event.error ?? "unknown"}`
           ).catch(() => {});
         }
@@ -284,7 +309,40 @@ function summarizeStreamDelta(event: {
   return `(${e.type ?? "unknown"})`;
 }
 
-/** One-line, bounded representation of a tool argument/result payload. */
+/**
+ * First-time DM branding: rename the room to "项目管理" and send the usage
+ * guide. Idempotent via config.managementRooms so restarts don't re-trigger
+ * (and a user-renamed room is never overwritten).
+ */
+async function maybeInitManagementRoom(
+  msg: ExternalMessage,
+  sendReply: (chatId: string, transport: string, text: string) => Promise<void>,
+  transportManager: TransportManager
+): Promise<void> {
+  const cfg = loadConfig();
+  if (cfg.managementRooms?.includes(msg.chatId)) return;
+  try {
+    await transportManager.setRoomName(msg.chatId, "项目管理");
+    await sendReply(msg.chatId, msg.transport, MANAGEMENT_ROOM_HELP);
+    saveConfig({ ...cfg, managementRooms: [...(cfg.managementRooms ?? []), msg.chatId] });
+    logger.info(`[project] DM 房间已初始化为项目管理: ${msg.chatId}`);
+  } catch {
+    // Non-matrix transport or transient failure — skip branding, try again later.
+  }
+}
+
+const MANAGEMENT_ROOM_HELP = `🏗️ **项目管理房间**
+
+这里是 pi-courier 的管理台。直接发消息 = 在默认项目(~/Projects)里与 pi 对话。
+
+📁 **项目管理**
+• \`/newproject <项目名> <路径>\` — 创建新项目(自动建私有房间并拉你进入,项目对话到新房间进行)
+• \`/projects\` — 查看项目列表
+
+⚡ **常用命令**
+• \`/stop\` — 停止当前任务
+• \`/reload\` — 重启 pi 进程
+• \`/help\` — 完整帮助`;
 function summarizeArg(arg: unknown, max = 500): string {
   if (arg === undefined || arg === null) return "";
   if (typeof arg === "string") {

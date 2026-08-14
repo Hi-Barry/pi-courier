@@ -45,6 +45,34 @@ export class MatrixProvider implements ITransportProvider {
     return this._isConnected;
   }
 
+  /** Create a private project room (used by /newproject). */
+  async createProjectRoom(name: string, inviteUserId: string): Promise<string> {
+    if (!this.client) throw new Error("Matrix 未连接");
+    const roomId = await this.client.createRoom({
+      name,
+      invite: [inviteUserId],
+      preset: "private_chat",
+    });
+    return roomId;
+  }
+
+  /** Rename a room (used to brand the DM as the management room). */
+  async setRoomName(roomId: string, name: string): Promise<void> {
+    if (!this.client) throw new Error("Matrix 未连接");
+    await this.client.sendStateEvent(roomId, "m.room.name", "", { name });
+  }
+
+  /** Get the current room name (null if the room has no name yet). */
+  async getRoomName(roomId: string): Promise<string | null> {
+    if (!this.client) return null;
+    try {
+      const ev = await this.client.getRoomStateEvent(roomId, "m.room.name", "");
+      return (ev as { name?: string } | undefined)?.name ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   // Formatting delegated to matrix-utils.ts (pure, testable)
 
   async connect(): Promise<void> {

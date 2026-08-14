@@ -169,6 +169,25 @@ You are now a trusted user (the first trusted user also becomes admin). Any user
 
 **Group chats**: enable the room first with `/enable <roomId> <all|mentions|trusted-only>` (in a DM to the bot), or add it during `setup` (trusted-room step; default mode `trusted-only`). Without this, **nobody** in the room is answered — including trusted users. Room IDs look like `!xxx:server` (visible in the logs).
 
+### Multi-project rooms (project isolation)
+
+One bot account can serve multiple projects — each project gets its own private room (named after the project), its own pi process, working directory and conversation history.
+
+- **DM = management room**: the first DM to the bot is auto-renamed to "项目管理" and a usage guide is sent. It serves the default project (`workdir`, usually `~/Projects`).
+- **Create a project** (in the DM):
+  ```
+  /newproject <name> <absolute-path>
+  ```
+  The bot creates a private room named after the project, invites the admin, writes the mapping to `pi-courier.json` (`projects`), and confirms. Talk to the project in its own room — context and bash working directory are fully isolated.
+- **List projects**: `/projects`
+- Manual setup is also possible: edit `pi-courier.json` and add a `projects` map:
+  ```json
+  "projects": {
+    "!roomid:server": { "workdir": "/home/you/Projects/myapp" }
+  }
+  ```
+- Each project room lazily starts its own pi process (~300MB RAM each) with `--session-dir <workdir>/.pi-session`, so sessions survive restarts per project.
+
 ### Managing the service
 
 ```bash
