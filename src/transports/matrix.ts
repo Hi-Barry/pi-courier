@@ -128,7 +128,20 @@ export class MatrixProvider implements ITransportProvider {
       this.joinedRooms.add(roomId);
       // Refresh member count asynchronously
       this.client?.getJoinedRoomMembers(roomId)
-        .then(members => this.roomMemberCount.set(roomId, members.length))
+        .then(members => {
+          this.roomMemberCount.set(roomId, members.length);
+          // Multi-user room that isn't explicitly enabled: post a one-time
+          // hint so the inviter knows how to enable it. The room.join event
+          // only fires on (re)join, so this is naturally idempotent.
+          if (members.length > 2 && !this.auth.isChannelEnabled(roomId)) {
+            this.sendMessage(
+              roomId,
+              `🤖 我已加入这个群聊,但默认不回应群消息。\n\n` +
+                `启用方式:私聊给我发 /enable ${roomId} trusted-only\n` +
+                `(或 all = 回应所有人 / mentions = 只回应 @我)`
+            ).catch(() => {});
+          }
+        })
         .catch(() => {});
     });
     this.client.on("room.leave", (roomId: string) => {

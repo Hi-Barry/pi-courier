@@ -104,7 +104,7 @@ pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输
    信任房间: !abc:server (trusted-only) 或无(群聊默认不回应)
 ```
 
-> **群聊**:先在 DM 里发 `/enable <房间ID> <all|mentions|trusted-only>` 启用房间(或 setup 的"信任房间"步骤,默认 trusted-only)。未启用的房间**所有人都不回应**(包括信任用户)。房间 ID 形如 `!xxx:服务器`(日志可见)。
+> **群聊**:**成员数 >2 的房间默认静默** —— bot 被拉进群时会发一条一次性提示,之后不回应任何消息,直到管理员显式启用:`/enable <房间ID> <all|mentions|trusted-only>`(DM 里发给 bot,或 setup 的"信任房间"步骤,默认 trusted-only)。**2 人房间(你 + bot)自动回应**。房间 ID 形如 `!xxx:服务器`(日志可见)。
 
 ### 多项目房间(项目隔离)
 

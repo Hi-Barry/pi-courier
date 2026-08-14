@@ -139,6 +139,11 @@ export class ChallengeAuth {
     }
   }
 
+  /** Whether a group chat has been explicitly enabled by the admin. */
+  isChannelEnabled(chatId: string): boolean {
+    return this.channelAuth.get(chatId)?.enabled === true;
+  }
+
   /**
    * Initiate or validate a challenge
    */
