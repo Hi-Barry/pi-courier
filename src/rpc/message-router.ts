@@ -118,15 +118,16 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       if (!isAuthorized) return;
 
-      // DM management-room branding: on the first trusted DM message from the
-      // admin, rename the room to "项目管理" and send a usage guide
-      // (idempotent via config). Only the admin's DM is branded — other
-      // users' DMs and project rooms are never touched.
+      // DM management-room branding: the FIRST admin DM becomes the
+      // management room (rename + usage guide, persisted by room ID). All
+      // later checks are room-ID driven — project rooms, other 2-person
+      // rooms and other users' DMs are never management rooms.
       const adminRaw = (auth.exportConfig().adminUserId ?? "").replace(/^matrix:/, "");
-      const isAdminDm = !msg.isGroupChat && msg.userId === adminRaw;
-      if (isAdminDm && !projectManager.isProjectRoom(msg.chatId)) {
-        void maybeInitManagementRoom(msg, sendReply, transportManager);
+      if (!msg.isGroupChat && msg.userId === adminRaw && !projectManager.isProjectRoom(msg.chatId)) {
+        await maybeInitManagementRoom(msg, sendReply, transportManager);
       }
+      // Management room = the recorded room ID (managementRooms[0]).
+      const isManagementRoom = loadConfig().managementRooms?.[0] === msg.chatId;
 
       // Resolve the pi process for this room: project rooms get their own
       // (lazily started), everything else (DM) uses the shared default Rpc.
@@ -154,9 +155,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             setRoomName: async (roomId, name) => transportManager.setRoomName(roomId, name),
             adminUserId: auth.exportConfig().adminUserId,
             chatId: msg.chatId,
-            // The management room is the admin's DM — unique and stable; the
-            // branding flag in config only gates rename/guide idempotency.
-            isManagementRoom: isAdminDm,
+            // Management room = the recorded room ID (unique, stable).
+            isManagementRoom,
           });
           if (handled) return;
         } catch (err) {
@@ -358,12 +358,14 @@ async function maybeInitManagementRoom(
   transportManager: TransportManager
 ): Promise<void> {
   const cfg = loadConfig();
-  if (cfg.managementRooms?.includes(msg.chatId)) return;
+  const rooms = cfg.managementRooms ?? [];
+  if (rooms.includes(msg.chatId)) return; // already the management room
+  if (rooms.length > 0) return; // a management room already exists — never brand another
   try {
     await transportManager.setRoomName(msg.chatId, "项目管理");
     await sendReply(msg.chatId, msg.transport, MANAGEMENT_ROOM_HELP);
-    saveConfig({ ...cfg, managementRooms: [...(cfg.managementRooms ?? []), msg.chatId] });
-    logger.info(`[project] DM 房间已初始化为项目管理: ${msg.chatId}`);
+    saveConfig({ ...cfg, managementRooms: [...rooms, msg.chatId] });
+    logger.info(`[project] 管理房间已初始化: ${msg.chatId}`);
   } catch {
     // Non-matrix transport or transient failure — skip branding, try again later.
   }

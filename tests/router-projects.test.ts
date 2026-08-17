@@ -17,6 +17,9 @@ let configBackup: string | null = null;
 
 beforeEach(() => {
   configBackup = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, "utf-8") : null;
+  // Isolate: start each test from no management room / no projects.
+  const cfg = loadConfig();
+  saveConfig({ ...cfg, managementRooms: [], projects: {} });
 });
 
 afterEach(() => {
