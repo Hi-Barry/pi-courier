@@ -145,8 +145,8 @@ describe("message-router multi-project routing", () => {
     expect(reply.text).toContain("!newproj:server");
   });
 
-  it("rejects a relative path in /newproject", async () => {
-    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
+  it("resolves a relative path in /pmctl new against the project root", async () => {
+    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
     const router = createMessageRouter({
       rpc,
       projectManager,
@@ -156,9 +156,33 @@ describe("message-router multi-project routing", () => {
       log: () => {},
       debug: false,
     });
-    await router.handleIncoming(makeMsg({ content: "/newproject myapp relative/path" }));
-    expect(transportManager.createProjectRoom).not.toHaveBeenCalled();
-    expect(replies.at(-1)!.text).toContain("绝对路径");
+    await router.handleIncoming(makeMsg({ content: "/newproject myapp myapp" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(projectManager.registerProject).toHaveBeenCalledWith(
+      "!newproj:server",
+      "/home/you/Projects/myapp",
+      "myapp"
+    );
+  });
+
+  it("uses an absolute path as-is in /pmctl new", async () => {
+    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
+    const router = createMessageRouter({
+      rpc,
+      projectManager,
+      auth,
+      transportManager,
+      sendReply,
+      log: () => {},
+      debug: false,
+    });
+    await router.handleIncoming(makeMsg({ content: "/newproject myapp /srv/custom/myapp" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(projectManager.registerProject).toHaveBeenCalledWith(
+      "!newproj:server",
+      "/srv/custom/myapp",
+      "myapp"
+    );
   });
 
   it("allows /pmctl from a trusted DM even before the branding flag is persisted", async () => {

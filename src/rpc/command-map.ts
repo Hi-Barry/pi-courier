@@ -11,6 +11,19 @@
 import type { PiRpc } from "./pi-rpc.js";
 import type { ProjectManager } from "./project-manager.js";
 import { loadConfig } from "../config.js";
+import * as path from "node:path";
+import * as os from "node:os";
+
+/**
+ * Resolve a project path: absolute paths are used as-is; relative paths are
+ * resolved against the project root (config.workdir, the setup-time default
+ * project directory) — so `/pmctl new myapp myapp` lands in ~/Projects/myapp.
+ */
+function resolveProjectPath(p: string): string {
+  if (p.startsWith("/")) return p;
+  const root = loadConfig().workdir ?? path.join(os.homedir(), "Projects");
+  return path.join(root, p);
+}
 
 export interface SlashCommandContext {
   rpc: PiRpc;
@@ -120,13 +133,14 @@ export async function handleSlashCommand(
             const pname = (sp === -1 ? rest : rest.slice(0, sp)).trim();
             const workdir = (sp === -1 ? "" : rest.slice(sp + 1)).trim();
             if (!pname || !workdir) {
-              await reply("用法: /pmctl new <项目名> <绝对路径>\n例: /pmctl new myapp /home/you/Projects/myapp");
+              await reply(
+                "用法: /pmctl new <项目名> <路径>\n" +
+                  "路径可用相对路径(基于工程根,如 myapp → ~/Projects/myapp)或绝对路径。\n" +
+                  "例: /pmctl new myapp myapp"
+              );
               return true;
             }
-            if (!workdir.startsWith("/")) {
-              await reply(`❌ 路径必须是绝对路径(以 / 开头): ${workdir}`);
-              return true;
-            }
+            const resolvedWorkdir = resolveProjectPath(workdir);
             const inviteMxid = (ctx.adminUserId ?? "").replace(/^matrix:/, "");
             if (!inviteMxid) {
               await reply("❌ 缺少邀请对象(未配置信任用户)");
@@ -138,11 +152,11 @@ export async function handleSlashCommand(
                 await reply("❌ 房间创建失败(Matrix 未连接?)");
                 return true;
               }
-              pm.registerProject(roomId, workdir, pname);
+              pm.registerProject(roomId, resolvedWorkdir, pname);
               await reply(
                 `✅ 项目「${pname}」创建完成!\n\n` +
                   `• 房间: ${roomId}\n` +
-                  `• 工作目录: ${workdir}\n` +
+                  `• 工作目录: ${resolvedWorkdir}\n` +
                   `• 已邀请你进入新房间\n\n` +
                   `项目对话请到新房间进行(独立上下文与工作目录)。`
               );
@@ -209,10 +223,11 @@ export async function handleSlashCommand(
             const sp = rest.indexOf(" ");
             const target = (sp === -1 ? rest : rest.slice(0, sp)).trim();
             const newWorkdir = (sp === -1 ? "" : rest.slice(sp + 1)).trim();
-            if (!target || !newWorkdir.startsWith("/")) {
-              await reply("用法: /pmctl mv <项目名|房间ID> <新绝对路径>");
+            if (!target || !newWorkdir) {
+              await reply("用法: /pmctl mv <项目名|房间ID> <新路径>(相对路径基于工程根)");
               return true;
             }
+            const resolvedWorkdir = resolveProjectPath(newWorkdir);
             const found = pm.listProjects().find(
               ([roomId, p]) => p.name === target || roomId === target
             );
@@ -221,10 +236,10 @@ export async function handleSlashCommand(
               return true;
             }
             const [roomId, entry] = found;
-            pm.updateProjectWorkdir(roomId, newWorkdir);
+            pm.updateProjectWorkdir(roomId, resolvedWorkdir);
             await reply(
               `🚚 项目「${entry.name ?? roomId}」已迁移\n` +
-                `• 新工作目录: ${newWorkdir}\n` +
+                `• 新工作目录: ${resolvedWorkdir}\n` +
                 `• 会话将重新开始(旧会话保留在旧目录 .pi-session)`
             );
             return true;

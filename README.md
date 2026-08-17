@@ -176,9 +176,9 @@ One bot account can serve multiple projects — each project gets its own privat
 - **DM = management room**: the first DM to the bot is auto-renamed to "项目管理" and a usage guide is sent. It serves the default project (`workdir`, usually `~/Projects`).
 - **Create a project** (in the DM):
   ```
-  /pmctl new <name> <absolute-path>
+  /pmctl new <name> <path>
   ```
-  The bot creates a private room named after the project, invites the admin, writes the mapping to `pi-courier.json` (`projects`), and confirms. Talk to the project in its own room — context and bash working directory are fully isolated.
+  **Paths can be relative** (resolved against the project root, i.e. the setup-time `workdir` — `myapp` → `~/Projects/myapp`) or absolute. The bot creates a private room named after the project, invites the admin, writes the mapping to `pi-courier.json` (`projects`), and confirms. Talk to the project in its own room — context and bash working directory are fully isolated.
 - **Project management commands** (`/pmctl`, **management room only**; project rooms are for conversation):
   ```
   /pmctl list                 List projects

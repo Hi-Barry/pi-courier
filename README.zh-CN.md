@@ -113,9 +113,9 @@ pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输
 - **DM = 管理房间**:首次私聊 bot 时,房间自动改名为"项目管理"并发送使用说明。DM 服务默认项目(`workdir`,通常 `~/Projects`)。
 - **创建项目**(在 DM 里发):
   ```
-  /pmctl new <项目名> <绝对路径>
+  /pmctl new <项目名> <路径>
   ```
-  bot 创建以项目命名的私有房间、邀请管理员进入、把映射写入 `pi-courier.json`(`projects` 字段)并回复确认。项目对话在新房间进行 —— 上下文和 bash 工作目录完全隔离。
+  **路径可用相对路径**(基于工程根,即 setup 时的 workdir,如 `myapp` → `~/Projects/myapp`)或绝对路径。bot 创建以项目命名的私有房间、邀请管理员进入、把映射写入 `pi-courier.json`(`projects` 字段)并回复确认。项目对话在新房间进行 —— 上下文和 bash 工作目录完全隔离。
 - **项目管理命令**(`/pmctl`,**仅在管理房间可用**;项目房间只能对话):
   ```
   /pmctl list                 项目列表
