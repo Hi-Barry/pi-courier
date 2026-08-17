@@ -8,8 +8,9 @@
  * Agent events are bound to the room that owns the process, so replies
  * always go back to the right chat even with concurrent turns.
  */
-import type { RpcEventListener } from "@earendil-works/pi-coding-agent";
+
 import * as path from "node:path";
+import type { RpcEventListener } from "@earendil-works/pi-coding-agent";
 import { loadConfig, saveConfig } from "../config.js";
 import { PiRpc, type PiRpcOptions } from "./pi-rpc.js";
 

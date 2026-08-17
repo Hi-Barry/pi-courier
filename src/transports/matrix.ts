@@ -73,6 +73,14 @@ export class MatrixProvider implements ITransportProvider {
     }
   }
 
+  /** Have the bot actively leave a room (used by /pmctl rm). */
+  async leaveRoom(roomId: string, reason?: string): Promise<void> {
+    if (!this.client) throw new Error("Matrix 未连接");
+    await this.client.leaveRoom(roomId, reason);
+    this.joinedRooms.delete(roomId);
+    this.roomMemberCount.delete(roomId);
+  }
+
   // Formatting delegated to matrix-utils.ts (pure, testable)
 
   async connect(): Promise<void> {

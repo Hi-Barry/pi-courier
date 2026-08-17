@@ -8,11 +8,12 @@
  *     skill commands (/skill:name) and prompt templates (/template) are expanded by pi itself
  *  4. Unknown commands get a helpful error listing what is available
  */
+
+import * as os from "node:os";
+import * as path from "node:path";
+import { loadConfig } from "../config.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { ProjectManager } from "./project-manager.js";
-import { loadConfig } from "../config.js";
-import * as path from "node:path";
-import * as os from "node:os";
 
 /**
  * Resolve a project path: absolute paths are used as-is; relative paths are
@@ -41,7 +42,16 @@ export interface SlashCommandContext {
   isManagementRoom?: boolean;
   /** Rename a room via the Matrix transport (optional). */
   setRoomName?: (roomId: string, name: string) => Promise<void>;
+  /** Have the bot actively leave a room (used by /pmctl rm after confirm). */
+  leaveRoom?: (roomId: string, reason?: string) => Promise<void>;
 }
+
+/**
+ * Pending /pmctl rm confirmation, keyed by the chat that issued the request.
+ * A first `/pmctl rm <target>` only arms the delete; the same command issued
+ * again in the same chat confirms it.
+ */
+const pendingRm = new Map<string, { roomId: string; name: string }>();
 
 /** Returns true if the command was handled (something was done / replied). */
 export async function handleSlashCommand(
@@ -49,6 +59,7 @@ export async function handleSlashCommand(
   ctx: SlashCommandContext
 ): Promise<boolean> {
   const { rpc, reply } = ctx;
+  const chatId = ctx.chatId ?? "";
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return false;
 
@@ -204,20 +215,48 @@ export async function handleSlashCommand(
               await reply("用法: /pmctl rm <项目名|房间ID>");
               return true;
             }
+            // cancel: 清除待确认状态
+            if (target === "cancel" || target === "no" || target === "取消") {
+              const had = pendingRm.delete(chatId);
+              await reply(had ? "✅ 已取消删除" : "当前没有待确认的删除操作");
+              return true;
+            }
             const found = pm.listProjects().find(
               ([roomId, p]) => p.name === target || roomId === target
             );
             if (!found) {
+              pendingRm.delete(chatId);
               await reply(`❌ 未找到项目: ${target}(用 /pmctl list 查看)`);
               return true;
             }
             const [roomId, entry] = found;
-            await pm.removeProject(roomId);
+            // 第二次(确认)到达?先检查待确认状态
+            const pending = pendingRm.get(chatId);
+            if (pending && pending.roomId === roomId) {
+              pendingRm.delete(chatId);
+              await pm.removeProject(roomId);
+              await reply(
+                `🗑️ 项目「${entry.name ?? roomId}」已删除\n` +
+                  `• 已解除映射并停止进程\n` +
+                  `• 工作目录保留: ${entry.workdir}(如需删除请自行处理)\n` +
+                  `• 正在主动退出房间…`
+              );
+              if (ctx.leaveRoom) {
+                try {
+                  await ctx.leaveRoom(roomId, "项目已删除");
+                } catch (err) {
+                  await reply(`⚠️ 房间退出失败(可手动退出): ${(err as Error).message}`);
+                }
+              }
+              return true;
+            }
+            // 第一次:仅要求确认,不删除
+            pendingRm.set(chatId, { roomId, name: entry.name ?? roomId });
             await reply(
-              `🗑️ 项目「${entry.name ?? roomId}」已删除\n` +
-                `• 已解除映射并停止进程\n` +
-                `• 工作目录保留: ${entry.workdir}(如需删除请自行处理)\n` +
-                `• 房间 ${roomId} 已保留(可用 /disable 或自行退出)`
+              `⚠️ 确认删除项目「${entry.name ?? roomId}」?\n\n` +
+                `再次发送 \`/pmctl rm ${entry.name ?? roomId}\` 确认删除。\n` +
+                `确认后我会停止进程并主动退出该房间。\n` +
+                `(发送 \`/pmctl rm cancel\` 取消)`
             );
             return true;
           }
@@ -451,7 +490,8 @@ function helpText(): string {
     "• `/reload` — 重启 pi 进程(装插件/改配置后使用)",
     "• `/pmctl new <名称> <路径>` — 创建项目(管理房间)",
     "• `/pmctl list` — 项目列表",
-    "• `/pmctl show|rm|mv|rename` — 项目详情/删除/迁移/重命名(管理房间)",
+    "• `/pmctl show|rm|mv|rename` — 项目详情/删除/迁移/重命名(管理房间;",
+    "  rm 需二次确认,确认后停止进程并退出房间)",
     "",
     "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。",
     "**Bridge 管理命令**: `/help`(本帮助)、`/trusted`、`/revoke`、`/channels`、`/enable`、`/disable`、`/toggletools`",

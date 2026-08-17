@@ -128,6 +128,13 @@ export class TransportManager {
     return matrix.getRoomName(roomId);
   }
 
+  /** Have the bot actively leave a room (no-op if unavailable). */
+  async leaveRoom(roomId: string, reason?: string): Promise<void> {
+    const matrix = this.transports.get("matrix");
+    if (!matrix?.leaveRoom) return;
+    await matrix.leaveRoom(roomId, reason);
+  }
+
   /**
    * Get connection status for all transports
    */

@@ -153,6 +153,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             createProjectRoom: async (name, inviteMxid) =>
               transportManager.createProjectRoom(name, inviteMxid),
             setRoomName: async (roomId, name) => transportManager.setRoomName(roomId, name),
+            leaveRoom: async (roomId, reason) =>
+              transportManager.leaveRoom(roomId, reason),
             adminUserId: auth.exportConfig().adminUserId,
             chatId: msg.chatId,
             // Management room = the recorded room ID (unique, stable).
@@ -378,7 +380,7 @@ const MANAGEMENT_ROOM_HELP = `🏗️ **项目管理房间**
 📁 **项目管理**(仅本房间可用)
 • \`/pmctl new <名称> <路径>\` — 创建项目(自动建私有房间并拉你进入)
 • \`/pmctl list\` — 项目列表
-• \`/pmctl show|rm|mv|rename\` — 项目详情/删除/迁移/重命名
+• \`/pmctl show|rm|mv|rename\` — 项目详情/删除/迁移/重命名\n\n⚠️ \`/pmctl rm\` 需二次确认,确认后停止进程并主动退出房间
 
 ⚡ **常用命令**
 • \`/stop\` — 停止当前任务
