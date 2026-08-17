@@ -388,28 +388,28 @@ export class ChallengeAuth {
    * Get help text for admin commands
    */
   private getHelpText(): string {
-    return `**Admin Commands**
+    return `**管理命令**
 
-*DM Only:*
-• \`/help\` — Show this help
-• \`/trusted\` — List trusted users
-• \`/revoke <userId>\` — Revoke trust for a user
-• \`/channels\` — List enabled channels
-• \`/enable [chatId] <mode>\` — Enable a channel (in the group: no chatId needed, enables the current room)
-  Modes: \`all\`, \`mentions\`, \`trusted-only\`
-• \`/disable <chatId>\` — Disable a channel
-• \`/toggletools\` — Toggle tool call visibility in replies
+*仅私聊(DM):*
+• \`/help\` — 显示本帮助
+• \`/trusted\` — 查看信任用户列表
+• \`/revoke <userId>\` — 撤销用户的信任
+• \`/channels\` — 查看已启用房间
+• \`/enable [chatId] <模式>\` — 启用房间(群里发:无需 chatId,启用当前房间)
+  模式: \`all\`(所有人)、\`mentions\`(仅 @我)、\`trusted-only\`(仅信任用户)
+• \`/disable <chatId>\` — 停用房间
+• \`/toggletools\` — 切换回复中是否显示工具调用
 
-*Project management (management room only):*
-• \`/pmctl new <name> <path>\` — Create a project
-• \`/pmctl list\` — List projects
-• \`/pmctl show|rm|mv|rename ...\` — Project details/remove/move/rename
-  (see /help from the management room for the full guide)
+*项目管理(仅管理房间):*
+• \`/pmctl new <名称> <路径>\` — 创建项目
+• \`/pmctl list\` — 项目列表
+• \`/pmctl show|rm|mv|rename ...\` — 项目详情/删除/迁移/重命名
+  (在管理房间发 /help 查看完整说明)
 
-*Authentication:*
-• First DM to bot → 6-digit code shown in terminal
-• Enter code in chat → become trusted
-• First trusted user = admin`;
+*认证:*
+• 首次私聊 bot → 终端显示 6 位验证码
+• 在聊天里输入验证码 → 成为信任用户
+• 第一个信任用户 = 管理员`;
   }
 
   /**
