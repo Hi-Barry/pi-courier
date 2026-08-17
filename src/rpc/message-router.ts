@@ -118,10 +118,13 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       if (!isAuthorized) return;
 
-      // DM management-room branding: on the first trusted DM message, rename
-      // the room to "项目管理" and send a usage guide (idempotent via config).
-      // Project rooms are never branded — they are 2-person rooms too.
-      if (!msg.isGroupChat && !projectManager.isProjectRoom(msg.chatId)) {
+      // DM management-room branding: on the first trusted DM message from the
+      // admin, rename the room to "项目管理" and send a usage guide
+      // (idempotent via config). Only the admin's DM is branded — other
+      // users' DMs and project rooms are never touched.
+      const adminRaw = (auth.exportConfig().adminUserId ?? "").replace(/^matrix:/, "");
+      const isAdminDm = !msg.isGroupChat && msg.userId === adminRaw;
+      if (isAdminDm && !projectManager.isProjectRoom(msg.chatId)) {
         void maybeInitManagementRoom(msg, sendReply, transportManager);
       }
 
@@ -142,7 +145,6 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // Slash commands → RPC mapping (builtin) or passthrough (extensions/skills/templates)
       if (text.startsWith("/")) {
         try {
-          const cfg = loadConfig();
           const handled = await handleSlashCommand(text, {
             rpc: roomRpc,
             reply: async (replyText) => sendReply(msg.chatId, msg.transport, replyText),
@@ -152,11 +154,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             setRoomName: async (roomId, name) => transportManager.setRoomName(roomId, name),
             adminUserId: auth.exportConfig().adminUserId,
             chatId: msg.chatId,
-            // A trusted user's DM is the management room — even on the very
-            // first message, before the branding flag is persisted.
-            isManagementRoom:
-              cfg.managementRooms?.includes(msg.chatId) === true ||
-              (!msg.isGroupChat && auth.isTrustedUser(msg.userId, msg.transport)),
+            // The management room is the admin's DM — unique and stable; the
+            // branding flag in config only gates rename/guide idempotency.
+            isManagementRoom: isAdminDm,
           });
           if (handled) return;
         } catch (err) {

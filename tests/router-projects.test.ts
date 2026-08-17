@@ -239,6 +239,23 @@ describe("message-router multi-project routing", () => {
     expect(replies.at(-1)!.text).toContain("仅可在管理房间");
   });
 
+  it("rejects /pmctl from a non-admin trusted user's DM", async () => {
+    const router = createMessageRouter({
+      rpc,
+      projectManager,
+      auth,
+      transportManager,
+      sendReply,
+      log: () => {},
+      debug: false,
+    });
+    // Trusted but not the admin — their DM is not the management room.
+    await router.handleIncoming(
+      makeMsg({ userId: "@alice:server", content: "/pmctl list" })
+    );
+    expect(replies.at(-1)!.text).toContain("仅可在管理房间");
+  });
+
   it("brands an unnamed DM room on first message (idempotent)", async () => {
     const router = createMessageRouter({
       rpc,
