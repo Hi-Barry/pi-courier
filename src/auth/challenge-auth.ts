@@ -395,10 +395,16 @@ export class ChallengeAuth {
 • \`/trusted\` — List trusted users
 • \`/revoke <userId>\` — Revoke trust for a user
 • \`/channels\` — List enabled channels
-• \`/enable <chatId> <mode>\` — Enable a channel
+• \`/enable [chatId] <mode>\` — Enable a channel (in the group: no chatId needed, enables the current room)
   Modes: \`all\`, \`mentions\`, \`trusted-only\`
 • \`/disable <chatId>\` — Disable a channel
 • \`/toggletools\` — Toggle tool call visibility in replies
+
+*Project management (management room only):*
+• \`/pmctl new <name> <path>\` — Create a project
+• \`/pmctl list\` — List projects
+• \`/pmctl show|rm|mv|rename ...\` — Project details/remove/move/rename
+  (see /help from the management room for the full guide)
 
 *Authentication:*
 • First DM to bot → 6-digit code shown in terminal
