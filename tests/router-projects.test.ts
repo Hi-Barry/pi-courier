@@ -72,6 +72,7 @@ describe("message-router multi-project routing", () => {
     auth = {
       checkAuthorization: vi.fn().mockResolvedValue(true),
       handleAdminCommand: vi.fn().mockResolvedValue(false),
+      isTrustedUser: vi.fn().mockReturnValue(true),
       exportConfig: vi.fn().mockReturnValue({
         trustedUsers: [],
         adminUserId: "matrix:@barry:server",
@@ -157,7 +158,41 @@ describe("message-router multi-project routing", () => {
     });
     await router.handleIncoming(makeMsg({ content: "/newproject myapp relative/path" }));
     expect(transportManager.createProjectRoom).not.toHaveBeenCalled();
-    expect(replies[0].text).toContain("绝对路径");
+    expect(replies.at(-1)!.text).toContain("绝对路径");
+  });
+
+  it("allows /pmctl from a trusted DM even before the branding flag is persisted", async () => {
+    // No managementRooms flag in config (first-ever message) — the trusted
+    // user's DM must still count as the management room.
+    const router = createMessageRouter({
+      rpc,
+      projectManager,
+      auth,
+      transportManager,
+      sendReply,
+      log: () => {},
+      debug: false,
+    });
+    await router.handleIncoming(makeMsg({ content: "/pmctl new myapp /tmp/myapp" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(projectManager.registerProject).toHaveBeenCalledWith("!newproj:server", "/tmp/myapp", "myapp");
+    expect(replies.at(-1)!.text).toContain("创建完成");
+  });
+
+  it("rejects /pmctl from a project room", async () => {
+    const router = createMessageRouter({
+      rpc,
+      projectManager,
+      auth,
+      transportManager,
+      sendReply,
+      log: () => {},
+      debug: false,
+    });
+    await router.handleIncoming(
+      makeMsg({ chatId: "!projroom:server", isGroupChat: true, content: "/pmctl list" })
+    );
+    expect(replies.at(-1)!.text).toContain("仅可在管理房间");
   });
 
   it("brands an unnamed DM room on first message (idempotent)", async () => {

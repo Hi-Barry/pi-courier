@@ -141,7 +141,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             setRoomName: async (roomId, name) => transportManager.setRoomName(roomId, name),
             adminUserId: auth.exportConfig().adminUserId,
             chatId: msg.chatId,
-            isManagementRoom: cfg.managementRooms?.includes(msg.chatId) === true,
+            // A trusted user's DM is the management room — even on the very
+            // first message, before the branding flag is persisted.
+            isManagementRoom:
+              cfg.managementRooms?.includes(msg.chatId) === true ||
+              (!msg.isGroupChat && auth.isTrustedUser(msg.userId, msg.transport)),
           });
           if (handled) return;
         } catch (err) {
@@ -358,9 +362,10 @@ const MANAGEMENT_ROOM_HELP = `🏗️ **项目管理房间**
 
 这里是 pi-courier 的管理台。直接发消息 = 在默认项目(~/Projects)里与 pi 对话。
 
-📁 **项目管理**
-• \`/newproject <项目名> <路径>\` — 创建新项目(自动建私有房间并拉你进入,项目对话到新房间进行)
-• \`/projects\` — 查看项目列表
+📁 **项目管理**(仅本房间可用)
+• \`/pmctl new <名称> <路径>\` — 创建项目(自动建私有房间并拉你进入)
+• \`/pmctl list\` — 项目列表
+• \`/pmctl show|rm|mv|rename\` — 项目详情/删除/迁移/重命名
 
 ⚡ **常用命令**
 • \`/stop\` — 停止当前任务
