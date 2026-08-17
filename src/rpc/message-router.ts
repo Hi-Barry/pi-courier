@@ -131,13 +131,17 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // Slash commands → RPC mapping (builtin) or passthrough (extensions/skills/templates)
       if (text.startsWith("/")) {
         try {
+          const cfg = loadConfig();
           const handled = await handleSlashCommand(text, {
             rpc: roomRpc,
             reply: async (replyText) => sendReply(msg.chatId, msg.transport, replyText),
             projectManager,
             createProjectRoom: async (name, inviteMxid) =>
               transportManager.createProjectRoom(name, inviteMxid),
+            setRoomName: async (roomId, name) => transportManager.setRoomName(roomId, name),
             adminUserId: auth.exportConfig().adminUserId,
+            chatId: msg.chatId,
+            isManagementRoom: cfg.managementRooms?.includes(msg.chatId) === true,
           });
           if (handled) return;
         } catch (err) {

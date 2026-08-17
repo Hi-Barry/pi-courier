@@ -20,8 +20,14 @@ export interface SlashCommandContext {
   projectManager?: ProjectManager;
   /** Create a private room + invite a user (Matrix). Optional. */
   createProjectRoom?: (name: string, inviteUserId: string) => Promise<string | null>;
-  /** Admin user MXID (invite target for /newproject), e.g. matrix:@barry:server. */
+  /** Admin user MXID (invite target for /pmctl new), e.g. matrix:@barry:server. */
   adminUserId?: string;
+  /** The room this command came from. */
+  chatId?: string;
+  /** Whether this room is the management room (first paired DM). */
+  isManagementRoom?: boolean;
+  /** Rename a room via the Matrix transport (optional). */
+  setRoomName?: (roomId: string, name: string) => Promise<void>;
 }
 
 /** Returns true if the command was handled (something was done / replied). */
@@ -77,57 +83,181 @@ export async function handleSlashCommand(
         return true;
       }
 
-      // --- Project management ------------------------------------------------
-      case "/newproject": {
+      // --- Project management (/pmctl, management room only) ------------------
+      case "/pmctl":
+      case "/newproject":
+      case "/projects": {
+        // Management commands are only available in the management room
+        // (the first paired DM). Project rooms are for conversation only.
+        if (!ctx.isManagementRoom) {
+          await reply("❌ /pmctl 仅可在管理房间(与 bot 的私聊)使用");
+          return true;
+        }
         if (!ctx.projectManager || !ctx.createProjectRoom) {
-          await reply("❌ /newproject 不可用(仅 Matrix 部署支持)");
+          await reply("❌ /pmctl 不可用(仅 Matrix 部署支持)");
           return true;
         }
-        const space = args.indexOf(" ");
-        const name = (space === -1 ? args : args.slice(0, space)).trim();
-        const workdir = (space === -1 ? "" : args.slice(space + 1)).trim();
-        if (!name || !workdir) {
-          await reply(
-            "用法: /newproject <项目名> <项目路径>\n例: /newproject myapp /home/you/Projects/myapp\n项目路径必须是绝对路径。"
-          );
-          return true;
+        const pm = ctx.projectManager;
+        const legacyNewProject = name === "/newproject";
+        const legacyProjects = name === "/projects";
+
+        // Resolve the sub-command.
+        let op: string;
+        let rest = args;
+        if (legacyNewProject) {
+          op = "new";
+        } else if (legacyProjects) {
+          op = "list";
+        } else {
+          const sp = args.indexOf(" ");
+          op = (sp === -1 ? args : args.slice(0, sp)).trim() || "list";
+          rest = (sp === -1 ? "" : args.slice(sp + 1)).trim();
         }
-        if (!workdir.startsWith("/")) {
-          await reply(`❌ 路径必须是绝对路径(以 / 开头): ${workdir}`);
-          return true;
-        }
-        // Create a private room named after the project and invite the admin.
-        const inviteMxid = (ctx.adminUserId ?? "").replace(/^matrix:/, "");
-        if (!inviteMxid) {
-          await reply("❌ 缺少邀请对象(未配置信任用户)");
-          return true;
-        }
-        try {
-          const roomId = await ctx.createProjectRoom(name, inviteMxid);
-          if (!roomId) {
-            await reply("❌ 房间创建失败(Matrix 未连接?)");
+
+        switch (op) {
+          case "new": {
+            const sp = rest.indexOf(" ");
+            const pname = (sp === -1 ? rest : rest.slice(0, sp)).trim();
+            const workdir = (sp === -1 ? "" : rest.slice(sp + 1)).trim();
+            if (!pname || !workdir) {
+              await reply("用法: /pmctl new <项目名> <绝对路径>\n例: /pmctl new myapp /home/you/Projects/myapp");
+              return true;
+            }
+            if (!workdir.startsWith("/")) {
+              await reply(`❌ 路径必须是绝对路径(以 / 开头): ${workdir}`);
+              return true;
+            }
+            const inviteMxid = (ctx.adminUserId ?? "").replace(/^matrix:/, "");
+            if (!inviteMxid) {
+              await reply("❌ 缺少邀请对象(未配置信任用户)");
+              return true;
+            }
+            try {
+              const roomId = await ctx.createProjectRoom(pname, inviteMxid);
+              if (!roomId) {
+                await reply("❌ 房间创建失败(Matrix 未连接?)");
+                return true;
+              }
+              pm.registerProject(roomId, workdir, pname);
+              await reply(
+                `✅ 项目「${pname}」创建完成!\n\n` +
+                  `• 房间: ${roomId}\n` +
+                  `• 工作目录: ${workdir}\n` +
+                  `• 已邀请你进入新房间\n\n` +
+                  `项目对话请到新房间进行(独立上下文与工作目录)。`
+              );
+            } catch (err) {
+              await reply(`❌ 创建项目失败: ${(err as Error).message}`);
+            }
             return true;
           }
-          ctx.projectManager.registerProject(roomId, workdir);
-          await reply(
-            `✅ 项目「${name}」创建完成!\n\n` +
-              `• 房间: ${roomId}\n` +
-              `• 工作目录: ${workdir}\n` +
-              `• 已邀请你进入新房间\n\n` +
-              `项目对话请到新房间进行(独立上下文与工作目录)。`
-          );
-        } catch (err) {
-          await reply(`❌ 创建项目失败: ${(err as Error).message}`);
-        }
-        return true;
-      }
 
-      case "/projects": {
-        const projects = ctx.projectManager
-          ? loadProjectsText()
-          : "无(未启用多项目)";
-        await reply(projects);
-        return true;
+          case "list": {
+            await reply(pmctlListText(pm));
+            return true;
+          }
+
+          case "show": {
+            const target = rest.trim();
+            if (!target) {
+              await reply("用法: /pmctl show <项目名|房间ID>");
+              return true;
+            }
+            const found = pm.listProjects().find(
+              ([roomId, p]) => p.name === target || roomId === target
+            );
+            if (!found) {
+              await reply(`❌ 未找到项目: ${target}(用 /pmctl list 查看)`);
+              return true;
+            }
+            const [roomId, entry] = found;
+            await reply(
+              `📁 项目: ${entry.name ?? roomId}\n` +
+                `• 房间: ${roomId}\n` +
+                `• 工作目录: ${entry.workdir}\n` +
+                `• 状态: ${pm.isRunning(roomId) ? "✅ 运行中" : "⏸️ 未启动(lazy)"}\n` +
+                `• 会话: ${entry.workdir}/.pi-session`
+            );
+            return true;
+          }
+
+          case "rm": {
+            const target = rest.trim();
+            if (!target) {
+              await reply("用法: /pmctl rm <项目名|房间ID>");
+              return true;
+            }
+            const found = pm.listProjects().find(
+              ([roomId, p]) => p.name === target || roomId === target
+            );
+            if (!found) {
+              await reply(`❌ 未找到项目: ${target}(用 /pmctl list 查看)`);
+              return true;
+            }
+            const [roomId, entry] = found;
+            await pm.removeProject(roomId);
+            await reply(
+              `🗑️ 项目「${entry.name ?? roomId}」已删除\n` +
+                `• 已解除映射并停止进程\n` +
+                `• 工作目录保留: ${entry.workdir}(如需删除请自行处理)\n` +
+                `• 房间 ${roomId} 已保留(可用 /disable 或自行退出)`
+            );
+            return true;
+          }
+
+          case "mv": {
+            const sp = rest.indexOf(" ");
+            const target = (sp === -1 ? rest : rest.slice(0, sp)).trim();
+            const newWorkdir = (sp === -1 ? "" : rest.slice(sp + 1)).trim();
+            if (!target || !newWorkdir.startsWith("/")) {
+              await reply("用法: /pmctl mv <项目名|房间ID> <新绝对路径>");
+              return true;
+            }
+            const found = pm.listProjects().find(
+              ([roomId, p]) => p.name === target || roomId === target
+            );
+            if (!found) {
+              await reply(`❌ 未找到项目: ${target}(用 /pmctl list 查看)`);
+              return true;
+            }
+            const [roomId, entry] = found;
+            pm.updateProjectWorkdir(roomId, newWorkdir);
+            await reply(
+              `🚚 项目「${entry.name ?? roomId}」已迁移\n` +
+                `• 新工作目录: ${newWorkdir}\n` +
+                `• 会话将重新开始(旧会话保留在旧目录 .pi-session)`
+            );
+            return true;
+          }
+
+          case "rename": {
+            const sp = rest.indexOf(" ");
+            const target = (sp === -1 ? rest : rest.slice(0, sp)).trim();
+            const newName = (sp === -1 ? "" : rest.slice(sp + 1)).trim();
+            if (!target || !newName) {
+              await reply("用法: /pmctl rename <项目名|房间ID> <新名称>");
+              return true;
+            }
+            const found = pm.listProjects().find(
+              ([roomId, p]) => p.name === target || roomId === target
+            );
+            if (!found) {
+              await reply(`❌ 未找到项目: ${target}(用 /pmctl list 查看)`);
+              return true;
+            }
+            const [roomId] = found;
+            pm.renameProject(roomId, newName);
+            if (ctx.setRoomName) {
+              await ctx.setRoomName(roomId, newName).catch(() => {});
+            }
+            await reply(`✏️ 项目已重命名为「${newName}」`);
+            return true;
+          }
+
+          default:
+            await reply(`❌ 未知操作: ${op}\n可用操作: new / list / show / rm / mv / rename`);
+            return true;
+        }
       }
 
       // --- Model / thinking --------------------------------------------------
@@ -273,11 +403,17 @@ function parseModelArg(arg: string): { provider: string; modelId: string } {
   return { provider: "", modelId: trimmed };
 }
 
-/** One-line list of configured projects (roomId -> workdir). */
-function loadProjectsText(): string {
-  const projects = loadConfig().projects ?? {};
-  const lines = Object.entries(projects).map(([roomId, p]) => `• ${roomId} → ${p.workdir}`);
-  return lines.length > 0 ? `**项目列表**:\n${lines.join("\n")}` : "暂无项目(用 /newproject 创建)";
+/** Project list text: name, status, workdir, room id. */
+function pmctlListText(pm: ProjectManager): string {
+  const projects = pm.listProjects();
+  if (projects.length === 0) {
+    return "暂无项目(用 /pmctl new <名称> <路径> 创建)";
+  }
+  const lines = projects.map(([roomId, p]) => {
+    const status = pm.isRunning(roomId) ? "✅ 运行中" : "⏸️ 未启动";
+    return `• ${p.name ?? roomId} — ${status}\n  ${p.workdir} (${roomId})`;
+  });
+  return `**项目列表** (${projects.length}):\n${lines.join("\n")}`;
 }
 
 function helpText(): string {
@@ -295,8 +431,9 @@ function helpText(): string {
     "• `/bash <命令>` — 执行 shell 命令(写入上下文)",
     "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)",
     "• `/reload` — 重启 pi 进程(装插件/改配置后使用)",
-    "• `/newproject <项目名> <路径>` — 创建新项目(自动建私有房间;DM 里使用)",
-    "• `/projects` — 查看项目列表",
+    "• `/pmctl new <名称> <路径>` — 创建项目(管理房间)",
+    "• `/pmctl list` — 项目列表",
+    "• `/pmctl show|rm|mv|rename` — 项目详情/删除/迁移/重命名(管理房间)",
     "",
     "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。",
     "**Bridge 管理命令**: `/help`(本帮助)、`/trusted`、`/revoke`、`/channels`、`/enable`、`/disable`、`/toggletools`",

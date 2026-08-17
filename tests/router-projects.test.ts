@@ -122,6 +122,8 @@ describe("message-router multi-project routing", () => {
   });
 
   it("/newproject creates a room, registers the project and replies", async () => {
+    // Management commands require the management-room flag in config.
+    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
     const router = createMessageRouter({
       rpc,
       projectManager,
@@ -136,13 +138,14 @@ describe("message-router multi-project routing", () => {
     );
     await new Promise((r) => setTimeout(r, 20)); // let fire-and-forget branding settle
     expect(transportManager.createProjectRoom).toHaveBeenCalledWith("myapp", "@barry:server");
-    expect(projectManager.registerProject).toHaveBeenCalledWith("!newproj:server", "/tmp/myapp");
+    expect(projectManager.registerProject).toHaveBeenCalledWith("!newproj:server", "/tmp/myapp", "myapp");
     const reply = replies.at(-1)!;
     expect(reply.text).toContain("myapp");
     expect(reply.text).toContain("!newproj:server");
   });
 
   it("rejects a relative path in /newproject", async () => {
+    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
     const router = createMessageRouter({
       rpc,
       projectManager,

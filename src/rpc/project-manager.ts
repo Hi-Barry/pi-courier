@@ -3,7 +3,7 @@
  *
  * Each mapped Matrix room gets its own pi child process (own cwd, own
  * session, own bash environment). Rooms are lazily started on first
- * message; the default PiRpc (DM / default workdir) is shared.
+ * message; the default PiRpc (management room / default workdir) is shared.
  *
  * Agent events are bound to the room that owns the process, so replies
  * always go back to the right chat even with concurrent turns.
@@ -13,8 +13,13 @@ import * as path from "node:path";
 import { loadConfig, saveConfig } from "../config.js";
 import { PiRpc, type PiRpcOptions } from "./pi-rpc.js";
 
+export interface ProjectEntry {
+  name?: string;
+  workdir: string;
+}
+
 export interface ProjectManagerOptions {
-  /** Shared default PiRpc (DM / unmapped rooms). */
+  /** Shared default PiRpc (management room / default workdir). */
   defaultRpc: PiRpc;
   /** Base options for project processes (cliPath, common args, ...). */
   baseOptions: PiRpcOptions;
@@ -35,19 +40,23 @@ export class ProjectManager {
     this.onRoomEvent = opts.onRoomEvent;
   }
 
-  /** Current projects mapping from config (roomId -> workdir). */
-  private projectMap(): Record<string, { workdir: string }> {
+  /** Current projects mapping from config (roomId -> entry). */
+  projectMap(): Record<string, ProjectEntry> {
     return loadConfig().projects ?? {};
+  }
+
+  /** All configured projects as [roomId, entry] pairs. */
+  listProjects(): Array<[string, ProjectEntry]> {
+    return Object.entries(this.projectMap());
   }
 
   /**
    * Resolve the PiRpc for a room.
    * - Mapped project room -> project process (lazy start).
-   * - Anything else -> default Rpc (DM / management room).
+   * - Anything else -> default Rpc (management room).
    */
   getRpcForRoom(roomId: string): PiRpc {
-    const projects = this.projectMap();
-    const entry = projects[roomId];
+    const entry = this.projectMap()[roomId];
     if (entry) {
       return this.getProjectRpc(roomId, entry.workdir);
     }
@@ -57,6 +66,11 @@ export class ProjectManager {
   /** Whether this room is a mapped project room. */
   isProjectRoom(roomId: string): boolean {
     return Boolean(this.projectMap()[roomId]);
+  }
+
+  /** Whether a project process is currently running for this room. */
+  isRunning(roomId: string): boolean {
+    return this.projectRpcs.has(roomId);
   }
 
   private getProjectRpc(roomId: string, workdir: string): PiRpc {
@@ -84,10 +98,48 @@ export class ProjectManager {
     return rpc;
   }
 
-  /** Register a new project room at runtime (used by /newproject). */
-  registerProject(roomId: string, workdir: string): void {
+  /** Register a new project room at runtime (used by /pmctl new). */
+  registerProject(roomId: string, workdir: string, name?: string): void {
     const cfg = loadConfig();
-    const projects = { ...(cfg.projects ?? {}), [roomId]: { workdir } };
+    const projects = {
+      ...(cfg.projects ?? {}),
+      [roomId]: { name: name ?? roomId, workdir },
+    };
+    saveConfig({ ...cfg, projects });
+  }
+
+  /** Update a project's workdir (used by /pmctl mv). */
+  updateProjectWorkdir(roomId: string, workdir: string): void {
+    const cfg = loadConfig();
+    const projects = { ...(cfg.projects ?? {}) };
+    const entry = projects[roomId];
+    if (!entry) return;
+    projects[roomId] = { ...entry, workdir };
+    saveConfig({ ...cfg, projects });
+    // Drop the running process so the next message starts fresh in the new dir.
+    this.projectRpcs.delete(roomId);
+  }
+
+  /** Rename a project (used by /pmctl rename). */
+  renameProject(roomId: string, name: string): void {
+    const cfg = loadConfig();
+    const projects = { ...(cfg.projects ?? {}) };
+    const entry = projects[roomId];
+    if (!entry) return;
+    projects[roomId] = { ...entry, name };
+    saveConfig({ ...cfg, projects });
+  }
+
+  /** Remove a project (used by /pmctl rm): stop its process, drop the mapping. */
+  async removeProject(roomId: string): Promise<void> {
+    const rpc = this.projectRpcs.get(roomId);
+    if (rpc) {
+      await rpc.stop().catch(() => {});
+      this.projectRpcs.delete(roomId);
+    }
+    const cfg = loadConfig();
+    const projects = { ...(cfg.projects ?? {}) };
+    delete projects[roomId];
     saveConfig({ ...cfg, projects });
   }
 
