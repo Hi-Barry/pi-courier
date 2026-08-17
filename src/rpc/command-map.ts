@@ -131,16 +131,19 @@ export async function handleSlashCommand(
           case "new": {
             const sp = rest.indexOf(" ");
             const pname = (sp === -1 ? rest : rest.slice(0, sp)).trim();
-            const workdir = (sp === -1 ? "" : rest.slice(sp + 1)).trim();
-            if (!pname || !workdir) {
+            const workdirArg = (sp === -1 ? "" : rest.slice(sp + 1)).trim();
+            if (!pname) {
               await reply(
-                "用法: /pmctl new <项目名> <路径>\n" +
-                  "路径可用相对路径(基于工程根,如 myapp → ~/Projects/myapp)或绝对路径。\n" +
-                  "例: /pmctl new myapp myapp"
+                "用法: /pmctl new <项目名> [路径]\n" +
+                  "路径可选:缺省为工程根下同名目录(如 newapp → ~/Projects/newapp);" +
+                  "也可用相对路径或绝对路径。"
               );
               return true;
             }
-            const resolvedWorkdir = resolveProjectPath(workdir);
+            // Path is optional: default to <project root>/<name>.
+            const resolvedWorkdir = workdirArg
+              ? resolveProjectPath(workdirArg)
+              : resolveProjectPath(pname);
             const inviteMxid = (ctx.adminUserId ?? "").replace(/^matrix:/, "");
             if (!inviteMxid) {
               await reply("❌ 缺少邀请对象(未配置信任用户)");

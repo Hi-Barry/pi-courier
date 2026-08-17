@@ -185,6 +185,26 @@ describe("message-router multi-project routing", () => {
     );
   });
 
+  it("defaults the path to <project root>/<name> when omitted", async () => {
+    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
+    const router = createMessageRouter({
+      rpc,
+      projectManager,
+      auth,
+      transportManager,
+      sendReply,
+      log: () => {},
+      debug: false,
+    });
+    await router.handleIncoming(makeMsg({ content: "/pmctl new newapp" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(projectManager.registerProject).toHaveBeenCalledWith(
+      "!newproj:server",
+      "/home/you/Projects/newapp",
+      "newapp"
+    );
+  });
+
   it("allows /pmctl from a trusted DM even before the branding flag is persisted", async () => {
     // No managementRooms flag in config (first-ever message) — the trusted
     // user's DM must still count as the management room.
