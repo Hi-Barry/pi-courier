@@ -255,4 +255,20 @@ describe("message-router multi-project routing", () => {
     expect(transportManager.setRoomName).toHaveBeenCalledWith("!dm:server", "项目管理");
     expect(replies.some((r) => r.text.includes("项目管理房间"))).toBe(true);
   });
+
+  it("does not brand a project room (2-person room with a mapping)", async () => {
+    (projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const router = createMessageRouter({
+      rpc,
+      projectManager,
+      auth,
+      transportManager,
+      sendReply,
+      log: () => {},
+      debug: false,
+    });
+    await router.handleIncoming(makeMsg({ chatId: "!projroom:server", content: "hello" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(transportManager.setRoomName).not.toHaveBeenCalled();
+  });
 });

@@ -51,11 +51,11 @@ export class ProjectManager {
   }
 
   /**
-   * Resolve the PiRpc for a room.
+   * Resolve the PiRpc for a room (starting it on first use).
    * - Mapped project room -> project process (lazy start).
    * - Anything else -> default Rpc (management room).
    */
-  getRpcForRoom(roomId: string): PiRpc {
+  async getRpcForRoom(roomId: string): Promise<PiRpc> {
     const entry = this.projectMap()[roomId];
     if (entry) {
       return this.getProjectRpc(roomId, entry.workdir);
@@ -73,7 +73,7 @@ export class ProjectManager {
     return this.projectRpcs.has(roomId);
   }
 
-  private getProjectRpc(roomId: string, workdir: string): PiRpc {
+  private async getProjectRpc(roomId: string, workdir: string): Promise<PiRpc> {
     const existing = this.projectRpcs.get(roomId);
     if (existing) return existing;
 
@@ -95,6 +95,9 @@ export class ProjectManager {
     rpc.onEvent(listener);
 
     this.projectRpcs.set(roomId, rpc);
+    // Lazy start: spawn the pi process and wait for the handshake. PiRpc.start
+    // is idempotent, so subsequent calls reuse the running process.
+    await rpc.start();
     return rpc;
   }
 

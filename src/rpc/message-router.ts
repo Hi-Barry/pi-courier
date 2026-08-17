@@ -120,13 +120,24 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       // DM management-room branding: on the first trusted DM message, rename
       // the room to "项目管理" and send a usage guide (idempotent via config).
-      if (!msg.isGroupChat) {
+      // Project rooms are never branded — they are 2-person rooms too.
+      if (!msg.isGroupChat && !projectManager.isProjectRoom(msg.chatId)) {
         void maybeInitManagementRoom(msg, sendReply, transportManager);
       }
 
-      // Resolve the pi process for this room: project rooms get their own,
-      // everything else (DM) uses the shared default Rpc.
-      const roomRpc = projectManager.getRpcForRoom(msg.chatId);
+      // Resolve the pi process for this room: project rooms get their own
+      // (lazily started), everything else (DM) uses the shared default Rpc.
+      let roomRpc: PiRpc;
+      try {
+        roomRpc = await projectManager.getRpcForRoom(msg.chatId);
+      } catch (err) {
+        await sendReply(
+          msg.chatId,
+          msg.transport,
+          `❌ 无法启动 pi 进程: ${(err as Error).message}`
+        );
+        return;
+      }
 
       // Slash commands → RPC mapping (builtin) or passthrough (extensions/skills/templates)
       if (text.startsWith("/")) {
