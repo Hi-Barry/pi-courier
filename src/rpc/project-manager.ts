@@ -76,7 +76,12 @@ export class ProjectManager {
 
   private async getProjectRpc(roomId: string, workdir: string): Promise<PiRpc> {
     const existing = this.projectRpcs.get(roomId);
-    if (existing) return existing;
+    if (existing) {
+      // Wait for (or reuse) the in-flight connection so a fast second message
+      // never grabs a process that isn't ready yet.
+      await existing.start().catch(() => {});
+      return existing;
+    }
 
     // Per-project session dir: each project's conversation state lives in
     // its own workdir/.pi-session — isolated and resumable (--continue).
@@ -113,15 +118,20 @@ export class ProjectManager {
   }
 
   /** Update a project's workdir (used by /pmctl mv). */
-  updateProjectWorkdir(roomId: string, workdir: string): void {
+  async updateProjectWorkdir(roomId: string, workdir: string): Promise<void> {
     const cfg = loadConfig();
     const projects = { ...(cfg.projects ?? {}) };
     const entry = projects[roomId];
     if (!entry) return;
     projects[roomId] = { ...entry, workdir };
     saveConfig({ ...cfg, projects });
-    // Drop the running process so the next message starts fresh in the new dir.
-    this.projectRpcs.delete(roomId);
+    // Stop and drop the running process so the next message starts fresh in
+    // the new dir (prevents an orphaned pi process from a stale cwd).
+    const old = this.projectRpcs.get(roomId);
+    if (old) {
+      await old.stop().catch(() => {});
+      this.projectRpcs.delete(roomId);
+    }
   }
 
   /** Rename a project (used by /pmctl rename). */

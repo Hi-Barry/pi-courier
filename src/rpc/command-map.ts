@@ -51,7 +51,7 @@ export interface SlashCommandContext {
  * A first `/pmctl rm <target>` only arms the delete; the same command issued
  * again in the same chat confirms it.
  */
-const pendingRm = new Map<string, { roomId: string; name: string }>();
+const pendingRm = new Map<string, { roomId: string; name: string; ts: number }>();
 
 /** Returns true if the command was handled (something was done / replied). */
 export async function handleSlashCommand(
@@ -230,9 +230,15 @@ export async function handleSlashCommand(
               return true;
             }
             const [roomId, entry] = found;
-            // 第二次(确认)到达?先检查待确认状态
+            // A pending confirmation expires after 60s to avoid a stale
+            // confirmation silently deleting a project much later.
             const pending = pendingRm.get(chatId);
-            if (pending && pending.roomId === roomId) {
+            if (pending && pending.ts && Date.now() - pending.ts > 60_000) {
+              pendingRm.delete(chatId); // expired — treat as a fresh rm
+              await reply(`⏳ 上次确认已超时(60 秒),需重新确认。`);
+            }
+            const pendingCurrent = pendingRm.get(chatId);
+            if (pendingCurrent && pendingCurrent.roomId === roomId) {
               pendingRm.delete(chatId);
               await pm.removeProject(roomId);
               await reply(
@@ -251,7 +257,7 @@ export async function handleSlashCommand(
               return true;
             }
             // 第一次:仅要求确认,不删除
-            pendingRm.set(chatId, { roomId, name: entry.name ?? roomId });
+            pendingRm.set(chatId, { roomId, name: entry.name ?? roomId, ts: Date.now() });
             await reply(
               `⚠️ 确认删除项目「${entry.name ?? roomId}」?\n\n` +
                 `再次发送 \`/pmctl rm ${entry.name ?? roomId}\` 确认删除。\n` +

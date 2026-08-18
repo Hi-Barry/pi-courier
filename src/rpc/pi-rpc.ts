@@ -84,8 +84,20 @@ export class PiRpc {
     );
   }
 
+  private startPromise: Promise<void> | null = null;
+
   async start(): Promise<void> {
     if (this.client) return;
+    // Reuse the in-flight start so concurrent callers wait on the same
+    // spawn instead of creating a second pi process.
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = this.doStart().finally(() => {
+      this.startPromise = null;
+    });
+    return this.startPromise;
+  }
+
+  private async doStart(): Promise<void> {
 
     // The workdir becomes the pi child process's cwd; spawn requires it to
     // exist, so create it on demand.

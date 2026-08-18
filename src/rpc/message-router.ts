@@ -54,13 +54,6 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     },
 
     async handleIncoming(msg: ExternalMessage): Promise<void> {
-      pendingRemoteChat = {
-        chatId: msg.chatId,
-        transport: msg.transport,
-        username: msg.username,
-        messageId: msg.messageId,
-      };
-
       const text = msg.content.trim();
       if (!text) return;
 
@@ -109,6 +102,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             await sendReply(msg.chatId, msg.transport, "用法: /enable <all|mentions|trusted-only>(本房间)");
             return;
           }
+          // "all" responds to everyone — admin-only. Trusted users may only
+          // request trusted-only / mentions.
+          if (mode === "all") {
+            const adminUser = (auth.exportConfig().adminUserId ?? "").replace(/^matrix:/, "");
+            if (msg.userId !== adminUser) {
+              await sendReply(msg.chatId, msg.transport, "❌ all 模式仅管理员可用(可采用 trusted-only 或 mentions)");
+              return;
+            }
+          }
           auth.enableChannel(msg.chatId, mode);
           await sendReply(msg.chatId, msg.transport, `✅ 本房间已启用 (mode: ${mode})`);
           logger.info(`[auth] 房间 ${msg.chatId} 已由 ${msg.username} 启用 (${mode})`);
@@ -141,6 +143,19 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           `❌ 无法启动 pi 进程: ${(err as Error).message}`
         );
         return;
+      }
+
+      // Record the reply target ONLY for the shared default Rpc (non-project
+      // rooms). Project rooms are excluded so a project-room message never
+      // overwrites the DM's pending target (which would misroute the DM
+      // reply — see handleEvent).
+      if (!projectManager.isProjectRoom(msg.chatId)) {
+        pendingRemoteChat = {
+          chatId: msg.chatId,
+          transport: msg.transport,
+          username: msg.username,
+          messageId: msg.messageId,
+        };
       }
 
       // Slash commands → RPC mapping (builtin) or passthrough (extensions/skills/templates)
