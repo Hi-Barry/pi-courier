@@ -195,11 +195,9 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 | `/reload` | 重启 pi(装完扩展/配置后) |
 | `/help` | 完整帮助 |
 
-**bridge 管理命令**:`/trusted`、`/revoke <userId>`、`/channels`、`/enable <chatId> <mode>`、`/disable <chatId>`、`/toggletools`
+**bridge 管理命令**:`/trusted`、`/revoke <userId>`、`/channels`、`/enable [chatId] <模式>`、`/disable <chatId>`、`/toggletools`
 
 **其他任何 `/` 开头的内容**都直接透传给 pi —— 扩展命令、`/skill:名称`、提示词模板由 pi 展开。普通文本就是正常对话。
-
-**群聊**:先给 bot 发 `/enable <roomId> all` 启用该房间。
 
 ### 服务管理
 

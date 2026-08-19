@@ -90,7 +90,8 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
            bot 密码:                                     ← 密码(不回显)
   [方式 2] 粘贴 access token (syt_...):                  ← 已有 token
 ✅ 登录成功,账号: @test3:matrix.example.com
-信任用户(管理员)MXID [默认 @test3:matrix.example.com]:   ← 直接回车 = 只有 bot 自己可信;建议填你的账号,如 @barry:matrix.example.com
+信任用户(管理员)MXID [默认 @test3:matrix.example.com]:   ← Enter = only the bot is trusted; better fill your account, e.g. @barry:matrix.example.com
+信任房间 ID(可选,回车跳过;多个逗号分隔,如 !abc:server 或 !abc:server:mentions):   ← for group chats; default mode trusted-only; skip or use /enable later
 启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间也选 y 无妨)
 pi 工作目录 [默认 /home/you/Projects]:                   ← Enter 或输入其他目录
 
@@ -99,6 +100,8 @@ pi 工作目录 [默认 /home/you/Projects]:                   ← Enter 或输�
    信任用户: @barry:...
    E2EE: 开启
    工作目录: /home/you/Projects
+   设备 ID: PICOURIERXXXXXXXX(固定,重跑 setup 复用)
+   信任房间: !abc:server (trusted-only) 或无(群聊默认不回应)
 ```
 
 The wizard verifies the token and writes `~/.pi/pi-courier.json`. To skip the wizard, create that file manually — the format is in the [FAQ](#4-faq).
@@ -163,7 +166,7 @@ You are now a trusted user (the first trusted user also becomes admin). Any user
 | `/reload` | Restart pi (after installing extensions/config) |
 | `/help` | Full help |
 
-**Bridge admin commands**: `/trusted`, `/revoke <userId>`, `/channels`, `/enable <chatId> <mode>`, `/disable <chatId>`, `/toggletools`
+**Bridge admin commands**: `/trusted`, `/revoke <userId>`, `/channels`, `/enable [chatId] <mode>`, `/disable <chatId>`, `/toggletools`
 
 **Anything else** starting with `/` passes through to pi directly — extension commands, `/skill:name`, prompt templates. Plain text is a normal conversation turn.
 
