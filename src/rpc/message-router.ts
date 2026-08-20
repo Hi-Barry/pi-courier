@@ -7,6 +7,8 @@
  */
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
 import { loadConfig, saveConfig } from "../config.js";
 import {
@@ -120,16 +122,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       if (!isAuthorized) return;
 
-      // DM management-room branding: the FIRST admin DM becomes the
-      // management room (rename + usage guide, persisted by room ID). All
-      // later checks are room-ID driven — project rooms, other 2-person
-      // rooms and other users' DMs are never management rooms.
-      const adminRaw = (auth.exportConfig().adminUserId ?? "").replace(/^matrix:/, "");
-      if (!msg.isGroupChat && msg.userId === adminRaw && !projectManager.isProjectRoom(msg.chatId)) {
+      // Management room = the FIRST accepted message in a private (≤2 person)
+      // non-project room fixes that room's ID (managementRooms[0]). This is
+      // purely room-ID driven and works for BOTH challenge-code pairing and
+      // config-driven trusted users (no code needed).
+      const mgmtId = loadConfig().managementRooms?.[0];
+      if (!mgmtId && !msg.isGroupChat && !projectManager.isProjectRoom(msg.chatId)) {
         await maybeInitManagementRoom(msg, sendReply, transportManager);
       }
-      // Management room = the recorded room ID (managementRooms[0]).
-      const isManagementRoom = loadConfig().managementRooms?.[0] === msg.chatId;
+      const isManagementRoom = (loadConfig().managementRooms?.[0] ?? "") === msg.chatId;
 
       // Resolve the pi process for this room: project rooms get their own
       // (lazily started), everything else (DM) uses the shared default Rpc.
@@ -171,6 +172,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             leaveRoom: async (roomId, reason) =>
               transportManager.leaveRoom(roomId, reason),
             adminUserId: auth.exportConfig().adminUserId,
+            senderUserId: msg.userId,
             chatId: msg.chatId,
             // Management room = the recorded room ID (unique, stable).
             isManagementRoom,
@@ -365,9 +367,35 @@ function summarizeStreamDelta(event: {
 }
 
 /**
- * First-time DM branding: rename the room to "项目管理" and send the usage
- * guide. Idempotent via config.managementRooms so restarts don't re-trigger
- * (and a user-renamed room is never overwritten).
+ * Build the management-room guide, labelled with the instance name, the bot
+ * account and the working directory — so when the bridge runs on several
+ * machines you can tell which project belongs to which box/account.
+ */
+function buildManagementRoomHelp(
+  instanceName: string,
+  botAccount: string,
+  workdir: string
+): string {
+  return (
+    `🏗️ **项目管理房间**（${instanceName}）\n\n` +
+    `• bot 账号: \`${botAccount}\`\n` +
+    `• 默认工作目录: \`${workdir}\`\n\n` +
+    `这里是本实例的管理台。直接发消息 = 在默认项目(${workdir})里与 pi 对话。\n\n` +
+    `📁 **项目管理**(仅本房间可用)\n` +
+    `• \`/pmctl new <名称> [路径]\` — 创建项目(自动建私有房间并拉你进入)\n` +
+    `• \`/pmctl list\` — 项目列表\n` +
+    `• \`/pmctl show|rm|mv|rename\` — 项目详情/删除/迁移/重命名\n\n` +
+    `⚡ **常用命令**\n` +
+    `• \`/stop\` — 停止当前任务\n` +
+    `• \`/reload\` — 重启 pi 进程\n` +
+    `• \`/help\` — 完整帮助`
+  );
+}
+
+/**
+ * First-time branding: rename the room to "项目管理(<instance>)" and send the
+ * usage guide. Idempotent via config.managementRooms so restarts don't
+ * re-trigger (and a user-renamed room is never overwritten).
  */
 async function maybeInitManagementRoom(
   msg: ExternalMessage,
@@ -379,28 +407,18 @@ async function maybeInitManagementRoom(
   if (rooms.includes(msg.chatId)) return; // already the management room
   if (rooms.length > 0) return; // a management room already exists — never brand another
   try {
-    await transportManager.setRoomName(msg.chatId, "项目管理");
-    await sendReply(msg.chatId, msg.transport, MANAGEMENT_ROOM_HELP);
+    const instanceName = cfg.instanceName ?? os.hostname();
+    const botAccount = transportManager.getBotUserId?.() ?? "(未知)";
+    const workdir = cfg.workdir ?? path.join(os.homedir(), "Projects");
+    const roomName = `项目管理（${instanceName}）`;
+    await transportManager.setRoomName(msg.chatId, roomName);
+    await sendReply(msg.chatId, msg.transport, buildManagementRoomHelp(instanceName, botAccount, workdir));
     saveConfig({ ...cfg, managementRooms: [...rooms, msg.chatId] });
-    logger.info(`[project] 管理房间已初始化: ${msg.chatId}`);
+    logger.info(`[project] 管理房间已初始化: ${msg.chatId} (${roomName})`);
   } catch {
     // Non-matrix transport or transient failure — skip branding, try again later.
   }
 }
-
-const MANAGEMENT_ROOM_HELP = `🏗️ **项目管理房间**
-
-这里是 pi-courier 的管理台。直接发消息 = 在默认项目(~/Projects)里与 pi 对话。
-
-📁 **项目管理**(仅本房间可用)
-• \`/pmctl new <名称> <路径>\` — 创建项目(自动建私有房间并拉你进入)
-• \`/pmctl list\` — 项目列表
-• \`/pmctl show|rm|mv|rename\` — 项目详情/删除/迁移/重命名\n\n⚠️ \`/pmctl rm\` 需二次确认,确认后停止进程并主动退出房间
-
-⚡ **常用命令**
-• \`/stop\` — 停止当前任务
-• \`/reload\` — 重启 pi 进程
-• \`/help\` — 完整帮助`;
 function summarizeArg(arg: unknown, max = 500): string {
   if (arg === undefined || arg === null) return "";
   if (typeof arg === "string") {

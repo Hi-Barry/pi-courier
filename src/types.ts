@@ -42,6 +42,11 @@ export interface MsgBridgeConfig {
   debug?: boolean;
   /** pi 的工作目录(pi 子进程的 cwd;`--workdir` 参数优先) */
   workdir?: string;
+  /**
+   * 实例名/机器名(可选):用于区分多台部署。默认取 os.hostname()。
+   * 管理房间名与首聊说明会带上它,方便跨机识别"哪个账号/哪台机器"。
+   */
+  instanceName?: string;
   /** pi 会话存储目录(对应 pi 的 --session-dir) */
   sessionDir?: string;
   /** 显式指定 pi 的 cli.js 路径(默认:PI_CLI_PATH → which pi → 本地 node_modules) */

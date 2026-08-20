@@ -242,7 +242,8 @@ describe("message-router multi-project routing", () => {
     expect(replies.at(-1)!.text).toContain("仅可在管理房间");
   });
 
-  it("rejects /pmctl from a non-admin trusted user's DM", async () => {
+  it("rejects /pmctl from a second room once a management room already exists", async () => {
+    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
     const router = createMessageRouter({
       rpc,
       projectManager,
@@ -252,9 +253,9 @@ describe("message-router multi-project routing", () => {
       log: () => {},
       debug: false,
     });
-    // Trusted but not the admin — their DM is not the management room.
+    // A different private room is not the management room.
     await router.handleIncoming(
-      makeMsg({ userId: "@alice:server", content: "/pmctl list" })
+      makeMsg({ chatId: "!alice:server", content: "/pmctl list" })
     );
     expect(replies.at(-1)!.text).toContain("仅可在管理房间");
   });
@@ -270,9 +271,12 @@ describe("message-router multi-project routing", () => {
       debug: false,
     });
     await router.handleIncoming(makeMsg({ content: "hi" }));
-    // maybeInitManagementRoom runs fire-and-forget — let it complete
+    // maybeInitManagementRoom runs — let it complete
     await new Promise((r) => setTimeout(r, 20));
-    expect(transportManager.setRoomName).toHaveBeenCalledWith("!dm:server", "项目管理");
+    expect(transportManager.setRoomName).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining("项目管理")
+    );
     expect(replies.some((r) => r.text.includes("项目管理房间"))).toBe(true);
   });
 

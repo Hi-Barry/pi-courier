@@ -54,6 +54,8 @@ export interface ITransportProvider {
   setRoomName?(roomId: string, name: string): Promise<void>;
   /** Get the current room name (null if none). */
   getRoomName?(roomId: string): Promise<string | null>;
+  /** The bot's own Matrix user ID (null if not connected). */
+  getBotUserId?(): string | null;
   /** Have the bot actively leave a room. */
   leaveRoom?(roomId: string, reason?: string): Promise<void>;
 }

@@ -36,6 +36,8 @@ export interface SlashCommandContext {
   createProjectRoom?: (name: string, inviteUserId: string) => Promise<string | null>;
   /** Admin user MXID (invite target for /pmctl new), e.g. matrix:@barry:server. */
   adminUserId?: string;
+  /** The user who sent this command (invite target for /pmctl new). */
+  senderUserId?: string;
   /** The room this command came from. */
   chatId?: string;
   /** Whether this room is the management room (first paired DM). */
@@ -155,7 +157,7 @@ export async function handleSlashCommand(
             const resolvedWorkdir = workdirArg
               ? resolveProjectPath(workdirArg)
               : resolveProjectPath(pname);
-            const inviteMxid = (ctx.adminUserId ?? "").replace(/^matrix:/, "");
+            const inviteMxid = (ctx.senderUserId ?? ctx.adminUserId ?? "").replace(/^matrix:/, "");
             if (!inviteMxid) {
               await reply("❌ 缺少邀请对象(未配置信任用户)");
               return true;

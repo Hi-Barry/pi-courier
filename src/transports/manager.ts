@@ -130,9 +130,15 @@ export class TransportManager {
 
   /** Have the bot actively leave a room (no-op if unavailable). */
   async leaveRoom(roomId: string, reason?: string): Promise<void> {
-    const matrix = this.transports.get("matrix");
+    const matrix = this.transports.get("matrix") as ITransportProvider | undefined;
     if (!matrix?.leaveRoom) return;
     await matrix.leaveRoom(roomId, reason);
+  }
+
+  /** The bot's own Matrix user ID (null if not connected). */
+  getBotUserId(): string | null {
+    const matrix = this.transports.get("matrix") as ITransportProvider | undefined;
+    return matrix?.getBotUserId?.() ?? null;
   }
 
   /**

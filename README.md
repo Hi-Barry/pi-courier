@@ -94,12 +94,14 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
 信任房间 ID(可选,回车跳过;多个逗号分隔,如 !abc:server 或 !abc:server:mentions):   ← for group chats; default mode trusted-only; skip or use /enable later
 启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间也选 y 无妨)
 pi 工作目录 [默认 /home/you/Projects]:                   ← Enter 或输入其他目录
+实例名/机器名 [默认 debian]:                             ← distinguish multiple deployments; shown in the management room name
 
 ✅ 配置已写入 ~/.pi/pi-courier.json
    账号: @test3:...
    信任用户: @barry:...
    E2EE: 开启
    工作目录: /home/you/Projects
+   实例名: debian(multi-machine label, shown in the management room name)
    设备 ID: PICOURIERXXXXXXXX(固定,重跑 setup 复用)
    信任房间: !abc:server (trusted-only) 或无(群聊默认不回应)
 ```
@@ -176,12 +178,12 @@ You are now a trusted user (the first trusted user also becomes admin). Any user
 
 One bot account can serve multiple projects — each project gets its own private room (named after the project), its own pi process, working directory and conversation history.
 
-- **DM = management room**: the first DM to the bot is auto-renamed to "项目管理" and a usage guide is sent. It serves the default project (`workdir`, usually `~/Projects`).
-- **Create a project** (in the DM):
+- **Management room = the first accepted private room**: the first room where the bot **successfully accepts (authorizes) a message** — a non-project, ≤2-person room — becomes the management room. This works for both challenge-code pairing and config-driven trusted users. It's auto-renamed to `项目管理(<instance>)`, a guide is sent, and its room ID is persisted to `config.managementRooms`; afterwards purely **room-ID driven** (single, stable). The management room is the admin console — `/pmctl` works only there. If you have several private rooms, only the first one becomes it.
+- **Create a project** (in the management room):
   ```
-  /pmctl new <name> <path>
+  /pmctl new <name> [path]
   ```
-  **Paths can be relative** (resolved against the project root, i.e. the setup-time `workdir` — `myapp` → `~/Projects/myapp`) or absolute. The bot creates a private room named after the project, invites the admin, writes the mapping to `pi-courier.json` (`projects`), and confirms. Talk to the project in its own room — context and bash working directory are fully isolated.
+  **The path is optional** — omitted it becomes `<project root>/<name>` (`newapp` → `~/Projects/newapp`); a relative path is resolved against the project root; an absolute path is used as-is. The bot creates a private room named after the project, invites the sender, writes the mapping to `pi-courier.json` (`projects`), and confirms. Talk to the project in its own room — context and bash working directory are fully isolated.
 - **Project management commands** (`/pmctl`, **management room only**; project rooms are for conversation):
   ```
   /pmctl list                 List projects

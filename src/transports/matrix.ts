@@ -81,6 +81,11 @@ export class MatrixProvider implements ITransportProvider {
     this.roomMemberCount.delete(roomId);
   }
 
+  /** The bot's own Matrix user ID (null if not connected). */
+  getBotUserId(): string | null {
+    return this.botUserId ?? null;
+  }
+
   // Formatting delegated to matrix-utils.ts (pure, testable)
 
   async connect(): Promise<void> {

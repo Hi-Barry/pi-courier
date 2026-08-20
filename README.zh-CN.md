@@ -94,12 +94,14 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
 信任房间 ID(可选,回车跳过;多个逗号分隔,如 !abc:server 或 !abc:server:mentions):   ← 群聊用;默认模式 trusted-only;可跳过,之后用 /enable 添加
 启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间选 y 也没问题)
 pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输入其他目录
+实例名/机器名 [默认 debian]:                             ← 多台部署用来区分;将显示在管理房间名
 
 ✅ 配置已写入 ~/.pi/pi-courier.json
    账号: @test3:...
    信任用户: @barry:...
    E2EE: 开启
    工作目录: /home/你/Projects
+   实例名: debian(多台部署区分,显示在管理房间名)
    设备 ID: PICOURIERXXXXXXXX(固定,重跑 setup 复用)
    信任房间: !abc:server (trusted-only) 或无(群聊默认不回应)
 ```
@@ -110,12 +112,12 @@ pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输
 
 同一个 bot 账号可以服务多个项目 —— 每个项目一个私有房间(房间名=项目名),有独立的 pi 进程、工作目录和会话历史。
 
-- **DM = 管理房间**:首次私聊 bot 时,房间自动改名为"项目管理"并发送使用说明。DM 服务默认项目(`workdir`,通常 `~/Projects`)。
-- **创建项目**(在 DM 里发):
+- **管理房间 = 第一个被受理的私有房间**:bot **第一次成功受理(授权通过)的、非项目的私有/2 人房间**会固化为管理房间—— 无论是验证码配对还是配置预信任都适用。房间自动改名为 `项目管理(<实例名>)` 并发送使用说明,房间 ID 写入 `config.managementRooms`,之后完全由**房间 ID 驱动**(一个、稳定)。管理房间即"管理台":`/pmctl` 仅在此可用。若有多个私有房间,只有第一个能成为它。
+- **创建项目**(在管理房间发):
   ```
-  /pmctl new <项目名> <路径>
+  /pmctl new <项目名> [路径]
   ```
-  **路径可用相对路径**(基于工程根,即 setup 时的 workdir,如 `myapp` → `~/Projects/myapp`)或绝对路径。bot 创建以项目命名的私有房间、邀请管理员进入、把映射写入 `pi-courier.json`(`projects` 字段)并回复确认。项目对话在新房间进行 —— 上下文和 bash 工作目录完全隔离。
+  **路径可选**:缺省为工程根下同名目录(`newapp` → `~/Projects/newapp`);也可用相对路径(基于工程根)或绝对路径。bot 创建以项目命名的私有房间、邀请发送者进入、把映射写入 `pi-courier.json`(`projects` 字段)并回复确认。项目对话在新房间进行 —— 上下文和 bash 工作目录完全隔离。
 - **项目管理命令**(`/pmctl`,**仅在管理房间可用**;项目房间只能对话):
   ```
   /pmctl list                 项目列表
