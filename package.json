@@ -55,6 +55,7 @@
     "access": "public"
   },
   "dependencies": {
+    "markdown-it": "^15.0.0",
     "matrix-bot-sdk": "^0.8.0"
   },
   "peerDependencies": {

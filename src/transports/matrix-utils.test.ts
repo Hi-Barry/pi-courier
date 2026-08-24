@@ -1,7 +1,6 @@
 import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
-  escapeHtml,
   extractUsername,
   formatForMatrix,
   shouldSkipEvent,
@@ -9,41 +8,13 @@ import {
   wasBotMentioned,
 } from "./matrix-utils.js";
 
-// ─── escapeHtml ───────────────────────────────────────────────
-
-describe("escapeHtml", () => {
-  it("escapes ampersand", () => {
-    expect(escapeHtml("a & b")).toBe("a &amp; b");
-  });
-
-  it("escapes angle brackets", () => {
-    expect(escapeHtml("<script>")).toBe("&lt;script&gt;");
-  });
-
-  it("escapes double quotes", () => {
-    expect(escapeHtml('say "hello"')).toBe("say &quot;hello&quot;");
-  });
-
-  it("handles all special chars together", () => {
-    expect(escapeHtml('<a href="x">&')).toBe("&lt;a href=&quot;x&quot;&gt;&amp;");
-  });
-
-  it("returns plain text unchanged", () => {
-    expect(escapeHtml("hello world")).toBe("hello world");
-  });
-
-  it("handles empty string", () => {
-    expect(escapeHtml("")).toBe("");
-  });
-});
-
 // ─── formatForMatrix ──────────────────────────────────────────
 
 describe("formatForMatrix", () => {
-  it("returns plain body only for text without markdown", () => {
+  it("renders plain text as a paragraph, body preserved", () => {
     const result = formatForMatrix("hello world");
-    expect(result).toEqual({ body: "hello world" });
-    expect(result.formattedBody).toBeUndefined();
+    expect(result.body).toBe("hello world");
+    expect(result.formattedBody).toContain("hello world");
   });
 
   it("converts **bold** to <strong>", () => {
@@ -105,6 +76,18 @@ describe("formatForMatrix", () => {
     const original = "**bold** and `code`";
     const result = formatForMatrix(original);
     expect(result.body).toBe(original);
+  });
+
+  it("escapes raw HTML outside code (html:false)", () => {
+    const result = formatForMatrix("hello <script>alert(1)</script>");
+    expect(result.formattedBody).not.toContain("<script>");
+    expect(result.formattedBody).toContain("&lt;script&gt;");
+  });
+
+  it("renders markdown lists (new via markdown-it)", () => {
+    const result = formatForMatrix("- a\n- b");
+    expect(result.formattedBody).toContain("<ul>");
+    expect(result.formattedBody).toContain("<li>a</li>");
   });
 });
 
@@ -271,13 +254,11 @@ describe("formatForMatrix properties", () => {
     );
   });
 
-  it("formattedBody is undefined when no markdown chars present", () => {
-    // Generate strings that don't contain markdown-triggering chars
-    const noMarkdown = fc.string().filter((s) => !/[*_`#[]/.test(s));
+  it("formattedBody never contains raw <script> tags (html:false, security)", () => {
     fc.assert(
-      fc.property(noMarkdown, (text) => {
+      fc.property(fc.string(), (text) => {
         const result = formatForMatrix(text);
-        expect(result.formattedBody).toBeUndefined();
+        expect(result.formattedBody?.toLowerCase()).not.toContain("<script");
       })
     );
   });
@@ -295,23 +276,6 @@ describe("stripBotMention properties", () => {
         const text = `${prefix} ${botId} some text`;
         const result = stripBotMention(text, botId);
         expect(result).not.toContain(botId);
-      })
-    );
-  });
-});
-
-describe("escapeHtml properties", () => {
-  it("output never contains raw <, >, &, or \" (except as entities)", () => {
-    fc.assert(
-      fc.property(fc.string(), (text) => {
-        const result = escapeHtml(text);
-        // After escaping, the only < > & " should be inside entity sequences
-        const withoutEntities = result
-          .replace(/&amp;/g, "")
-          .replace(/&lt;/g, "")
-          .replace(/&gt;/g, "")
-          .replace(/&quot;/g, "");
-        expect(withoutEntities).not.toMatch(/[<>"&]/);
       })
     );
   });
