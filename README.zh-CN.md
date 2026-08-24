@@ -95,6 +95,7 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
 启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间选 y 也没问题)
 pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输入其他目录
 实例名/机器名 [默认 debian]:                             ← 多台部署用来区分;将显示在管理房间名
+启用多工程模式? [y/N]:                                   ← 默认 N=单工程(一个 bot 对应一个 pi);y=多工程(管理房间+项目房间)
 
 ✅ 配置已写入 ~/.pi/pi-courier.json
    账号: @test3:...
@@ -102,11 +103,22 @@ pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输
    E2EE: 开启
    工作目录: /home/你/Projects
    实例名: debian(多台部署区分,显示在管理房间名)
+   多工程: 关闭(单工程)
    设备 ID: PICOURIERXXXXXXXX(固定,重跑 setup 复用)
    信任房间: !abc:server (trusted-only) 或无(群聊默认不回应)
 ```
 
 > **群聊**:**成员数 >2 的房间默认静默** —— bot 被拉进群时会发一条一次性提示,之后不回应任何消息,直到启用。**启用方式(无需房间 ID)**:直接在群里发 `/enable <all|mentions|trusted-only>`(信任用户,默认 trusted-only);或在 DM 里发 `/enable <房间ID> <模式>`。**2 人房间(你 + bot)自动回应**。房间 ID 形如 `!xxx:服务器`(日志可见)。
+
+### 单工程 / 多工程模式
+
+**默认是单工程(简单模式)**:一个 bot 账号对应一个 pi,所有房间直接连默认工作目录(`workdir`),**没有**管理房间 / 项目房间概念,`/pmctl` 也不可用 —— 适合只想"bot 直接聊天"的用户。
+
+**需要多项目时开启多工程**:
+- setup 里"启用多工程模式?"选 `y`,或
+- 之后在聊天里发 `/multiproject on` 再 `pi-courier restart` 生效
+
+`/multiproject`(信任用户可发):`on` 开启 / `off` 关闭(都需重启生效);不带参数显示当前状态。多工程模式下才有下面的管理房间/项目房间机制。
 
 ### 多项目房间(项目隔离)
 

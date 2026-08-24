@@ -42,6 +42,8 @@ export interface SlashCommandContext {
   chatId?: string;
   /** Whether this room is the management room (first paired DM). */
   isManagementRoom?: boolean;
+  /** Whether multi-project mode is active (for /pmctl availability). */
+  isMultiProject?: boolean;
   /** Rename a room via the Matrix transport (optional). */
   setRoomName?: (roomId: string, name: string) => Promise<void>;
   /** Have the bot actively leave a room (used by /pmctl rm after confirm). */
@@ -113,6 +115,11 @@ export async function handleSlashCommand(
       case "/pmctl":
       case "/newproject":
       case "/projects": {
+        // In single-project mode /pmctl is not available.
+        if (ctx.isMultiProject === false) {
+          await reply("❌ 当前为单工程模式,未启用项目管理。\n如需多工程:发 `/multiproject on` 并重启(pi-courier restart)。");
+          return true;
+        }
         // Management commands are only available in the management room
         // (the first paired DM). Project rooms are for conversation only.
         if (!ctx.isManagementRoom) {

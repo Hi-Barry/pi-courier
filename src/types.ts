@@ -47,6 +47,13 @@ export interface MsgBridgeConfig {
    * 管理房间名与首聊说明会带上它,方便跨机识别"哪个账号/哪台机器"。
    */
   instanceName?: string;
+  /**
+   * 多工程模式(默认 false = 单工程简单模式)。
+   * - false:一个账号 ↔ 一个 pi;所有房间直接连默认 workdir,不做管理房间/项目房间,/pmctl 不可用。
+   * - true:启用多项目(管理房间、项目房间隔离、/pmctl、实例名)。
+   * 用 /multiproject on|off 切换(改配置,重启生效)。
+   */
+  multiProject?: boolean;
   /** pi 会话存储目录(对应 pi 的 --session-dir) */
   sessionDir?: string;
   /** 显式指定 pi 的 cli.js 路径(默认:PI_CLI_PATH → which pi → 本地 node_modules) */

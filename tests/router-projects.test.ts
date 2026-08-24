@@ -68,6 +68,7 @@ describe("message-router multi-project routing", () => {
     projectManager = {
       getRpcForRoom: vi.fn().mockReturnValue(rpc),
       isProjectRoom: vi.fn().mockReturnValue(false),
+      isMultiProject: true,
       registerProject: vi.fn(),
       stopAll: vi.fn(),
     } as unknown as ProjectManager;
@@ -294,5 +295,55 @@ describe("message-router multi-project routing", () => {
     await router.handleIncoming(makeMsg({ chatId: "!projroom:server", content: "hello" }));
     await new Promise((r) => setTimeout(r, 20));
     expect(transportManager.setRoomName).not.toHaveBeenCalled();
+  });
+
+  it("in single-project mode /pmctl reports it is unavailable", async () => {
+    (projectManager as { isMultiProject: boolean }).isMultiProject = false;
+    const router = createMessageRouter({
+      rpc,
+      projectManager,
+      auth,
+      transportManager,
+      sendReply,
+      log: () => {},
+      debug: false,
+    });
+    await router.handleIncoming(makeMsg({ content: "/pmctl list" }));
+    expect(replies.at(-1)!.text).toContain("单工程模式");
+  });
+
+  it("in single-project mode every room uses the default rpc (no branding)", async () => {
+    (projectManager as { isMultiProject: boolean }).isMultiProject = false;
+    (projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const router = createMessageRouter({
+      rpc,
+      projectManager,
+      auth,
+      transportManager,
+      sendReply,
+      log: () => {},
+      debug: false,
+    });
+    await router.handleIncoming(makeMsg({ content: "hello" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(transportManager.setRoomName).not.toHaveBeenCalled();
+    expect(rpc.prompt).toHaveBeenCalledWith("hello");
+  });
+
+  it("a trusted user can toggle multi-project mode via /multiproject (restart effect)", async () => {
+    (projectManager as { isMultiProject: boolean }).isMultiProject = true;
+    const router = createMessageRouter({
+      rpc,
+      projectManager,
+      auth,
+      transportManager,
+      sendReply,
+      log: () => {},
+      debug: false,
+    });
+    await router.handleIncoming(makeMsg({ content: "/multiproject off" }));
+    const saved = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+    expect(saved.multiProject).toBe(false);
+    expect(replies.at(-1)!.text).toContain("重启生效");
   });
 });

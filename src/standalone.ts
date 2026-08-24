@@ -201,6 +201,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     onRoomEvent: (roomId, event) => {
       router.handleEvent(event, roomId);
     },
+    multiProject: loadConfig().multiProject === true,
   });
 
   const router = createMessageRouter({

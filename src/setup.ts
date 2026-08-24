@@ -274,6 +274,11 @@ export async function runSetup(): Promise<void> {
     const instanceDefault = existing.instanceName ?? os.hostname();
     const instanceName = (await ask(`实例名/机器名(默认 ${instanceDefault};多台部署用来区分,将显示在管理房间名): `)).trim() || instanceDefault;
 
+    // ---- 6.6 multi-project mode ----------------------------------------------
+    const mpDefault = existing.multiProject === true;
+    const mpRaw = (await ask(`启用多工程模式? [y/N](多工程=管理房间+项目房间隔离,可用 /pmctl;默认 N=单工程,一个 bot 对应一个 pi): `)).trim().toLowerCase();
+    const multiProject = mpRaw === "y" || mpRaw === "yes" || (mpRaw === "" && mpDefault);
+
     // ---- merge & save --------------------------------------------------------
     // Keep untouched fields (sessionDir / cliPath / logLevel / hideToolCalls …)
     // from the existing config instead of overwriting the whole file.
@@ -288,6 +293,7 @@ export async function runSetup(): Promise<void> {
       },
       workdir,
       instanceName,
+      multiProject,
       deviceId,
       autoConnect: existing.autoConnect ?? true,
       debug: existing.debug ?? true,
@@ -300,6 +306,7 @@ export async function runSetup(): Promise<void> {
     console.log(`   E2EE: ${encryption ? "开启" : "关闭"}`);
     console.log(`   工作目录: ${workdir}`);
     console.log(`   实例名: ${instanceName}(用于多台部署区分,显示在管理房间名)`);
+    console.log(`   多工程: ${multiProject ? "开启" : "关闭(单工程)"}`);
     console.log(`   设备 ID: ${deviceId}(固定,重跑 setup 复用;想换设备就删掉此字段)`);
     const roomList = Object.entries(rooms).map(([id, c]) => `${id} (${c.mode})`).join(", ");
     console.log(`   信任房间: ${roomList || "无(群聊默认不回应;可后续用 /enable 添加)"}`);

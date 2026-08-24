@@ -26,12 +26,15 @@ export interface ProjectManagerOptions {
   baseOptions: PiRpcOptions;
   /** Subscribe a per-room agent event listener: (roomId, event). */
   onRoomEvent: (roomId: string, event: unknown) => void;
+  /** Multi-project mode. false = single-project: every room uses defaultRpc. */
+  multiProject?: boolean;
 }
 
 export class ProjectManager {
   private defaultRpc: PiRpc;
   private baseOptions: PiRpcOptions;
   private onRoomEvent: (roomId: string, event: unknown) => void;
+  private multiProject: boolean;
   /** roomId -> PiRpc for project rooms (lazily started). */
   private projectRpcs = new Map<string, PiRpc>();
 
@@ -39,6 +42,7 @@ export class ProjectManager {
     this.defaultRpc = opts.defaultRpc;
     this.baseOptions = opts.baseOptions;
     this.onRoomEvent = opts.onRoomEvent;
+    this.multiProject = opts.multiProject === true;
   }
 
   /** Current projects mapping from config (roomId -> entry). */
@@ -53,10 +57,11 @@ export class ProjectManager {
 
   /**
    * Resolve the PiRpc for a room (starting it on first use).
-   * - Mapped project room -> project process (lazy start).
-   * - Anything else -> default Rpc (management room).
+   * - Single-project mode: every room uses the shared default Rpc.
+   * - Multi-project: mapped project room -> project process; else default.
    */
   async getRpcForRoom(roomId: string): Promise<PiRpc> {
+    if (!this.multiProject) return this.defaultRpc;
     const entry = this.projectMap()[roomId];
     if (entry) {
       return this.getProjectRpc(roomId, entry.workdir);
@@ -64,9 +69,15 @@ export class ProjectManager {
     return this.defaultRpc;
   }
 
-  /** Whether this room is a mapped project room. */
+  /** Whether this room is a mapped project room (only meaningful in multi-project). */
   isProjectRoom(roomId: string): boolean {
+    if (!this.multiProject) return false;
     return Boolean(this.projectMap()[roomId]);
+  }
+
+  /** Whether multi-project mode is enabled. */
+  get isMultiProject(): boolean {
+    return this.multiProject;
   }
 
   /** Whether a project process is currently running for this room. */

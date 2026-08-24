@@ -122,15 +122,48 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       if (!isAuthorized) return;
 
+      // /multiproject — switch single/multi project mode. Config read/write;
+      // takes effect on restart. Trusted users may toggle.
+      if (text.startsWith("/multiproject")) {
+        const isTrusted = auth.isTrustedUser(msg.userId, msg.transport);
+        if (!isTrusted) {
+          await sendReply(msg.chatId, msg.transport, "❌ 无权限(仅信任用户可切换多工程模式)");
+          return;
+        }
+        const action = text.split(/\s+/)[1]?.toLowerCase() ?? "";
+        const current = projectManager.isMultiProject ? "多工程模式(开启)" : "单工程模式(关闭)";
+        if (action === "on" || action === "off") {
+          const next = action === "on";
+          if (next === projectManager.isMultiProject) {
+            await sendReply(msg.chatId, msg.transport, `当前已是${current},无需切换。`);
+            return;
+          }
+          const cfg = loadConfig();
+          saveConfig({ ...cfg, multiProject: next });
+          await sendReply(
+            msg.chatId,
+            msg.transport,
+            `✅ 已${next ? "开启" : "关闭"}多工程模式。\n重启生效:运行 \`pi-courier restart\`(${next ? "重启后将启用管理房间/项目房间 /pmctl" : "重启后所有房间直接连默认 pi"})。`
+          );
+        } else {
+          await sendReply(
+            msg.chatId,
+            msg.transport,
+            `当前: ${current}\n\n用法:\n/multiproject on  — 开启多工程(重启生效)\n/multiproject off — 关闭多工程,回到单工程(重启生效)`
+          );
+        }
+        return;
+      }
+
       // Management room = the FIRST accepted message in a private (≤2 person)
-      // non-project room fixes that room's ID (managementRooms[0]). This is
-      // purely room-ID driven and works for BOTH challenge-code pairing and
-      // config-driven trusted users (no code needed).
-      const mgmtId = loadConfig().managementRooms?.[0];
-      if (!mgmtId && !msg.isGroupChat && !projectManager.isProjectRoom(msg.chatId)) {
+      // non-project room fixes that room's ID (managementRooms[0]). Works for
+      // BOTH challenge-code pairing and config-driven trusted users. Only in
+      // multi-project mode.
+      const multiProject = projectManager.isMultiProject;
+      if (multiProject && !loadConfig().managementRooms?.[0] && !msg.isGroupChat && !projectManager.isProjectRoom(msg.chatId)) {
         await maybeInitManagementRoom(msg, sendReply, transportManager);
       }
-      const isManagementRoom = (loadConfig().managementRooms?.[0] ?? "") === msg.chatId;
+      const isManagementRoom = multiProject && (loadConfig().managementRooms?.[0] ?? "") === msg.chatId;
 
       // Resolve the pi process for this room: project rooms get their own
       // (lazily started), everything else (DM) uses the shared default Rpc.
@@ -176,6 +209,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             chatId: msg.chatId,
             // Management room = the recorded room ID (unique, stable).
             isManagementRoom,
+            // Whether multi-project mode is active (for /pmctl availability).
+            isMultiProject: projectManager.isMultiProject,
           });
           if (handled) return;
         } catch (err) {

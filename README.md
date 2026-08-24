@@ -95,6 +95,7 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
 启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间也选 y 无妨)
 pi 工作目录 [默认 /home/you/Projects]:                   ← Enter 或输入其他目录
 实例名/机器名 [默认 debian]:                             ← distinguish multiple deployments; shown in the management room name
+启用多工程模式? [y/N]:                                   ← default N = single-project (one bot ↔ one pi); y = multi-project (management + project rooms)
 
 ✅ 配置已写入 ~/.pi/pi-courier.json
    账号: @test3:...
@@ -102,6 +103,7 @@ pi 工作目录 [默认 /home/you/Projects]:                   ← Enter 或输�
    E2EE: 开启
    工作目录: /home/you/Projects
    实例名: debian(multi-machine label, shown in the management room name)
+   多工程: 关闭(单工程)
    设备 ID: PICOURIERXXXXXXXX(固定,重跑 setup 复用)
    信任房间: !abc:server (trusted-only) 或无(群聊默认不回应)
 ```
@@ -173,6 +175,16 @@ You are now a trusted user (the first trusted user also becomes admin). Any user
 **Anything else** starting with `/` passes through to pi directly — extension commands, `/skill:name`, prompt templates. Plain text is a normal conversation turn.
 
 **Group chats**: rooms with **more than 2 members** are silent by default — the bot posts a one-time hint when invited, then answers nothing until enabled. **Enable without the room ID**: send `/enable <all|mentions|trusted-only>` right in the group (trusted users only, defaults to `trusted-only`), or in a DM with `/enable <roomId> <mode>` (or add it during `setup`). Two-person rooms (you + the bot) answer automatically. Room IDs look like `!xxx:server`.
+
+### Single-project vs multi-project mode
+
+**Default is single-project (simple)**: one bot account ↔ one pi. Every room talks directly to the default working directory (`workdir`); there are **no** management/project rooms and `/pmctl` is unavailable — ideal for users who just want to chat with the bot.
+
+**Enable multi-project when you need isolation**:
+- answer `y` to "启用多工程模式?" in setup, or
+- later send `/multiproject on` and `pi-courier restart`
+
+`/multiproject` (trusted users): `on` / `off` (both take effect on restart); no args shows the current mode. The management-room / project-room mechanisms below only exist in multi-project mode.
 
 ### Multi-project rooms (project isolation)
 
