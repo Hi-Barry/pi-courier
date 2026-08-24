@@ -27,6 +27,10 @@ function createPrompter(): {
 } {
   if (stdin.isTTY) {
     const rl = createInterface({ input: stdin, output: stdout });
+    // Each ask registers a `close` listener; the wizard makes a handful of
+    // asks, which trips the default 10-listener warning. It's harmless (each
+    // is `once`, freed at process exit), so lift the cap.
+    rl.setMaxListeners(0);
     return {
       ask: (prompt, opts) =>
         new Promise((resolve) => {
