@@ -2,53 +2,16 @@
  * Pure utility functions for Matrix transport.
  * Extracted for testability — no SDK or network dependencies.
  */
+import MarkdownIt from "markdown-it";
 
-/** Escape HTML special characters */
-export function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+// html:false escapes raw HTML (pi output must never inject tags);
+// breaks:true keeps chat-style single newlines as <br>;
+// linkify turns bare URLs into links.
+const md = new MarkdownIt({ html: false, breaks: true, linkify: true });
 
-/** Convert markdown to Matrix HTML. Returns plain body + optional formatted HTML. */
+/** Convert markdown to Matrix HTML. Returns plain body (fallback) + formatted HTML. */
 export function formatForMatrix(text: string): { body: string; formattedBody?: string } {
-  const hasMarkdown = /[*_`#[]/.test(text);
-  if (!hasMarkdown) {
-    return { body: text };
-  }
-
-  let html = text;
-
-  // Protect code blocks
-  const codeBlocks: string[] = [];
-  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    codeBlocks.push(`<pre><code${lang ? ` class="language-${lang}"` : ""}>${escapeHtml(code.trimEnd())}</code></pre>`);
-    return `__CODEBLOCK_${codeBlocks.length - 1}__`;
-  });
-
-  // Protect inline code
-  const inlineCodes: string[] = [];
-  html = html.replace(/`([^`]+)`/g, (_, code) => {
-    inlineCodes.push(`<code>${escapeHtml(code)}</code>`);
-    return `__INLINECODE_${inlineCodes.length - 1}__`;
-  });
-
-  // Bold
-  html = html.replace(/\*\*([^*]+?)\*\*/g, "<strong>$1</strong>");
-  // Italic
-  html = html.replace(/(?<!\*)\*(?!\*)([^*]+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
-  // Links
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-  // Newlines to <br>
-  html = html.replace(/\n/g, "<br>");
-
-  // Restore code blocks and inline code
-  html = html.replace(/__CODEBLOCK_(\d+)__/g, (_, idx) => codeBlocks[parseInt(idx, 10)]);
-  html = html.replace(/__INLINECODE_(\d+)__/g, (_, idx) => inlineCodes[parseInt(idx, 10)]);
-
-  return { body: text, formattedBody: html };
+  return { body: text, formattedBody: md.render(text).trim() };
 }
 
 /**
