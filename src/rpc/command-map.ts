@@ -170,7 +170,8 @@ export async function handleSlashCommand(
               return true;
             }
             try {
-              const roomId = await ctx.createProjectRoom(pname, inviteMxid);
+              const instance = loadConfig().instanceName ?? os.hostname();
+              const roomId = await ctx.createProjectRoom(`${pname}(${instance})`, inviteMxid);
               if (!roomId) {
                 await reply("❌ 房间创建失败(Matrix 未连接?)");
                 return true;

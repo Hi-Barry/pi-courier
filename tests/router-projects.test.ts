@@ -142,7 +142,7 @@ describe("message-router multi-project routing", () => {
       makeMsg({ content: "/newproject myapp /tmp/myapp" })
     );
     await new Promise((r) => setTimeout(r, 20)); // let fire-and-forget branding settle
-    expect(transportManager.createProjectRoom).toHaveBeenCalledWith("myapp", "@barry:server");
+    expect(transportManager.createProjectRoom).toHaveBeenCalledWith(expect.stringContaining("myapp("), "@barry:server");
     expect(projectManager.registerProject).toHaveBeenCalledWith("!newproj:server", "/tmp/myapp", "myapp");
     const reply = replies.at(-1)!;
     expect(reply.text).toContain("myapp");
