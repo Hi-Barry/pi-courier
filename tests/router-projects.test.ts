@@ -90,6 +90,7 @@ describe("message-router multi-project routing", () => {
       createProjectRoom: vi.fn().mockResolvedValue("!newproj:server"),
       setRoomName: vi.fn().mockResolvedValue(undefined),
       getRoomName: vi.fn().mockResolvedValue(null),
+      setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
     } as unknown as TransportManager;
   });
 
@@ -143,6 +144,7 @@ describe("message-router multi-project routing", () => {
     );
     await new Promise((r) => setTimeout(r, 20)); // let fire-and-forget branding settle
     expect(transportManager.createProjectRoom).toHaveBeenCalledWith(expect.stringContaining("myapp("), "@barry:server");
+    expect(transportManager.setUserPowerLevel).toHaveBeenCalledWith("!newproj:server", "@barry:server", 100);
     expect(projectManager.registerProject).toHaveBeenCalledWith("!newproj:server", "/tmp/myapp", "myapp");
     const reply = replies.at(-1)!;
     expect(reply.text).toContain("myapp");

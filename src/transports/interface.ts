@@ -56,6 +56,8 @@ export interface ITransportProvider {
   getRoomName?(roomId: string): Promise<string | null>;
   /** The bot's own Matrix user ID (null if not connected). */
   getBotUserId?(): string | null;
+  /** Set a user's power level in a room (project owner -> admin). */
+  setUserPowerLevel?(roomId: string, userId: string, level: number): Promise<void>;
   /** Have the bot actively leave a room. */
   leaveRoom?(roomId: string, reason?: string): Promise<void>;
 }

@@ -46,8 +46,10 @@ export interface SlashCommandContext {
   isMultiProject?: boolean;
   /** Rename a room via the Matrix transport (optional). */
   setRoomName?: (roomId: string, name: string) => Promise<void>;
-  /** Have the bot actively leave a room (used by /pmctl rm after confirm). */
+  /** Have the bot leave a room via the Matrix transport (optional). */
   leaveRoom?: (roomId: string, reason?: string) => Promise<void>;
+  /** Promote a user in a room via the Matrix transport (optional). */
+  setUserPowerLevel?: (roomId: string, userId: string, level: number) => Promise<void>;
 }
 
 /**
@@ -177,6 +179,11 @@ export async function handleSlashCommand(
                 return true;
               }
               pm.registerProject(roomId, resolvedWorkdir, pname);
+              // The bot creates the room, so make the sender the room admin
+              // so they can rename / invite / manage it themselves.
+              if (ctx.setUserPowerLevel && inviteMxid) {
+                await ctx.setUserPowerLevel(roomId, inviteMxid, 100).catch(() => {});
+              }
               await reply(
                 `✅ 项目「${pname}」创建完成!\n\n` +
                   `• 房间: ${roomId}\n` +

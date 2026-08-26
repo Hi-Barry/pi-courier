@@ -204,6 +204,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             setRoomName: async (roomId, name) => transportManager.setRoomName(roomId, name),
             leaveRoom: async (roomId, reason) =>
               transportManager.leaveRoom(roomId, reason),
+            setUserPowerLevel: async (roomId, userId, level) =>
+              transportManager.setUserPowerLevel(roomId, userId, level),
             adminUserId: auth.exportConfig().adminUserId,
             senderUserId: msg.userId,
             chatId: msg.chatId,

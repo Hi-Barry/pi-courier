@@ -86,6 +86,12 @@ export class MatrixProvider implements ITransportProvider {
     return this.botUserId ?? null;
   }
 
+  /** Set a user's power level in a room (used to make the project owner admin). */
+  async setUserPowerLevel(roomId: string, userId: string, level: number): Promise<void> {
+    if (!this.client) throw new Error("Matrix 未连接");
+    await this.client.setUserPowerLevel(userId, roomId, level);
+  }
+
   // Formatting delegated to matrix-utils.ts (pure, testable)
 
   async connect(): Promise<void> {

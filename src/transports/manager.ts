@@ -141,6 +141,13 @@ export class TransportManager {
     return matrix?.getBotUserId?.() ?? null;
   }
 
+  /** Set a user's power level in a room (project owner -> admin). */
+  async setUserPowerLevel(roomId: string, userId: string, level: number): Promise<void> {
+    const matrix = this.transports.get("matrix") as ITransportProvider | undefined;
+    if (!matrix?.setUserPowerLevel) return;
+    await matrix.setUserPowerLevel(roomId, userId, level);
+  }
+
   /**
    * Get connection status for all transports
    */
