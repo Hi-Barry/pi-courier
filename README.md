@@ -226,6 +226,7 @@ pi-courier stop           # stop
 pi-courier start          # start
 pi-courier disable        # uninstall the service
 pi-courier update         # update pi-courier itself
+pi-courier -v             # show the installed version
 ```
 
 Log levels: `debug < info < warn < error`. The service writes everything;

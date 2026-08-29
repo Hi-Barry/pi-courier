@@ -226,6 +226,7 @@ pi-courier stop                # 停止
 pi-courier start               # 启动
 pi-courier disable             # 卸载服务
 pi-courier update              # 更新 pi-courier 自身
+pi-courier -v                  # 显示当前版本(--version/version 亦可)
 ```
 
 日志级别:`debug < info < warn < error`。服务会把全部内容写入日志;`logs` 默认显示 INFO 及以上,`--level debug` 显示完整会话回放(用户消息、思考、工具调用、回复)。完整对话始终保存在 pi 的会话文件(`~/.pi/agent/sessions/`)。

@@ -11,6 +11,7 @@
  *   pi-courier status   show service status + recent logs
  *   pi-courier logs     tail the service logs
  *   pi-courier update   update this project (git pull + npm install + build)
+ *   pi-courier -v       show the installed version (--version / version)
  *
  * pi itself is managed independently on the system (npm i -g ...); this
  * project only ever updates itself.
@@ -83,6 +84,7 @@ function usage(): void {
   pi-courier logs      跟踪服务日志(Ctrl+C 退出)
   pi-courier disable   卸载服务(停止 + 取消自启 + 删除 unit 文件)
   pi-courier update    更新本项目(git pull + 安装依赖 + 重新构建)
+  pi-courier -v        显示版本号(--version / version 亦可)
 
 说明:pi 由系统独立安装与升级(npm i -g @earendil-works/pi-coding-agent),
 本项目只更新自身。`);
