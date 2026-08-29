@@ -15,7 +15,7 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
-import { loadConfig } from "../config.js";
+import type { ConfigStore } from "../config.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { ProjectManager } from "./project-manager.js";
 
@@ -24,9 +24,9 @@ import type { ProjectManager } from "./project-manager.js";
  * resolved against the project root (config.workdir, the setup-time default
  * project directory) — so `/pmctl new myapp myapp` lands in ~/Projects/myapp.
  */
-function resolveProjectPath(p: string): string {
+function resolveProjectPath(p: string, store: ConfigStore): string {
   if (p.startsWith("/")) return p;
-  const root = loadConfig().workdir ?? path.join(os.homedir(), "Projects");
+  const root = store.get().workdir ?? path.join(os.homedir(), "Projects");
   return path.join(root, p);
 }
 
@@ -48,6 +48,8 @@ export interface SlashCommandContext {
   isManagementRoom?: boolean;
   /** Whether multi-project mode is active (for /pmctl availability). */
   isMultiProject?: boolean;
+  /** Injected config store — the single runtime read path. */
+  store: ConfigStore;
   /** Rename a room via the Matrix transport (optional). */
   setRoomName?: (roomId: string, name: string) => Promise<void>;
   /** Have the bot leave a room via the Matrix transport (optional). */
@@ -168,15 +170,15 @@ export async function handleSlashCommand(
             }
             // Path is optional: default to <project root>/<name>.
             const resolvedWorkdir = workdirArg
-              ? resolveProjectPath(workdirArg)
-              : resolveProjectPath(pname);
+              ? resolveProjectPath(workdirArg, ctx.store)
+              : resolveProjectPath(pname, ctx.store);
             const inviteMxid = (ctx.senderUserId ?? ctx.adminUserId ?? "").replace(/^matrix:/, "");
             if (!inviteMxid) {
               await reply("❌ 缺少邀请对象(未配置信任用户)");
               return true;
             }
             try {
-              const instance = loadConfig().instanceName ?? os.hostname();
+              const instance = ctx.store.get().instanceName ?? os.hostname();
               const roomId = await ctx.createProjectRoom(`${pname}(${instance})`, inviteMxid);
               pm.registerProject(roomId, resolvedWorkdir, pname);
               // The bot creates the room, so make the sender the room admin
@@ -297,7 +299,7 @@ export async function handleSlashCommand(
               await reply("用法: /pmctl mv <项目名|房间ID> <新路径>(相对路径基于工程根)");
               return true;
             }
-            const resolvedWorkdir = resolveProjectPath(newWorkdir);
+            const resolvedWorkdir = resolveProjectPath(newWorkdir, ctx.store);
             const found = pm.listProjects().find(
               ([roomId, p]) => p.name === target || roomId === target
             );

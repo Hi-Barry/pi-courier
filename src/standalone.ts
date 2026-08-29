@@ -15,7 +15,7 @@ import * as os from "os";
 import * as path from "path";
 import * as readline from "readline";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
-import { loadConfig, saveConfig } from "./config.js";
+import { ConfigStore, loadConfig, saveConfig } from "./config.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
@@ -103,6 +103,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
 
   const config = loadConfig();
+  // One in-memory config for the whole process; everything below reads and
+  // writes through it (no per-call disk access on the message hot path).
+  const store = new ConfigStore(config);
   const workdir = await resolveWorkdir(args.workdir, config.workdir);
   const sessionDir = config.sessionDir;
   const cliPath = config.cliPath;
@@ -119,10 +122,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // Challenge prompts are sent via the transport's sendMessage
     },
     () => {
-      const cfg = loadConfig();
-      cfg.auth = auth.exportConfig();
-      saveConfig(cfg);
-    }
+      store.update({ auth: auth.exportConfig() });
+    },
+    store
   );
   if (config.auth) {
     auth.loadFromConfig(config.auth);
@@ -200,7 +202,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     onRoomEvent: (roomId, event) => {
       router.handleEvent(event, roomId);
     },
-    multiProject: loadConfig().multiProject === true,
+    store,
+    multiProject: store.get().multiProject === true,
   });
 
   const router = createMessageRouter({
@@ -209,6 +212,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     sendReply,
     sendTyping,
     roomOps,
+    store,
   });
 
   for (const t of transports) {

@@ -205,7 +205,7 @@ One bot account can serve multiple projects — each project gets its own privat
   /pmctl rename <name> <new>  Rename (also renames the room)
   ```
   Legacy aliases still work: `/newproject`, `/projects`.
-- Manual setup is also possible: edit `pi-courier.json` and add a `projects` map:
+- Manual setup is also possible: edit `pi-courier.json` and add a `projects` map (config is loaded once at startup — restart the service after manual edits):
   ```json
   "projects": {
     "!roomid:server": { "workdir": "/home/you/Projects/myapp" }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -161,5 +161,97 @@ describe('config', () => {
   it('hideToolCalls defaults to undefined (not hidden)', async () => {
     const { loadConfig } = await importConfig();
     expect(loadConfig().hideToolCalls).toBeUndefined();
+  });
+});
+
+describe('ConfigStore', () => {
+  let tmpDir: string;
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'pi-courier-store-'));
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function importConfig() {
+    vi.doMock('os', async () => {
+      const actual = await vi.importActual<typeof import('os')>('os');
+      return { ...actual, homedir: () => tmpDir };
+    });
+    return await import('../src/config');
+  }
+
+  it('persists updates to disk with 600 permissions and no format change', async () => {
+    const { ConfigStore } = await importConfig();
+    const piDir = join(tmpDir, '.pi');
+    const path = join(piDir, 'pi-courier.json');
+
+    const store = new ConfigStore({ autoConnect: true });
+    store.update({ managementRooms: ['!r:server'] });
+
+    const stat = statSync(path);
+    expect(stat.mode & 0o777).toBe(0o600);
+    const onDisk = JSON.parse(readFileSync(path, 'utf-8'));
+    // Both fields survive — an update never drops unrelated config.
+    expect(onDisk.autoConnect).toBe(true);
+    expect(onDisk.managementRooms).toEqual(['!r:server']);
+  });
+
+  it('interleaved updates never lose a concurrent writer\'s field', async () => {
+    const { ConfigStore } = await importConfig();
+    const store = new ConfigStore();
+
+    // Simulates the old race: writer A and writer B each computed a patch
+    // from the same base state, then both persisted.
+    store.update({ multiProject: true });
+    store.update({ managementRooms: ['!r:server'] });
+
+    expect(store.get().multiProject).toBe(true);
+    expect(store.get().managementRooms).toEqual(['!r:server']);
+  });
+
+  it('a writer that snapshots before an await cannot erase fields written during it', async () => {
+    const { ConfigStore } = await importConfig();
+    const store = new ConfigStore({ hideToolCalls: true });
+
+    // The old whole-file-overwrite pattern held a full config snapshot
+    // across an await (e.g. management-room branding's setRoomName) and
+    // then saved it — erasing anything another writer persisted during the
+    // await. update() merges into the CURRENT in-memory state instead.
+    const staleSnapshot = store.get();
+    await Promise.resolve(); // writer B's turn during writer A's await
+    store.update({ multiProject: true });
+    store.update({ managementRooms: [...(staleSnapshot.managementRooms ?? []), '!r:server'] });
+
+    expect(store.get().multiProject).toBe(true); // survives the late writer
+    expect(store.get().hideToolCalls).toBe(true);
+    expect(store.get().managementRooms).toEqual(['!r:server']);
+  });
+
+  it('constructed with an initial object it never touches the disk', async () => {
+    const { ConfigStore } = await importConfig();
+    const store = new ConfigStore({ projects: { '!p:server': { workdir: '/w' } } });
+
+    expect(store.get().projects?.['!p:server'].workdir).toBe('/w');
+    expect(existsSync(join(tmpDir, '.pi'))).toBe(false);
+  });
+
+  it('without an initial object it loads once from disk', async () => {
+    const piDir = join(tmpDir, '.pi');
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, 'pi-courier.json'), JSON.stringify({ workdir: '/from/disk' }));
+
+    const { ConfigStore } = await importConfig();
+    const store = new ConfigStore();
+
+    expect(store.get().workdir).toBe('/from/disk');
+    // Later disk edits are NOT re-read (loaded once at construction).
+    writeFileSync(join(piDir, 'pi-courier.json'), JSON.stringify({ workdir: '/changed' }));
+    expect(store.get().workdir).toBe('/from/disk');
   });
 });

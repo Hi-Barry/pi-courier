@@ -11,7 +11,7 @@
 
 import * as path from "node:path";
 import type { RpcEventListener } from "@earendil-works/pi-coding-agent";
-import { loadConfig, saveConfig } from "../config.js";
+import type { ConfigStore } from "../config.js";
 import { PiRpc, type PiRpcOptions } from "./pi-rpc.js";
 
 export interface ProjectEntry {
@@ -28,6 +28,8 @@ export interface ProjectManagerOptions {
   onRoomEvent: (roomId: string, event: unknown) => void;
   /** Multi-project mode. false = single-project: every room uses defaultRpc. */
   multiProject?: boolean;
+  /** Injected config store (single read/write path for the projects map). */
+  store: ConfigStore;
 }
 
 export class ProjectManager {
@@ -35,6 +37,7 @@ export class ProjectManager {
   private baseOptions: PiRpcOptions;
   private onRoomEvent: (roomId: string, event: unknown) => void;
   private multiProject: boolean;
+  private store: ConfigStore;
   /** roomId -> PiRpc for project rooms (lazily started). */
   private projectRpcs = new Map<string, PiRpc>();
 
@@ -43,11 +46,12 @@ export class ProjectManager {
     this.baseOptions = opts.baseOptions;
     this.onRoomEvent = opts.onRoomEvent;
     this.multiProject = opts.multiProject === true;
+    this.store = opts.store;
   }
 
-  /** Current projects mapping from config (roomId -> entry). */
+  /** Current projects mapping (roomId -> entry) — in-memory, no disk read. */
   projectMap(): Record<string, ProjectEntry> {
-    return loadConfig().projects ?? {};
+    return this.store.get().projects ?? {};
   }
 
   /** All configured projects as [roomId, entry] pairs. */
@@ -118,24 +122,27 @@ export class ProjectManager {
     return rpc;
   }
 
+  /** Single write path for the projects map: copy, mutate, persist. */
+  private updateProjects(mutate: (projects: Record<string, ProjectEntry>) => void): void {
+    const projects = { ...(this.store.get().projects ?? {}) };
+    mutate(projects);
+    this.store.update({ projects });
+  }
+
   /** Register a new project room at runtime (used by /pmctl new). */
   registerProject(roomId: string, workdir: string, name?: string): void {
-    const cfg = loadConfig();
-    const projects = {
-      ...(cfg.projects ?? {}),
-      [roomId]: { name: name ?? roomId, workdir },
-    };
-    saveConfig({ ...cfg, projects });
+    this.updateProjects((projects) => {
+      projects[roomId] = { name: name ?? roomId, workdir };
+    });
   }
 
   /** Update a project's workdir (used by /pmctl mv). */
   async updateProjectWorkdir(roomId: string, workdir: string): Promise<void> {
-    const cfg = loadConfig();
-    const projects = { ...(cfg.projects ?? {}) };
-    const entry = projects[roomId];
+    const entry = this.projectMap()[roomId];
     if (!entry) return;
-    projects[roomId] = { ...entry, workdir };
-    saveConfig({ ...cfg, projects });
+    this.updateProjects((projects) => {
+      projects[roomId] = { ...entry, workdir };
+    });
     // Stop and drop the running process so the next message starts fresh in
     // the new dir (prevents an orphaned pi process from a stale cwd).
     const old = this.projectRpcs.get(roomId);
@@ -147,12 +154,11 @@ export class ProjectManager {
 
   /** Rename a project (used by /pmctl rename). */
   renameProject(roomId: string, name: string): void {
-    const cfg = loadConfig();
-    const projects = { ...(cfg.projects ?? {}) };
-    const entry = projects[roomId];
+    const entry = this.projectMap()[roomId];
     if (!entry) return;
-    projects[roomId] = { ...entry, name };
-    saveConfig({ ...cfg, projects });
+    this.updateProjects((projects) => {
+      projects[roomId] = { ...entry, name };
+    });
   }
 
   /** Remove a project (used by /pmctl rm): stop its process, drop the mapping. */
@@ -162,10 +168,9 @@ export class ProjectManager {
       await rpc.stop().catch(() => {});
       this.projectRpcs.delete(roomId);
     }
-    const cfg = loadConfig();
-    const projects = { ...(cfg.projects ?? {}) };
-    delete projects[roomId];
-    saveConfig({ ...cfg, projects });
+    this.updateProjects((projects) => {
+      delete projects[roomId];
+    });
   }
 
   async stopAll(): Promise<void> {

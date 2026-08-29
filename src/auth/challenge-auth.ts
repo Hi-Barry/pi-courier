@@ -3,7 +3,7 @@
  * Ported from vscode-chonky-remote-pilot
  */
 
-import { loadConfig, saveConfig } from "../config.js";
+import type { ConfigStore } from "../config.js";
 
 interface ChallengeData {
   code: string;
@@ -32,8 +32,11 @@ export class ChallengeAuth {
   constructor(
     private onShowCode: (code: string, username: string) => void,
     private onNotify: (message: string, level?: "info" | "warning" | "error") => void,
-    private onSendMessage?: (chatId: string, message: string) => Promise<void>,
-    private onSaveAuth?: () => void
+    private onSendMessage: ((chatId: string, message: string) => Promise<void>) | undefined,
+    private onSaveAuth: (() => void) | undefined,
+    /** Injected config store (required — /toggletools writes through the
+     *  single write path; there is no fallback to direct disk writes). */
+    private store: ConfigStore
   ) {}
 
   /**
@@ -290,10 +293,9 @@ export class ChallengeAuth {
       }
 
       case "/toggletools": {
-        const cfg = loadConfig();
-        cfg.hideToolCalls = !cfg.hideToolCalls;
-        saveConfig(cfg);
-        const state = cfg.hideToolCalls ? "hidden" : "shown";
+        const next = !this.store.get().hideToolCalls;
+        this.store.update({ hideToolCalls: next });
+        const state = next ? "hidden" : "shown";
         await sendMessage(`🔧 Tool calls ${state} in remote messages`);
         return true;
       }

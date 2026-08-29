@@ -1,33 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { loadConfig, saveConfig } from "../src/config";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { ConfigStore } from "../src/config";
 import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { createMessageRouter } from "../src/rpc/message-router";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
 import type { ExternalMessage } from "../src/types";
-
-// maybeInitManagementRoom persists into the real ~/.pi config — back it up
-// around each test so the test run never pollutes real state.
-const CONFIG_PATH = path.join(os.homedir(), ".pi", "pi-courier.json");
-let configBackup: string | null = null;
-
-beforeEach(() => {
-  configBackup = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, "utf-8") : null;
-  // Isolate: start each test from no management room / no projects.
-  const cfg = loadConfig();
-  saveConfig({ ...cfg, managementRooms: [], projects: {} });
-});
-
-afterEach(() => {
-  if (configBackup === null) {
-    fs.rmSync(CONFIG_PATH, { force: true });
-  } else {
-    fs.writeFileSync(CONFIG_PATH, configBackup, { mode: 0o600 });
-  }
-});
 
 function makeMsg(overrides: Partial<ExternalMessage> = {}): ExternalMessage {
   return {
@@ -72,13 +49,15 @@ function makeFixtures(opts: { multiProject?: boolean; channels?: Record<string, 
     renameProject: vi.fn(),
     stopAll: vi.fn(),
   } as unknown as ProjectManager;
+  const store = new ConfigStore({ managementRooms: [], projects: {} });
   const auth = new ChallengeAuth(
     (code) => {
       codeBox.current = code;
     },
     () => {},
     undefined,
-    () => {}
+    () => {},
+    store
   );
   auth.loadFromConfig({
     trustedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
@@ -95,8 +74,8 @@ function makeFixtures(opts: { multiProject?: boolean; channels?: Record<string, 
     getBotUserId: vi.fn().mockReturnValue("@bot:server"),
   };
   const makeRouter = () =>
-    createMessageRouter({ projectManager, auth, sendReply, sendTyping, roomOps });
-  return { codeBox, replies, sendReply, sendTyping, rpc, projectManager, auth, roomOps, makeRouter };
+    createMessageRouter({ projectManager, auth, sendReply, sendTyping, roomOps, store });
+  return { codeBox, replies, sendReply, sendTyping, rpc, projectManager, auth, roomOps, store, makeRouter };
 }
 
 describe("message-router multi-project routing", () => {
@@ -105,6 +84,7 @@ describe("message-router multi-project routing", () => {
   let auth: ChallengeAuth;
   let roomOps: Record<string, ReturnType<typeof vi.fn>>;
   let sendTyping: ReturnType<typeof vi.fn>;
+  let store: ConfigStore;
   let replies: Array<{ chatId: string; transport: string; text: string }>;
   let makeRouter: () => ReturnType<typeof createMessageRouter>;
 
@@ -115,6 +95,7 @@ describe("message-router multi-project routing", () => {
     auth = fx.auth;
     roomOps = fx.roomOps as unknown as Record<string, ReturnType<typeof vi.fn>>;
     sendTyping = fx.sendTyping as ReturnType<typeof vi.fn>;
+    store = fx.store;
     replies = fx.replies;
     makeRouter = fx.makeRouter;
   });
@@ -142,7 +123,7 @@ describe("message-router multi-project routing", () => {
 
   it("/newproject creates a room, registers the project and replies", async () => {
     // Management commands require the management-room flag in config.
-    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
+    store.update({ managementRooms: ["!dm:server"] });
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ content: "/newproject myapp /tmp/myapp" }));
     await new Promise((r) => setTimeout(r, 20)); // let fire-and-forget branding settle
@@ -155,7 +136,7 @@ describe("message-router multi-project routing", () => {
   });
 
   it("resolves a relative path in /pmctl new against the project root", async () => {
-    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
+    store.update({ managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ content: "/newproject myapp myapp" }));
     await new Promise((r) => setTimeout(r, 20));
@@ -167,7 +148,7 @@ describe("message-router multi-project routing", () => {
   });
 
   it("uses an absolute path as-is in /pmctl new", async () => {
-    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
+    store.update({ managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ content: "/newproject myapp /srv/custom/myapp" }));
     await new Promise((r) => setTimeout(r, 20));
@@ -179,7 +160,7 @@ describe("message-router multi-project routing", () => {
   });
 
   it("defaults the path to <project root>/<name> when omitted", async () => {
-    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
+    store.update({ managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ content: "/pmctl new newapp" }));
     await new Promise((r) => setTimeout(r, 20));
@@ -210,7 +191,7 @@ describe("message-router multi-project routing", () => {
   });
 
   it("rejects /pmctl from a second room once a management room already exists", async () => {
-    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
+    store.update({ managementRooms: ["!dm:server"] });
     const router = makeRouter();
     // A different private room is not the management room.
     await router.handleIncoming(
@@ -229,6 +210,8 @@ describe("message-router multi-project routing", () => {
       expect.stringContaining("项目管理")
     );
     expect(replies.some((r) => r.text.includes("项目管理房间"))).toBe(true);
+    // The pairing is persisted through the injected store (single write path).
+    expect(store.get().managementRooms).toEqual(["!dm:server"]);
   });
 
   it("does not brand a project room (2-person room with a mapping)", async () => {
@@ -260,8 +243,7 @@ describe("message-router multi-project routing", () => {
     (projectManager as { isMultiProject: boolean }).isMultiProject = true;
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ content: "/multiproject off" }));
-    const saved = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
-    expect(saved.multiProject).toBe(false);
+    expect(store.get().multiProject).toBe(false);
     expect(replies.at(-1)!.text).toContain("重启生效");
   });
 
@@ -273,7 +255,7 @@ describe("message-router multi-project routing", () => {
   });
 
   it("room-creation failure surfaces the thrown message (no null-branch)", async () => {
-    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
+    store.update({ managementRooms: ["!dm:server"] });
     roomOps.createProjectRoom.mockRejectedValue(new Error("Matrix 未连接"));
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ content: "/pmctl new myapp" }));
@@ -283,7 +265,7 @@ describe("message-router multi-project routing", () => {
   });
 
   it("owner-promotion failure warns but the project is still registered", async () => {
-    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
+    store.update({ managementRooms: ["!dm:server"] });
     roomOps.setUserPowerLevel.mockRejectedValue(new Error("power level too low"));
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ content: "/pmctl new myapp" }));
@@ -293,7 +275,7 @@ describe("message-router multi-project routing", () => {
   });
 
   it("room-rename failure is surfaced while the project rename stands", async () => {
-    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
+    store.update({ managementRooms: ["!dm:server"] });
     (projectManager.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
       ["!proj:server", { name: "myapp", workdir: "/w/myapp" }],
     ]);
@@ -306,11 +288,11 @@ describe("message-router multi-project routing", () => {
   });
 
   it("without roomOps /pmctl reports Matrix-only availability", async () => {
-    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
+    store.update({ managementRooms: ["!dm:server"] });
     const sendReply = async (chatId: string, transport: string, text: string) => {
       replies.push({ chatId, transport, text });
     };
-    const router = createMessageRouter({ projectManager, auth, sendReply, sendTyping });
+    const router = createMessageRouter({ projectManager, auth, sendReply, sendTyping, store });
     await router.handleIncoming(makeMsg({ content: "/pmctl list" }));
     expect(replies.at(-1)!.text).toContain("仅 Matrix 部署支持");
   });

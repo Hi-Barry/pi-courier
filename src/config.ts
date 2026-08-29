@@ -85,3 +85,34 @@ export function saveConfig(config: MsgBridgeConfig): void {
     console.warn("Failed to set directory permissions:", err);
   }
 }
+
+/**
+ * Runtime config store — loaded once at startup, injected into every module
+ * that needs config. The config file is effectively a database (projects,
+ * management rooms, trusted users, channel modes all live in it), and the
+ * previous load-modify-save-per-caller pattern could interleave into lost
+ * fields. All runtime reads go through `get()` (no disk access) and all
+ * runtime writes through `update()` — one in-memory copy, one write path,
+ * so single-threaded interleaving can no longer drop a concurrent writer's
+ * field. Disk format, path and 0600 permission logic stay in load/saveConfig.
+ */
+export class ConfigStore {
+  private config: MsgBridgeConfig;
+
+  /** `initial` injects a ready-made config (tests); default loads from disk once. */
+  constructor(initial?: MsgBridgeConfig) {
+    this.config = initial ?? loadConfig();
+  }
+
+  /** Current in-memory config. Mutating nested objects directly bypasses the
+   *  single write path — always prefer update(). */
+  get(): MsgBridgeConfig {
+    return this.config;
+  }
+
+  /** Shallow-merge a patch into the in-memory config and persist it. */
+  update(patch: Partial<MsgBridgeConfig>): void {
+    this.config = { ...this.config, ...patch };
+    saveConfig(this.config);
+  }
+}

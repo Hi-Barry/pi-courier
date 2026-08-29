@@ -10,7 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
-import { loadConfig, saveConfig } from "../config.js";
+import type { ConfigStore } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -32,6 +32,8 @@ export interface MessageRouterDeps {
   sendReply: (chatId: string, transport: string, text: string) => Promise<void>;
   /** Best-effort typing indicator (silent no-op when unavailable) */
   sendTyping: (chatId: string, transport: string) => Promise<void>;
+  /** Injected config store — the single runtime read/write path. */
+  store: ConfigStore;
   /** Room-management capability (Matrix). Optional: absent in single-project
    *  or non-Matrix deployments; only the /pmctl path and management-room
    *  branding consume it. */
@@ -49,7 +51,7 @@ export interface MessageRouter {
 }
 
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
-  const { projectManager, auth, sendReply, sendTyping, roomOps } = deps;
+  const { projectManager, auth, sendReply, sendTyping, roomOps, store } = deps;
   let pendingRemoteChat: PendingRemoteChat | null = null;
 
   return {
@@ -137,8 +139,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             await sendReply(msg.chatId, msg.transport, `当前已是${current},无需切换。`);
             return;
           }
-          const cfg = loadConfig();
-          saveConfig({ ...cfg, multiProject: next });
+          store.update({ multiProject: next });
           await sendReply(
             msg.chatId,
             msg.transport,
@@ -159,10 +160,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // BOTH challenge-code pairing and config-driven trusted users. Only in
       // multi-project mode.
       const multiProject = projectManager.isMultiProject;
-      if (multiProject && roomOps && !loadConfig().managementRooms?.[0] && !msg.isGroupChat && !projectManager.isProjectRoom(msg.chatId)) {
-        await maybeInitManagementRoom(msg, sendReply, roomOps);
+      if (multiProject && roomOps && !store.get().managementRooms?.[0] && !msg.isGroupChat && !projectManager.isProjectRoom(msg.chatId)) {
+        await maybeInitManagementRoom(msg, sendReply, roomOps, store);
       }
-      const isManagementRoom = multiProject && (loadConfig().managementRooms?.[0] ?? "") === msg.chatId;
+      const isManagementRoom = multiProject && (store.get().managementRooms?.[0] ?? "") === msg.chatId;
 
       // Resolve the pi process for this room: project rooms get their own
       // (lazily started), everything else (DM) uses the shared default Rpc.
@@ -213,6 +214,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             isManagementRoom,
             // Whether multi-project mode is active (for /pmctl availability).
             isMultiProject: projectManager.isMultiProject,
+            // Injected store for /pmctl's path + instance reads.
+            store,
           });
           if (handled) return;
         } catch (err) {
@@ -341,7 +344,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         const responseText = extractTextFromMessage(message);
         const toolCallsText = formatToolCalls(message);
         const pendingTools = hasToolCalls(message);
-        const cfg = loadConfig();
+        const hideToolCalls = store.get().hideToolCalls;
 
         // Reply summary at INFO level — the full conversation is also in pi's
         // session file (path logged below).
@@ -352,7 +355,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         const parts: string[] = [];
         const trimmed = responseText.trim();
         if (trimmed) parts.push(trimmed);
-        if (toolCallsText && !cfg.hideToolCalls) parts.push(toolCallsText);
+        if (toolCallsText && !hideToolCalls) parts.push(toolCallsText);
 
         if (parts.length === 0) {
           // No content this turn — keep pendingRemoteChat for a follow-up turn
@@ -435,9 +438,10 @@ function buildManagementRoomHelp(
 async function maybeInitManagementRoom(
   msg: ExternalMessage,
   sendReply: (chatId: string, transport: string, text: string) => Promise<void>,
-  roomOps: RoomOps
+  roomOps: RoomOps,
+  store: ConfigStore
 ): Promise<void> {
-  const cfg = loadConfig();
+  const cfg = store.get();
   const rooms = cfg.managementRooms ?? [];
   if (rooms.includes(msg.chatId)) return; // already the management room
   if (rooms.length > 0) return; // a management room already exists — never brand another
@@ -448,7 +452,7 @@ async function maybeInitManagementRoom(
     const roomName = `项目管理（${instanceName}）`;
     await roomOps.setRoomName(msg.chatId, roomName);
     await sendReply(msg.chatId, msg.transport, buildManagementRoomHelp(instanceName, botAccount, workdir));
-    saveConfig({ ...cfg, managementRooms: [...rooms, msg.chatId] });
+    store.update({ managementRooms: [...rooms, msg.chatId] });
     logger.info(`[project] 管理房间已初始化: ${msg.chatId} (${roomName})`);
   } catch {
     // Non-matrix transport or transient failure — skip branding, try again later.

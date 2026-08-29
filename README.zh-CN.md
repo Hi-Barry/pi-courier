@@ -139,7 +139,7 @@ pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输
   /pmctl rename <名称> <新名>  重命名(同步改房间名)
   ```
   旧命令别名仍可用:`/newproject`、`/projects`。
-- **手动配置**也可以:直接编辑 `pi-courier.json` 加 `projects` 映射:
+- **手动配置**也可以:直接编辑 `pi-courier.json` 加 `projects` 映射(配置在启动时装载一次 —— 手动编辑后需重启服务生效):
   ```json
   "projects": {
     "!房间ID:服务器": { "workdir": "/home/你/Projects/myapp" }
