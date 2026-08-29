@@ -37,6 +37,16 @@ suppressDeprecationWarnings();
 const SERVICE_NAME = "pi-courier";
 const SERVICE_UNIT = `${SERVICE_NAME}.service`;
 
+/** Read the installed pi-courier version from package.json. */
+function packageVersion(): string {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(projectDir(), "package.json"), "utf-8")) as { version?: string };
+    return pkg.version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 /** Project root (parent of the dist/ directory this file is compiled into). */
 function projectDir(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -331,6 +341,11 @@ async function main(): Promise<void> {
     case "--help":
     case "-h":
       usage();
+      break;
+    case "version":
+    case "--version":
+    case "-v":
+      console.log(packageVersion());
       break;
     default:
       usage();
