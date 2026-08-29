@@ -11,7 +11,7 @@ import {
 import * as os from "os";
 import * as path from "path";
 import type { ExternalMessage } from "../types.js";
-import type { ITransportProvider } from "./interface.js";
+import type { RoomOps, Transport } from "./interface.js";
 import {
   extractUsername,
   formatForMatrix,
@@ -24,7 +24,7 @@ import {
  * Matrix transport provider using matrix-bot-sdk
  * Works with any Matrix homeserver — Element X, Element Web, FluffyChat, etc.
  */
-export class MatrixProvider implements ITransportProvider {
+export class MatrixProvider implements Transport, RoomOps {
   readonly type = "matrix";
   private client?: MatrixClient;
   private _isConnected = false;
@@ -62,17 +62,6 @@ export class MatrixProvider implements ITransportProvider {
   async setRoomName(roomId: string, name: string): Promise<void> {
     if (!this.client) throw new Error("Matrix 未连接");
     await this.client.sendStateEvent(roomId, "m.room.name", "", { name });
-  }
-
-  /** Get the current room name (null if the room has no name yet). */
-  async getRoomName(roomId: string): Promise<string | null> {
-    if (!this.client) return null;
-    try {
-      const ev = await this.client.getRoomStateEvent(roomId, "m.room.name", "");
-      return (ev as { name?: string } | undefined)?.name ?? null;
-    } catch {
-      return null;
-    }
   }
 
   /** Have the bot actively leave a room (used by /pmctl rm). */

@@ -7,7 +7,6 @@ import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { createMessageRouter } from "../src/rpc/message-router";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
-import type { TransportManager } from "../src/transports/manager";
 import type { ExternalMessage } from "../src/types";
 
 // maybeInitManagementRoom persists into the real ~/.pi config — back it up
@@ -69,6 +68,8 @@ function makeFixtures(opts: { multiProject?: boolean; channels?: Record<string, 
     isProjectRoom: vi.fn().mockReturnValue(false),
     isMultiProject: opts.multiProject ?? true,
     registerProject: vi.fn(),
+    listProjects: vi.fn().mockReturnValue([] as Array<[string, { name?: string; workdir: string }]>),
+    renameProject: vi.fn(),
     stopAll: vi.fn(),
   } as unknown as ProjectManager;
   const auth = new ChallengeAuth(
@@ -84,23 +85,26 @@ function makeFixtures(opts: { multiProject?: boolean; channels?: Record<string, 
     adminUserId: "matrix:@barry:server",
     channels: opts.channels ?? {},
   });
-  const transportManager = {
-    sendMessage: vi.fn().mockResolvedValue(undefined),
-    sendTyping: vi.fn().mockResolvedValue(undefined),
+  // Router sees message I/O as two functions; room ops as one stubbed capability.
+  const sendTyping = vi.fn().mockResolvedValue(undefined);
+  const roomOps = {
     createProjectRoom: vi.fn().mockResolvedValue("!newproj:server"),
     setRoomName: vi.fn().mockResolvedValue(undefined),
-    getRoomName: vi.fn().mockResolvedValue(null),
     setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
-  } as unknown as TransportManager;
-  const makeRouter = () => createMessageRouter({ projectManager, auth, transportManager, sendReply });
-  return { codeBox, replies, sendReply, rpc, projectManager, auth, transportManager, makeRouter };
+    leaveRoom: vi.fn().mockResolvedValue(undefined),
+    getBotUserId: vi.fn().mockReturnValue("@bot:server"),
+  };
+  const makeRouter = () =>
+    createMessageRouter({ projectManager, auth, sendReply, sendTyping, roomOps });
+  return { codeBox, replies, sendReply, sendTyping, rpc, projectManager, auth, roomOps, makeRouter };
 }
 
 describe("message-router multi-project routing", () => {
   let rpc: PiRpc;
   let projectManager: ProjectManager;
   let auth: ChallengeAuth;
-  let transportManager: TransportManager;
+  let roomOps: Record<string, ReturnType<typeof vi.fn>>;
+  let sendTyping: ReturnType<typeof vi.fn>;
   let replies: Array<{ chatId: string; transport: string; text: string }>;
   let makeRouter: () => ReturnType<typeof createMessageRouter>;
 
@@ -109,7 +113,8 @@ describe("message-router multi-project routing", () => {
     rpc = fx.rpc;
     projectManager = fx.projectManager;
     auth = fx.auth;
-    transportManager = fx.transportManager;
+    roomOps = fx.roomOps as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    sendTyping = fx.sendTyping as ReturnType<typeof vi.fn>;
     replies = fx.replies;
     makeRouter = fx.makeRouter;
   });
@@ -141,8 +146,8 @@ describe("message-router multi-project routing", () => {
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ content: "/newproject myapp /tmp/myapp" }));
     await new Promise((r) => setTimeout(r, 20)); // let fire-and-forget branding settle
-    expect(transportManager.createProjectRoom).toHaveBeenCalledWith(expect.stringContaining("myapp("), "@barry:server");
-    expect(transportManager.setUserPowerLevel).toHaveBeenCalledWith("!newproj:server", "@barry:server", 100);
+    expect(roomOps.createProjectRoom).toHaveBeenCalledWith(expect.stringContaining("myapp("), "@barry:server");
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!newproj:server", "@barry:server", 100);
     expect(projectManager.registerProject).toHaveBeenCalledWith("!newproj:server", "/tmp/myapp", "myapp");
     const reply = replies.at(-1)!;
     expect(reply.text).toContain("myapp");
@@ -219,7 +224,7 @@ describe("message-router multi-project routing", () => {
     await router.handleIncoming(makeMsg({ content: "hi" }));
     // maybeInitManagementRoom runs — let it complete
     await new Promise((r) => setTimeout(r, 20));
-    expect(transportManager.setRoomName).toHaveBeenCalledWith(
+    expect(roomOps.setRoomName).toHaveBeenCalledWith(
       expect.any(String),
       expect.stringContaining("项目管理")
     );
@@ -231,7 +236,7 @@ describe("message-router multi-project routing", () => {
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ chatId: "!projroom:server", content: "hello" }));
     await new Promise((r) => setTimeout(r, 20));
-    expect(transportManager.setRoomName).not.toHaveBeenCalled();
+    expect(roomOps.setRoomName).not.toHaveBeenCalled();
   });
 
   it("in single-project mode /pmctl reports it is unavailable", async () => {
@@ -247,7 +252,7 @@ describe("message-router multi-project routing", () => {
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ content: "hello" }));
     await new Promise((r) => setTimeout(r, 20));
-    expect(transportManager.setRoomName).not.toHaveBeenCalled();
+    expect(roomOps.setRoomName).not.toHaveBeenCalled();
     expect(rpc.prompt).toHaveBeenCalledWith("hello");
   });
 
@@ -258,6 +263,56 @@ describe("message-router multi-project routing", () => {
     const saved = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
     expect(saved.multiProject).toBe(false);
     expect(replies.at(-1)!.text).toContain("重启生效");
+  });
+
+  it("agent turn_start triggers a typing indicator via the message-I/O seam", async () => {
+    const router = makeRouter();
+    router.handleEvent({ type: "turn_start" }, "!room:server");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sendTyping).toHaveBeenCalledWith("!room:server", "matrix");
+  });
+
+  it("room-creation failure surfaces the thrown message (no null-branch)", async () => {
+    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
+    roomOps.createProjectRoom.mockRejectedValue(new Error("Matrix 未连接"));
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ content: "/pmctl new myapp" }));
+    expect(replies.at(-1)!.text).toContain("创建项目失败");
+    expect(replies.at(-1)!.text).toContain("Matrix 未连接");
+    expect(projectManager.registerProject).not.toHaveBeenCalled();
+  });
+
+  it("owner-promotion failure warns but the project is still registered", async () => {
+    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
+    roomOps.setUserPowerLevel.mockRejectedValue(new Error("power level too low"));
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ content: "/pmctl new myapp" }));
+    expect(projectManager.registerProject).toHaveBeenCalledWith("!newproj:server", expect.any(String), "myapp");
+    expect(replies.some((r) => r.text.includes("创建完成"))).toBe(true);
+    expect(replies.some((r) => r.text.includes("设为管理员失败"))).toBe(true);
+  });
+
+  it("room-rename failure is surfaced while the project rename stands", async () => {
+    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
+    (projectManager.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!proj:server", { name: "myapp", workdir: "/w/myapp" }],
+    ]);
+    roomOps.setRoomName.mockRejectedValue(new Error("没有权限"));
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ content: "/pmctl rename myapp newname" }));
+    expect(projectManager.renameProject).toHaveBeenCalledWith("!proj:server", "newname");
+    expect(replies.at(-1)!.text).toContain("房间改名失败");
+    expect(replies.at(-1)!.text).toContain("没有权限");
+  });
+
+  it("without roomOps /pmctl reports Matrix-only availability", async () => {
+    saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
+    const sendReply = async (chatId: string, transport: string, text: string) => {
+      replies.push({ chatId, transport, text });
+    };
+    const router = createMessageRouter({ projectManager, auth, sendReply, sendTyping });
+    await router.handleIncoming(makeMsg({ content: "/pmctl list" }));
+    expect(replies.at(-1)!.text).toContain("仅 Matrix 部署支持");
   });
 });
 

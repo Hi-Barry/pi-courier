@@ -36,8 +36,8 @@ export interface SlashCommandContext {
   reply: (text: string) => Promise<void>;
   /** Multi-project management (project rooms). Optional. */
   projectManager?: ProjectManager;
-  /** Create a private room + invite a user (Matrix). Optional. */
-  createProjectRoom?: (name: string, inviteUserId: string) => Promise<string | null>;
+  /** Create a private room + invite a user (RoomOps; throws on failure). Optional. */
+  createProjectRoom?: (name: string, inviteUserId: string) => Promise<string>;
   /** Admin user MXID (invite target for /pmctl new), e.g. matrix:@barry:server. */
   adminUserId?: string;
   /** The user who sent this command (invite target for /pmctl new). */
@@ -178,15 +178,16 @@ export async function handleSlashCommand(
             try {
               const instance = loadConfig().instanceName ?? os.hostname();
               const roomId = await ctx.createProjectRoom(`${pname}(${instance})`, inviteMxid);
-              if (!roomId) {
-                await reply("❌ 房间创建失败(Matrix 未连接?)");
-                return true;
-              }
               pm.registerProject(roomId, resolvedWorkdir, pname);
               // The bot creates the room, so make the sender the room admin
-              // so they can rename / invite / manage it themselves.
+              // so they can rename / invite / manage it themselves. Failure
+              // here must not fail the (already created) project.
               if (ctx.setUserPowerLevel && inviteMxid) {
-                await ctx.setUserPowerLevel(roomId, inviteMxid, 100).catch(() => {});
+                try {
+                  await ctx.setUserPowerLevel(roomId, inviteMxid, 100);
+                } catch (err) {
+                  await reply(`⚠️ 房间已创建,但设为管理员失败(可手动设置): ${(err as Error).message}`);
+                }
               }
               await reply(
                 `✅ 项目「${pname}」创建完成!\n\n` +
@@ -331,10 +332,19 @@ export async function handleSlashCommand(
             }
             const [roomId] = found;
             pm.renameProject(roomId, newName);
+            const renamed = `✏️ 项目已重命名为「${newName}」`;
             if (ctx.setRoomName) {
-              await ctx.setRoomName(roomId, newName).catch(() => {});
+              // The project mapping is already renamed; surface room-rename
+              // failures instead of swallowing them.
+              try {
+                await ctx.setRoomName(roomId, newName);
+                await reply(renamed);
+              } catch (err) {
+                await reply(`${renamed}(房间改名失败: ${(err as Error).message})`);
+              }
+            } else {
+              await reply(renamed);
             }
-            await reply(`✏️ 项目已重命名为「${newName}」`);
             return true;
           }
 

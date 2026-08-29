@@ -21,7 +21,7 @@ import { logger, parseLogLevel, setLogLevel } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { ProjectManager } from "./rpc/project-manager.js";
-import { TransportManager } from "./transports/manager.js";
+import type { RoomOps, Transport } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
@@ -128,17 +128,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     auth.loadFromConfig(config.auth);
   }
 
-  const transportManager = new TransportManager();
-
-  const addTransport = (transport: import("./transports/interface.js").ITransportProvider): void => {
-    transportManager.addTransport(transport);
-  };
+  // ---- transports ------------------------------------------------------------
+  // A plain registry (no manager class): each configured transport is wired
+  // inline below. Matrix additionally carries the RoomOps capability, which
+  // is handed to the router separately (only the /pmctl path consumes it).
+  const transports: Transport[] = [];
+  const getTransport = (type: string): Transport | undefined => transports.find((t) => t.type === type);
+  let roomOps: RoomOps | undefined;
 
   if (config.matrix?.homeserverUrl && config.matrix?.accessToken) {
-    addTransport(new MatrixProvider(config.matrix, (chatId) => auth.isChannelEnabled(chatId)));
+    const matrix = new MatrixProvider(config.matrix, (chatId) => auth.isChannelEnabled(chatId));
+    transports.push(matrix);
+    roomOps = matrix;
   }
 
-  if (transportManager.getAllTransports().length === 0) {
+  if (transports.length === 0) {
     // No Matrix config yet — do NOT exit. Under systemd/docker restart
     // policies an exit(1) here crash-loops the service and makes
     // `pi-courier setup` unreachable (exec fails while restarting).
@@ -169,13 +173,22 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // ---- message routing ------------------------------------------------------
   const sendReply = async (chatId: string, transport: string, text: string): Promise<void> => {
     try {
-      await transportManager.sendMessage(chatId, transport, text);
+      const t = getTransport(transport);
+      if (!t) throw new Error(`Transport ${transport} not found`);
+      if (!t.isConnected) throw new Error(`Transport ${transport} not connected`);
+      await t.sendMessage(chatId, text);
       const short = text.replace(/\s+/g, " ").trim();
       logger.debug(`📤 [${transport}] ${short.slice(0, 500)}${short.length > 500 ? "…" : ""}`);
     } catch (err) {
       logger.error(`发送失败 (${transport}): ${(err as Error).message}`);
     }
   };
+  // Silent no-op when the transport is missing/disconnected (typing is best-effort).
+  const sendTyping = async (chatId: string, transport: string): Promise<void> => {
+    const t = getTransport(transport);
+    if (t?.isConnected) await t.sendTyping(chatId);
+  };
+  const disconnectAll = (): Promise<unknown> => Promise.allSettled(transports.map((t) => t.disconnect()));
 
   // ---- multi-project routing -------------------------------------------------
   // Project rooms get their own pi process (isolated cwd/session); DM and
@@ -193,19 +206,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const router = createMessageRouter({
     projectManager,
     auth,
-    transportManager,
     sendReply,
+    sendTyping,
+    roomOps,
   });
 
-  transportManager.onMessage((msg) => {
-    router.handleIncoming(msg).catch((err) => {
-      logger.error("❌ message handling error:", (err as Error).message);
+  for (const t of transports) {
+    t.onMessage((msg) => {
+      router.handleIncoming(msg).catch((err) => {
+        logger.error("❌ message handling error:", (err as Error).message);
+      });
     });
-  });
-
-  transportManager.onError((err, transport) => {
-    logger.error(`❌ ${transport} error:`, (err as Error).message);
-  });
+    t.onError((err) => {
+      logger.error(`❌ ${t.type} error:`, (err as Error).message);
+    });
+  }
 
   // ---- agent events → replies ------------------------------------------------
   rpc.onEvent((event) => {
@@ -214,12 +229,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   // ---- startup ----------------------------------------------------------------
   try {
-    await transportManager.connectAll();
+    await Promise.all(
+      transports.map((t) =>
+        t.connect().catch((err) => {
+          throw new Error(`${t.type} connection failed: ${(err as Error).message}`);
+        })
+      )
+    );
     logger.info(
-      `✅ transports connected: ${transportManager
-        .getStatus()
-        .map((s) => `${s.type}=${s.connected ? "up" : "down"}`)
-        .join(", ")}`
+      `✅ transports connected: ${transports.map((t) => `${t.type}=${t.isConnected ? "up" : "down"}`).join(", ")}`
     );
   } catch (err) {
     logger.warn("⚠️ some transports failed to connect:", (err as Error).message);
@@ -241,7 +259,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     logger.info(`✅ pi RPC connected (model: ${state.model?.id ?? "unknown"}, session: ${state.sessionId ?? "?"})`);
   } catch (err) {
     logger.error("[bridge] failed to start pi RPC:", (err as Error).message);
-    await transportManager.disconnectAll();
+    await disconnectAll();
     releaseLock();
     process.exit(1);
   }
@@ -253,7 +271,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     shuttingDown = true;
     logger.info(`🛑 ${signal} received — shutting down`);
     await rpc.stop().catch(() => {});
-    await transportManager.disconnectAll();
+    await disconnectAll();
     releaseLock();
     process.exit(0);
   };

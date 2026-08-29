@@ -1,10 +1,10 @@
 import type { ExternalMessage } from "../types.js";
 
 /**
- * Transport provider interface
- * Adapts different messenger platforms (Telegram, WhatsApp, Slack, Discord)
+ * Message I/O seam — one adapter per messenger platform. The router depends
+ * only on this surface for receiving and replying.
  */
-export interface ITransportProvider {
+export interface Transport {
   /** Transport type identifier */
   readonly type: string;
 
@@ -46,18 +46,29 @@ export interface ITransportProvider {
    * @param handler - Error handler function
    */
   onError(handler: (error: Error) => void): void;
+}
 
-  // ---- optional room management (Matrix transport) ---------------------------
+/**
+ * Room-management capability (Matrix rooms today). Consumed ONLY by the
+ * /pmctl path and management-room branding; absent in single-project or
+ * non-Matrix deployments. A second transport with a real "room" concept is
+ * the point at which this graduates to a multi-platform seam — until then it
+ * is a concrete capability, not a hypothetical one.
+ *
+ * Failure semantics are uniform for operations: every method THROWS with a
+ * meaningful message (callers reply with it). No null returns, no silent
+ * no-ops. The one exception is the getBotUserId QUERY, which legitimately
+ * returns null before connecting.
+ */
+export interface RoomOps {
   /** Create a private room with a name and invite a user. Returns room ID. */
-  createProjectRoom?(name: string, inviteUserId: string): Promise<string>;
+  createProjectRoom(name: string, inviteUserId: string): Promise<string>;
   /** Rename a room. */
-  setRoomName?(roomId: string, name: string): Promise<void>;
-  /** Get the current room name (null if none). */
-  getRoomName?(roomId: string): Promise<string | null>;
-  /** The bot's own Matrix user ID (null if not connected). */
-  getBotUserId?(): string | null;
+  setRoomName(roomId: string, name: string): Promise<void>;
+  /** The bot's own user ID (null if not connected). */
+  getBotUserId(): string | null;
   /** Set a user's power level in a room (project owner -> admin). */
-  setUserPowerLevel?(roomId: string, userId: string, level: number): Promise<void>;
+  setUserPowerLevel(roomId: string, userId: string, level: number): Promise<void>;
   /** Have the bot actively leave a room. */
-  leaveRoom?(roomId: string, reason?: string): Promise<void>;
+  leaveRoom(roomId: string, reason?: string): Promise<void>;
 }

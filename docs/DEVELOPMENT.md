@@ -197,13 +197,13 @@ pi 0.83.0 就绪。
 - `/reload` → 重启 pi 进程(后加)
 - 其余 `/xxx` → 透传给 pi 的 `prompt`,由 pi 展开命令/技能/模板
 
-**`src/rpc/message-router.ts`**(171 行)—— 核心接线
+**`src/rpc/message-router.ts`** —— 核心接线
 - 认证 → bridge 管理命令 → RPC 映射命令 → 透传 prompt,四级路由
 - agent 事件流(`message_end` / `turn_end` / `agent_start`…)→ 回发到 Matrix
 - `pendingRemoteChat` 语义:工具调用轮次保留"正在处理"状态,最终轮清空
 - typing 指示:`agent_start` / `turn_start` 触发 Matrix 输入中状态
 
-**`src/standalone.ts`**(318 行)—— 独立入口
+**`src/standalone.ts`** —— 独立入口
 - 单实例锁(lock.ts)
 - 信号优雅关闭(SIGTERM/SIGINT)
 - 初始化 transports → 启动 RPC → 挂接事件

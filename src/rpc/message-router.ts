@@ -18,7 +18,7 @@ import {
   splitMessage,
 } from "../formatting.js";
 import { isEnabled, logger } from "../logger.js";
-import type { TransportManager } from "../transports/manager.js";
+import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, PendingRemoteChat } from "../types.js";
 import { handleSlashCommand } from "./command-map.js";
 import type { PiRpc } from "./pi-rpc.js";
@@ -28,9 +28,14 @@ export interface MessageRouterDeps {
   /** Multi-project routing: resolves the PiRpc for a room (default when unmapped). */
   projectManager: ProjectManager;
   auth: ChallengeAuth;
-  transportManager: TransportManager;
   /** Send a text reply to a chat via a transport (errors swallowed by caller) */
   sendReply: (chatId: string, transport: string, text: string) => Promise<void>;
+  /** Best-effort typing indicator (silent no-op when unavailable) */
+  sendTyping: (chatId: string, transport: string) => Promise<void>;
+  /** Room-management capability (Matrix). Optional: absent in single-project
+   *  or non-Matrix deployments; only the /pmctl path and management-room
+   *  branding consume it. */
+  roomOps?: RoomOps;
 }
 
 export interface MessageRouter {
@@ -44,7 +49,7 @@ export interface MessageRouter {
 }
 
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
-  const { projectManager, auth, transportManager, sendReply } = deps;
+  const { projectManager, auth, sendReply, sendTyping, roomOps } = deps;
   let pendingRemoteChat: PendingRemoteChat | null = null;
 
   return {
@@ -154,8 +159,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // BOTH challenge-code pairing and config-driven trusted users. Only in
       // multi-project mode.
       const multiProject = projectManager.isMultiProject;
-      if (multiProject && !loadConfig().managementRooms?.[0] && !msg.isGroupChat && !projectManager.isProjectRoom(msg.chatId)) {
-        await maybeInitManagementRoom(msg, sendReply, transportManager);
+      if (multiProject && roomOps && !loadConfig().managementRooms?.[0] && !msg.isGroupChat && !projectManager.isProjectRoom(msg.chatId)) {
+        await maybeInitManagementRoom(msg, sendReply, roomOps);
       }
       const isManagementRoom = multiProject && (loadConfig().managementRooms?.[0] ?? "") === msg.chatId;
 
@@ -193,13 +198,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             rpc: roomRpc,
             reply: async (replyText) => sendReply(msg.chatId, msg.transport, replyText),
             projectManager,
-            createProjectRoom: async (name, inviteMxid) =>
-              transportManager.createProjectRoom(name, inviteMxid),
-            setRoomName: async (roomId, name) => transportManager.setRoomName(roomId, name),
-            leaveRoom: async (roomId, reason) =>
-              transportManager.leaveRoom(roomId, reason),
-            setUserPowerLevel: async (roomId, userId, level) =>
-              transportManager.setUserPowerLevel(roomId, userId, level),
+            // RoomOps reaches only the /pmctl path — message I/O and room
+            // management never share an interface again.
+            createProjectRoom: roomOps ? (name, inviteMxid) => roomOps.createProjectRoom(name, inviteMxid) : undefined,
+            setRoomName: roomOps ? (roomId, name) => roomOps.setRoomName(roomId, name) : undefined,
+            leaveRoom: roomOps ? (roomId, reason) => roomOps.leaveRoom(roomId, reason) : undefined,
+            setUserPowerLevel: roomOps
+              ? (roomId, userId, level) => roomOps.setUserPowerLevel(roomId, userId, level)
+              : undefined,
             adminUserId: auth.exportConfig().adminUserId,
             senderUserId: msg.userId,
             chatId: msg.chatId,
@@ -324,9 +330,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       if (event.type === "turn_start") {
         if (target) {
-          transportManager
-            .sendTyping(target.chatId, target.transport)
-            .catch(() => {});
+          sendTyping(target.chatId, target.transport).catch(() => {});
         }
         return;
       }
@@ -431,7 +435,7 @@ function buildManagementRoomHelp(
 async function maybeInitManagementRoom(
   msg: ExternalMessage,
   sendReply: (chatId: string, transport: string, text: string) => Promise<void>,
-  transportManager: TransportManager
+  roomOps: RoomOps
 ): Promise<void> {
   const cfg = loadConfig();
   const rooms = cfg.managementRooms ?? [];
@@ -439,10 +443,10 @@ async function maybeInitManagementRoom(
   if (rooms.length > 0) return; // a management room already exists — never brand another
   try {
     const instanceName = cfg.instanceName ?? os.hostname();
-    const botAccount = transportManager.getBotUserId?.() ?? "(未知)";
+    const botAccount = roomOps.getBotUserId() ?? "(未知)";
     const workdir = cfg.workdir ?? path.join(os.homedir(), "Projects");
     const roomName = `项目管理（${instanceName}）`;
-    await transportManager.setRoomName(msg.chatId, roomName);
+    await roomOps.setRoomName(msg.chatId, roomName);
     await sendReply(msg.chatId, msg.transport, buildManagementRoomHelp(instanceName, botAccount, workdir));
     saveConfig({ ...cfg, managementRooms: [...rooms, msg.chatId] });
     logger.info(`[project] 管理房间已初始化: ${msg.chatId} (${roomName})`);
