@@ -10,7 +10,6 @@ import {
 } from "matrix-bot-sdk";
 import * as os from "os";
 import * as path from "path";
-import type { ChallengeAuth } from "../auth/challenge-auth.js";
 import type { ExternalMessage } from "../types.js";
 import type { ITransportProvider } from "./interface.js";
 import {
@@ -38,7 +37,10 @@ export class MatrixProvider implements ITransportProvider {
 
   constructor(
     private config: { homeserverUrl: string; accessToken: string; encryption?: boolean },
-    private auth: ChallengeAuth
+    /** Whether a group room is enabled for the bridge (join-hint UX only;
+     *  all policy — authorization, challenges, admin commands, group /enable —
+     *  lives in the message-router pipeline). */
+    private isRoomEnabled: (chatId: string) => boolean
   ) {}
 
   get isConnected(): boolean {
@@ -152,7 +154,7 @@ export class MatrixProvider implements ITransportProvider {
           // Multi-user room that isn't explicitly enabled: post a one-time
           // hint so the inviter knows how to enable it. The room.join event
           // only fires on (re)join, so this is naturally idempotent.
-          if (members.length > 2 && !this.auth.isChannelEnabled(roomId)) {
+          if (members.length > 2 && !this.isRoomEnabled(roomId)) {
             this.sendMessage(
               roomId,
               `🤖 我已加入这个群聊,但默认不回应群消息。\n\n` +
@@ -310,34 +312,11 @@ export class MatrixProvider implements ITransportProvider {
     // Check if bot was mentioned (pure utility)
     const wasMentioned = isGroupChat ? wasBotMentioned(messageText, this.botUserId) : false;
 
-    // Check authorization
-    const sendMessageToUser = async (cId: string, text: string) => {
-      await this.sendMessage(cId, text);
-    };
-
-    const isAuthorized = await this.auth.checkAuthorization(
-      userId,
-      chatId,
-      username,
-      isGroupChat,
-      wasMentioned,
-      sendMessageToUser,
-      this.type
-    );
-
-    // Handle challenge codes and commands in DMs
-    if (!isGroupChat && (messageText.startsWith("/") || messageText.match(/^\d{6}$/))) {
-      const handled = await this.auth.handleAdminCommand(
-        messageText,
-        chatId,
-        userId,
-        async (text) => await this.sendMessage(chatId, text),
-        this.type
-      );
-      if (handled) return;
-    }
-
-    if (!isAuthorized) return;
+    // Transport is pure I/O: EVERY message passing the filter above is
+    // forwarded. Authorization, challenges, admin commands and group /enable
+    // are policy and run in the message-router pipeline — a gate here would
+    // make later pipeline stages (e.g. /enable in an unenabled room)
+    // unreachable dead code.
 
     // Strip bot mention from message (pure utility)
     const cleanContent = wasMentioned && this.botUserId

@@ -570,12 +570,15 @@ TypeError: webidl.util.markAsUncloneable is not a function
 ### 12.2 消息路由
 
 ```
-Matrix 消息
-  → 认证检查(trusted / challenge)
-    → bridge 管理命令(/trusted /revoke ...)
-      → RPC 映射命令(/new /compact /model ...)
-        → 透传 prompt(/skill:xxx /template 普通文本)
+Matrix 消息(transport 只做纯 I/O,不做授权判定)
+  → 群聊 /enable(先于认证 —— 未启用房间的消息正是靠它启用本房间;all 仅管理员)
+    → 认证检查(trusted / challenge)
+      → bridge 管理命令(/trusted /revoke /channels /enable <chatId> /disable /toggletools)
+        → RPC 映射命令(/new /compact /model ...;DM /help 也在这里,统一输出 pi 命令 + bridge 命令)
+          → 透传 prompt(/skill:xxx /template 普通文本)
 ```
+
+策略(认证、挑战码、管理命令、群 /enable)只存在于 router 的 `handleIncoming` 管道一份;transport 侧不做任何授权判定(否则未启用房间的消息到不了 `/enable`,该功能在真实链路上不可达)。
 
 ### 12.3 回复机制
 

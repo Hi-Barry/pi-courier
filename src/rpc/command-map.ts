@@ -2,11 +2,15 @@
  * Slash command map — turns `/command args` messages from messengers into RPC calls.
  *
  * Layer ordering (matches previous extension behaviour, minus the conflicts):
- *  1. Bridge admin commands (/help, /trusted, ...) are handled by ChallengeAuth before this module
+ *  1. ChallengeAuth handles challenge codes and its own admin commands
+ *     (/trusted, /revoke, /channels, /enable, /disable, /toggletools) in the
+ *     router pipeline before this module
  *  2. Builtin pi commands that have a dedicated RPC command are mapped here
  *  3. Everything else starting with "/" is forwarded via prompt: extension commands,
  *     skill commands (/skill:name) and prompt templates (/template) are expanded by pi itself
  *  4. Unknown commands get a helpful error listing what is available
+ *  /help is unified HERE (pi commands + bridge admin commands) — the single
+ *  help surface; ChallengeAuth no longer has its own help text.
  */
 
 import * as os from "node:os";
@@ -518,5 +522,6 @@ function helpText(): string {
     "",
     "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。",
     "**Bridge 管理命令**: `/help`(本帮助)、`/trusted`、`/revoke`、`/channels`、`/enable`、`/disable`、`/toggletools`",
+    "**认证**: 首次私聊 bot → bot 终端显示 6 位验证码 → 在聊天里输入验证码即成为信任用户(第一个信任用户 = 管理员)。群聊由信任用户在群里发 `/enable <模式>` 启用。",
   ].join("\n");
 }

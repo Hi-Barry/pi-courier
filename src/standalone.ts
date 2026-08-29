@@ -135,7 +135,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   };
 
   if (config.matrix?.homeserverUrl && config.matrix?.accessToken) {
-    addTransport(new MatrixProvider(config.matrix, auth));
+    addTransport(new MatrixProvider(config.matrix, (chatId) => auth.isChannelEnabled(chatId)));
   }
 
   if (transportManager.getAllTransports().length === 0) {

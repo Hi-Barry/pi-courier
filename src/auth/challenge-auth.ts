@@ -145,6 +145,13 @@ export class ChallengeAuth {
     return this.trustedUsers.has(namespaced);
   }
 
+  /** Whether this user is the admin (namespaced comparison, per transport). */
+  isAdminUser(userId: string, transport?: string): boolean {
+    if (!this.adminUserId) return false;
+    const namespaced = transport ? `${transport}:${userId}` : userId;
+    return this.adminUserId === namespaced || this.adminUserId === userId;
+  }
+
   /** Whether a group chat has been explicitly enabled by the admin. */
   isChannelEnabled(chatId: string): boolean {
     return this.channelAuth.get(chatId)?.enabled === true;
@@ -232,15 +239,12 @@ export class ChallengeAuth {
       return false;
     }
 
-    // Admin commands
+    // Admin commands (/help is NOT handled here — the router reserves it for
+    // the command map's bridge/pi help so there is a single help surface).
     const parts = text.split(/\s+/);
     const cmd = parts[0].toLowerCase();
 
     switch (cmd) {
-      case "/help":
-        await sendMessage(this.getHelpText());
-        return true;
-
       case "/enable":
         if (parts.length < 3) {
           await sendMessage("Usage: /enable <chatId> <all|mentions|trusted-only>");
@@ -382,34 +386,6 @@ export class ChallengeAuth {
    */
   private generateCode(): string {
     return Math.floor(100000 + Math.random() * 900000).toString();
-  }
-
-  /**
-   * Get help text for admin commands
-   */
-  private getHelpText(): string {
-    return `**管理命令**
-
-*仅私聊(DM):*
-• \`/help\` — 显示本帮助
-• \`/trusted\` — 查看信任用户列表
-• \`/revoke <userId>\` — 撤销用户的信任
-• \`/channels\` — 查看已启用房间
-• \`/enable [chatId] <模式>\` — 启用房间(群里发:无需 chatId,启用当前房间)
-  模式: \`all\`(所有人)、\`mentions\`(仅 @我)、\`trusted-only\`(仅信任用户)
-• \`/disable <chatId>\` — 停用房间
-• \`/toggletools\` — 切换回复中是否显示工具调用
-
-*项目管理(仅管理房间):*
-• \`/pmctl new <名称> <路径>\` — 创建项目
-• \`/pmctl list\` — 项目列表
-• \`/pmctl show|rm|mv|rename ...\` — 项目详情/删除/迁移/重命名
-  (在管理房间发 /help 查看完整说明)
-
-*认证:*
-• 首次私聊 bot → 终端显示 6 位验证码
-• 在聊天里输入验证码 → 成为信任用户
-• 第一个信任用户 = 管理员`;
   }
 
   /**

@@ -103,12 +103,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           }
           // "all" responds to everyone — admin-only. Trusted users may only
           // request trusted-only / mentions.
-          if (mode === "all") {
-            const adminUser = (auth.exportConfig().adminUserId ?? "").replace(/^matrix:/, "");
-            if (msg.userId !== adminUser) {
-              await sendReply(msg.chatId, msg.transport, "❌ all 模式仅管理员可用(可采用 trusted-only 或 mentions)");
-              return;
-            }
+          if (mode === "all" && !auth.isAdminUser(msg.userId, msg.transport)) {
+            await sendReply(msg.chatId, msg.transport, "❌ all 模式仅管理员可用(可采用 trusted-only 或 mentions)");
+            return;
           }
           auth.enableChannel(msg.chatId, mode);
           await sendReply(msg.chatId, msg.transport, `✅ 本房间已启用 (mode: ${mode})`);
