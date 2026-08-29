@@ -19,14 +19,47 @@ const LEVEL_NAMES: Record<LogLevel, string> = { debug: "DEBUG", info: "INFO", wa
 /** Truncation limits keep log lines bounded (journald-friendly). */
 const MAX_STRING = 2000;
 
-let writeThreshold: LogLevel = "info";
-
-export function setLogLevel(level: LogLevel): void {
-  writeThreshold = level;
+export interface LeveledLogger {
+  setLogLevel(level: LogLevel): void;
+  getLogLevel(): LogLevel;
+  isEnabled(level: LogLevel): boolean;
+  debug(...args: unknown[]): void;
+  info(...args: unknown[]): void;
+  warn(...args: unknown[]): void;
+  error(...args: unknown[]): void;
 }
 
-export function getLogLevel(): LogLevel {
-  return writeThreshold;
+/**
+ * Create an isolated leveled logger. The write threshold lives in the
+ * instance, so tests never share mutable module state. The exported
+ * `logger` below is the process-wide default instance.
+ */
+export function createLogger(initial: LogLevel = "info"): LeveledLogger {
+  let threshold: LogLevel = initial;
+
+  const isEnabled = (level: LogLevel): boolean => LEVEL_ORDER[level] >= LEVEL_ORDER[threshold];
+
+  const write = (level: LogLevel, args: unknown[]): void => {
+    if (!isEnabled(level)) return;
+    const line = [`[${new Date().toISOString()}]`, `[${LEVEL_NAMES[level]}]`, ...args.map(formatArg)].join(" ");
+    if (level === "error" || level === "warn") {
+      console.error(line);
+    } else {
+      console.log(line);
+    }
+  };
+
+  return {
+    setLogLevel: (level: LogLevel) => {
+      threshold = level;
+    },
+    getLogLevel: () => threshold,
+    isEnabled,
+    debug: (...args: unknown[]) => write("debug", args),
+    info: (...args: unknown[]) => write("info", args),
+    warn: (...args: unknown[]) => write("warn", args),
+    error: (...args: unknown[]) => write("error", args),
+  };
 }
 
 /** Parse a CLI/config level string; undefined when invalid. */
@@ -36,10 +69,6 @@ export function parseLogLevel(value: string): LogLevel | undefined {
   if (v === "warning") return "warn";
   if (v === "err" || v === "fatal") return "error";
   return undefined;
-}
-
-export function isEnabled(level: LogLevel): boolean {
-  return LEVEL_ORDER[level] >= LEVEL_ORDER[writeThreshold];
 }
 
 function formatArg(arg: unknown): string {
@@ -57,19 +86,9 @@ function formatArg(arg: unknown): string {
   return String(arg);
 }
 
-function write(level: LogLevel, args: unknown[]): void {
-  if (!isEnabled(level)) return;
-  const line = [`[${new Date().toISOString()}]`, `[${LEVEL_NAMES[level]}]`, ...args.map(formatArg)].join(" ");
-  if (level === "error" || level === "warn") {
-    console.error(line);
-  } else {
-    console.log(line);
-  }
-}
+const defaultLogger = createLogger();
 
-export const logger = {
-  debug: (...args: unknown[]): void => write("debug", args),
-  info: (...args: unknown[]): void => write("info", args),
-  warn: (...args: unknown[]): void => write("warn", args),
-  error: (...args: unknown[]): void => write("error", args),
-};
+export const logger: LeveledLogger = defaultLogger;
+export const setLogLevel = defaultLogger.setLogLevel;
+export const getLogLevel = defaultLogger.getLogLevel;
+export const isEnabled = defaultLogger.isEnabled;

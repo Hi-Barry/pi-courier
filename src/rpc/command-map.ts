@@ -250,7 +250,7 @@ export async function handleSlashCommand(
             // A pending confirmation expires after 60s to avoid a stale
             // confirmation silently deleting a project much later.
             const pending = pendingRm.get(chatId);
-            if (pending && pending.ts && Date.now() - pending.ts > 60_000) {
+            if (pending?.ts && Date.now() - pending.ts > 60_000) {
               pendingRm.delete(chatId); // expired — treat as a fresh rm
               await reply(`⏳ 上次确认已超时(60 秒),需重新确认。`);
             }

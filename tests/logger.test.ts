@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isEnabled, parseLogLevel, setLogLevel } from "../src/logger.js";
+import { createLogger, parseLogLevel } from "../src/logger.js";
 
 describe("logger levels", () => {
   it("parses level strings", () => {
@@ -12,19 +12,25 @@ describe("logger levels", () => {
   });
 
   it("enables levels at or above the threshold", () => {
-    setLogLevel("info");
-    expect(isEnabled("info")).toBe(true);
-    expect(isEnabled("warn")).toBe(true);
-    expect(isEnabled("error")).toBe(true);
-    expect(isEnabled("debug")).toBe(false);
+    const log = createLogger("info");
+    expect(log.isEnabled("info")).toBe(true);
+    expect(log.isEnabled("warn")).toBe(true);
+    expect(log.isEnabled("error")).toBe(true);
+    expect(log.isEnabled("debug")).toBe(false);
 
-    setLogLevel("debug");
-    expect(isEnabled("debug")).toBe(true);
+    log.setLogLevel("debug");
+    expect(log.isEnabled("debug")).toBe(true);
 
-    setLogLevel("warn");
-    expect(isEnabled("info")).toBe(false);
-    expect(isEnabled("warn")).toBe(true);
+    log.setLogLevel("warn");
+    expect(log.isEnabled("info")).toBe(false);
+    expect(log.isEnabled("warn")).toBe(true);
+  });
 
-    setLogLevel("info"); // reset for other tests
+  it("instances do not share threshold state", () => {
+    const a = createLogger("info");
+    const b = createLogger("info");
+    a.setLogLevel("debug");
+    expect(b.getLogLevel()).toBe("info");
+    expect(b.isEnabled("debug")).toBe(false);
   });
 });

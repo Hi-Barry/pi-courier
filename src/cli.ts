@@ -22,18 +22,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
+import { suppressKnownWarnings } from "./warnings.js";
 
-// Suppress the known `util._extend` deprecation warning emitted by some
-// transport dependencies at load time — it pollutes interactive output.
-function suppressDeprecationWarnings(): void {
-  const orig = process.emitWarning;
-  process.emitWarning = ((warning: unknown, ...rest: unknown[]): void => {
-    const msg = typeof warning === "string" ? warning : (warning as Error | undefined)?.message ?? "";
-    if (msg.includes("util._extend")) return;
-    (orig as (...args: unknown[]) => void).call(process, warning, ...rest);
-  }) as typeof process.emitWarning;
-}
-suppressDeprecationWarnings();
+suppressKnownWarnings();
 
 const SERVICE_NAME = "pi-courier";
 const SERVICE_UNIT = `${SERVICE_NAME}.service`;
@@ -104,26 +95,9 @@ async function cmdSetup(): Promise<void> {
 // ===========================================================================
 
 async function cmdRun(args: string[]): Promise<void> {
-  const config = loadConfig();
-  // Supported overrides: --workdir, --level.
-  let workdir: string | undefined;
-  let level: string | undefined;
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--workdir") {
-      workdir = args[++i];
-    } else if (args[i] === "--level") {
-      level = args[++i];
-    } else {
-      console.warn(`⚠️  忽略未知参数: ${args[i]}(旧参数已废弃,请用配置或子命令)`);
-    }
-  }
-  const finalWorkdir = workdir ?? config.workdir;
-
+  // Supported overrides: --workdir, --level (parsed once by standalone's main).
   const { main } = await import("./standalone.js");
-  const standaloneArgs: string[] = [];
-  if (workdir) standaloneArgs.push("--workdir", workdir);
-  if (level) standaloneArgs.push("--level", level);
-  await main(standaloneArgs);
+  await main(args);
 }
 
 // ===========================================================================
@@ -169,7 +143,8 @@ function cmdEnable(): void {
     console.warn(`⚠️  当前 Node 版本为 v${process.versions.node},pi 的 undici 需要 Node >= 21。建议用 nvm 安装 v24 后重新执行本命令。`);
   }
 
-  const config = loadConfig();
+  // Early read: surfaces config-permission warnings before installing the service.
+  loadConfig();
   const projDir = projectDir();
 
   const unit = buildUnit(projDir);

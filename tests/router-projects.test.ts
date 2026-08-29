@@ -96,13 +96,10 @@ describe("message-router multi-project routing", () => {
 
   it("routes plain DM messages to the room's rpc via projectManager", async () => {
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     const msg = makeMsg({ content: "hello pi" });
     await router.handleIncoming(msg);
@@ -114,13 +111,10 @@ describe("message-router multi-project routing", () => {
     const projectRpc = { prompt: vi.fn().mockResolvedValue(undefined) } as unknown as PiRpc;
     (projectManager.getRpcForRoom as ReturnType<typeof vi.fn>).mockReturnValue(projectRpc);
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     await router.handleIncoming(makeMsg({ chatId: "!proj:server", content: "do work" }));
     expect(rpc.prompt).not.toHaveBeenCalled();
@@ -131,13 +125,10 @@ describe("message-router multi-project routing", () => {
     // Management commands require the management-room flag in config.
     saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     await router.handleIncoming(
       makeMsg({ content: "/newproject myapp /tmp/myapp" })
@@ -154,13 +145,10 @@ describe("message-router multi-project routing", () => {
   it("resolves a relative path in /pmctl new against the project root", async () => {
     saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     await router.handleIncoming(makeMsg({ content: "/newproject myapp myapp" }));
     await new Promise((r) => setTimeout(r, 20));
@@ -174,13 +162,10 @@ describe("message-router multi-project routing", () => {
   it("uses an absolute path as-is in /pmctl new", async () => {
     saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     await router.handleIncoming(makeMsg({ content: "/newproject myapp /srv/custom/myapp" }));
     await new Promise((r) => setTimeout(r, 20));
@@ -194,13 +179,10 @@ describe("message-router multi-project routing", () => {
   it("defaults the path to <project root>/<name> when omitted", async () => {
     saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     await router.handleIncoming(makeMsg({ content: "/pmctl new newapp" }));
     await new Promise((r) => setTimeout(r, 20));
@@ -215,13 +197,10 @@ describe("message-router multi-project routing", () => {
     // No managementRooms flag in config (first-ever message) — the trusted
     // user's DM must still count as the management room.
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     await router.handleIncoming(makeMsg({ content: "/pmctl new myapp /tmp/myapp" }));
     await new Promise((r) => setTimeout(r, 20));
@@ -231,13 +210,10 @@ describe("message-router multi-project routing", () => {
 
   it("rejects /pmctl from a project room", async () => {
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     await router.handleIncoming(
       makeMsg({ chatId: "!projroom:server", isGroupChat: true, content: "/pmctl list" })
@@ -248,13 +224,10 @@ describe("message-router multi-project routing", () => {
   it("rejects /pmctl from a second room once a management room already exists", async () => {
     saveConfig({ ...loadConfig(), managementRooms: ["!dm:server"] });
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     // A different private room is not the management room.
     await router.handleIncoming(
@@ -265,13 +238,10 @@ describe("message-router multi-project routing", () => {
 
   it("brands an unnamed DM room on first message (idempotent)", async () => {
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     await router.handleIncoming(makeMsg({ content: "hi" }));
     // maybeInitManagementRoom runs — let it complete
@@ -286,13 +256,10 @@ describe("message-router multi-project routing", () => {
   it("does not brand a project room (2-person room with a mapping)", async () => {
     (projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockReturnValue(true);
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     await router.handleIncoming(makeMsg({ chatId: "!projroom:server", content: "hello" }));
     await new Promise((r) => setTimeout(r, 20));
@@ -302,13 +269,10 @@ describe("message-router multi-project routing", () => {
   it("in single-project mode /pmctl reports it is unavailable", async () => {
     (projectManager as { isMultiProject: boolean }).isMultiProject = false;
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     await router.handleIncoming(makeMsg({ content: "/pmctl list" }));
     expect(replies.at(-1)!.text).toContain("单工程模式");
@@ -318,13 +282,10 @@ describe("message-router multi-project routing", () => {
     (projectManager as { isMultiProject: boolean }).isMultiProject = false;
     (projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockReturnValue(false);
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     await router.handleIncoming(makeMsg({ content: "hello" }));
     await new Promise((r) => setTimeout(r, 20));
@@ -335,13 +296,10 @@ describe("message-router multi-project routing", () => {
   it("a trusted user can toggle multi-project mode via /multiproject (restart effect)", async () => {
     (projectManager as { isMultiProject: boolean }).isMultiProject = true;
     const router = createMessageRouter({
-      rpc,
       projectManager,
       auth,
       transportManager,
       sendReply,
-      log: () => {},
-      debug: false,
     });
     await router.handleIncoming(makeMsg({ content: "/multiproject off" }));
     const saved = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));

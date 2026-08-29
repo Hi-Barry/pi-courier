@@ -34,7 +34,7 @@ export function shouldSkipEvent(
 
   // Only process text messages
   const content = event.content;
-  if (!content || content.msgtype !== "m.text" || !content.body) return "not_text";
+  if (content?.msgtype !== "m.text" || !content?.body) return "not_text";
 
   // Ignore edits (we only process original messages)
   if (content["m.new_content"]) return "edit";

@@ -6,9 +6,9 @@
  *   agent events ────────────────> router ──> reply back to the messenger
  */
 
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
 import { loadConfig, saveConfig } from "../config.js";
 import {
@@ -25,15 +25,12 @@ import type { PiRpc } from "./pi-rpc.js";
 import type { ProjectManager } from "./project-manager.js";
 
 export interface MessageRouterDeps {
-  rpc: PiRpc;
   /** Multi-project routing: resolves the PiRpc for a room (default when unmapped). */
   projectManager: ProjectManager;
   auth: ChallengeAuth;
   transportManager: TransportManager;
   /** Send a text reply to a chat via a transport (errors swallowed by caller) */
   sendReply: (chatId: string, transport: string, text: string) => Promise<void>;
-  log: (...args: unknown[]) => void;
-  debug: boolean;
 }
 
 export interface MessageRouter {
@@ -47,7 +44,7 @@ export interface MessageRouter {
 }
 
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
-  const { rpc, projectManager, auth, transportManager, sendReply, log, debug } = deps;
+  const { projectManager, auth, transportManager, sendReply } = deps;
   let pendingRemoteChat: PendingRemoteChat | null = null;
 
   return {

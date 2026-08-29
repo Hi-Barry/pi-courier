@@ -10,8 +10,7 @@
  *   Messenger <── replies <────────── bridge <── agent events (stdout JSONL)
  */
 
-import { fileURLToPath, pathToFileURL } from "node:url";
-import * as fs from "fs";
+import { pathToFileURL } from "node:url";
 import * as os from "os";
 import * as path from "path";
 import * as readline from "readline";
@@ -24,17 +23,9 @@ import { PiRpc } from "./rpc/pi-rpc.js";
 import { ProjectManager } from "./rpc/project-manager.js";
 import { TransportManager } from "./transports/manager.js";
 import { MatrixProvider } from "./transports/matrix.js";
+import { suppressKnownWarnings } from "./warnings.js";
 
-// Suppress the known `util._extend` deprecation warning emitted by some
-// transport dependencies at load time — it pollutes interactive output.
-{
-  const orig = process.emitWarning;
-  process.emitWarning = ((warning: unknown, ...rest: unknown[]): void => {
-    const msg = typeof warning === "string" ? warning : (warning as Error | undefined)?.message ?? "";
-    if (msg.includes("util._extend")) return;
-    (orig as (...args: unknown[]) => void).call(process, warning, ...rest);
-  }) as typeof process.emitWarning;
-}
+suppressKnownWarnings();
 
 function parseArgs(argv: string[]): { workdir?: string; logLevel?: string } {
   const result: { workdir?: string; logLevel?: string } = {};
@@ -63,14 +54,10 @@ function parseArgs(argv: string[]): { workdir?: string; logLevel?: string } {
         console.warn("⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 debug: true");
         break;
       default:
-        console.warn(`[bridge] ignoring unknown argument: ${arg}`);
+        console.warn(`⚠️  忽略未知参数: ${arg}(旧参数已废弃,请用配置或子命令)`);
     }
   }
   return result;
-}
-
-function log(...args: unknown[]): void {
-  logger.info(...args);
 }
 
 /**
@@ -116,7 +103,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
 
   const config = loadConfig();
-  const debug = config.debug === true;
   const workdir = await resolveWorkdir(args.workdir, config.workdir);
   const sessionDir = config.sessionDir;
   const cliPath = config.cliPath;
@@ -205,13 +191,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   });
 
   const router = createMessageRouter({
-    rpc,
     projectManager,
     auth,
     transportManager,
     sendReply,
-    log,
-    debug,
   });
 
   transportManager.onMessage((msg) => {
@@ -232,7 +215,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // ---- startup ----------------------------------------------------------------
   try {
     await transportManager.connectAll();
-    log(
+    logger.info(
       `✅ transports connected: ${transportManager
         .getStatus()
         .map((s) => `${s.type}=${s.connected ? "up" : "down"}`)
