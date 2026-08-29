@@ -19,7 +19,7 @@ import {
 } from "../formatting.js";
 import { isEnabled, logger } from "../logger.js";
 import type { RoomOps } from "../transports/interface.js";
-import type { ExternalMessage, PendingRemoteChat } from "../types.js";
+import type { ExternalMessage, ReplyTarget } from "../types.js";
 import { handleSlashCommand } from "./command-map.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { ProjectManager } from "./project-manager.js";
@@ -43,22 +43,53 @@ export interface MessageRouterDeps {
 export interface MessageRouter {
   /** Handle an incoming messenger message */
   handleIncoming(msg: ExternalMessage): Promise<void>;
-  /** Handle an agent event (from pi RPC). roomId = the room that owns the
-   *  pi process (project rooms); omitted for the shared default Rpc. */
-  handleEvent(event: unknown, roomId?: string): void;
-  /** Chat that the current/last turn belongs to */
-  pendingRemoteChat: PendingRemoteChat | null;
+  /** Handle an agent event emitted by `rpc` — the reply target comes from
+   *  the rpc's binding (see RoomBinding), never from a global slot. */
+  handleEvent(rawEvent: unknown, rpc: PiRpc): void;
+}
+
+/**
+ * Reply routing: every pi process is bound to the chat that prompted it.
+ * Project rpcs are pinned to their owning room (re-bound here with the real
+ * transport/username); the shared default rpc is re-bound by each DM prompt.
+ * Because bindings are per-process, a project-room prompt can never misroute
+ * a DM reply — the b7a5d7f bug class dies structurally. Cross-conversation
+ * attribution inside ONE shared process is a protocol limit (pi's RPC has no
+ * chat concept), so the default rpc's binding legitimately follows the most
+ * recent prompter.
+ */
+interface RoomBinding {
+  /** Pinned bindings (project rooms) survive completed turns; the shared
+   *  default rpc's binding releases after one. */
+  pinned: boolean;
+  replyTarget: ReplyTarget;
+}
+
+/** Format a completed turn into reply text. Returns text = null when the turn
+ *  has no replyable content (the binding is kept for the follow-up turn). */
+export function buildTurnReply(
+  message: AssistantMessage,
+  hideToolCalls?: boolean
+): { text: string | null; pendingTools: boolean } {
+  const responseText = extractTextFromMessage(message);
+  const toolCallsText = formatToolCalls(message);
+  const pendingTools = hasToolCalls(message);
+  const parts: string[] = [];
+  const trimmed = responseText.trim();
+  if (trimmed) parts.push(trimmed);
+  if (toolCallsText && !hideToolCalls) parts.push(toolCallsText);
+  if (parts.length === 0) return { text: null, pendingTools };
+  return { text: parts.join("\n\n"), pendingTools };
 }
 
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const { projectManager, auth, sendReply, sendTyping, roomOps, store } = deps;
-  let pendingRemoteChat: PendingRemoteChat | null = null;
+  const bindings = new WeakMap<PiRpc, RoomBinding>();
+  const bindReplyTarget = (rpc: PiRpc, replyTarget: ReplyTarget, pinned: boolean): void => {
+    bindings.set(rpc, { pinned, replyTarget });
+  };
 
   return {
-    get pendingRemoteChat(): PendingRemoteChat | null {
-      return pendingRemoteChat;
-    },
-
     async handleIncoming(msg: ExternalMessage): Promise<void> {
       const text = msg.content.trim();
       if (!text) return;
@@ -179,18 +210,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         return;
       }
 
-      // Record the reply target ONLY for the shared default Rpc (non-project
-      // rooms). Project rooms are excluded so a project-room message never
-      // overwrites the DM's pending target (which would misroute the DM
-      // reply — see handleEvent).
-      if (!projectManager.isProjectRoom(msg.chatId)) {
-        pendingRemoteChat = {
-          chatId: msg.chatId,
-          transport: msg.transport,
-          username: msg.username,
-          messageId: msg.messageId,
-        };
-      }
+      // Bind this room to the pi process that will serve it (per-process
+      // binding — see RoomBinding above). Binding unconditionally is safe:
+      // a project-room prompt only ever re-pins the project rpc to its own
+      // room, so the default rpc's DM binding is untouched.
+      bindReplyTarget(
+        roomRpc,
+        { chatId: msg.chatId, transport: msg.transport, username: msg.username },
+        projectManager.isProjectRoom(msg.chatId)
+      );
 
       // Slash commands → RPC mapping (builtin) or passthrough (extensions/skills/templates)
       if (text.startsWith("/")) {
@@ -232,104 +260,17 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
     },
 
-    handleEvent(rawEvent: unknown, roomId?: string): void {
-      // For project rooms the reply target is the room itself (the pi
-      // process is owned by that room). For the shared default Rpc we use
-      // pendingRemoteChat as before.
-      const target = roomId
-        ? { chatId: roomId, transport: "matrix", username: "user" }
-        : pendingRemoteChat;
+    handleEvent(rawEvent: unknown, rpc: PiRpc): void {
+      // The reply target comes from the rpc's own binding — project rpcs are
+      // pinned to their room, the default rpc follows its latest prompter.
+      const target = bindings.get(rpc)?.replyTarget;
 
       // extension_error is emitted by the RPC layer but is not part of the
       // typed AgentSessionEvent union — widen for runtime event checking.
-      const event = rawEvent as {
-        type: string;
-        message?: AssistantMessage;
-        assistantMessageEvent?: unknown;
-        toolName?: string;
-        args?: unknown;
-        result?: unknown;
-        partialResult?: unknown;
-        isError?: boolean;
-        willRetry?: boolean;
-        attempt?: number;
-        maxAttempts?: number;
-        delayMs?: number;
-        errorMessage?: string;
-        finalError?: string;
-        success?: boolean;
-        reason?: string;
-        aborted?: boolean;
-        level?: unknown;
-        name?: string;
-        steering?: readonly string[];
-        followUp?: readonly string[];
-        extensionPath?: string;
-        error?: string;
-      };
+      const event = rawEvent as AgentEventView;
 
-      // ---- full session replay log (leveled) -----------------------------
-      switch (event.type) {
-        case "agent_start":
-          logger.debug("[agent] run 开始");
-          break;
-        case "agent_end":
-          logger.debug(`[agent] run 结束(willRetry: ${event.willRetry ?? false})`);
-          break;
-        case "agent_settled":
-          logger.debug("[agent] 已收敛");
-          break;
-        case "message_start":
-          logger.debug("[agent] 消息开始");
-          break;
-        case "message_update":
-          // Streaming delta (includes thinking deltas). DEBUG level, truncated.
-          logger.debug(`[agent] 流式增量: ${summarizeStreamDelta(event)}`);
-          break;
-        case "message_end":
-          logger.debug("[agent] 消息完成");
-          break;
-        case "tool_execution_start":
-          logger.info(`[agent] 🔧 工具调用: ${event.toolName ?? "?"}(${summarizeArg(event.args)})`);
-          break;
-        case "tool_execution_update":
-          logger.debug(`[agent] 工具进度: ${event.toolName ?? "?"} → ${summarizeArg(event.partialResult, 300)}`);
-          break;
-        case "tool_execution_end":
-          logger.info(
-            `[agent] 工具完成: ${event.toolName ?? "?"} → ${event.isError ? "❌ 错误" : "✅ 成功"} ${summarizeArg(event.result, 500)}`
-          );
-          break;
-        case "compaction_start":
-          logger.warn(`[agent] 上下文压缩开始(${event.reason ?? "?"})`);
-          break;
-        case "compaction_end":
-          logger.warn(
-            `[agent] 上下文压缩${event.aborted ? "中止" : "结束"}(${event.reason ?? "?"}${event.errorMessage ? `, 错误: ${event.errorMessage}` : ""})`
-          );
-          break;
-        case "auto_retry_start":
-          logger.warn(`[agent] 自动重试 ${event.attempt}/${event.maxAttempts}(${event.errorMessage ?? ""})`);
-          break;
-        case "auto_retry_end":
-          logger.warn(`[agent] 自动重试结束: ${event.success ? "成功" : `失败(${event.finalError ?? ""})`}`);
-          break;
-        case "queue_update":
-          logger.debug(`[agent] 队列更新(steer: ${event.steering?.length ?? 0}, followUp: ${event.followUp?.length ?? 0})`);
-          break;
-        case "thinking_level_changed":
-          logger.info(`[agent] 思考级别: ${String(event.level ?? "?")}`);
-          break;
-        case "session_info_changed":
-          logger.debug(`[agent] 会话名称: ${event.name ?? "(清除)"}`);
-          break;
-        case "entry_appended":
-          logger.debug("[agent] 会话条目已写入");
-          break;
-        default:
-          logger.debug(`[agent] 事件: ${event.type}`);
-          break;
-      }
+
+      logAgentEvent(event);
 
       if (event.type === "turn_start") {
         if (target) {
@@ -340,36 +281,28 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       if (event.type === "turn_end") {
         if (!target) return;
-        const message = event.message as AssistantMessage;
-        const responseText = extractTextFromMessage(message);
-        const toolCallsText = formatToolCalls(message);
-        const pendingTools = hasToolCalls(message);
-        const hideToolCalls = store.get().hideToolCalls;
+        const turn = buildTurnReply(event.message as AssistantMessage, store.get().hideToolCalls);
 
         // Reply summary at INFO level — the full conversation is also in pi's
-        // session file (path logged below).
-        logger.info(
-          `[agent] 回复 @${target.username}: ${responseText.trim().slice(0, 500)}${responseText.trim().length > 500 ? "…" : ""}`
-        );
+        // session file.
+        const replyPreview = turn.text ?? "";
+        logger.info(`[agent] 回复 @${target.username}: ${replyPreview.slice(0, 500)}${replyPreview.length > 500 ? "…" : ""}`);
 
-        const parts: string[] = [];
-        const trimmed = responseText.trim();
-        if (trimmed) parts.push(trimmed);
-        if (toolCallsText && !hideToolCalls) parts.push(toolCallsText);
-
-        if (parts.length === 0) {
-          // No content this turn — keep pendingRemoteChat for a follow-up turn
+        if (turn.text === null) {
+          // No content this turn — keep the binding for a follow-up turn
           return;
         }
 
-        const fullText = parts.join("\n\n");
-        const chunks = splitMessage(fullText, 4000);
-        for (const chunk of chunks) {
+        for (const chunk of splitMessage(turn.text, 4000)) {
           sendReply(target.chatId, target.transport, chunk).catch(() => {});
         }
 
-        if (!pendingTools && !roomId) {
-          pendingRemoteChat = null;
+        // A completed conversational turn releases unpinned bindings (the
+        // shared default rpc) so late events never reply to a stale chat.
+        // Pinned project bindings survive (parity with the old roomId path).
+        const binding = bindings.get(rpc);
+        if (!turn.pendingTools && binding && !binding.pinned) {
+          bindings.delete(rpc);
         }
         return;
       }
@@ -402,6 +335,100 @@ function summarizeStreamDelta(event: {
   if (e.type === "tool_call") return "工具调用增量";
   if (e.delta) return e.delta.slice(0, 300);
   return `(${e.type ?? "unknown"})`;
+}
+
+type AgentEventView = {
+        type: string;
+        message?: AssistantMessage;
+        assistantMessageEvent?: unknown;
+        toolName?: string;
+        args?: unknown;
+        result?: unknown;
+        partialResult?: unknown;
+        isError?: boolean;
+        willRetry?: boolean;
+        attempt?: number;
+        maxAttempts?: number;
+        delayMs?: number;
+        errorMessage?: string;
+        finalError?: string;
+        success?: boolean;
+        reason?: string;
+        aborted?: boolean;
+        level?: unknown;
+        name?: string;
+        steering?: readonly string[];
+        followUp?: readonly string[];
+        extensionPath?: string;
+        error?: string;
+     };
+
+/**
+ * Session-replay logging, fully separated from routing: muting it (log
+ * level, or removing calls) can never affect reply routing.
+ */
+function logAgentEvent(event: AgentEventView): void {
+  switch (event.type) {
+    case "agent_start":
+      logger.debug("[agent] run 开始");
+      break;
+    case "agent_end":
+      logger.debug(`[agent] run 结束(willRetry: ${event.willRetry ?? false})`);
+      break;
+    case "agent_settled":
+      logger.debug("[agent] 已收敛");
+      break;
+    case "message_start":
+      logger.debug("[agent] 消息开始");
+      break;
+    case "message_update":
+      // Streaming delta (includes thinking deltas). DEBUG level, truncated.
+      logger.debug(`[agent] 流式增量: ${summarizeStreamDelta(event)}`);
+      break;
+    case "message_end":
+      logger.debug("[agent] 消息完成");
+      break;
+    case "tool_execution_start":
+      logger.info(`[agent] 🔧 工具调用: ${event.toolName ?? "?"}(${summarizeArg(event.args)})`);
+      break;
+    case "tool_execution_update":
+      logger.debug(`[agent] 工具进度: ${event.toolName ?? "?"} → ${summarizeArg(event.partialResult, 300)}`);
+      break;
+    case "tool_execution_end":
+      logger.info(
+        `[agent] 工具完成: ${event.toolName ?? "?"} → ${event.isError ? "❌ 错误" : "✅ 成功"} ${summarizeArg(event.result, 500)}`
+      );
+      break;
+    case "compaction_start":
+      logger.warn(`[agent] 上下文压缩开始(${event.reason ?? "?"})`);
+      break;
+    case "compaction_end":
+      logger.warn(
+        `[agent] 上下文压缩${event.aborted ? "中止" : "结束"}(${event.reason ?? "?"}${event.errorMessage ? `, 错误: ${event.errorMessage}` : ""})`
+      );
+      break;
+    case "auto_retry_start":
+      logger.warn(`[agent] 自动重试 ${event.attempt}/${event.maxAttempts}(${event.errorMessage ?? ""})`);
+      break;
+    case "auto_retry_end":
+      logger.warn(`[agent] 自动重试结束: ${event.success ? "成功" : `失败(${event.finalError ?? ""})`}`);
+      break;
+    case "queue_update":
+      logger.debug(`[agent] 队列更新(steer: ${event.steering?.length ?? 0}, followUp: ${event.followUp?.length ?? 0})`);
+      break;
+    case "thinking_level_changed":
+      logger.info(`[agent] 思考级别: ${String(event.level ?? "?")}`);
+      break;
+    case "session_info_changed":
+      logger.debug(`[agent] 会话名称: ${event.name ?? "(清除)"}`);
+      break;
+    case "entry_appended":
+      logger.debug("[agent] 会话条目已写入");
+      break;
+    default:
+      logger.debug(`[agent] 事件: ${event.type}`);
+      break;
+  }
 }
 
 /**

@@ -1,10 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ConfigStore } from "../src/config";
 import { ChallengeAuth } from "../src/auth/challenge-auth";
+import { logger } from "../src/logger";
+import { buildTurnReply } from "../src/rpc/message-router";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createMessageRouter } from "../src/rpc/message-router";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
 import type { ExternalMessage } from "../src/types";
+
+/** Minimal assistant-shaped message for turn_end events. */
+function textMessage(text: string): AssistantMessage {
+  return { content: [{ type: "text", text }] } as unknown as AssistantMessage;
+}
 
 function makeMsg(overrides: Partial<ExternalMessage> = {}): ExternalMessage {
   return {
@@ -77,6 +85,33 @@ function makeFixtures(opts: { multiProject?: boolean; channels?: Record<string, 
     createMessageRouter({ projectManager, auth, sendReply, sendTyping, roomOps, store });
   return { codeBox, replies, sendReply, sendTyping, rpc, projectManager, auth, roomOps, store, makeRouter };
 }
+
+describe("buildTurnReply", () => {
+  const textPart = (text: string) => ({ type: "text", text });
+
+  it("joins text parts into replyable text", () => {
+    const msg = { content: [textPart("hello"), textPart("world")] } as unknown as AssistantMessage;
+    expect(buildTurnReply(msg)).toEqual({ text: "hello\nworld", pendingTools: false });
+  });
+
+  it("reports pendingTools for tool-call turns", () => {
+    const msg = { content: [{ type: "toolCall", name: "bash", arguments: {} }] } as unknown as AssistantMessage;
+    expect(buildTurnReply(msg, true)).toEqual({ text: null, pendingTools: true });
+  });
+
+  it("appends tool-call summaries unless hidden", () => {
+    const msg = { content: [textPart("ran it"), { type: "toolCall", name: "bash", arguments: {} }] } as unknown as AssistantMessage;
+    expect(buildTurnReply(msg, true)).toEqual({ text: "ran it", pendingTools: true });
+    const shown = buildTurnReply(msg, false);
+    expect(shown.text).toContain("ran it");
+    expect(shown.text).toContain("`bash`");
+  });
+
+  it("returns null text for a content-free turn (binding must be kept)", () => {
+    const msg = { content: [] } as unknown as AssistantMessage;
+    expect(buildTurnReply(msg)).toEqual({ text: null, pendingTools: false });
+  });
+});
 
 describe("message-router multi-project routing", () => {
   let rpc: PiRpc;
@@ -247,11 +282,92 @@ describe("message-router multi-project routing", () => {
     expect(replies.at(-1)!.text).toContain("重启生效");
   });
 
-  it("agent turn_start triggers a typing indicator via the message-I/O seam", async () => {
+  it("agent turn_start triggers a typing indicator for the prompting room", async () => {
     const router = makeRouter();
-    router.handleEvent({ type: "turn_start" }, "!room:server");
+    // A prompt binds the room to the default rpc; the typing follows that binding.
+    await router.handleIncoming(makeMsg({ content: "hi" }));
+    router.handleEvent({ type: "turn_start" }, rpc);
     await new Promise((r) => setTimeout(r, 0));
-    expect(sendTyping).toHaveBeenCalledWith("!room:server", "matrix");
+    expect(sendTyping).toHaveBeenCalledWith("!dm:server", "matrix");
+  });
+
+  it("a project-room prompt cannot misroute a DM reply (per-process bindings)", async () => {
+    const projectRpc = { prompt: vi.fn().mockResolvedValue(undefined) } as unknown as PiRpc;
+    (projectManager.getRpcForRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      async (roomId: string) => (roomId === "!proj:server" ? projectRpc : rpc)
+    );
+    (projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => roomId === "!proj:server"
+    );
+    const router = makeRouter();
+
+    // A prompts in the DM, then B prompts in a project room.
+    await router.handleIncoming(makeMsg({ content: "hi from A" }));
+    await router.handleIncoming(makeMsg({ chatId: "!proj:server", content: "hi from B" }));
+
+    // A's turn completes — its reply MUST go to A despite B's prompt in between.
+    router.handleEvent({ type: "turn_end", message: textMessage("reply to A") }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replies.at(-1)).toMatchObject({ chatId: "!dm:server", transport: "matrix", text: "reply to A" });
+
+    // B's own turn completes — pinned to the project room.
+    router.handleEvent({ type: "turn_end", message: textMessage("reply to B") }, projectRpc);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replies.at(-1)).toMatchObject({ chatId: "!proj:server", text: "reply to B" });
+  });
+
+  it("a second DM prompt retargets the shared default process (protocol limit, documented)", async () => {
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ content: "hi from A" }));
+    await router.handleIncoming(
+      makeMsg({ chatId: "!carol:server", userId: "@carol:server", username: "carol", content: "hi from carol" })
+    );
+    // pi's RPC carries no chat concept: one shared process serves both DMs,
+    // so the binding follows the most recent prompter. (Per-DM processes
+    // would fix this at ~300MB each — deliberately out of scope, spec #3.)
+    router.handleEvent({ type: "turn_end", message: textMessage("late reply") }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replies.at(-1)).toMatchObject({ chatId: "!carol:server", text: "late reply" });
+  });
+
+  it("a completed conversational turn releases the default binding; project bindings stay pinned", async () => {
+    const projectRpc = { prompt: vi.fn().mockResolvedValue(undefined) } as unknown as PiRpc;
+    (projectManager.getRpcForRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      async (roomId: string) => (roomId === "!proj:server" ? projectRpc : rpc)
+    );
+    (projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => roomId === "!proj:server"
+    );
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ content: "hi" }));
+    await router.handleIncoming(makeMsg({ chatId: "!proj:server", content: "hello" }));
+
+    router.handleEvent({ type: "turn_end", message: textMessage("done") }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    const repliesAfterDm = replies.length;
+    // Late default-rpc event: binding released — nothing replies anywhere.
+    router.handleEvent({ type: "extension_error", error: "boom" }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replies.length).toBe(repliesAfterDm);
+
+    // Project binding survives its own completed turn (pinned parity).
+    router.handleEvent({ type: "turn_end", message: textMessage("proj done") }, projectRpc);
+    router.handleEvent({ type: "extension_error", error: "late boom" }, projectRpc);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replies.at(-1)).toMatchObject({ chatId: "!proj:server", text: "⚠️ 扩展错误 (unknown): late boom" });
+  });
+
+  it("muting agent logging (log level) does not affect reply routing", async () => {
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ content: "hi" }));
+    logger.setLogLevel("error"); // all [agent] replay logs go silent
+    try {
+      router.handleEvent({ type: "turn_end", message: textMessage("still routed") }, rpc);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(replies.at(-1)).toMatchObject({ chatId: "!dm:server", text: "still routed" });
+    } finally {
+      logger.setLogLevel("info");
+    }
   });
 
   it("room-creation failure surfaces the thrown message (no null-branch)", async () => {

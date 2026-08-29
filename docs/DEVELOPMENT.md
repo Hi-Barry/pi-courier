@@ -200,7 +200,7 @@ pi 0.83.0 就绪。
 **`src/rpc/message-router.ts`** —— 核心接线
 - 认证 → bridge 管理命令 → RPC 映射命令 → 透传 prompt,四级路由
 - agent 事件流(`message_end` / `turn_end` / `agent_start`…)→ 回发到 Matrix
-- `pendingRemoteChat` 语义:工具调用轮次保留"正在处理"状态,最终轮清空
+- 回复按 RoomBinding 路由:每个 pi 进程绑定自己的回复目标(项目房间钉住、共享默认进程随最近一次 DM 提示刷新,完整对话轮结束后释放)——不存在进程级单槽
 - typing 指示:`agent_start` / `turn_start` 触发 Matrix 输入中状态
 
 **`src/standalone.ts`** —— 独立入口
@@ -582,7 +582,8 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 
 ### 12.3 回复机制
 
-- 对话类回复:监听 agent 事件流(`message_end` / `turn_end`),增量回发
+- 对话类回复:监听 agent 事件流的 `turn_end`,按来源进程的 RoomBinding 回信(`message_end` 仅记录日志)
+- 同一默认进程内跨 DM 的对话归属是协议限制(pi 的 RPC 无 chat 概念):绑定跟随最近一次提示;项目房间进程独占、天然钉住
 - 命令类回复(统计/模型列表):直接等 RPC 响应
 - 流式期间发消息:自动附加 `streamingBehavior: "steer"/"followUp"`
 

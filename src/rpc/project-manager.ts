@@ -24,8 +24,8 @@ export interface ProjectManagerOptions {
   defaultRpc: PiRpc;
   /** Base options for project processes (cliPath, common args, ...). */
   baseOptions: PiRpcOptions;
-  /** Subscribe a per-room agent event listener: (roomId, event). */
-  onRoomEvent: (roomId: string, event: unknown) => void;
+  /** Subscribe a per-room agent event listener: (roomId, event, rpc). */
+  onRoomEvent: (roomId: string, event: unknown, rpc: PiRpc) => void;
   /** Multi-project mode. false = single-project: every room uses defaultRpc. */
   multiProject?: boolean;
   /** Injected config store (single read/write path for the projects map). */
@@ -35,7 +35,7 @@ export interface ProjectManagerOptions {
 export class ProjectManager {
   private defaultRpc: PiRpc;
   private baseOptions: PiRpcOptions;
-  private onRoomEvent: (roomId: string, event: unknown) => void;
+  private onRoomEvent: (roomId: string, event: unknown, rpc: PiRpc) => void;
   private multiProject: boolean;
   private store: ConfigStore;
   /** roomId -> PiRpc for project rooms (lazily started). */
@@ -111,7 +111,7 @@ export class ProjectManager {
     });
 
     const listener: RpcEventListener = (event) => {
-      this.onRoomEvent(roomId, event);
+      this.onRoomEvent(roomId, event, rpc);
     };
     rpc.onEvent(listener);
 

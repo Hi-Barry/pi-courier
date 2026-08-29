@@ -199,8 +199,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const projectManager = new ProjectManager({
     defaultRpc: rpc,
     baseOptions: { cliPath, args: ["--continue"] },
-    onRoomEvent: (roomId, event) => {
-      router.handleEvent(event, roomId);
+    onRoomEvent: (_roomId, event, rpc) => {
+      router.handleEvent(event, rpc);
     },
     store,
     multiProject: store.get().multiProject === true,
@@ -228,7 +228,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   // ---- agent events → replies ------------------------------------------------
   rpc.onEvent((event) => {
-    router.handleEvent(event);
+    router.handleEvent(event, rpc);
   });
 
   // ---- startup ----------------------------------------------------------------

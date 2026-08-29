@@ -80,13 +80,13 @@ export interface MsgBridgeConfig {
 }
 
 /**
- * Pending remote chat session tracking
+ * Where a reply goes: which chat, over which transport (message I/O), and
+ * who prompted. RoomBindings attach one of these per pi process.
  */
-export interface PendingRemoteChat {
+export interface ReplyTarget {
   chatId: string;
   transport: string;
   username: string;
-  messageId: string;
 }
 
 /**
