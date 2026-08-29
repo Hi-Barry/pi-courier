@@ -21,6 +21,7 @@ import { isEnabled, logger } from "../logger.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, ReplyTarget } from "../types.js";
 import { handleSlashCommand } from "./command-map.js";
+import type { PmctlController } from "./pmctl-controller.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { ProjectManager } from "./project-manager.js";
 
@@ -38,6 +39,8 @@ export interface MessageRouterDeps {
    *  or non-Matrix deployments; only the /pmctl path and management-room
    *  branding consume it. */
   roomOps?: RoomOps;
+  /** Multi-project management (/pmctl family): gates + actions in one module. */
+  pmctl: PmctlController;
 }
 
 export interface MessageRouter {
@@ -83,7 +86,7 @@ export function buildTurnReply(
 }
 
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
-  const { projectManager, auth, sendReply, sendTyping, roomOps, store } = deps;
+  const { projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl } = deps;
   const bindings = new WeakMap<PiRpc, RoomBinding>();
   const bindReplyTarget = (rpc: PiRpc, replyTarget: ReplyTarget, pinned: boolean): void => {
     bindings.set(rpc, { pinned, replyTarget });
@@ -220,30 +223,18 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         projectManager.isProjectRoom(msg.chatId)
       );
 
+      // /pmctl family first: gates + actions live in the controller. The
+      // invite target arrives pre-resolved (transport-native MXID).
+      if (await pmctl.handle(text, { chatId: msg.chatId, senderMxid: msg.userId, isManagementRoom }, async (replyText) => sendReply(msg.chatId, msg.transport, replyText))) {
+        return;
+      }
+
       // Slash commands → RPC mapping (builtin) or passthrough (extensions/skills/templates)
       if (text.startsWith("/")) {
         try {
           const handled = await handleSlashCommand(text, {
             rpc: roomRpc,
             reply: async (replyText) => sendReply(msg.chatId, msg.transport, replyText),
-            projectManager,
-            // RoomOps reaches only the /pmctl path — message I/O and room
-            // management never share an interface again.
-            createProjectRoom: roomOps ? (name, inviteMxid) => roomOps.createProjectRoom(name, inviteMxid) : undefined,
-            setRoomName: roomOps ? (roomId, name) => roomOps.setRoomName(roomId, name) : undefined,
-            leaveRoom: roomOps ? (roomId, reason) => roomOps.leaveRoom(roomId, reason) : undefined,
-            setUserPowerLevel: roomOps
-              ? (roomId, userId, level) => roomOps.setUserPowerLevel(roomId, userId, level)
-              : undefined,
-            adminUserId: auth.exportConfig().adminUserId,
-            senderUserId: msg.userId,
-            chatId: msg.chatId,
-            // Management room = the recorded room ID (unique, stable).
-            isManagementRoom,
-            // Whether multi-project mode is active (for /pmctl availability).
-            isMultiProject: projectManager.isMultiProject,
-            // Injected store for /pmctl's path + instance reads.
-            store,
           });
           if (handled) return;
         } catch (err) {

@@ -182,7 +182,7 @@ pi 0.83.0 就绪。
 - `get_commands` 60 秒缓存:避免频繁查询命令列表
 - 监听器队列:修复了"先注册事件监听、后启动连接"会抛错的问题
 
-**`src/rpc/command-map.ts`**(217 行)—— 命令映射表
+**`src/rpc/command-map.ts`** —— 命令映射表(纯 pi 命令;/pmctl 家族已移入 PmctlController)
 - `/new` `/clear` → `new_session`
 - `/compact [说明]` → `compact`
 - `/model [name]` → `set_model` / `get_available_models`
@@ -197,8 +197,12 @@ pi 0.83.0 就绪。
 - `/reload` → 重启 pi 进程(后加)
 - 其余 `/xxx` → 透传给 pi 的 `prompt`,由 pi 展开命令/技能/模板
 
+**`src/rpc/pmctl-controller.ts`** —— /pmctl 家族(门禁 + new/list/show/rm/mv/rename;rm 60 秒确认状态为实例字段)
+- 门禁顺序:单工程开关 → 管理房间校验 → Matrix 能力
+- 邀请目标由 router 以 transport 原生 MXID 传入(控制器不做前缀剥离)
+
 **`src/rpc/message-router.ts`** —— 核心接线
-- 认证 → bridge 管理命令 → RPC 映射命令 → 透传 prompt,四级路由
+- 认证 → bridge 管理命令 → /pmctl 家族 → RPC 映射命令 → 透传 prompt,五级路由
 - agent 事件流(`message_end` / `turn_end` / `agent_start`…)→ 回发到 Matrix
 - 回复按 RoomBinding 路由:每个 pi 进程绑定自己的回复目标(项目房间钉住、共享默认进程随最近一次 DM 提示刷新,完整对话轮结束后释放)——不存在进程级单槽
 - typing 指示:`agent_start` / `turn_start` 触发 Matrix 输入中状态
@@ -574,11 +578,12 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
   → 群聊 /enable(先于认证 —— 未启用房间的消息正是靠它启用本房间;all 仅管理员)
     → 认证检查(trusted / challenge)
       → bridge 管理命令(/trusted /revoke /channels /enable <chatId> /disable /toggletools)
-        → RPC 映射命令(/new /compact /model ...;DM /help 也在这里,统一输出 pi 命令 + bridge 命令)
-          → 透传 prompt(/skill:xxx /template 普通文本)
+        → /pmctl 家族(PmctlController:门禁 + new/list/show/rm/mv/rename)
+          → RPC 映射命令(/new /compact /model ...;DM /help 也在这里,统一输出 pi 命令 + bridge 命令)
+            → 透传 prompt(/skill:xxx /template 普通文本)
 ```
 
-策略(认证、挑战码、管理命令、群 /enable)只存在于 router 的 `handleIncoming` 管道一份;transport 侧不做任何授权判定(否则未启用房间的消息到不了 `/enable`,该功能在真实链路上不可达)。
+策略(认证、挑战码、管理命令、群 /enable)只存在于 router 的 `handleIncoming` 管道一份;transport 侧不做任何授权判定(否则未启用房间的消息到不了 `/enable`,该功能在真实链路上不可达)。/pmctl 的门禁与动作集中在 PmctlController,邀请目标由 router 以 transport 原生 MXID 传入。
 
 ### 12.3 回复机制
 

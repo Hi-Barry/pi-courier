@@ -3,6 +3,7 @@ import { ConfigStore } from "../src/config";
 import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { logger } from "../src/logger";
 import { buildTurnReply } from "../src/rpc/message-router";
+import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createMessageRouter } from "../src/rpc/message-router";
 import type { PiRpc } from "../src/rpc/pi-rpc";
@@ -81,9 +82,22 @@ function makeFixtures(opts: { multiProject?: boolean; channels?: Record<string, 
     leaveRoom: vi.fn().mockResolvedValue(undefined),
     getBotUserId: vi.fn().mockReturnValue("@bot:server"),
   };
+  const pmctl = new PmctlController({ projectManager, roomOps, store });
   const makeRouter = () =>
-    createMessageRouter({ projectManager, auth, sendReply, sendTyping, roomOps, store });
-  return { codeBox, replies, sendReply, sendTyping, rpc, projectManager, auth, roomOps, store, makeRouter };
+    createMessageRouter({ projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl });
+  return {
+    codeBox,
+    replies,
+    sendReply,
+    sendTyping,
+    rpc,
+    projectManager,
+    auth,
+    roomOps,
+    store,
+    pmctl,
+    makeRouter,
+  };
 }
 
 describe("buildTurnReply", () => {
@@ -120,6 +134,7 @@ describe("message-router multi-project routing", () => {
   let roomOps: Record<string, ReturnType<typeof vi.fn>>;
   let sendTyping: ReturnType<typeof vi.fn>;
   let store: ConfigStore;
+  let pmctl: PmctlController;
   let replies: Array<{ chatId: string; transport: string; text: string }>;
   let makeRouter: () => ReturnType<typeof createMessageRouter>;
 
@@ -131,6 +146,7 @@ describe("message-router multi-project routing", () => {
     roomOps = fx.roomOps as unknown as Record<string, ReturnType<typeof vi.fn>>;
     sendTyping = fx.sendTyping as ReturnType<typeof vi.fn>;
     store = fx.store;
+    pmctl = fx.pmctl;
     replies = fx.replies;
     makeRouter = fx.makeRouter;
   });
@@ -408,7 +424,8 @@ describe("message-router multi-project routing", () => {
     const sendReply = async (chatId: string, transport: string, text: string) => {
       replies.push({ chatId, transport, text });
     };
-    const router = createMessageRouter({ projectManager, auth, sendReply, sendTyping, store });
+    const pmctlNoOps = new PmctlController({ projectManager, store });
+    const router = createMessageRouter({ projectManager, auth, sendReply, sendTyping, store, pmctl: pmctlNoOps });
     await router.handleIncoming(makeMsg({ content: "/pmctl list" }));
     expect(replies.at(-1)!.text).toContain("仅 Matrix 部署支持");
   });

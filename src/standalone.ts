@@ -21,6 +21,7 @@ import { logger, parseLogLevel, setLogLevel } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { ProjectManager } from "./rpc/project-manager.js";
+import { PmctlController } from "./rpc/pmctl-controller.js";
 import type { RoomOps, Transport } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
 import { suppressKnownWarnings } from "./warnings.js";
@@ -206,6 +207,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     multiProject: store.get().multiProject === true,
   });
 
+  const pmctl = new PmctlController({ projectManager, roomOps, store });
+
   const router = createMessageRouter({
     projectManager,
     auth,
@@ -213,6 +216,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     sendTyping,
     roomOps,
     store,
+    pmctl,
   });
 
   for (const t of transports) {
