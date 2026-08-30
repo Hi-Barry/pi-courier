@@ -20,7 +20,7 @@
     "watch": "tsc --watch",
     "clean": "rm -rf dist",
     "start": "node dist/standalone.js",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "lint": "biome check src/",
     "lint:fix": "biome check --fix src/"

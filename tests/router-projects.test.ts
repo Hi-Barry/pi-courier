@@ -71,7 +71,9 @@ function makeFixtures(opts: { multiProject?: boolean; channels?: Record<string, 
     channels: opts.channels ?? {},
   });
   // Router sees message I/O as two functions; room ops as one stubbed capability.
-  const sendTyping = vi.fn().mockResolvedValue(undefined);
+  const sendTyping = vi.fn(
+    async (_chatId: string, _transport: string): Promise<void> => {}
+  );
   const roomOps = {
     createProjectRoom: vi.fn().mockResolvedValue("!newproj:server"),
     setRoomName: vi.fn().mockResolvedValue(undefined),
@@ -129,7 +131,7 @@ describe("message-router multi-project routing", () => {
   let projectManager: ProjectManager;
   let auth: ChallengeAuth;
   let roomOps: Record<string, ReturnType<typeof vi.fn>>;
-  let sendTyping: ReturnType<typeof vi.fn>;
+  let sendTyping: ReturnType<typeof makeFixtures>["sendTyping"];
   let store: ConfigStore;
   let pmctl: PmctlController;
   let replies: Array<{ chatId: string; transport: string; text: string }>;
@@ -141,7 +143,7 @@ describe("message-router multi-project routing", () => {
     projectManager = fx.projectManager;
     auth = fx.auth;
     roomOps = fx.roomOps as unknown as Record<string, ReturnType<typeof vi.fn>>;
-    sendTyping = fx.sendTyping as ReturnType<typeof vi.fn>;
+    sendTyping = fx.sendTyping;
     store = fx.store;
     pmctl = fx.pmctl;
     replies = fx.replies;

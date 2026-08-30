@@ -16,7 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ConfigStore } from "../config.js";
 import type { RoomOps } from "../transports/interface.js";
-import type { ProjectManager, ProjectEntry } from "./project-manager.js";
+import type { ProjectEntry, ProjectManager } from "./project-manager.js";
 
 export interface PmctlCall {
   /** Room the command came from (also the pending-rm confirmation key). */

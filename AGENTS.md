@@ -6,7 +6,7 @@ pi-courier —— 通过 Matrix 远程使用 [pi coding agent](https://pi.dev)(�
 
 - npm:`pi-courier`(公开);GitHub:`Hi-Barry/pi-courier`(公开,MIT)
 - 源码入口:`src/standalone.ts`(运行时)、`src/cli.ts`(CLI)、`src/rpc/`(RPC 客户端层)、`src/setup.ts`(配置向导)
-- 构建:`npm run build`(clean + tsc)| 测试:`npm run test` | lint:`npm run lint`
+- 构建:`npm run build`(clean + tsc)| 测试:`npm run test` | lint:`npm run lint` | typecheck:`npm run typecheck`(主配置 + tsconfig.test.json 双配置)
 - 发布流程:`npm version patch` → git push --tags → `npm publish`
 
 ## 核心规则

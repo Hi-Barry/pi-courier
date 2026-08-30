@@ -22,8 +22,8 @@ import { isEnabled, logger } from "../logger.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, ReplyTarget } from "../types.js";
 import { handleSlashCommand } from "./command-map.js";
-import type { PmctlController } from "./pmctl-controller.js";
 import type { PiRpc } from "./pi-rpc.js";
+import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
 
 export interface MessageRouterDeps {
