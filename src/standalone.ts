@@ -118,15 +118,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   const auth = new ChallengeAuth(
     (code, username) => logger.info(`🔐 Challenge code for @${username}: ${code}`),
-    (message, level) => logger.info(`[auth:${level ?? "info"}] ${message}`),
-    async (_chatId, _message) => {
-      // Challenge prompts are sent via the transport's sendMessage
-    },
-    () => {
-      store.update({ auth: auth.exportConfig() });
-    },
-    store
+    (message, level) => logger.info(`[auth:${level ?? "info"}] ${message}`)
   );
+  // Auth state persistence flows through command effects (admin-commands.ts)
+  // applied by the router via the injected store — the engine never saves.
   if (config.auth) {
     auth.loadFromConfig(config.auth);
   }

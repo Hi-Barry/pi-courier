@@ -63,10 +63,7 @@ function makeFixtures(opts: { multiProject?: boolean; channels?: Record<string, 
     (code) => {
       codeBox.current = code;
     },
-    () => {},
-    undefined,
-    () => {},
-    store
+    () => {}
   );
   auth.loadFromConfig({
     trustedUsers: ["matrix:@barry:server", "matrix:@carol:server"],

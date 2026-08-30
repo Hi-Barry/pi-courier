@@ -1,9 +1,14 @@
 /**
- * Challenge-based authentication for remote messengers
- * Ported from vscode-chonky-remote-pilot
+ * Challenge-based authentication strategy engine.
+ * Ported from vscode-chonky-remote-pilot.
+ *
+ * Pure strategy: authorization decisions, challenge lifecycle, channel modes
+ * and trust state — every method either reads state, mutates it in memory, or
+ * (for the challenge prompt) sends through the sender passed as a parameter.
+ * No persistence and no admin-command handling happens here: the caller
+ * applies persistence effects (see admin-commands.ts) through the injected
+ * config store.
  */
-
-import type { ConfigStore } from "../config.js";
 
 interface ChallengeData {
   code: string;
@@ -19,9 +24,8 @@ interface ChannelAuth {
   mode: "all" | "mentions" | "trusted-only";
 }
 
-/**
- * Manages authentication via 6-digit challenge codes and trusted users
- */
+export type ChallengeOutcome = "authenticated" | "expired" | "wrong" | "blocked";
+
 export class ChallengeAuth {
   private challenges = new Map<string, ChallengeData>();
   private trustedUsers = new Set<string>();
@@ -31,12 +35,7 @@ export class ChallengeAuth {
 
   constructor(
     private onShowCode: (code: string, username: string) => void,
-    private onNotify: (message: string, level?: "info" | "warning" | "error") => void,
-    private onSendMessage: ((chatId: string, message: string) => Promise<void>) | undefined,
-    private onSaveAuth: (() => void) | undefined,
-    /** Injected config store (required — /toggletools writes through the
-     *  single write path; there is no fallback to direct disk writes). */
-    private store: ConfigStore
+    private onNotify: (message: string, level?: "info" | "warning" | "error") => void
   ) {}
 
   /**
@@ -74,8 +73,9 @@ export class ChallengeAuth {
   }
 
   /**
-   * Check if a user is authorized to send messages
-   * Handles challenge creation, validation, and channel authorization
+   * Check if a user is authorized to send messages. Unknown DM users get a
+   * challenge; the prompt goes out through the sender passed here — the
+   * engine never stores a sender on itself.
    */
   async checkAuthorization(
     userId: string,
@@ -88,7 +88,7 @@ export class ChallengeAuth {
   ): Promise<boolean> {
     // Create namespaced user ID (transport:userId)
     const namespacedUserId = transport ? `${transport}:${userId}` : userId;
-    
+
     // Check if user is blocked
     const blockedUntil = this.blockedUsers.get(namespacedUserId);
     if (blockedUntil && Date.now() < blockedUntil) {
@@ -109,16 +109,7 @@ export class ChallengeAuth {
         return true;
       }
 
-      // Temporarily override onSendMessage for this challenge if provided
-      if (sendMessage) {
-        const originalSender = this.onSendMessage;
-        this.onSendMessage = sendMessage;
-        const result = await this.initiateChallenge(namespacedUserId, chatId, username);
-        this.onSendMessage = originalSender;
-        return result;
-      }
-      
-      return await this.initiateChallenge(namespacedUserId, chatId, username);
+      return await this.initiateChallenge(namespacedUserId, chatId, username, sendMessage);
     }
 
     // Group chat: check channel authorization
@@ -160,31 +151,92 @@ export class ChallengeAuth {
     return this.channelAuth.get(chatId)?.enabled === true;
   }
 
-  /** Enable a group chat with a mode (used by /enable in the room itself). */
+  /** Enable a group chat with a mode (in-memory only; the caller persists). */
   enableChannel(chatId: string, mode: "all" | "mentions" | "trusted-only"): void {
     this.channelAuth.set(chatId, { enabled: true, mode });
-    if (this.onSaveAuth) this.onSaveAuth();
+  }
+
+  /** Disable a group chat (in-memory only; the caller persists). */
+  disableChannel(chatId: string): void {
+    this.channelAuth.delete(chatId);
+  }
+
+  /** Revoke trust. Matching rule: full namespaced IDs (or exact entries)
+   *  match exactly; any other form — bare telegram IDs AND native MXIDs as
+   *  displayed by /trusted — matches the `:<id>` suffix of one entry.
+   *  Returns whether anything was revoked. */
+  revokeUser(revokeId: string): boolean {
+    if (this.trustedUsers.has(revokeId)) {
+      this.trustedUsers.delete(revokeId);
+      return true;
+    }
+    for (const id of this.trustedUsers) {
+      if (id.endsWith(`:${revokeId}`)) {
+        this.trustedUsers.delete(id);
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
-   * Initiate or validate a challenge
+   * Validate a challenge code. Mutates trust/blocked/challenge state and
+   * returns the outcome — the caller turns it into replies and persistence.
+   */
+  validateChallengeCode(namespacedUserId: string, code: string): ChallengeOutcome | "none" {
+    const challenge = this.challenges.get(namespacedUserId);
+    if (!challenge) return "none";
+
+    // Expired?
+    if (Date.now() > challenge.expiresAt) {
+      this.challenges.delete(namespacedUserId);
+      return "expired";
+    }
+
+    // Correct code?
+    if (code === challenge.code) {
+      this.trustedUsers.add(namespacedUserId);
+      this.challenges.delete(namespacedUserId);
+      this.onNotify(`✅ ${challenge.username} authenticated`, "info");
+      return "authenticated";
+    }
+
+    // Wrong code
+    challenge.attempts++;
+    if (challenge.attempts >= 3) {
+      this.challenges.delete(namespacedUserId);
+      this.blockedUsers.set(namespacedUserId, Date.now() + 5 * 60 * 1000); // 5 min block
+      this.onNotify(`🚫 ${challenge.username} blocked (3 failed attempts)`, "warning");
+      return "blocked";
+    }
+
+    return "wrong";
+  }
+
+  /** Attempts left on the active challenge (0 when none/blocked). */
+  attemptsLeft(namespacedUserId: string): number {
+    const challenge = this.challenges.get(namespacedUserId);
+    return challenge ? Math.max(0, 3 - challenge.attempts) : 0;
+  }
+
+  /**
+   * Initiate or re-check a challenge for a DM user. Returns false (the user
+   * is not yet authorized); the prompt is delivered via the sender argument.
    */
   private async initiateChallenge(
     userId: string,
     chatId: string,
-    username: string
+    username: string,
+    sendMessage?: (chatId: string, message: string) => Promise<void>
   ): Promise<boolean> {
     const existingChallenge = this.challenges.get(userId);
 
-    // Check if there's an active challenge
+    // An active challenge just waits for the code — no new code, no re-send.
     if (existingChallenge) {
-      // Expired?
       if (Date.now() > existingChallenge.expiresAt) {
         this.challenges.delete(userId);
-        return await this.initiateChallenge(userId, chatId, username);
+        return await this.initiateChallenge(userId, chatId, username, sendMessage);
       }
-
-      // Challenge still active, return false (user needs to enter code)
       return false;
     }
 
@@ -203,11 +255,11 @@ export class ChallengeAuth {
 
     // Show code in terminal FIRST
     this.onShowCode(code, username);
-    
+
     // Then send message to user asking for the code
-    if (this.onSendMessage) {
+    if (sendMessage) {
       try {
-        await this.onSendMessage(
+        await sendMessage(
           chatId,
           "🔐 Please enter the 6-digit code provided by the bot admin.\n⏱️ Expires in 2 minutes."
         );
@@ -215,172 +267,8 @@ export class ChallengeAuth {
         // Ignore send errors
       }
     }
-    
+
     return false;
-  }
-
-  /**
-   * Handle admin commands in DM
-   * Returns true if command was handled
-   */
-  async handleAdminCommand(
-    text: string,
-    _chatId: string,
-    userId: string,
-    sendMessage: (text: string) => Promise<void>,
-    transport?: string
-  ): Promise<boolean> {
-    // Create namespaced user ID
-    const namespacedUserId = transport ? `${transport}:${userId}` : userId;
-    
-    // Non-admin users: check for challenge code entry
-    if (!this.trustedUsers.has(namespacedUserId)) {
-      const challenge = this.challenges.get(namespacedUserId);
-      if (challenge && text.match(/^\d{6}$/)) {
-        return await this.validateChallenge(namespacedUserId, text, sendMessage);
-      }
-      return false;
-    }
-
-    // Admin commands (/help is NOT handled here — the router reserves it for
-    // the command map's bridge/pi help so there is a single help surface).
-    const parts = text.split(/\s+/);
-    const cmd = parts[0].toLowerCase();
-
-    switch (cmd) {
-      case "/enable":
-        if (parts.length < 3) {
-          await sendMessage("Usage: /enable <chatId> <all|mentions|trusted-only>");
-          return true;
-        }
-        this.channelAuth.set(parts[1], {
-          enabled: true,
-          mode: parts[2] as any,
-        });
-        if (this.onSaveAuth) this.onSaveAuth();
-        await sendMessage(`✅ Channel ${parts[1]} enabled (mode: ${parts[2]})`);
-        this.onNotify(`Channel ${parts[1]} enabled (${parts[2]})`, "info");
-        return true;
-
-      case "/disable":
-        if (parts.length < 2) {
-          await sendMessage("Usage: /disable <chatId>");
-          return true;
-        }
-        this.channelAuth.delete(parts[1]);
-        if (this.onSaveAuth) this.onSaveAuth();
-        await sendMessage(`❌ Channel ${parts[1]} disabled`);
-        this.onNotify(`Channel ${parts[1]} disabled`, "info");
-        return true;
-
-      case "/channels": {
-        const channels = Array.from(this.channelAuth.entries())
-          .map(([id, auth]) => `• ${id}: ${auth.enabled ? "✅" : "❌"} (${auth.mode})`)
-          .join("\n");
-        await sendMessage(channels || "No channels configured");
-        return true;
-      }
-
-      case "/trusted": {
-        const trusted = Array.from(this.trustedUsers)
-          .map(id => {
-            const [transport, uid] = id.split(':');
-            return uid ? `${uid} (${transport})` : id;
-          })
-          .join(", ");
-        await sendMessage(`Trusted users (${this.trustedUsers.size}):\n${trusted || "None"}`);
-        return true;
-      }
-
-      case "/toggletools": {
-        const next = !this.store.get().hideToolCalls;
-        this.store.update({ hideToolCalls: next });
-        const state = next ? "hidden" : "shown";
-        await sendMessage(`🔧 Tool calls ${state} in remote messages`);
-        return true;
-      }
-
-      case "/revoke": {
-        if (parts.length < 2) {
-          await sendMessage("Usage: /revoke <userId> or /revoke <transport:userId>");
-          return true;
-        }
-        const revokeId = parts[1];
-        // Support both "telegram:123" and "123" (searches for any match)
-        let revoked = false;
-        if (revokeId.includes(':')) {
-          // Full namespaced ID
-          if (this.trustedUsers.has(revokeId)) {
-            this.trustedUsers.delete(revokeId);
-            revoked = true;
-          }
-        } else {
-          // Plain ID - search across all transports
-          for (const id of this.trustedUsers) {
-            if (id.endsWith(`:${revokeId}`)) {
-              this.trustedUsers.delete(id);
-              revoked = true;
-              break;
-            }
-          }
-        }
-        if (revoked) {
-          if (this.onSaveAuth) this.onSaveAuth();
-          await sendMessage(`🔓 Revoked trust for ${revokeId}`);
-          this.onNotify(`Revoked: ${revokeId}`, "warning");
-        } else {
-          await sendMessage(`❌ User ${revokeId} not found in trusted users`);
-        }
-        return true;
-      }
-
-      default:
-        return false;
-    }
-  }
-
-  /**
-   * Validate a challenge code entered by the user
-   */
-  private async validateChallenge(
-    userId: string,
-    code: string,
-    sendMessage: (text: string) => Promise<void>
-  ): Promise<boolean> {
-    const challenge = this.challenges.get(userId);
-    if (!challenge) return false;
-
-    // Expired?
-    if (Date.now() > challenge.expiresAt) {
-      this.challenges.delete(userId);
-      await sendMessage("⏱️ Challenge expired. Send any message to get a new code.");
-      return true;
-    }
-
-    // Correct code?
-    if (code === challenge.code) {
-      this.trustedUsers.add(userId);
-      this.challenges.delete(userId);
-      if (this.onSaveAuth) this.onSaveAuth();
-      await sendMessage("✅ Authenticated! You can now chat with the agent.");
-      this.onNotify(`✅ ${challenge.username} authenticated`, "info");
-      return true;
-    }
-
-    // Wrong code
-    challenge.attempts++;
-    if (challenge.attempts >= 3) {
-      this.challenges.delete(userId);
-      this.blockedUsers.set(userId, Date.now() + 5 * 60 * 1000); // 5 min block
-      await sendMessage("🚫 Too many failed attempts. Blocked for 5 minutes.");
-      this.onNotify(`🚫 ${challenge.username} blocked (3 failed attempts)`, "warning");
-      return true;
-    }
-
-    await sendMessage(
-      `❌ Wrong code. ${3 - challenge.attempts} attempts remaining.`
-    );
-    return true;
   }
 
   /**
@@ -388,32 +276,5 @@ export class ChallengeAuth {
    */
   private generateCode(): string {
     return Math.floor(100000 + Math.random() * 900000).toString();
-  }
-
-  /**
-   * Get current stats with detailed user info
-   */
-  getStats(): { 
-    trustedUsers: number; 
-    channels: number;
-    usersByTransport: Record<string, string[]>;
-  } {
-    // Group users by transport
-    const usersByTransport: Record<string, string[]> = {};
-    for (const namespacedId of this.trustedUsers) {
-      const [transport, userId] = namespacedId.split(':');
-      if (transport && userId) {
-        if (!usersByTransport[transport]) {
-          usersByTransport[transport] = [];
-        }
-        usersByTransport[transport].push(userId);
-      }
-    }
-    
-    return {
-      trustedUsers: this.trustedUsers.size,
-      channels: Array.from(this.channelAuth.values()).filter((a) => a.enabled).length,
-      usersByTransport,
-    };
   }
 }

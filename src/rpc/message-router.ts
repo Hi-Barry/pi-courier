@@ -9,6 +9,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { handleAdminCommand } from "../auth/admin-commands.js";
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
 import type { ConfigStore } from "../config.js";
 import {
@@ -119,14 +120,28 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       if (!msg.isGroupChat && (text.startsWith("/") || /^\d{6}$/.test(text))) {
         const cmdName = text.split(/\s+/)[0].toLowerCase();
         if (!text.startsWith("/") || cmdName !== "/help") {
-          const handled = await auth.handleAdminCommand(
+          const result = handleAdminCommand(auth, {
             text,
-            msg.chatId,
-            msg.userId,
-            async (replyText) => sendReply(msg.chatId, msg.transport, replyText),
-            msg.transport
-          );
-          if (handled) return;
+            userId: msg.userId,
+            transport: msg.transport,
+            hideToolCalls: store.get().hideToolCalls,
+          });
+          if (result.handled) {
+            for (const replyText of result.replies) {
+              await sendReply(msg.chatId, msg.transport, replyText);
+            }
+            for (const notification of result.notifications) {
+              logger.info(`[auth:${notification.level}] ${notification.message}`);
+            }
+            for (const effect of result.effects) {
+              if (effect.kind === "persistAuth") {
+                store.update({ auth: auth.exportConfig() });
+              } else if (effect.kind === "hideToolCalls") {
+                store.update({ hideToolCalls: effect.value });
+              }
+            }
+            return;
+          }
         }
       }
 
@@ -149,6 +164,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             return;
           }
           auth.enableChannel(msg.chatId, mode);
+          store.update({ auth: auth.exportConfig() });
           await sendReply(msg.chatId, msg.transport, `✅ 本房间已启用 (mode: ${mode})`);
           logger.info(`[auth] 房间 ${msg.chatId} 已由 ${msg.username} 启用 (${mode})`);
           return;

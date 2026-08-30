@@ -2,9 +2,9 @@
  * Slash command map — turns `/command args` messages from messengers into RPC calls.
  *
  * Layer ordering (matches previous extension behaviour, minus the conflicts):
- *  1. ChallengeAuth handles challenge codes and its own admin commands
- *     (/trusted, /revoke, /channels, /enable, /disable, /toggletools) in the
- *     router pipeline before this module
+ *  1. The auth pipeline handles challenge codes and admin commands
+ *     (handleAdminCommand: /trusted, /revoke, /channels, /enable, /disable,
+ *     /toggletools) in the router pipeline before this module
  *  2. /pmctl-family commands are dispatched by PmctlController in the router
  *     pipeline before this module
  *  3. Builtin pi commands that have a dedicated RPC command are mapped here
@@ -15,6 +15,7 @@
  *  help surface; ChallengeAuth no longer has its own help text.
  */
 
+import { adminCommandHelpText } from "../auth/admin-commands.js";
 import type { PiRpc } from "./pi-rpc.js";
 
 export interface SlashCommandContext {
@@ -241,7 +242,6 @@ function helpText(): string {
     "  rm 需二次确认,确认后停止进程并退出房间)",
     "",
     "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。",
-    "**Bridge 管理命令**: `/help`(本帮助)、`/trusted`、`/revoke`、`/channels`、`/enable`、`/disable`、`/toggletools`",
-    "**认证**: 首次私聊 bot → bot 终端显示 6 位验证码 → 在聊天里输入验证码即成为信任用户(第一个信任用户 = 管理员)。群聊由信任用户在群里发 `/enable <模式>` 启用。",
+    adminCommandHelpText(),
   ].join("\n");
 }
