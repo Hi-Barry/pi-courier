@@ -11,11 +11,8 @@
  */
 
 import { pathToFileURL } from "node:url";
-import * as os from "os";
-import * as path from "path";
-import * as readline from "readline";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
-import { ConfigStore, loadConfig, saveConfig } from "./config.js";
+import { ConfigStore } from "./config.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
@@ -25,6 +22,7 @@ import { ProjectManager } from "./rpc/project-manager.js";
 import type { RoomOps, Transport } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
 import { suppressKnownWarnings } from "./warnings.js";
+import { resolveWorkdir } from "./workdir.js";
 
 suppressKnownWarnings();
 
@@ -61,39 +59,6 @@ function parseArgs(argv: string[]): { workdir?: string; logLevel?: string } {
   return result;
 }
 
-/**
- * Resolve the pi working directory.
- *
- * Priority: CLI --workdir > config.workdir > prompt/default. When neither the
- * CLI nor the config provides one (first run), ask on an interactive terminal
- * (default: ~/Projects); in non-interactive contexts (systemd service) use the
- * default silently. Either way the resolved value is persisted to the config,
- * so the config stays the single source of truth and later edits take effect
- * on restart (LLM-friendly).
- */
-async function resolveWorkdir(cliWorkdir: string | undefined, configWorkdir: string | undefined): Promise<string> {
-  if (cliWorkdir) return cliWorkdir;
-  if (configWorkdir) return configWorkdir;
-
-  const fallback = path.join(os.homedir(), "Projects");
-  let workdir = fallback;
-
-  if (process.stdin.isTTY) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await new Promise<string>((resolve) => {
-      rl.question(`未配置工作目录。请输入 pi 工作目录 [默认 ${fallback}]: `, (a) => resolve(a.trim()));
-    });
-    rl.close();
-    if (answer) workdir = answer;
-  }
-
-  const cfg = loadConfig();
-  cfg.workdir = workdir;
-  saveConfig(cfg);
-  logger.info(`工作目录: ${workdir}(已保存到 ~/.pi/pi-courier.json,改配置后重启即生效)`);
-  return workdir;
-}
-
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv);
 
@@ -103,11 +68,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     process.exit(1);
   }
 
-  const config = loadConfig();
-  // One in-memory config for the whole process; everything below reads and
-  // writes through it (no per-call disk access on the message hot path).
-  const store = new ConfigStore(config);
-  const workdir = await resolveWorkdir(args.workdir, config.workdir);
+  // One load, one in-memory copy for the whole process; everything below —
+  // including first-run workdir resolution — reads and writes through it.
+  // There is no direct loadConfig/saveConfig use left in this file.
+  // NOTE: resolve `config` only AFTER store.update calls are done — update()
+  // replaces the in-memory object, so an earlier alias would go stale.
+  const store = new ConfigStore();
+  const workdir = await resolveWorkdir(args.workdir, store, undefined, (wd) =>
+    logger.info(`工作目录: ${wd}(已保存到 ~/.pi/pi-courier.json,改配置后重启即生效)`)
+  );
+  const config = store.get();
   const sessionDir = config.sessionDir;
   const cliPath = config.cliPath;
 

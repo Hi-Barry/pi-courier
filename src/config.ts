@@ -86,6 +86,12 @@ export function saveConfig(config: MsgBridgeConfig): void {
   }
 }
 
+/** Default project root (~userHome/Projects) — shared by first-run workdir
+ *  resolution and the setup wizard so the fallback cannot drift. */
+export function defaultProjectsRoot(): string {
+  return path.join(os.homedir(), "Projects");
+}
+
 /**
  * Runtime config store — loaded once at startup, injected into every module
  * that needs config. The config file is effectively a database (projects,

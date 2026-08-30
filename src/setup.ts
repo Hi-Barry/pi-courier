@@ -10,7 +10,7 @@
 import * as os from "node:os";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline";
-import { loadConfig, saveConfig } from "./config.js";
+import { loadConfig, saveConfig , defaultProjectsRoot } from "./config.js";
 import type { MsgBridgeConfig } from "./types.js";
 
 /**
@@ -271,7 +271,7 @@ export async function runSetup(): Promise<void> {
     const encryption = encAnswer === "" ? encDefault : encAnswer === "y";
 
     // ---- 6. workdir ----------------------------------------------------------
-    const workdirDefault = existing.workdir ?? `${os.homedir()}/Projects`;
+    const workdirDefault = existing.workdir ?? defaultProjectsRoot();
     const workdir = (await ask(`pi 工作目录 [默认 ${workdirDefault}]: `)).trim() || workdirDefault;
 
     // ---- 6.5 instance name (multi-machine differentiation) -------------------
