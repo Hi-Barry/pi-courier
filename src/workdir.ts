@@ -11,8 +11,8 @@
  */
 
 import * as readline from "node:readline";
-import { defaultProjectsRoot } from "./config.js";
 import type { ConfigStore } from "./config.js";
+import { defaultProjectsRoot } from "./config.js";
 
 export type WorkdirPrompt = () => Promise<string | undefined>;
 

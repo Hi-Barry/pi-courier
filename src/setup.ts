@@ -10,7 +10,7 @@
 import * as os from "node:os";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline";
-import { loadConfig, saveConfig , defaultProjectsRoot } from "./config.js";
+import { defaultProjectsRoot, loadConfig, saveConfig  } from "./config.js";
 import type { MsgBridgeConfig } from "./types.js";
 
 /**

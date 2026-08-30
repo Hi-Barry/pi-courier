@@ -1,3 +1,5 @@
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ILogger } from "matrix-bot-sdk";
 import {
   AutojoinRoomsMixin,
@@ -8,8 +10,6 @@ import {
   RustSdkCryptoStoreType,
   SimpleFsStorageProvider,
 } from "matrix-bot-sdk";
-import * as os from "node:os";
-import * as path from "node:path";
 import type { ExternalMessage } from "../types.js";
 import type { RoomOps, Transport } from "./interface.js";
 import {
