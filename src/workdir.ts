@@ -10,7 +10,7 @@
  * config store so it stays unit-testable.
  */
 
-import * as readline from "readline";
+import * as readline from "node:readline";
 import { defaultProjectsRoot } from "./config.js";
 import type { ConfigStore } from "./config.js";
 

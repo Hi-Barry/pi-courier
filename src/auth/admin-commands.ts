@@ -9,7 +9,7 @@
  * injected config store — this module touches no disk and holds no state.
  */
 
-import type { ChallengeAuth } from "./challenge-auth.js";
+import { namespacedId, type ChallengeAuth } from "./challenge-auth.js";
 
 export type AdminEffect = { kind: "persistAuth" } | { kind: "hideToolCalls"; value: boolean };
 
@@ -53,7 +53,7 @@ export function adminCommandHelpText(): string {
  * challenge validation applies (the caller then continues its pipeline).
  */
 export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput): AdminCommandResult {
-  const namespacedUserId = input.transport ? `${input.transport}:${input.userId}` : input.userId;
+  const namespacedUserId = namespacedId(input.userId, input.transport);
 
   // Non-admin users: challenge-code entry (only when a challenge is active).
   if (!auth.isTrustedUser(input.userId, input.transport)) {

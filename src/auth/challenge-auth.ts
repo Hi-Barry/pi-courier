@@ -26,6 +26,16 @@ interface ChannelAuth {
 
 export type ChallengeOutcome = "authenticated" | "expired" | "wrong" | "blocked";
 
+/** Per-transport identity key (`transport:userId`) — the single namespacing
+ *  implementation for runtime identity: trust/admin lookups, challenge
+ *  storage and admin-command handling all key off it. (Config-storage
+ *  boundaries — the matrix env vars and setup — write the transport-prefixed
+ *  form directly; display-side splits are the inverse operation.)
+ */
+export function namespacedId(userId: string, transport?: string): string {
+  return transport ? `${transport}:${userId}` : userId;
+}
+
 export class ChallengeAuth {
   private challenges = new Map<string, ChallengeData>();
   private trustedUsers = new Set<string>();
@@ -87,7 +97,7 @@ export class ChallengeAuth {
     transport?: string
   ): Promise<boolean> {
     // Create namespaced user ID (transport:userId)
-    const namespacedUserId = transport ? `${transport}:${userId}` : userId;
+    const namespacedUserId = namespacedId(userId, transport);
 
     // Check if user is blocked
     const blockedUntil = this.blockedUsers.get(namespacedUserId);
@@ -135,14 +145,14 @@ export class ChallengeAuth {
 
   /** Whether a user is in the trusted list (per transport). */
   isTrustedUser(userId: string, transport?: string): boolean {
-    const namespaced = transport ? `${transport}:${userId}` : userId;
+    const namespaced = namespacedId(userId, transport);
     return this.trustedUsers.has(namespaced);
   }
 
   /** Whether this user is the admin (namespaced comparison, per transport). */
   isAdminUser(userId: string, transport?: string): boolean {
     if (!this.adminUserId) return false;
-    const namespaced = transport ? `${transport}:${userId}` : userId;
+    const namespaced = namespacedId(userId, transport);
     return this.adminUserId === namespaced || this.adminUserId === userId;
   }
 
