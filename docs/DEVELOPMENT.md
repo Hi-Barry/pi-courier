@@ -575,7 +575,7 @@ TypeError: webidl.util.markAsUncloneable is not a function
 
 ```
 Matrix 消息(transport 只做纯 I/O,不做授权判定)
-  → 群聊 /enable(先于认证 —— 未启用房间的消息正是靠它启用本房间;all 仅管理员)
+  → 群聊 /enable(授权计算先行、授权生效在后 —— 未启用房间的消息正是靠本步骤在生效前启用房间;all 仅管理员)
     → 认证检查(trusted / challenge)
       → bridge 管理命令(/trusted /revoke /channels /enable <chatId> /disable /toggletools)
         → /pmctl 家族(PmctlController:门禁 + new/list/show/rm/mv/rename)
@@ -583,7 +583,7 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
             → 透传 prompt(/skill:xxx /template 普通文本)
 ```
 
-策略(认证、挑战码、群 /enable)只存在于 router 的 `handleIncoming` 管道一份,管理命令判定在 `src/auth/admin-commands.ts`(纯输入输出,effects 由 router 落盘);transport 侧不做任何授权判定(否则未启用房间的消息到不了 `/enable`,该功能在真实链路上不可达)。/pmctl 的门禁与动作集中在 PmctlController,邀请目标由 router 以 transport 原生 MXID 传入。
+策略(认证、挑战码、群 /enable)只存在于 router 的 `handleIncoming` 管道一份,管理命令判定在 `src/auth/admin-commands.ts`(纯输入输出,effects 由 router 落盘);transport 侧不做任何授权判定(否则未启用房间的消息到不了 `/enable`,该功能在真实链路上不可达)。注意:/enable 步骤在「授权生效」之前执行,但位于「授权计算」之后——两者缺一不可。/pmctl 的门禁与动作集中在 PmctlController,邀请目标由 router 以 transport 原生 MXID 传入。
 
 ### 12.3 回复机制
 
