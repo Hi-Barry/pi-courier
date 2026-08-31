@@ -108,6 +108,21 @@ export class MatrixProvider implements Transport, RoomOps {
     }
   }
 
+  /** Unlink a room from a space (used by /pmctl rm). */
+  async removeRoomFromSpace(spaceRoomId: string, childRoomId: string): Promise<void> {
+    if (!this.client) throw new Error("Matrix 未连接");
+    // Empty content drops the child from the space's view (m.space.child
+    // with no via servers is not a resolvable child).
+    await this.client.sendStateEvent(spaceRoomId, "m.space.child", childRoomId, {});
+    // Clear the child-side badge too — best-effort; the bot leaves the room
+    // right after, so remaining members keep a clean room header.
+    try {
+      await this.client.sendStateEvent(childRoomId, "m.room.parent", spaceRoomId, {});
+    } catch {
+      // best-effort
+    }
+  }
+
   /** Rename a room (used to brand the DM as the management room). */
   async setRoomName(roomId: string, name: string): Promise<void> {
     if (!this.client) throw new Error("Matrix 未连接");

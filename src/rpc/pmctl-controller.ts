@@ -14,7 +14,7 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ConfigStore } from "../config.js";
+import { type ConfigStore, isSpaceMode } from "../config.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
 
@@ -140,6 +140,13 @@ export class PmctlController {
     return this.opts.store.get().instanceName ?? os.hostname();
   }
 
+  /** The organizational space this deployment files rooms under, when the
+   *  feature is active and the space has been created. */
+  private activeSpaceRoomId(): string | undefined {
+    const cfg = this.opts.store.get();
+    return isSpaceMode(cfg) ? cfg.space?.roomId : undefined;
+  }
+
   private async newProject(
     rest: string,
     call: PmctlCall,
@@ -173,12 +180,23 @@ export class PmctlController {
       } catch (err) {
         await reply(`⚠️ 房间已创建,但设为管理员失败(可手动设置): ${(err as Error).message}`);
       }
+      // File the new room under the organizational space (display layer
+      // only — a link failure never fails the project).
+      let spaceNote = "";
+      const spaceRoomId = this.activeSpaceRoomId();
+      if (spaceRoomId) {
+        try {
+          await roomOps.addRoomToSpace(spaceRoomId, roomId);
+        } catch (err) {
+          spaceNote = `\n⚠️ 挂入空间失败(不影响项目): ${(err as Error).message}`;
+        }
+      }
       await reply(
         `✅ 项目「${pname}」创建完成!\n\n` +
           `• 房间: ${roomId}\n` +
           `• 工作目录: ${resolvedWorkdir}\n` +
           `• 已邀请你进入新房间\n\n` +
-          `项目对话请到新房间进行(独立上下文与工作目录)。`
+          `项目对话请到新房间进行(独立上下文与工作目录)。${spaceNote}`
       );
     } catch (err) {
       await reply(`❌ 创建项目失败: ${(err as Error).message}`);
@@ -260,6 +278,17 @@ export class PmctlController {
           `• 工作目录保留: ${entry.workdir}(如需删除请自行处理)\n` +
           `• 正在主动退出房间…`
       );
+      // Unfile from the space first — once the bot leaves, it can no longer
+      // clear the space-side child state (ghost entry). Best-effort: the
+      // removal proceeds even if the unlink fails.
+      const spaceRoomId = this.activeSpaceRoomId();
+      if (spaceRoomId) {
+        try {
+          await roomOps.removeRoomFromSpace(spaceRoomId, roomId);
+        } catch (err) {
+          await reply(`⚠️ 从空间移除失败(空间里可能残留条目,可手动移除): ${(err as Error).message}`);
+        }
+      }
       try {
         await roomOps.leaveRoom(roomId, "项目已删除");
       } catch (err) {

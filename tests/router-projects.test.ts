@@ -79,6 +79,7 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     createProjectRoom: vi.fn().mockResolvedValue("!newproj:server"),
     createSpace: vi.fn().mockResolvedValue("!space:server"),
     addRoomToSpace: vi.fn().mockResolvedValue(undefined),
+    removeRoomFromSpace: vi.fn().mockResolvedValue(undefined),
     setRoomName: vi.fn().mockResolvedValue(undefined),
     setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
     leaveRoom: vi.fn().mockResolvedValue(undefined),

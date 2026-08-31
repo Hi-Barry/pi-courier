@@ -17,11 +17,10 @@
  */
 
 import * as os from "node:os";
-import { type ConfigStore, defaultProjectsRoot, nativeMxid } from "./config.js";
+import { type ConfigStore, defaultProjectsRoot, isSpaceMode, nativeMxid } from "./config.js";
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./rpc/message-router.js";
 import type { RoomOps } from "./transports/interface.js";
-import type { MsgBridgeConfig } from "./types.js";
 
 export interface SpaceEnsureDeps {
   roomOps: RoomOps;
@@ -30,13 +29,6 @@ export interface SpaceEnsureDeps {
 }
 
 export type SpaceEnsureResult = "skipped" | "ready" | "degraded";
-
-/** Space mode = multi-project deployment with the organizational space
- *  switched on. Single source of truth for standalone's adoption gate and
- *  this module's skip path. */
-export function isSpaceMode(cfg: MsgBridgeConfig): boolean {
-  return cfg.multiProject === true && cfg.space?.enabled === true;
-}
 
 export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promise<SpaceEnsureResult> {
   const { roomOps, store, sendReply } = deps;

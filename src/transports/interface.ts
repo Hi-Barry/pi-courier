@@ -73,6 +73,10 @@ export interface RoomOps {
    *  event for Element) plus child-side m.room.parent, the latter
    *  best-effort — the bot may lack power in rooms it did not create. */
   addRoomToSpace(spaceRoomId: string, childRoomId: string): Promise<void>;
+  /** Unlink a room from a space (used by /pmctl rm): clears m.space.child
+   *  so the space view loses the room, plus the child-side m.room.parent,
+   *  best-effort. */
+  removeRoomFromSpace(spaceRoomId: string, childRoomId: string): Promise<void>;
   /** Rename a room. */
   setRoomName(roomId: string, name: string): Promise<void>;
   /** The bot's own user ID (null if not connected). */

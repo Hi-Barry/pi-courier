@@ -47,7 +47,11 @@ describe("PmctlController", () => {
       projects.delete(roomId);
     });
     roomOps = {
+      createRoom: vi.fn().mockResolvedValue("!newroom:server"),
       createProjectRoom: vi.fn().mockResolvedValue("!newroom:server"),
+      createSpace: vi.fn().mockResolvedValue("!space:server"),
+      addRoomToSpace: vi.fn().mockResolvedValue(undefined),
+      removeRoomFromSpace: vi.fn().mockResolvedValue(undefined),
       setRoomName: vi.fn().mockResolvedValue(undefined),
       setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
       leaveRoom: vi.fn().mockResolvedValue(undefined),
@@ -217,5 +221,83 @@ describe("PmctlController", () => {
     await handle("/pmctl rename myapp newer");
     expect(replies.at(-1)).toContain("房间改名失败");
     expect(replies.at(-1)).toContain("没有权限");
+  });
+
+  // ---- space hooks (spec #16 ticket 3) ----------------------------------------
+  // Space-active controllers get a fresh store via the constructor (no
+  // store.update — the ConfigStore would persist to the real home dir).
+
+  function spaceController(spaceActive = true) {
+    const spaceStore = new ConfigStore({
+      managementRooms: [],
+      projects: {},
+      workdir: "/home/you/Projects",
+      multiProject: true,
+      ...(spaceActive ? { space: { enabled: true, roomId: "!space:server" } } : {}),
+    });
+    return new PmctlController({
+      projectManager: pm as unknown as ProjectManager,
+      roomOps: roomOps as unknown as RoomOps,
+      store: spaceStore,
+    });
+  }
+
+  it("new files the project room under the active space", async () => {
+    await spaceController().handle("/pmctl new myapp", call, reply);
+    expect(roomOps.addRoomToSpace).toHaveBeenCalledWith("!space:server", "!newroom:server");
+    expect(replies.at(-1)).toContain("创建完成");
+  });
+
+  it("new link failure never fails the project (warn note appended)", async () => {
+    roomOps.addRoomToSpace.mockRejectedValue(new Error("M_FORBIDDEN"));
+    await spaceController().handle("/pmctl new myapp", call, reply);
+    expect(pm.registerProject).toHaveBeenCalledWith("!newroom:server", "/home/you/Projects/myapp", "myapp");
+    expect(replies.at(-1)).toContain("创建完成");
+    expect(replies.at(-1)).toContain("挂入空间失败");
+  });
+
+  it("new without the space (off or not yet created) links nothing", async () => {
+    await spaceController(false).handle("/pmctl new myapp", call, reply);
+    expect(roomOps.addRoomToSpace).not.toHaveBeenCalled();
+    // The default beforeEach store (no space fields at all) behaves the same.
+    await handle("/pmctl new other");
+    expect(roomOps.addRoomToSpace).not.toHaveBeenCalled();
+  });
+
+  it("rm unlinks from the space BEFORE leaving (no ghost entry)", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!proj:server", { name: "myapp", workdir: "/w/myapp" }],
+    ]);
+    const c = spaceController(); // one instance — the rm window is instance state
+    await c.handle("/pmctl rm myapp", call, reply); // arm
+    await c.handle("/pmctl rm myapp", call, reply); // confirm
+    expect(roomOps.removeRoomFromSpace).toHaveBeenCalledWith("!space:server", "!proj:server");
+    expect(roomOps.leaveRoom).toHaveBeenCalledWith("!proj:server", "项目已删除");
+    const unlink = (roomOps.removeRoomFromSpace as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const leave = (roomOps.leaveRoom as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(unlink).toBeLessThan(leave);
+  });
+
+  it("rm unlink failure warns but still leaves the room", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!proj:server", { name: "myapp", workdir: "/w/myapp" }],
+    ]);
+    roomOps.removeRoomFromSpace.mockRejectedValue(new Error("M_FORBIDDEN"));
+    const c = spaceController();
+    await c.handle("/pmctl rm myapp", call, reply); // arm
+    await c.handle("/pmctl rm myapp", call, reply); // confirm
+    expect(roomOps.leaveRoom).toHaveBeenCalledWith("!proj:server", "项目已删除");
+    expect(replies.some((r) => r.includes("从空间移除失败"))).toBe(true);
+  });
+
+  it("rm without the space unlinks nothing", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!proj:server", { name: "myapp", workdir: "/w/myapp" }],
+    ]);
+    const c = spaceController(false);
+    await c.handle("/pmctl rm myapp", call, reply); // arm
+    await c.handle("/pmctl rm myapp", call, reply); // confirm
+    expect(roomOps.removeRoomFromSpace).not.toHaveBeenCalled();
+    expect(roomOps.leaveRoom).toHaveBeenCalledWith("!proj:server", "项目已删除");
   });
 });

@@ -99,6 +99,13 @@ export function nativeMxid(namespaced: string): string {
   return namespaced.startsWith("matrix:") ? namespaced.slice("matrix:".length) : namespaced;
 }
 
+/** Space mode = multi-project deployment with the organizational space
+ *  switched on. Single source of truth for the startup ensure, the router's
+ *  adoption gate and the /pmctl space hooks. */
+export function isSpaceMode(cfg: MsgBridgeConfig): boolean {
+  return cfg.multiProject === true && cfg.space?.enabled === true;
+}
+
 /**
  * Runtime config store — loaded once at startup, injected into every module
  * that needs config. The config file is effectively a database (projects,
