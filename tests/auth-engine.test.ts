@@ -154,7 +154,7 @@ describe("handleAdminCommand (pure in/out)", () => {
     vi.useRealTimers();
   });
 
-  it("challenge-code entry returns replies plus a persistAuth effect", async () => {
+  it("challenge-code entry returns replies plus persistAuth + spaceInvite effects", async () => {
     const { auth, shown } = makeEngine();
     await initiate(auth, "@eve:server", "!dm:server");
     const result = handleAdminCommand(auth, {
@@ -164,7 +164,12 @@ describe("handleAdminCommand (pure in/out)", () => {
     });
     expect(result.handled).toBe(true);
     expect(result.replies).toEqual(["✅ Authenticated! You can now chat with the agent."]);
-    expect(result.effects).toEqual([{ kind: "persistAuth" }]);
+    // The space invite rides the same effect chain as trust persistence —
+    // the caller (router) applies it; the engine stays free of Matrix I/O.
+    expect(result.effects).toEqual([
+      { kind: "persistAuth" },
+      { kind: "spaceInvite", userId: "@eve:server", transport: "matrix" },
+    ]);
     expect(auth.isTrustedUser("@eve:server", "matrix")).toBe(true);
   });
 

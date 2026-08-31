@@ -11,7 +11,12 @@
 
 import { type ChallengeAuth, namespacedId } from "./challenge-auth.js";
 
-export type AdminEffect = { kind: "persistAuth" } | { kind: "hideToolCalls"; value: boolean };
+export type AdminEffect =
+  | { kind: "persistAuth" }
+  | { kind: "hideToolCalls"; value: boolean }
+  /** Trust was just granted to this user via a passed challenge — the caller
+   *  invites them into the organizational space (fire-once, best-effort). */
+  | { kind: "spaceInvite"; userId: string; transport?: string };
 
 export interface AdminNotification {
   message: string;
@@ -64,7 +69,10 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
           return handled({
             replies: ["✅ Authenticated! You can now chat with the agent."],
             notifications: [],
-            effects: [{ kind: "persistAuth" }],
+            effects: [
+              { kind: "persistAuth" },
+              { kind: "spaceInvite", userId: input.userId, transport: input.transport },
+            ],
           });
         case "expired":
           return handled({

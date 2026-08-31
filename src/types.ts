@@ -80,13 +80,20 @@ export interface MsgBridgeConfig {
   /**
    * Element 空间(Space)组织视图——纯展示层,不影响信任模型与房间权限:
    * 把本实例创建的房间收纳进一个私有空间,便于在 Element 中管理。
-   * - enabled:启用开关(仅多项目模式生效;由 setup 写入)。
-   * - roomId:已创建空间的房间 ID(幂等标记;缺省 = 尚未创建,启动时懒创建,
-   *   失败降级为无空间模式并在下次启动重试)。
-   * - invitedUsers:已向其发出过空间邀请的命名空间用户 ID(含已拒绝者)——
-   *   每人只邀请一次,不重复打扰;未入列的信任用户由启动自愈补邀。
    */
-  space?: { enabled?: boolean; roomId?: string; invitedUsers?: string[] };
+  space?: SpaceConfig;
+}
+
+/** @see MsgBridgeConfig.space */
+export interface SpaceConfig {
+  /** 启用开关(仅多项目模式生效;由 setup 写入)。 */
+  enabled?: boolean;
+  /** 已创建空间的房间 ID(幂等标记;缺省 = 尚未创建,启动时懒创建,
+   *  失败降级为无空间模式并在下次启动重试)。 */
+  roomId?: string;
+  /** 已向其发出过空间邀请的命名空间用户 ID(含已拒绝者)——
+   *  每人只邀请一次,不重复打扰;未入列的信任用户由启动自愈补邀。 */
+  invitedUsers?: string[];
 }
 
 /**

@@ -17,9 +17,9 @@
  */
 
 import * as os from "node:os";
-import { type ConfigStore, defaultProjectsRoot, isSpaceMode, nativeMxid } from "./config.js";
+import { activeSpaceRoomId, type ConfigStore, defaultProjectsRoot, isSpaceMode, nativeMxid } from "./config.js";
 import { logger } from "./logger.js";
-import { buildManagementRoomHelp, managementRoomName } from "./rpc/message-router.js";
+import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
 import type { RoomOps } from "./transports/interface.js";
 
 export interface SpaceEnsureDeps {
@@ -96,19 +96,9 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
     // Invite self-heal: trusted users missing from invitedUsers — trust
     // granted while degraded, or an invite that failed earlier — get their
     // (single) invite now. Failures stay unrecorded and retry next start.
-    const invited = new Set(store.get().space?.invitedUsers ?? []);
-    const missing = (cfg.auth?.trustedUsers ?? []).filter((u) => !invited.has(u));
-    for (const user of missing) {
-      try {
-        await roomOps.inviteUser(spaceId, nativeMxid(user));
-        invited.add(user);
-        logger.info(`[space] 已补邀信任用户进空间: ${user}`);
-      } catch (err) {
-        logger.warn(`[space] 补邀 ${user} 进空间失败(下次启动重试): ${(err as Error).message}`);
-      }
-    }
-    if (missing.length > 0) {
-      store.update({ space: { ...store.get().space, roomId: spaceId, invitedUsers: [...invited] } });
+    const current = store.get();
+    for (const user of (cfg.auth?.trustedUsers ?? []).filter((u) => !(current.space?.invitedUsers ?? []).includes(u))) {
+      await inviteUserToSpaceOnce(roomOps, store, user);
     }
 
     return "ready";
@@ -117,5 +107,32 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
       `[space] 空间初始化失败,本次以无空间模式运行(下次启动自动重试): ${(err as Error).message}`
     );
     return "degraded";
+  }
+}
+
+/** Fire-once space invite for ONE namespaced user: space.invitedUsers records
+ *  every user we have invited (decliners included) so nobody is pinged twice.
+ *  A failed invite is NOT recorded — the startup ensure self-heals it.
+ *  Single implementation shared by the router's spaceInvite effect and the
+ *  ensure's self-heal pass. Returns true when the invite went out. */
+export async function inviteUserToSpaceOnce(
+  roomOps: RoomOps,
+  store: ConfigStore,
+  namespacedUser: string
+): Promise<boolean> {
+  const spaceId = activeSpaceRoomId(store.get());
+  if (!spaceId) return false;
+  const invited = store.get().space?.invitedUsers ?? [];
+  if (invited.includes(namespacedUser)) return false;
+  try {
+    await roomOps.inviteUser(spaceId, nativeMxid(namespacedUser));
+    store.update({
+      space: { ...(store.get().space ?? {}), roomId: spaceId, invitedUsers: [...invited, namespacedUser] },
+    });
+    logger.info(`[space] 信任用户已邀请进空间: ${namespacedUser}`);
+    return true;
+  } catch (err) {
+    logger.warn(`[space] 邀请 ${namespacedUser} 进空间失败(下次启动自愈): ${(err as Error).message}`);
+    return false;
   }
 }

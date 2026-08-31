@@ -10,7 +10,7 @@ import * as os from "node:os";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth, namespacedId } from "../auth/challenge-auth.js";
-import { type ConfigStore, defaultProjectsRoot, isSpaceMode } from "../config.js";
+import { type ConfigStore, defaultProjectsRoot } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -18,6 +18,8 @@ import {
   splitMessage,
 } from "../formatting.js";
 import { isEnabled, logger } from "../logger.js";
+import { buildManagementRoomHelp, managementRoomName } from "../management-room.js";
+import { inviteUserToSpaceOnce } from "../space.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, ReplyTarget } from "../types.js";
 import { handleSlashCommand } from "./command-map.js";
@@ -124,7 +126,6 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       if (!msg.isGroupChat && (text.startsWith("/") || /^\d{6}$/.test(text))) {
         const cmdName = text.split(/\s+/)[0].toLowerCase();
         if (!text.startsWith("/") || cmdName !== "/help") {
-          const wasTrusted = auth.isTrustedUser(msg.userId, msg.transport);
           const result = handleAdminCommand(auth, {
             text,
             userId: msg.userId,
@@ -143,12 +144,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
                 store.update({ auth: auth.exportConfig() });
               } else if (effect.kind === "hideToolCalls") {
                 store.update({ hideToolCalls: effect.value });
+              } else if (effect.kind === "spaceInvite" && roomOps) {
+                // Trust just granted (challenge passed): invite into the
+                // organizational space — fire-once, best-effort (see space.ts).
+                await inviteUserToSpaceOnce(
+                  roomOps,
+                  store,
+                  namespacedId(effect.userId, effect.transport)
+                );
               }
-            }
-            // Trust transition (challenge passed): invite the new trusted
-            // user into the organizational space — fire-once, best-effort.
-            if (roomOps && !wasTrusted && auth.isTrustedUser(msg.userId, msg.transport)) {
-              await maybeInviteToSpace(msg.userId, msg.transport, roomOps, store);
             }
             return;
           }
@@ -456,40 +460,6 @@ function logAgentEvent(event: AgentEventView): void {
 }
 
 /**
- * Build the management-room guide, labelled with the instance name, the bot
- * account and the working directory — so when the bridge runs on several
- * machines you can tell which project belongs to which box/account.
- * Exported for the bot-created management room (space ensure) — both entry
- * points must present the same guide.
- */
-export function buildManagementRoomHelp(
-  instanceName: string,
-  botAccount: string,
-  workdir: string
-): string {
-  return (
-    `🏗️ **项目管理房间**（${instanceName}）\n\n` +
-    `• bot 账号: \`${botAccount}\`\n` +
-    `• 默认工作目录: \`${workdir}\`\n\n` +
-    `这里是本实例的管理台。直接发消息 = 在默认项目(${workdir})里与 pi 对话。\n\n` +
-    `📁 **项目管理**(仅本房间可用)\n` +
-    `• \`/pmctl new <名称> [路径]\` — 创建项目(自动建私有房间并拉你进入)\n` +
-    `• \`/pmctl list\` — 项目列表\n` +
-    `• \`/pmctl show|rm|mv|rename\` — 项目详情/删除/迁移/重命名\n\n` +
-    `⚡ **常用命令**\n` +
-    `• \`/stop\` — 停止当前任务\n` +
-    `• \`/reload\` — 重启 pi 进程\n` +
-    `• \`/help\` — 完整帮助`
-  );
-}
-
-/** Management-room display name — shared by adoption branding and the
- *  bot-created space path so the two cannot drift. */
-export function managementRoomName(instanceName: string): string {
-  return `项目管理（${instanceName}）`;
-}
-
-/**
  * First-time branding: rename the room to "项目管理(<instance>)" and send the
  * usage guide. Idempotent via config.managementRooms so restarts don't
  * re-trigger (and a user-renamed room is never overwritten).
@@ -515,32 +485,6 @@ async function maybeInitManagementRoom(
     logger.info(`[project] 管理房间已初始化: ${msg.chatId} (${roomName})`);
   } catch {
     // Non-matrix transport or transient failure — skip branding, try again later.
-  }
-}
-
-/** Fire-once space invite on a trust transition: space.invitedUsers records
- *  every user we have invited (decliners included) so nobody is pinged twice.
- *  A failed invite is NOT recorded — the startup space ensure self-heals it. */
-async function maybeInviteToSpace(
-  userId: string,
-  transport: string,
-  roomOps: RoomOps,
-  store: ConfigStore
-): Promise<void> {
-  const cfg = store.get();
-  const spaceId = cfg.space?.roomId;
-  if (!isSpaceMode(cfg) || !spaceId) return;
-  const id = namespacedId(userId, transport);
-  const invited = cfg.space?.invitedUsers ?? [];
-  if (invited.includes(id)) return;
-  try {
-    await roomOps.inviteUser(spaceId, userId);
-    store.update({
-      space: { ...(store.get().space ?? {}), roomId: spaceId, invitedUsers: [...invited, id] },
-    });
-    logger.info(`[space] 新信任用户已邀请进空间: ${id}`);
-  } catch (err) {
-    logger.warn(`[space] 邀请新信任用户进空间失败(下次启动自愈): ${(err as Error).message}`);
   }
 }
 function summarizeArg(arg: unknown, max = 500): string {

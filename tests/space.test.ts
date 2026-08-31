@@ -163,6 +163,29 @@ describe("space ensure", () => {
     expect(roomOps.inviteUser).not.toHaveBeenCalled();
   });
 
+  it("users trusted while degraded are caught up when the space is finally created", async () => {
+    // Degraded run: space creation fails, eve's challenge pass meanwhile
+    // records her as trusted (config-level, no invite possible).
+    const degraded = await runEnsure(
+      { auth: { trustedUsers: ["matrix:@barry:server", "matrix:@eve:server"], adminUserId: "matrix:@barry:server" } },
+      { createSpace: vi.fn().mockRejectedValue(new Error("M_UNRECOGNIZED")) }
+    );
+    expect(degraded.result).toBe("degraded");
+    expect(degraded.roomOps.inviteUser).not.toHaveBeenCalled();
+    // Next start: the space is created and its creation invite covers ALL
+    // current trusted users (barry + eve) — the catch-up path from #20's AC.
+    const created = await runEnsure(
+      { auth: { trustedUsers: ["matrix:@barry:server", "matrix:@eve:server"], adminUserId: "matrix:@barry:server" } }
+    );
+    expect(created.result).toBe("ready");
+    expect(created.roomOps.createSpace).toHaveBeenCalledWith({
+      name: "pi-courier · box1",
+      inviteUserIds: ["@barry:server", "@eve:server"],
+    });
+    expect(created.roomOps.inviteUser).not.toHaveBeenCalled(); // covered by creation
+    expect(created.store.get().space?.invitedUsers).toEqual(["matrix:@barry:server", "matrix:@eve:server"]);
+  });
+
   it("creates an unencrypted management room when the config switch is off", async () => {
     const { roomOps } = await runEnsure({
       matrix: { homeserverUrl: "https://matrix.example", accessToken: "tok", encryption: false },

@@ -14,7 +14,7 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
-import { type ConfigStore, isSpaceMode } from "../config.js";
+import { activeSpaceRoomId, type ConfigStore } from "../config.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
 
@@ -140,11 +140,10 @@ export class PmctlController {
     return this.opts.store.get().instanceName ?? os.hostname();
   }
 
-  /** The organizational space this deployment files rooms under, when the
-   *  feature is active and the space has been created. */
+  /** The organizational space this deployment files rooms under (shared
+   *  predicate — undefined when the feature is off or the space not created). */
   private activeSpaceRoomId(): string | undefined {
-    const cfg = this.opts.store.get();
-    return isSpaceMode(cfg) ? cfg.space?.roomId : undefined;
+    return activeSpaceRoomId(this.opts.store.get());
   }
 
   private async newProject(

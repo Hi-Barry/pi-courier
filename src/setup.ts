@@ -289,8 +289,13 @@ export async function runSetup(): Promise<void> {
     // Fresh configs default ON (new deployments get the grouped view);
     // existing configs default to their current state — legacy configs stay
     // off until the user opts in. The prompt only appears with multi-project;
-    // space.roomId etc. survive the merge untouched.
-    const hasExistingConfig = Object.keys(existing).length > 0;
+    // space.roomId etc. survive the merge untouched. "Fresh" is detected via
+    // setup-written fields (deviceId/workdir/multiProject) — env vars can
+    // inject matrix/auth keys without the wizard ever having run.
+    const hasExistingConfig =
+      existing.deviceId !== undefined ||
+      existing.workdir !== undefined ||
+      existing.multiProject !== undefined;
     const spaceDefault = hasExistingConfig ? existing.space?.enabled === true : true;
     let spaceEnabled = false;
     if (multiProject) {
@@ -298,7 +303,7 @@ export async function runSetup(): Promise<void> {
         ? "启用空间组织? [Y/n](Element 空间收纳管理/项目房间,重启后自动创建): "
         : "启用空间组织? [y/N](Element 空间收纳管理/项目房间,重启后自动创建): ";
       const spRaw = (await ask(spPrompt)).trim().toLowerCase();
-      spaceEnabled = spRaw === "" ? spaceDefault : spRaw === "y";
+      spaceEnabled = spRaw === "" ? spaceDefault : spRaw === "y" || spRaw === "yes";
     }
 
     // ---- merge & save --------------------------------------------------------
@@ -316,7 +321,9 @@ export async function runSetup(): Promise<void> {
       workdir,
       instanceName,
       multiProject,
-      space: { ...existing.space, enabled: spaceEnabled },
+      // Single-project reruns leave the space fields exactly as they were
+      // (no silent enabled flip) — the feature is multi-project-only.
+      ...(multiProject ? { space: { ...existing.space, enabled: spaceEnabled } } : {}),
       deviceId,
       autoConnect: existing.autoConnect ?? true,
       debug: existing.debug ?? true,

@@ -106,6 +106,13 @@ export function isSpaceMode(cfg: MsgBridgeConfig): boolean {
   return cfg.multiProject === true && cfg.space?.enabled === true;
 }
 
+/** The organizational space this deployment files rooms under, when the
+ *  feature is active AND the space has actually been created (degraded runs
+ *  with no roomId yet must not attempt space operations). */
+export function activeSpaceRoomId(cfg: MsgBridgeConfig): string | undefined {
+  return isSpaceMode(cfg) ? cfg.space?.roomId : undefined;
+}
+
 /**
  * Runtime config store — loaded once at startup, injected into every module
  * that needs config. The config file is effectively a database (projects,
