@@ -10,7 +10,7 @@
 import * as os from "node:os";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline";
-import { loadConfig, saveConfig , defaultProjectsRoot } from "./config.js";
+import { defaultProjectsRoot, loadConfig, nativeMxid, saveConfig } from "./config.js";
 import type { MsgBridgeConfig } from "./types.js";
 
 /**
@@ -230,8 +230,9 @@ export async function runSetup(): Promise<void> {
     }
 
     // ---- 4. trusted admin user ---------------------------------------------
-    const trustedDefault = existing.auth?.trustedUsers?.[0]?.replace(/^matrix:/, "") ?? botUserId;
-    const adminRaw = (await ask(`信任用户(管理员)MXID [默认 ${trustedDefault}]: `)).trim() || trustedDefault;
+    const trustedDefault = existing.auth?.trustedUsers?.[0] !== undefined
+      ? nativeMxid(existing.auth.trustedUsers[0])
+      : botUserId;    const adminRaw = (await ask(`信任用户(管理员)MXID [默认 ${trustedDefault}]: `)).trim() || trustedDefault;
     if (!adminRaw.startsWith("@")) throw new Error("MXID 应以 @ 开头,如 @barry:matrix.example.com");
 
     // ---- 4.5 trusted rooms (optional) ---------------------------------------

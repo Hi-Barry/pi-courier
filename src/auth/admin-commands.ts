@@ -9,7 +9,7 @@
  * injected config store — this module touches no disk and holds no state.
  */
 
-import { namespacedId, type ChallengeAuth } from "./challenge-auth.js";
+import { type ChallengeAuth, namespacedId } from "./challenge-auth.js";
 
 export type AdminEffect = { kind: "persistAuth" } | { kind: "hideToolCalls"; value: boolean };
 

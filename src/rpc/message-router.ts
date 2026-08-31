@@ -7,11 +7,10 @@
  */
 
 import * as os from "node:os";
-import * as path from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { handleAdminCommand } from "../auth/admin-commands.js";
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
-import type { ConfigStore } from "../config.js";
+import { type ConfigStore, defaultProjectsRoot } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -42,6 +41,11 @@ export interface MessageRouterDeps {
   roomOps?: RoomOps;
   /** Multi-project management (/pmctl family): gates + actions in one module. */
   pmctl: PmctlController;
+  /** Space-mode gate: while the organizational space is enabled, the
+   *  management room is bot-created at startup and first-DM adoption is
+   *  reserved for the degraded path (space ensure failed this run). Absent
+   *  = always allowed (legacy deployments). */
+  managementRoomAdoptionAllowed?: () => boolean;
 }
 
 export interface MessageRouter {
@@ -87,7 +91,7 @@ export function buildTurnReply(
 }
 
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
-  const { projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl } = deps;
+  const { projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl, managementRoomAdoptionAllowed } = deps;
   const bindings = new WeakMap<PiRpc, RoomBinding>();
   const bindReplyTarget = (rpc: PiRpc, replyTarget: ReplyTarget, pinned: boolean): void => {
     bindings.set(rpc, { pinned, replyTarget });
@@ -210,7 +214,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // BOTH challenge-code pairing and config-driven trusted users. Only in
       // multi-project mode.
       const multiProject = projectManager.isMultiProject;
-      if (multiProject && roomOps && !store.get().managementRooms?.[0] && !msg.isGroupChat && !projectManager.isProjectRoom(msg.chatId)) {
+      if (
+        multiProject &&
+        roomOps &&
+        (managementRoomAdoptionAllowed?.() ?? true) &&
+        !store.get().managementRooms?.[0] &&
+        !msg.isGroupChat &&
+        !projectManager.isProjectRoom(msg.chatId)
+      ) {
         await maybeInitManagementRoom(msg, sendReply, roomOps, store);
       }
       const isManagementRoom = multiProject && (store.get().managementRooms?.[0] ?? "") === msg.chatId;
@@ -442,8 +453,10 @@ function logAgentEvent(event: AgentEventView): void {
  * Build the management-room guide, labelled with the instance name, the bot
  * account and the working directory — so when the bridge runs on several
  * machines you can tell which project belongs to which box/account.
+ * Exported for the bot-created management room (space ensure) — both entry
+ * points must present the same guide.
  */
-function buildManagementRoomHelp(
+export function buildManagementRoomHelp(
   instanceName: string,
   botAccount: string,
   workdir: string
@@ -464,6 +477,12 @@ function buildManagementRoomHelp(
   );
 }
 
+/** Management-room display name — shared by adoption branding and the
+ *  bot-created space path so the two cannot drift. */
+export function managementRoomName(instanceName: string): string {
+  return `项目管理（${instanceName}）`;
+}
+
 /**
  * First-time branding: rename the room to "项目管理(<instance>)" and send the
  * usage guide. Idempotent via config.managementRooms so restarts don't
@@ -482,8 +501,8 @@ async function maybeInitManagementRoom(
   try {
     const instanceName = cfg.instanceName ?? os.hostname();
     const botAccount = roomOps.getBotUserId() ?? "(未知)";
-    const workdir = cfg.workdir ?? path.join(os.homedir(), "Projects");
-    const roomName = `项目管理（${instanceName}）`;
+    const workdir = cfg.workdir ?? defaultProjectsRoot();
+    const roomName = managementRoomName(instanceName);
     await roomOps.setRoomName(msg.chatId, roomName);
     await sendReply(msg.chatId, msg.transport, buildManagementRoomHelp(instanceName, botAccount, workdir));
     store.update({ managementRooms: [...rooms, msg.chatId] });

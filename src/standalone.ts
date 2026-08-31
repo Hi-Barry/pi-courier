@@ -19,6 +19,7 @@ import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
+import { ensureSpaceAndManagementRoom, isSpaceMode } from "./space.js";
 import type { RoomOps, Transport } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
 import { suppressKnownWarnings } from "./warnings.js";
@@ -172,6 +173,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     multiProject: store.get().multiProject === true,
   });
 
+  // ---- space (organizational) mode -----------------------------------------
+  // With the space enabled (multi-project only), the management room is
+  // bot-created inside the space at startup; adopting the first DM is
+  // reserved for the degraded path (space ensure failed this run). Note:
+  // a DM arriving while the ensure is still in flight is served normally
+  // but not adopted — same accepted startup-window class as the lazy
+  // project-process early events.
+  const spaceEnabled = isSpaceMode(store.get());
+  let managementRoomAdoptionAllowed = !spaceEnabled;
+
   const pmctl = new PmctlController({ projectManager, roomOps, store });
 
   const router = createMessageRouter({
@@ -182,6 +193,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     roomOps,
     store,
     pmctl,
+    managementRoomAdoptionAllowed: () => managementRoomAdoptionAllowed,
   });
 
   for (const t of transports) {
@@ -224,6 +236,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       logger.warn("   → 服务器端 device 的 one-time key 记账与本地不一致。");
       logger.warn("     解法:重跑 `pi-courier setup`,在\"保留现有 token?\"处输 n 换新 token(新设备=服务器干净)。");
     }
+  }
+
+  // ---- space ensure -----------------------------------------------------------
+  // Lazy + idempotent (config.space.roomId / managementRooms[0]); any failure
+  // degrades to the unspace'd behaviour and re-opens DM adoption. Runs before
+  // rpc.start so the room wiring is complete before the first prompt lands.
+  if (roomOps) {
+    const spaceResult = await ensureSpaceAndManagementRoom({ roomOps, store, sendReply });
+    if (spaceResult === "degraded") managementRoomAdoptionAllowed = true;
   }
 
   try {

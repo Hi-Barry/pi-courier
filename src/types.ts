@@ -77,6 +77,14 @@ export interface MsgBridgeConfig {
    * 避免重启后重复改名/重复发送使用说明)。
    */
   managementRooms?: string[];
+  /**
+   * Element 空间(Space)组织视图——纯展示层,不影响信任模型与房间权限:
+   * 把本实例创建的房间收纳进一个私有空间,便于在 Element 中管理。
+   * - enabled:启用开关(仅多项目模式生效;由 setup 写入)。
+   * - roomId:已创建空间的房间 ID(幂等标记;缺省 = 尚未创建,启动时懒创建,
+   *   失败降级为无空间模式并在下次启动重试)。
+   */
+  space?: { enabled?: boolean; roomId?: string };
 }
 
 /**

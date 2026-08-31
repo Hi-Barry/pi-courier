@@ -36,7 +36,7 @@ function makeMsg(overrides: Partial<ExternalMessage> = {}): ExternalMessage {
  * channel modes) are under test. barry = admin + trusted; carol = trusted
  * non-admin; rooms pre-listed in `channels` are enabled.
  */
-function makeFixtures(opts: { multiProject?: boolean; channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }> } = {}) {
+function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllowed?: () => boolean; channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }> } = {}) {
   const codeBox: { current: string | null } = { current: null };
   const replies: Array<{ chatId: string; transport: string; text: string }> = [];
   const sendReply = async (chatId: string, transport: string, text: string) => {
@@ -75,15 +75,19 @@ function makeFixtures(opts: { multiProject?: boolean; channels?: Record<string, 
     async (_chatId: string, _transport: string): Promise<void> => {}
   );
   const roomOps = {
+    createRoom: vi.fn().mockResolvedValue("!newroom:server"),
     createProjectRoom: vi.fn().mockResolvedValue("!newproj:server"),
+    createSpace: vi.fn().mockResolvedValue("!space:server"),
+    addRoomToSpace: vi.fn().mockResolvedValue(undefined),
     setRoomName: vi.fn().mockResolvedValue(undefined),
     setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
     leaveRoom: vi.fn().mockResolvedValue(undefined),
     getBotUserId: vi.fn().mockReturnValue("@bot:server"),
+    encryptionAvailable: true,
   };
   const pmctl = new PmctlController({ projectManager, roomOps, store });
   const makeRouter = () =>
-    createMessageRouter({ projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl });
+    createMessageRouter({ projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl, managementRoomAdoptionAllowed: opts.managementRoomAdoptionAllowed });
   return {
     codeBox,
     replies,
@@ -262,6 +266,34 @@ describe("message-router multi-project routing", () => {
     expect(replies.some((r) => r.text.includes("项目管理房间"))).toBe(true);
     // The pairing is persisted through the injected store (single write path).
     expect(store.get().managementRooms).toEqual(["!dm:server"]);
+  });
+
+  it("space mode: adoption is gated off while the space ensure owns the management room", async () => {
+    const fx = makeFixtures({ managementRoomAdoptionAllowed: () => false });
+    await fx.makeRouter().handleIncoming(makeMsg({ content: "hi" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fx.roomOps.setRoomName).not.toHaveBeenCalled();
+    expect(fx.store.get().managementRooms).toEqual([]);
+    // Gating adoption must not block the message itself.
+    expect(fx.rpc.prompt).toHaveBeenCalledWith("hi");
+  });
+
+  it("space mode: degraded fallback (gate back on) restores adoption", async () => {
+    let allowed = false;
+    const fx = makeFixtures({ managementRoomAdoptionAllowed: () => allowed });
+    const router = fx.makeRouter();
+    await router.handleIncoming(makeMsg({ content: "hi" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fx.roomOps.setRoomName).not.toHaveBeenCalled();
+    // Space ensure failed this run → the legacy DM adoption takes over.
+    allowed = true;
+    await router.handleIncoming(makeMsg({ content: "hello" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fx.roomOps.setRoomName).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining("项目管理")
+    );
+    expect(fx.store.get().managementRooms).toEqual(["!dm:server"]);
   });
 
   it("does not brand a project room (2-person room with a mapping)", async () => {
