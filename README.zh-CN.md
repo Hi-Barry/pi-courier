@@ -96,6 +96,7 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
 pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输入其他目录
 实例名/机器名 [默认 debian]:                             ← 多台部署用来区分;将显示在管理房间名
 启用多工程模式? [y/N]:                                   ← 默认 N=单工程(一个 bot 对应一个 pi);y=多工程(管理房间+项目房间)
+启用空间组织? [Y/n]:                                     ← 仅多工程时询问;全新配置默认 Y —— bot 创建的房间统一收纳进一个 Element 空间(见下文)
 
 ✅ 配置已写入 ~/.pi/pi-courier.json
    账号: @test3:...
@@ -124,7 +125,8 @@ pi 工作目录 [默认 /home/你/Projects]:                    ← 回车或输
 
 同一个 bot 账号可以服务多个项目 —— 每个项目一个私有房间(房间名=项目名),有独立的 pi 进程、工作目录和会话历史。
 
-- **管理房间 = 第一个被受理的私有房间**:bot **第一次成功受理(授权通过)的、非项目的私有/2 人房间**会固化为管理房间—— 无论是验证码配对还是配置预信任都适用。房间自动改名为 `项目管理(<实例名>)` 并发送使用说明,房间 ID 写入 `config.managementRooms`,之后完全由**房间 ID 驱动**(一个、稳定)。管理房间即"管理台":`/pmctl` 仅在此可用。若有多个私有房间,只有第一个能成为它。
+- **管理房间**:开启**空间组织**时(全新多工程配置默认开启),bot 在启动时**自行创建**管理房间 —— 位于私有空间 `pi-courier · <实例名>` 内,并邀请全部信任用户,无需先给 bot 发 DM。空间关闭(或创建失败)时沿用经典行为:bot **第一次成功受理(授权通过)的、非项目的私有/2 人房间**固化为管理房间(自动改名 `项目管理(<实例名>)` 并发送使用说明,房间 ID 写入 `config.managementRooms`)。两种路径下管理房间都是"管理台"(`/pmctl` 仅在此可用),且房间 ID 之后保持稳定。
+- **空间组织(Element)**:纯展示层收纳 —— 私有空间 `pi-courier · <实例名>` 收集 bot 创建的所有房间(管理房间 + `/pmctl new` 的项目房间),不再散落在房间列表里。**不影响信任模型与房间权限**;`/pmctl rm` 删除项目时同步把房间移出空间。开关在 `setup`(`启用空间组织?`,全新配置默认开、已有配置保持现状);空间在下次启动时懒创建,失败仅警告并回退无空间行为、下次启动自动重试。后续通过验证码成为信任用户的用户会被自动邀请进空间(每人只邀请一次)。
 - **创建项目**(在管理房间发):
   ```
   /pmctl new <项目名> [路径]
@@ -290,6 +292,8 @@ A: 向导生成的配置,示例:
   "matrix": { "homeserverUrl": "https://matrix.example.com", "accessToken": "syt_...", "encryption": true },
   "auth": { "trustedUsers": ["matrix:@你:matrix.example.com"], "adminUserId": "matrix:@你:matrix.example.com" },
   "workdir": "/home/你/Projects",
+  "multiProject": true,
+  "space": { "enabled": true },
   "autoConnect": true,
   "debug": true
 }

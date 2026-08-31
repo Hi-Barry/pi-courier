@@ -207,10 +207,17 @@ pi 0.83.0 就绪。
 - 回复按 RoomBinding 路由:每个 pi 进程绑定自己的回复目标(项目房间钉住、共享默认进程随最近一次 DM 提示刷新,完整对话轮结束后释放)——不存在进程级单槽
 - typing 指示:`agent_start` / `turn_start` 触发 Matrix 输入中状态
 
+**`src/space.ts`** —— Element 空间组织视图(纯展示层)
+- 启动期 ensure:懒创建私有空间 `pi-courier · <实例名>` + 空间内 bot 自建管理房间,幂等锚点为 config 的 `space.roomId` / `managementRooms[0]`
+- 任何失败降级为无空间行为(警告 + 下次启动重试);空间链接(m.space.child)每次启动幂等重挂
+- `inviteUserToSpaceOnce`:fire-once 邀请(space.invitedUsers 记账,拒绝者含内;失败不记账由自愈重试),router 的 spaceInvite 效应与此处自愈共用
+
+**`src/management-room.ts`** —— 管理房间文案单点组装(房间名 + 使用指南),DM 采纳与空间自建两条入口共用,杜绝文案漂移
+
 **`src/standalone.ts`** —— 独立入口
 - 单实例锁(lock.ts)
 - 信号优雅关闭(SIGTERM/SIGINT)
-- 初始化 transports → 启动 RPC → 挂接事件
+- 初始化 transports → 空间 ensure(幂等/降级)→ 启动 RPC → 挂接事件
 
 ### 5.2 适配 0.83.0 的坑
 
@@ -578,12 +585,12 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
   → 群聊 /enable(授权计算先行、授权生效在后 —— 未启用房间的消息正是靠本步骤在生效前启用房间;all 仅管理员)
     → 认证检查(trusted / challenge)
       → bridge 管理命令(/trusted /revoke /channels /enable <chatId> /disable /toggletools)
-        → /pmctl 家族(PmctlController:门禁 + new/list/show/rm/mv/rename)
+        → /pmctl 家族(PmctlController:门禁 + new/list/show/rm/mv/rename;空间启用时 new 挂链、rm 先摘链再退房)
           → RPC 映射命令(/new /compact /model ...;DM /help 也在这里,统一输出 pi 命令 + bridge 命令)
             → 透传 prompt(/skill:xxx /template 普通文本)
 ```
 
-策略(认证、挑战码、群 /enable)只存在于 router 的 `handleIncoming` 管道一份,管理命令判定在 `src/auth/admin-commands.ts`(纯输入输出,effects 由 router 落盘);transport 侧不做任何授权判定(否则未启用房间的消息到不了 `/enable`,该功能在真实链路上不可达)。注意:/enable 步骤在「授权生效」之前执行,但位于「授权计算」之后——两者缺一不可。/pmctl 的门禁与动作集中在 PmctlController,邀请目标由 router 以 transport 原生 MXID 传入。
+策略(认证、挑战码、群 /enable)只存在于 router 的 `handleIncoming` 管道一份,管理命令判定在 `src/auth/admin-commands.ts`(纯输入输出,effects 由 router 落盘——`persistAuth` 写 auth 快照、`hideToolCalls` 写开关、`spaceInvite` 触发空间 fire-once 邀请);transport 侧不做任何授权判定(否则未启用房间的消息到不了 `/enable`,该功能在真实链路上不可达)。注意:/enable 步骤在「授权生效」之前执行,但位于「授权计算」之后——两者缺一不可。/pmctl 的门禁与动作集中在 PmctlController,邀请目标由 router 以 transport 原生 MXID 传入。
 
 ### 12.3 回复机制
 
@@ -611,6 +618,7 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 6. **一键 CLI + 配置持久化**:部署复杂度收敛到 setup/enable 两条命令。
 7. **systemd 用户级服务**:无需 sudo,绝对路径 + PATH 显式控制,避免环境漂移。
 8. **scoped npm 包**:包名冲突用账号 scope 解决,命令名不受影响。
+9. **空间 = 纯组织视图**:Element 空间只做展示层收纳,不承载任何授权判定(不加 restricted room);信任模型与房间权限零改动,任何失败降级为无空间行为。
 
 ---
 

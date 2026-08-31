@@ -96,6 +96,7 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
 pi 工作目录 [默认 /home/you/Projects]:                   ← Enter 或输入其他目录
 实例名/机器名 [默认 debian]:                             ← distinguish multiple deployments; shown in the management room name
 启用多工程模式? [y/N]:                                   ← default N = single-project (one bot ↔ one pi); y = multi-project (management + project rooms)
+启用空间组织? [Y/n]:                                     ← only asked with multi-project; fresh configs default Y — all bot-created rooms are grouped into one Element space (see below)
 
 ✅ 配置已写入 ~/.pi/pi-courier.json
    账号: @test3:...
@@ -190,7 +191,8 @@ You are now a trusted user (the first trusted user also becomes admin). Any user
 
 One bot account can serve multiple projects — each project gets its own private room (named after the project), its own pi process, working directory and conversation history.
 
-- **Management room = the first accepted private room**: the first room where the bot **successfully accepts (authorizes) a message** — a non-project, ≤2-person room — becomes the management room. This works for both challenge-code pairing and config-driven trusted users. It's auto-renamed to `项目管理(<instance>)`, a guide is sent, and its room ID is persisted to `config.managementRooms`; afterwards purely **room-ID driven** (single, stable). The management room is the admin console — `/pmctl` works only there. If you have several private rooms, only the first one becomes it.
+- **Management room**: with the **space feature enabled** (fresh multi-project setups default to it), the bot **creates the management room itself at startup**, inside a private Element space `pi-courier · <instance>`, and invites all trusted users — no first DM needed. With the space off (or if its creation fails), the classic behavior applies: the first room where the bot **successfully accepts (authorizes) a message** — a non-project, ≤2-person room — becomes the management room (renamed to `项目管理(<instance>)`, guide sent, room ID persisted to `config.managementRooms`). Either way the room is the admin console — `/pmctl` works only there — and its ID is stable afterwards.
+- **Space organization (Element)**: a purely cosmetic grouping — a private space `pi-courier · <instanceName>` collects every room the bot creates (the management room and all `/pmctl new` project rooms) so they don't scatter across your room list. It never affects trust or permissions; `/pmctl rm` also removes the room from the space. Toggle it in `setup` (`启用空间组织?`, fresh configs default on, existing configs keep their current state); creation is lazy at the next start, and any failure just falls back to the unspace'd behavior with a warning and a retry on the next start. Users who pass the challenge later are invited into the space automatically (one invite per person, ever).
 - **Create a project** (in the management room):
   ```
   /pmctl new <name> [path]
@@ -293,6 +295,8 @@ A: The wizard-generated config. Example:
   "matrix": { "homeserverUrl": "https://matrix.example.com", "accessToken": "syt_...", "encryption": true },
   "auth": { "trustedUsers": ["matrix:@you:matrix.example.com"], "adminUserId": "matrix:@you:matrix.example.com" },
   "workdir": "/home/you/Projects",
+  "multiProject": true,
+  "space": { "enabled": true },
   "autoConnect": true,
   "debug": true
 }
