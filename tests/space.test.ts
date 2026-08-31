@@ -42,6 +42,7 @@ describe("space ensure", () => {
       createProjectRoom: vi.fn().mockResolvedValue("!proj:server"),
       createSpace: vi.fn().mockResolvedValue("!space:server"),
       addRoomToSpace: vi.fn().mockResolvedValue(undefined),
+      inviteUser: vi.fn().mockResolvedValue(undefined),
       setRoomName: vi.fn().mockResolvedValue(undefined),
       setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
       leaveRoom: vi.fn().mockResolvedValue(undefined),
@@ -120,6 +121,46 @@ describe("space ensure", () => {
     // Usage guide is sent to the new room; the room is the management room.
     expect(sendReply).toHaveBeenCalledWith("!mgmt:server", "matrix", expect.stringContaining("项目管理房间"));
     expect(store.get().managementRooms).toEqual(["!mgmt:server"]);
+
+    // Creation invited every trusted user — all recorded, no re-invite later.
+    expect(store.get().space?.invitedUsers).toEqual(["matrix:@barry:server", "matrix:@carol:server"]);
+    expect(roomOps.inviteUser).not.toHaveBeenCalled();
+  });
+
+  it("self-heal invites trusted users missing from invitedUsers (recorded on success)", async () => {
+    const { store, roomOps, result } = await runEnsure({
+      space: { enabled: true, roomId: "!space:server", invitedUsers: ["matrix:@barry:server"] },
+      managementRooms: ["!mgmt:server"],
+    });
+    expect(result).toBe("ready");
+    expect(roomOps.inviteUser).toHaveBeenCalledTimes(1);
+    expect(roomOps.inviteUser).toHaveBeenCalledWith("!space:server", "@carol:server");
+    expect(store.get().space?.invitedUsers).toEqual(["matrix:@barry:server", "matrix:@carol:server"]);
+  });
+
+  it("self-heal invite failure stays unrecorded and retries next start", async () => {
+    const overrides = { inviteUser: vi.fn().mockRejectedValue(new Error("M_LIMIT_EXCEEDED")) };
+    const first = await runEnsure(
+      { space: { enabled: true, roomId: "!space:server", invitedUsers: ["matrix:@barry:server"] }, managementRooms: ["!mgmt:server"] },
+      overrides
+    );
+    expect(first.result).toBe("ready");
+    expect(first.store.get().space?.invitedUsers).toEqual(["matrix:@barry:server"]);
+    // Next start (default stub) — the missing user is retried.
+    const second = await runEnsure({
+      space: { enabled: true, roomId: "!space:server", invitedUsers: ["matrix:@barry:server"] },
+      managementRooms: ["!mgmt:server"],
+    });
+    expect(second.roomOps.inviteUser).toHaveBeenCalledWith("!space:server", "@carol:server");
+    expect(second.store.get().space?.invitedUsers).toEqual(["matrix:@barry:server", "matrix:@carol:server"]);
+  });
+
+  it("self-heal is a no-op when everyone is already invited", async () => {
+    const { roomOps } = await runEnsure({
+      space: { enabled: true, roomId: "!space:server", invitedUsers: ["matrix:@barry:server", "matrix:@carol:server"] },
+      managementRooms: ["!mgmt:server"],
+    });
+    expect(roomOps.inviteUser).not.toHaveBeenCalled();
   });
 
   it("creates an unencrypted management room when the config switch is off", async () => {

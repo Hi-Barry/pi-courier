@@ -46,7 +46,16 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
         name: `pi-courier · ${instanceName}`,
         inviteUserIds,
       });
-      store.update({ space: { ...cfg.space, roomId: spaceId } });
+      // createRoom's invite list covers every trusted user — record them all
+      // so neither the self-heal below nor challenge-pass invites re-ping
+      // anyone (decliners included: one invite per user, ever).
+      store.update({
+        space: {
+          ...cfg.space,
+          roomId: spaceId,
+          invitedUsers: cfg.auth?.trustedUsers ?? [],
+        },
+      });
       logger.info(`[space] 空间已创建: ${spaceId}`);
     }
 
@@ -82,6 +91,24 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
       logger.warn(
         `[space] 管理房间挂入空间失败(下次启动自动重试,房间仍可用): ${(err as Error).message}`
       );
+    }
+
+    // Invite self-heal: trusted users missing from invitedUsers — trust
+    // granted while degraded, or an invite that failed earlier — get their
+    // (single) invite now. Failures stay unrecorded and retry next start.
+    const invited = new Set(store.get().space?.invitedUsers ?? []);
+    const missing = (cfg.auth?.trustedUsers ?? []).filter((u) => !invited.has(u));
+    for (const user of missing) {
+      try {
+        await roomOps.inviteUser(spaceId, nativeMxid(user));
+        invited.add(user);
+        logger.info(`[space] 已补邀信任用户进空间: ${user}`);
+      } catch (err) {
+        logger.warn(`[space] 补邀 ${user} 进空间失败(下次启动重试): ${(err as Error).message}`);
+      }
+    }
+    if (missing.length > 0) {
+      store.update({ space: { ...store.get().space, roomId: spaceId, invitedUsers: [...invited] } });
     }
 
     return "ready";

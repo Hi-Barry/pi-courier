@@ -123,6 +123,12 @@ export class MatrixProvider implements Transport, RoomOps {
     }
   }
 
+  /** Invite a user into a room (space membership). */
+  async inviteUser(roomId: string, userId: string): Promise<void> {
+    if (!this.client) throw new Error("Matrix 未连接");
+    await this.client.inviteUser(userId, roomId);
+  }
+
   /** Rename a room (used to brand the DM as the management room). */
   async setRoomName(roomId: string, name: string): Promise<void> {
     if (!this.client) throw new Error("Matrix 未连接");

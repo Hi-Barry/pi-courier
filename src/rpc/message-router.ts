@@ -9,8 +9,8 @@
 import * as os from "node:os";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { handleAdminCommand } from "../auth/admin-commands.js";
-import type { ChallengeAuth } from "../auth/challenge-auth.js";
-import { type ConfigStore, defaultProjectsRoot } from "../config.js";
+import { type ChallengeAuth, namespacedId } from "../auth/challenge-auth.js";
+import { type ConfigStore, defaultProjectsRoot, isSpaceMode } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -124,6 +124,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       if (!msg.isGroupChat && (text.startsWith("/") || /^\d{6}$/.test(text))) {
         const cmdName = text.split(/\s+/)[0].toLowerCase();
         if (!text.startsWith("/") || cmdName !== "/help") {
+          const wasTrusted = auth.isTrustedUser(msg.userId, msg.transport);
           const result = handleAdminCommand(auth, {
             text,
             userId: msg.userId,
@@ -143,6 +144,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
               } else if (effect.kind === "hideToolCalls") {
                 store.update({ hideToolCalls: effect.value });
               }
+            }
+            // Trust transition (challenge passed): invite the new trusted
+            // user into the organizational space — fire-once, best-effort.
+            if (roomOps && !wasTrusted && auth.isTrustedUser(msg.userId, msg.transport)) {
+              await maybeInviteToSpace(msg.userId, msg.transport, roomOps, store);
             }
             return;
           }
@@ -509,6 +515,32 @@ async function maybeInitManagementRoom(
     logger.info(`[project] 管理房间已初始化: ${msg.chatId} (${roomName})`);
   } catch {
     // Non-matrix transport or transient failure — skip branding, try again later.
+  }
+}
+
+/** Fire-once space invite on a trust transition: space.invitedUsers records
+ *  every user we have invited (decliners included) so nobody is pinged twice.
+ *  A failed invite is NOT recorded — the startup space ensure self-heals it. */
+async function maybeInviteToSpace(
+  userId: string,
+  transport: string,
+  roomOps: RoomOps,
+  store: ConfigStore
+): Promise<void> {
+  const cfg = store.get();
+  const spaceId = cfg.space?.roomId;
+  if (!isSpaceMode(cfg) || !spaceId) return;
+  const id = namespacedId(userId, transport);
+  const invited = cfg.space?.invitedUsers ?? [];
+  if (invited.includes(id)) return;
+  try {
+    await roomOps.inviteUser(spaceId, userId);
+    store.update({
+      space: { ...(store.get().space ?? {}), roomId: spaceId, invitedUsers: [...invited, id] },
+    });
+    logger.info(`[space] 新信任用户已邀请进空间: ${id}`);
+  } catch (err) {
+    logger.warn(`[space] 邀请新信任用户进空间失败(下次启动自愈): ${(err as Error).message}`);
   }
 }
 function summarizeArg(arg: unknown, max = 500): string {

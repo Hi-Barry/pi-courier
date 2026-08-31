@@ -83,8 +83,10 @@ export interface MsgBridgeConfig {
    * - enabled:启用开关(仅多项目模式生效;由 setup 写入)。
    * - roomId:已创建空间的房间 ID(幂等标记;缺省 = 尚未创建,启动时懒创建,
    *   失败降级为无空间模式并在下次启动重试)。
+   * - invitedUsers:已向其发出过空间邀请的命名空间用户 ID(含已拒绝者)——
+   *   每人只邀请一次,不重复打扰;未入列的信任用户由启动自愈补邀。
    */
-  space?: { enabled?: boolean; roomId?: string };
+  space?: { enabled?: boolean; roomId?: string; invitedUsers?: string[] };
 }
 
 /**

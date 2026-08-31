@@ -77,6 +77,8 @@ export interface RoomOps {
    *  so the space view loses the room, plus the child-side m.room.parent,
    *  best-effort. */
   removeRoomFromSpace(spaceRoomId: string, childRoomId: string): Promise<void>;
+  /** Invite a user into a room (space membership for newly trusted users). */
+  inviteUser(roomId: string, userId: string): Promise<void>;
   /** Rename a room. */
   setRoomName(roomId: string, name: string): Promise<void>;
   /** The bot's own user ID (null if not connected). */

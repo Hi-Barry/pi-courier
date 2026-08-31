@@ -36,7 +36,7 @@ function makeMsg(overrides: Partial<ExternalMessage> = {}): ExternalMessage {
  * channel modes) are under test. barry = admin + trusted; carol = trusted
  * non-admin; rooms pre-listed in `channels` are enabled.
  */
-function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllowed?: () => boolean; channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }> } = {}) {
+function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllowed?: () => boolean; space?: { enabled?: boolean; roomId?: string; invitedUsers?: string[] }; channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }> } = {}) {
   const codeBox: { current: string | null } = { current: null };
   const replies: Array<{ chatId: string; transport: string; text: string }> = [];
   const sendReply = async (chatId: string, transport: string, text: string) => {
@@ -58,7 +58,12 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     renameProject: vi.fn(),
     stopAll: vi.fn(),
   } as unknown as ProjectManager;
-  const store = new ConfigStore({ managementRooms: [], projects: {} });
+  const store = new ConfigStore({
+    managementRooms: [],
+    projects: {},
+    ...(opts.multiProject === false ? {} : { multiProject: true }),
+    ...(opts.space ? { space: opts.space } : {}),
+  });
   const auth = new ChallengeAuth(
     (code) => {
       codeBox.current = code;
@@ -80,6 +85,7 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     createSpace: vi.fn().mockResolvedValue("!space:server"),
     addRoomToSpace: vi.fn().mockResolvedValue(undefined),
     removeRoomFromSpace: vi.fn().mockResolvedValue(undefined),
+    inviteUser: vi.fn().mockResolvedValue(undefined),
     setRoomName: vi.fn().mockResolvedValue(undefined),
     setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
     leaveRoom: vi.fn().mockResolvedValue(undefined),
@@ -603,5 +609,50 @@ describe("message-router authorization pipeline (real ChallengeAuth)", () => {
     expect(rpc.prompt).not.toHaveBeenCalled();
     expect(codeBox.current).not.toBeNull();
     expect(replies.at(-1)!.text).toContain("6-digit");
+  });
+});
+
+describe("space invite on trust transition (spec #16 ticket 4)", () => {
+  const eveMsg = (content: string): ExternalMessage =>
+    makeMsg({ userId: "@eve:server", username: "eve", content });
+
+  async function passChallenge(fx: ReturnType<typeof makeFixtures>): Promise<void> {
+    const router = fx.makeRouter();
+    await router.handleIncoming(eveMsg("hello"));
+    expect(fx.codeBox.current).not.toBeNull();
+    await router.handleIncoming(eveMsg(fx.codeBox.current!));
+  }
+
+  it("a passed challenge invites the new trusted user into the space once", async () => {
+    const fx = makeFixtures({ space: { enabled: true, roomId: "!space:server" } });
+    await passChallenge(fx);
+    expect(fx.roomOps.inviteUser).toHaveBeenCalledWith("!space:server", "@eve:server");
+    expect(fx.roomOps.inviteUser).toHaveBeenCalledTimes(1);
+    expect(fx.store.get().space?.invitedUsers).toEqual(["matrix:@eve:server"]);
+  });
+
+  it("no invite without the space (off entirely, or degraded before creation)", async () => {
+    for (const space of [undefined, { enabled: true }, { enabled: false, roomId: "!space:server" }]) {
+      const fx = makeFixtures({ space });
+      await passChallenge(fx);
+      expect(fx.roomOps.inviteUser).not.toHaveBeenCalled();
+    }
+  });
+
+  it("an already-invited user (decliner) is never re-invited, but still authenticates", async () => {
+    const fx = makeFixtures({ space: { enabled: true, roomId: "!space:server", invitedUsers: ["matrix:@eve:server"] } });
+    await passChallenge(fx);
+    expect(fx.roomOps.inviteUser).not.toHaveBeenCalled();
+    expect(fx.replies.some((r) => r.text.includes("Authenticated"))).toBe(true);
+  });
+
+  it("an invite failure is non-fatal: authentication still succeeds", async () => {
+    const fx = makeFixtures({ space: { enabled: true, roomId: "!space:server" } });
+    (fx.roomOps.inviteUser as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("M_LIMIT_EXCEEDED"));
+    await passChallenge(fx);
+    expect(fx.roomOps.inviteUser).toHaveBeenCalledTimes(1);
+    expect(fx.replies.some((r) => r.text.includes("Authenticated"))).toBe(true);
+    // Not recorded — the startup ensure self-heals it on the next run.
+    expect(fx.store.get().space?.invitedUsers ?? []).not.toContain("matrix:@eve:server");
   });
 });
