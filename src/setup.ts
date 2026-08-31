@@ -232,7 +232,8 @@ export async function runSetup(): Promise<void> {
     // ---- 4. trusted admin user ---------------------------------------------
     const trustedDefault = existing.auth?.trustedUsers?.[0] !== undefined
       ? nativeMxid(existing.auth.trustedUsers[0])
-      : botUserId;    const adminRaw = (await ask(`信任用户(管理员)MXID [默认 ${trustedDefault}]: `)).trim() || trustedDefault;
+      : botUserId;
+    const adminRaw = (await ask(`信任用户(管理员)MXID [默认 ${trustedDefault}]: `)).trim() || trustedDefault;
     if (!adminRaw.startsWith("@")) throw new Error("MXID 应以 @ 开头,如 @barry:matrix.example.com");
 
     // ---- 4.5 trusted rooms (optional) ---------------------------------------
@@ -284,6 +285,22 @@ export async function runSetup(): Promise<void> {
     const mpRaw = (await ask(`启用多工程模式? [y/N](多工程=管理房间+项目房间隔离,可用 /pmctl;默认 N=单工程,一个 bot 对应一个 pi): `)).trim().toLowerCase();
     const multiProject = mpRaw === "y" || mpRaw === "yes" || (mpRaw === "" && mpDefault);
 
+    // ---- 6.7 space (organizational, multi-project only) ----------------------
+    // Fresh configs default ON (new deployments get the grouped view);
+    // existing configs default to their current state — legacy configs stay
+    // off until the user opts in. The prompt only appears with multi-project;
+    // space.roomId etc. survive the merge untouched.
+    const hasExistingConfig = Object.keys(existing).length > 0;
+    const spaceDefault = hasExistingConfig ? existing.space?.enabled === true : true;
+    let spaceEnabled = false;
+    if (multiProject) {
+      const spPrompt = spaceDefault
+        ? "启用空间组织? [Y/n](Element 空间收纳管理/项目房间,重启后自动创建): "
+        : "启用空间组织? [y/N](Element 空间收纳管理/项目房间,重启后自动创建): ";
+      const spRaw = (await ask(spPrompt)).trim().toLowerCase();
+      spaceEnabled = spRaw === "" ? spaceDefault : spRaw === "y";
+    }
+
     // ---- merge & save --------------------------------------------------------
     // Keep untouched fields (sessionDir / cliPath / logLevel / hideToolCalls …)
     // from the existing config instead of overwriting the whole file.
@@ -299,6 +316,7 @@ export async function runSetup(): Promise<void> {
       workdir,
       instanceName,
       multiProject,
+      space: { ...existing.space, enabled: spaceEnabled },
       deviceId,
       autoConnect: existing.autoConnect ?? true,
       debug: existing.debug ?? true,
@@ -312,6 +330,9 @@ export async function runSetup(): Promise<void> {
     console.log(`   工作目录: ${workdir}`);
     console.log(`   实例名: ${instanceName}(用于多台部署区分,显示在管理房间名)`);
     console.log(`   多工程: ${multiProject ? "开启" : "关闭(单工程)"}`);
+    if (multiProject) {
+      console.log(`   空间组织: ${spaceEnabled ? "开启(重启后创建空间并收纳管理/项目房间)" : "关闭"}`);
+    }
     console.log(`   设备 ID: ${deviceId}(固定,重跑 setup 复用;想换设备就删掉此字段)`);
     const roomList = Object.entries(rooms).map(([id, c]) => `${id} (${c.mode})`).join(", ");
     console.log(`   信任房间: ${roomList || "无(群聊默认不回应;可后续用 /enable 添加)"}`);
