@@ -17,12 +17,13 @@
 8. [阶段五:从 fork 到独立项目](#8-阶段五从-fork-到独立项目)
 9. [阶段六:一键 CLI](#9-阶段六一键-cli)
 10. [阶段七:发布到 npm](#10-阶段七发布到-npm)
-11. [踩坑全记录](#11-踩坑全记录)
-12. [技术架构](#12-技术架构)
-13. [关键设计决策](#13-关键设计决策)
-14. [版本演进](#14-版本演进)
-15. [经验与反思](#15-经验与反思)
-16. [未来展望](#16-未来展望)
+11. [阶段八:从单工程到多工程、再到空间组织](#11-阶段八从单工程到多工程再到空间组织)
+12. [踩坑全记录](#12-踩坑全记录)
+13. [技术架构](#13-技术架构)
+14. [关键设计决策](#14-关键设计决策)
+15. [版本演进](#15-版本演进)
+16. [经验与反思](#16-经验与反思)
+17. [未来展望](#17-未来展望)
 
 ---
 
@@ -484,11 +485,96 @@ npm install -g pi-courier
 
 ---
 
-## 11. 踩坑全记录
+## 11. 阶段八:从单工程到多工程、再到空间组织(0.1.17–0.1.33)
+
+0.1.16 之后,项目进入**功能迭代与架构收敛**阶段。这一阶段从"补体验细节"开始,逐步长出多工程模式、统一工程管理(`/pmctl`)和 Element 空间组织三大能力,最后以一次大规模架构重构(spec #11)收官。
+
+### 11.1 体验细节打磨(0.1.17–0.1.21)
+
+发布后陆续收到真实的体验问题,逐一修补:
+
+**0.1.17 静默密码与 E2EE 报错提示** —— setup 里密码输入 `readline` 静默(回显与事件丢失),且 Matrix E2EE 相关报错全是英文裸错。加上星号回显提示与友好的 E2EE 错误提示文案。
+
+**0.1.18 E2EE 二进制重复下载** —— 每次 `npm update` / 重装都重新下载 21MB 的原生库。改为:二进制已存在则跳过下载(检测到目标文件存在直接复用)。这是"升级代价"里最实际的痛点之一。
+
+**0.1.19 密码星号回显** —— 修复密码输入时无任何反馈的问题,每个字符以 `*` 回显。
+
+**0.1.20 固定设备 ID** —— 这是 E2EE 坑的一个根治。此前每次重跑 setup 都会生成新的 device_id,导致上一节 §12.3 的 `M_BAD_JSON device_keys 不匹配` 问题反复发作。改为 **password 登录使用固定 device ID**(形如 `PICOURIERXXXXXXXX`),重跑 setup 复用同一设备 → 不再触发该坑。README FAQ 里"重跑 setup 要删 crypto store"的提醒也随之弱化。
+
+**0.1.21 `/abort` 改名 `/stop`** —— 语义更清晰(对应 TUI 的 Esc),保留 `/abort` 作为别名。
+
+### 11.2 `/reload` 与信任房间(0.1.22–0.1.23)
+
+**0.1.22 修复 `/reload` 静默失败** —— `/reload`(重启 pi 进程)此前失败时没有反馈,用户以为成功其实没重载。补上成功/失败反馈与生命周期错误处理。
+
+**0.1.23 setup 增加信任房间步骤** —— 此前只能在配置文件里手写群聊房间 ID。故在向导里新增"信任房间 ID"一步(可选,逗号分隔多个),配合 `trusted-only` 默认策略,群聊接入不再需要手动改配置。
+
+### 11.3 多工程模式(0.1.24–0.1.26)
+
+这是从"一个 bot 对一个 pi"到"一个 bot 管多个项目"的能力跃迁。
+
+**0.1.24 多工程房间 + `/pmctl`** —— 核心铺垫:
+- 引入**工程房间**(project room):每个 `/pmctl new` 出来的工程对应一个独立房间 + 独立 pi 子进程(懒启动,不常驻)
+- **`/pmctl` 统一工程管理命令**(仅管理房间可用):`new` / `list` / `show` / `rm` / `mv` / `rename`
+- `new` 路径可选,默认 `<工程根>/<name>`;`new/mv` 接受相对工程根的路径
+- `/enable` 支持在群聊内部直接启用(无需房间 ID),未启用多人群聊一次性入群提示
+- 修复:工程房间不 branding、project rpc 懒启动、`/pmctl` 在首条 DM 也能用(管理房间判定改为 room-ID 驱动,而非成员关系推导)
+
+**0.1.25 管理房间收敛** —— 管理房间从"admin 的 DM"改为"**bot 成功授权消息的第一个房间**(非工程、≤2 人)",重命名为 `项目管理(<实例名>)`、发送使用指南、room ID 持久化到 `config.managementRooms`。增加实例名(机器名)以区分多机部署。
+
+**0.1.26 单/多工程开关** —— 新增 `/multiproject on|off`(trusted 用户,重启生效)。**默认单工程模式**(一个 bot ↔ 一个 pi,无管理/工程房间,`/pmctl` 不可用),保持简单;需要时再开多工程。setup 里也加了"启用多工程模式?"一步。
+
+### 11.4 markdown 渲染与杂项(0.1.27–0.1.32)
+
+**0.1.27 提升 readline 监听器上限** —— setup 里动态注册多条监听器触发 `MaxListenersExceededWarning`,提升上限消除告警。
+
+**0.1.28 markdown-it 渲染回复** —— pi 回复里的 markdown 用 markdown-it 渲染,聊天里代码块、加粗等正常展示(此前是纯文本)。
+
+**0.1.29 工程房间命名** —— 名称带实例名:`<工程>(<实例>)`,多机部署下同工程名不混淆。
+
+**0.1.30 `/pmctl new` 提升创建者为管理员** —— 建工程时把发起人设为该工程房间的 admin,方便其直接管理。
+
+**0.1.31–0.1.32 CLI `-v/--version`** —— 显示安装版本,并在 usage / README / 头注释里统一呈现(31 实现,32 补齐文档)。
+
+### 11.5 架构重构:spec #11(0.1.33)
+
+一次大规模 prefactor(由 spec #11 的 #4–#15 多张票驱动),目标是把"能跑"变成"能长住":
+
+| 票 | 内容 |
+|---|---|
+| #4 | 入口与依赖减负:砍掉多余的抽象层与入口 |
+| #5 | 授权策略收敛进 router:群聊 `/enable` 复活、DM `/help` 归一(单一 `handleIncoming` 管道) |
+| #6 | Transport / RoomOps 接口拆分:删 TransportManager、统一"不可用"语义 |
+| #7 | ConfigStore 单一写者:热路径零读盘、测试去真实目录化 |
+| #8 | RoomBinding 回复路由:按进程绑定回信目标,删除进程级单槽 |
+| #9 | `/pmctl` 升格 PmctlController:依赖注入,命令映射退回"纯 pi 命令" |
+| #10 | 认证拆分:纯策略引擎 + effect 返回式 admin 处理(依赖通过注入) |
+| #12 | tests 纳入 typecheck 门禁 |
+| #13 | workdir 首启决策抽模块,走 ConfigStore 单一写路径 |
+| #14 | namespacedId 收敛 + `node:` 导入前缀 |
+| #15 | 文档同步 |
+
+### 11.6 空间组织:spec #16(0.1.33)
+
+Element 空间的纯组织视图,五张票收官:
+
+| 票 | 内容 |
+|---|---|
+| #1 | 空间懒创建 + bot 自建管理房间:启动期 ensure 私有空间 `pi-courier · <实例名>`,幂等锚点为 `config.space.roomId` / `managementRooms[0]`;失败降级无空间行为 |
+| #2 | setup 空间启用提示:新配置默认开,已有配置保持现状 |
+| #3 | 工程房间挂入空间 + `/pmctl rm` 先摘链再退房 |
+| #4 | challenge 通过自动邀请进空间:fire-once + 自愈 |
+| #5 | 文档同步(中英 README + DEVELOPMENT.md) |
+
+空间特性与 §14 的"空间=纯组织视图"设计决策一致:只做展示层收纳,不承载任何授权判定。
+
+---
+
+## 12. 踩坑全记录
 
 这一章把开发过程中遇到的所有坑按主题归档。**每一个坑都是真实遇到、真实解决的**,README 的 FAQ 就是从这里提炼的。
 
-### 11.1 网络与代理(坑最多的一类)
+### 12.1 网络与代理(坑最多的一类)
 
 这台部署机的网络环境特殊:外网必须走代理。
 
@@ -501,7 +587,7 @@ npm install -g pi-courier
 
 **核心教训:一套代理配置覆盖不了所有流量。** npm 的 `proxy` 配置只作用于 npm 自身的 HTTP 客户端;postinstall 脚本里的 node fetch 走的是环境变量。两套必须分别配。
 
-### 11.2 Node 版本混用(最隐蔽的坑)
+### 12.2 Node 版本混用(最隐蔽的坑)
 
 systemd 服务反复重启,日志显示:
 
@@ -516,7 +602,7 @@ TypeError: webidl.util.markAsUncloneable is not a function
 
 **教训**:Node 版本混用(nvm v24 + 系统 v20)会造成跨进程的诡异问题。解决之道不是修一处,而是**全机统一版本**。
 
-### 11.3 E2EE 相关
+### 12.3 E2EE 相关
 
 | 坑 | 现象 | 解决 |
 |---|---|---|
@@ -529,7 +615,7 @@ TypeError: webidl.util.markAsUncloneable is not a function
 
 **加密房间的结论**:bot 账号没有交叉签名,Element 里"用户验证不可用";实测即使取消"仅向已验证设备共享密钥"也拿不到密钥。**最可靠的方案就是非加密房间** —— 配置 `encryption: true` 不影响普通房间。
 
-### 11.4 npm link / 安装
+### 12.4 npm link / 安装
 
 | 坑 | 现象 | 解决 |
 |---|---|---|
@@ -537,7 +623,7 @@ TypeError: webidl.util.markAsUncloneable is not a function
 | EEXIST | `npm install -g` 报文件已存在 | `npm unlink -g` + 删 bin |
 | allow-scripts 拦截 | 原生库 postinstall 被跳 | 手动下载或 approve |
 
-### 11.5 pi 会话相关
+### 12.5 pi 会话相关
 
 | 坑 | 现象 | 解决 |
 |---|---|---|
@@ -546,7 +632,7 @@ TypeError: webidl.util.markAsUncloneable is not a function
 
 **`--continue` 的验证过程值得一提**:第一次测试失败(两次启动 session id 不同),排查后发现是**测试脚本没发消息**,空会话根本不落盘。补上一条真实 prompt 后,重启验证通过 —— session id 完全一致。测试要模拟真实使用,这个教训很典型。
 
-### 11.6 其他
+### 12.6 其他
 
 | 坑 | 现象 | 解决 |
 |---|---|---|
@@ -558,9 +644,9 @@ TypeError: webidl.util.markAsUncloneable is not a function
 
 ---
 
-## 12. 技术架构
+## 13. 技术架构
 
-### 12.1 运行时架构
+### 13.1 运行时架构
 
 ```
 ┌──────────────┐    Matrix
@@ -578,7 +664,7 @@ TypeError: webidl.util.markAsUncloneable is not a function
 - pi 负责:LLM 对话、工具调用、会话管理、技能/模板展开
 - 两者通过 stdio 上的 JSONL(RPC 协议)通信
 
-### 12.2 消息路由
+### 13.2 消息路由
 
 ```
 Matrix 消息(transport 只做纯 I/O,不做授权判定)
@@ -592,23 +678,24 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 
 策略(认证、挑战码、群 /enable)只存在于 router 的 `handleIncoming` 管道一份,管理命令判定在 `src/auth/admin-commands.ts`(纯输入输出,effects 由 router 落盘——`persistAuth` 写 auth 快照、`hideToolCalls` 写开关、`spaceInvite` 触发空间 fire-once 邀请);transport 侧不做任何授权判定(否则未启用房间的消息到不了 `/enable`,该功能在真实链路上不可达)。注意:/enable 步骤在「授权生效」之前执行,但位于「授权计算」之后——两者缺一不可。/pmctl 的门禁与动作集中在 PmctlController,邀请目标由 router 以 transport 原生 MXID 传入。
 
-### 12.3 回复机制
+### 13.3 回复机制
 
 - 对话类回复:监听 agent 事件流的 `turn_end`,按来源进程的 RoomBinding 回信(`message_end` 仅记录日志)
 - 同一默认进程内跨 DM 的对话归属是协议限制(pi 的 RPC 无 chat 概念):绑定跟随最近一次提示;项目房间进程独占、天然钉住
 - 命令类回复(统计/模型列表):直接等 RPC 响应
 - 流式期间发消息:自动附加 `streamingBehavior: "steer"/"followUp"`
 
-### 12.4 会话模型
+### 13.4 会话模型
 
 - pi 会话按 workdir 分目录存储在 `~/.pi/agent/sessions/`
 - bridge 启动时传 `--continue`,恢复该 workdir 下最近会话
 - `/new` 开新会话,下次重启恢复新会话
 - `/reload` 重启 pi 进程,会话无损(文件在磁盘)
+- 多工程模式下,每个工程房间绑定一个独立 pi 进程(懒启动),会话按各工程 workdir 隔离,互不影响
 
 ---
 
-## 13. 关键设计决策
+## 14. 关键设计决策
 
 1. **RPC 模式而非扩展模式**:命令能力是硬需求,扩展模式在架构上无法满足。
 2. **用官方 RpcClient**:不重复造轮子,协议细节交给官方维护。
@@ -619,10 +706,13 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 7. **systemd 用户级服务**:无需 sudo,绝对路径 + PATH 显式控制,避免环境漂移。
 8. **scoped npm 包**:包名冲突用账号 scope 解决,命令名不受影响。
 9. **空间 = 纯组织视图**:Element 空间只做展示层收纳,不承载任何授权判定(不加 restricted room);信任模型与房间权限零改动,任何失败降级为无空间行为。
+10. **单工程默认、多工程可选**:保持"一个 bot 对一个 pi"的默认简单模型,复杂多工程能力按需开启(`/multiproject`),不把复杂度强加给普通用户。
+11. **每个工程一个独立 pi 进程**:工程间进程隔离、会话独立、互不干扰;懒启动按需拉起,避免多工程常驻资源浪费。
+12. **固定设备 ID**:password 登录用稳定 device_id,把"重跑 setup 就触发 E2EE 设备坑"这类可预见问题从根上消除,而不是靠 FAQ 让用户手动删 crypto store。
 
 ---
 
-## 14. 版本演进
+## 15. 版本演进
 
 | 版本 | 内容 |
 |---|---|
@@ -638,22 +728,41 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 | 0.1.14 | 容器 PID 复用锁接管;Docker 多阶段构建瘦身 + bin 符号链接重建 |
 | 0.1.15 | 加密存储目录改名 pi-courier-matrix-crypto;Docker 版本号进 Dockerfile |
 | 0.1.16 | **环境变量一键部署**:Matrix 配置全 env 化(PI_MATRIX_TRUSTED_USERS/ENCRYPTION/WORKDIR/LOG_LEVEL);LLM key 走 pi 原生 `${ENV}` 模板(PI_LLM_API_KEY);settings env 由 entrypoint 渲染;compose + .env.example |
+| 0.1.17 | setup 静默密码 + 友好 E2EE 错误提示 |
+| 0.1.18 | E2EE 21MB 二进制已存在则跳过重复下载(升级提速) |
+| 0.1.19 | 密码输入星号回显 |
+| 0.1.20 | **固定设备 ID**:password 登录稳定 device_id,根治重跑 setup 触发 E2EE 坑 |
+| 0.1.21 | `/abort` 改名 `/stop`(语义更清晰,保留别名) |
+| 0.1.22 | 修复 `/reload` 静默失败,补成功/失败反馈 |
+| 0.1.23 | setup 增加信任房间步骤;群聊接入不再依赖手改配置 |
+| 0.1.24 | **多工程房间 + `/pmctl`**:独立工程房间/独立 pi 进程;统一工程管理命令 new/list/show/rm/mv/rename;`/enable` 群内直启 |
+| 0.1.25 | 管理房间收敛:bot 成功授权消息的首个房间 + 实例名;room ID 持久化 |
+| 0.1.26 | **单/多工程开关** `/multiproject`;默认单工程,setup 可选多工程 |
+| 0.1.27 | setup 提升 readline 监听器上限(消除 MaxListenersExceededWarning) |
+| 0.1.28 | markdown-it 渲染回复(代码块/加粗正常展示) |
+| 0.1.29 | 工程房间命名带实例名 `<工程>(<实例>)` |
+| 0.1.30 | `/pmctl new` 将发起人设为该工程房间 admin |
+| 0.1.31 | CLI `-v/--version` 显示安装版本 |
+| 0.1.32 | README/usage/头注释统一呈现 `-v/--version` |
+| 0.1.33 | **架构重构(spec #11)+ 空间组织(spec #16)**:授权单管道、Transport/RoomOps 拆分、ConfigStore 单写者、RoomBinding 回复路由、PmctlController、纯策略认证;Element 空间懒创建 + bot 自建管理房间、工程房间挂空间、challenge 自动邀请进空间,失败降级无空间行为 |
 
 GitHub 仓库:[github.com/Hi-Barry/pi-courier](https://github.com/Hi-Barry/pi-courier)(私有)
 npm 包:[pi-courier](https://www.npmjs.com/package/pi-courier)
 ---
 
-## 15. 经验与反思
+## 16. 经验与反思
 
-### 15.1 技术层面
+### 16.1 技术层面
 
 1. **源码是最后的真相**:pi 的 `sendUserMessage` 限制、`defaultProvider` 字段名、`--continue` 参数,都是靠读源码确认的。文档会过时,源码不会。
 2. **代理是双轨的**:npm 的 proxy 配置和环境变量是两个世界。遇到下载慢,先分清走的是哪条路。
 3. **Node 版本统一是底线**:nvm 和系统 node 混用,会在最隐蔽的地方出最诡异的问题。
 4. **测试要模拟真实使用**:空会话不落盘导致 --continue 测试假失败,补上真实消息才暴露真相。
 5. **发布流程要演练**:scope 存在性、2FA、同步延迟,这些"发布手册"里的小字,全是实际拦路的坑。
+6. **治本优于给 FAQ 打补丁**:E2EE 设备坑最初靠"重跑 setup 就删一次 crypto store"的 FAQ 缓解;固定设备 ID 一出,这个坑从根上消失。能消除诱因时,别只教用户绕路。
+7. **默认简单、按需复杂**:单工程默认、多工程可选、空间纯展示,都是同一个原则 —— 把复杂度藏到开关后面,让绝大多数用户走最省心的路径。
 
-### 15.2 流程层面
+### 16.2 流程层面
 
 1. **小步走,每步验证**:整个项目按"调研 → 冒烟 → 骨架 → 联调 → 独立 → 简化 → 发布"推进,每阶段都有可验证的产出(测试、冒烟脚本、真实消息)。
 2. **先讨论后实现**:项目后期用户明确了"问题未达成一致前不得动手"的规则。回头看不只是沟通礼仪 —— 架构反转(内置 pi → pi 独立)如果闷头做完再返工,成本会大得多。
@@ -661,12 +770,13 @@ npm 包:[pi-courier](https://www.npmjs.com/package/pi-courier)
 
 ---
 
-## 16. 未来展望
+## 17. 未来展望
 
 - **上游演进**:matrix-sdk-crypto-nodejs 未来若改用每平台 optionalDependencies 包(esbuild 模式),21MB 下载坑自动消失,我们零成本受益。
 - **更多平台**:0.2.0 起专注 Matrix,transports 层已精简;若未来需要 Telegram/WhatsApp/Slack/Discord,可从上游 pi-messenger-bridge 重新引入对应 transport。
 - **E2EE 深度支持**:加密房间目前建议非加密房间绕行;若未来需要,可探索 bot 交叉签名方案。
-- **更多平台打包**:当前是 npm 包 + systemd 用户级服务,可考虑容器化。
+- **部署形态**:当前覆盖 npm 包 + systemd 用户级服务 + Docker env 一键部署;未来可考虑 compose 多实例、K8s 化等编排场景。
+- **多工程生态**:工程房间目前由 `/pmctl` 手工管理;未来可探索与仓库/环境感知联动(如按 git remote 自动映射工程)。
 
 ---
 
