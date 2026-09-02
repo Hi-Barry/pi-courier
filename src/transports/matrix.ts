@@ -11,7 +11,8 @@ import {
   SimpleFsStorageProvider,
 } from "matrix-bot-sdk";
 import type { ExternalMessage } from "../types.js";
-import type { RoomOps, Transport } from "./interface.js";
+import type { Transport } from "./interface.js";
+import { MatrixRoomOps } from "./matrix-rooms.js";
 import {
   extractUsername,
   formatForMatrix,
@@ -25,8 +26,12 @@ import {
 /**
  * Matrix transport provider using matrix-bot-sdk
  * Works with any Matrix homeserver — Element X, Element Web, FluffyChat, etc.
+ *
+ * Message I/O only. The room-capability half (RoomOps) lives in the
+ * composed matrix-rooms adapter; the composition root hands that to the
+ * /pmctl path and the startup space ensure.
  */
-export class MatrixProvider implements Transport, RoomOps {
+export class MatrixProvider implements Transport {
   readonly type = "matrix";
   private client?: MatrixClient;
   private _isConnected = false;
@@ -36,8 +41,16 @@ export class MatrixProvider implements Transport, RoomOps {
   private joinedRooms = new Set<string>();
   private roomMemberCount = new Map<string, number>();
   private connectedAt = 0;
-  /** Whether the E2EE crypto stack actually loaded (see RoomOps doc). */
-  encryptionAvailable = false;
+
+  /** Room-capability half of the Matrix integration (see matrix-rooms.ts). */
+  readonly roomOps = new MatrixRoomOps({
+    getClient: () => this.client,
+    getBotUserId: () => this.botUserId,
+    onLeftRoom: (roomId) => {
+      this.joinedRooms.delete(roomId);
+      this.roomMemberCount.delete(roomId);
+    },
+  });
 
   constructor(
     private config: { homeserverUrl: string; accessToken: string; encryption?: boolean },
@@ -49,111 +62,6 @@ export class MatrixProvider implements Transport, RoomOps {
 
   get isConnected(): boolean {
     return this._isConnected;
-  }
-
-  /** Create a private room — the general primitive (name + invitees; E2EE
-   *  state opt-in, only pass encrypted=true when encryptionAvailable). */
-  async createRoom(opts: { name: string; inviteUserIds: string[]; encrypted?: boolean }): Promise<string> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    const roomId = await this.client.createRoom({
-      name: opts.name,
-      invite: opts.inviteUserIds,
-      preset: "private_chat",
-      ...(opts.encrypted
-        ? {
-            initial_state: [
-              {
-                type: "m.room.encryption",
-                state_key: "",
-                content: { algorithm: "m.megolm.v1.aes-sha2" },
-              },
-            ],
-          }
-        : {}),
-    });
-    return roomId;
-  }
-
-  /** Create a private project room (used by /pmctl new). */
-  async createProjectRoom(name: string, inviteUserId: string): Promise<string> {
-    return this.createRoom({ name, inviteUserIds: [inviteUserId] });
-  }
-
-  /** Create a private space (m.space organizational container). */
-  async createSpace(opts: { name: string; inviteUserIds: string[] }): Promise<string> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    return this.client.createRoom({
-      name: opts.name,
-      invite: opts.inviteUserIds,
-      preset: "private_chat",
-      visibility: "private",
-      creation_content: { type: "m.space" },
-    });
-  }
-
-  /** Link a room into a space (used by the startup space ensure). */
-  async addRoomToSpace(spaceRoomId: string, childRoomId: string): Promise<void> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    const via = this.botUserId ? [this.botUserId.split(":")[1] ?? ""] : [];
-    // m.space.child (state_key = child room id) is what makes Element show
-    // the room inside the space.
-    await this.client.sendStateEvent(spaceRoomId, "m.space.child", childRoomId, { via });
-    // m.room.parent lives in the child room; the bot may lack power there
-    // (rooms it did not create). Element works from m.space.child alone.
-    try {
-      await this.client.sendStateEvent(childRoomId, "m.room.parent", spaceRoomId, {
-        via,
-        canonical: true,
-      });
-    } catch {
-      // best-effort
-    }
-  }
-
-  /** Unlink a room from a space (used by /pmctl rm). */
-  async removeRoomFromSpace(spaceRoomId: string, childRoomId: string): Promise<void> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    // Empty content drops the child from the space's view (m.space.child
-    // with no via servers is not a resolvable child).
-    await this.client.sendStateEvent(spaceRoomId, "m.space.child", childRoomId, {});
-    // Clear the child-side badge too — best-effort; the bot leaves the room
-    // right after, so remaining members keep a clean room header.
-    try {
-      await this.client.sendStateEvent(childRoomId, "m.room.parent", spaceRoomId, {});
-    } catch {
-      // best-effort
-    }
-  }
-
-  /** Invite a user into a room (space membership). */
-  async inviteUser(roomId: string, userId: string): Promise<void> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    await this.client.inviteUser(userId, roomId);
-  }
-
-  /** Rename a room (used to brand the DM as the management room). */
-  async setRoomName(roomId: string, name: string): Promise<void> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    await this.client.sendStateEvent(roomId, "m.room.name", "", { name });
-  }
-
-  /** Have the bot actively leave a room (used by /pmctl rm). */
-  async leaveRoom(roomId: string, reason?: string): Promise<void> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    await this.client.leaveRoom(roomId, reason);
-    this.joinedRooms.delete(roomId);
-    this.roomMemberCount.delete(roomId);
-  }
-
-  /** The bot's own Matrix user ID (null if not connected). */
-  getBotUserId(): string | null {
-    return this.botUserId ?? null;
-  }
-
-  /** Set a user's power level in a room (used to make the project owner admin). */
-  async setUserPowerLevel(roomId: string, userId: string, level: number): Promise<void> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    await this.client.setUserPowerLevel(userId, roomId, level);
   }
 
   // Formatting delegated to matrix-utils.ts (pure, testable)
@@ -292,7 +200,7 @@ export class MatrixProvider implements Transport, RoomOps {
     }));
     this.connectedAt = Date.now();
     this._isConnected = true;
-    this.encryptionAvailable = cryptoProvider !== undefined;
+    this.roomOps.encryptionAvailable = cryptoProvider !== undefined;
     const cryptoStatus = cryptoProvider ? "E2EE enabled" : "E2EE disabled";
     console.log(`✅ Matrix connected as ${this.botUserId} (${rooms.length} rooms, ${cryptoStatus})`);
   }
