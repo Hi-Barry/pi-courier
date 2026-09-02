@@ -15,6 +15,8 @@ import type { RoomOps, Transport } from "./interface.js";
 import {
   extractUsername,
   formatForMatrix,
+  isGroupChatRoom,
+  shouldPostJoinHint,
   shouldSkipEvent,
   stripBotMention,
   wasBotMentioned,
@@ -214,7 +216,7 @@ export class MatrixProvider implements Transport, RoomOps {
           // Multi-user room that isn't explicitly enabled: post a one-time
           // hint so the inviter knows how to enable it. The room.join event
           // only fires on (re)join, so this is naturally idempotent.
-          if (members.length > 2 && !this.isRoomEnabled(roomId)) {
+          if (shouldPostJoinHint(members.length, this.isRoomEnabled(roomId))) {
             this.sendMessage(
               roomId,
               `🤖 我已加入这个群聊,但默认不回应群消息。\n\n` +
@@ -368,7 +370,7 @@ export class MatrixProvider implements Transport, RoomOps {
         memberCount = 2; // Default to DM if we can't check
       }
     }
-    const isGroupChat = memberCount > 2;
+    const isGroupChat = isGroupChatRoom(memberCount);
 
     // Check if bot was mentioned (pure utility)
     const wasMentioned = isGroupChat ? wasBotMentioned(messageText, this.botUserId) : false;
