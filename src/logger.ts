@@ -6,9 +6,11 @@
  * via `--level debug` (run / logs), and config `logLevel` can lower/raise
  * the write threshold for the service.
  *
- * Output format: `[ISO timestamp] [LEVEL] message` — one line per call.
- * Objects are JSON-serialized; long strings are truncated (bounded lines,
- * journald-friendly).
+ * Output format: `[ISO timestamp] [LEVEL] [label] message` — one line per
+ * call; the `[label]` segment appears only on `withLabel()` views (project
+ * tagging). Objects are JSON-serialized; string args are newline-flattened
+ * (⏎) so one call always yields one physical line (journald-friendly, and a
+ * tagged line can never be split into unlabeled continuations).
  */
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -49,6 +51,10 @@ export interface LeveledLogger {
   setLogLevel(level: LogLevel): void;
   getLogLevel(): LogLevel;
   isEnabled(level: LogLevel): boolean;
+  /** Derive a view that prefixes every line with `[label]` (project tagging).
+   *  Threshold and suppression are read through to the parent on every call.
+   *  An empty/undefined label yields the parent itself (no-op derivation). */
+  withLabel(label: string | undefined): LeveledLogger;
   debug(...args: unknown[]): void;
   info(...args: unknown[]): void;
   warn(...args: unknown[]): void;
@@ -67,10 +73,11 @@ export function createLogger(initial: LogLevel = "info"): LeveledLogger {
 
   const isEnabled = (level: LogLevel): boolean => LEVEL_ORDER[level] >= LEVEL_ORDER[threshold];
 
-  const write = (level: LogLevel, args: unknown[]): void => {
+  const write = (level: LogLevel, args: unknown[], label?: string): void => {
     if (!isEnabled(level)) return;
     if (isSuppressed(args)) return;
-    const line = [`[${new Date().toISOString()}]`, `[${LEVEL_NAMES[level]}]`, ...args.map(formatArg)].join(" ");
+    const labelPart = label ? [`[${label}]`] : [];
+    const line = [`[${new Date().toISOString()}]`, `[${LEVEL_NAMES[level]}]`, ...labelPart, ...args.map(formatArg)].join(" ");
     if (level === "error" || level === "warn") {
       console.error(line);
     } else {
@@ -78,17 +85,32 @@ export function createLogger(initial: LogLevel = "info"): LeveledLogger {
     }
   };
 
-  return {
+  const logger: LeveledLogger = {
     setLogLevel: (level: LogLevel) => {
       threshold = level;
     },
     getLogLevel: () => threshold,
     isEnabled,
+    withLabel: (label: string | undefined) => {
+      const trimmed = label?.trim();
+      if (!trimmed) return logger;
+      return {
+        setLogLevel: logger.setLogLevel,
+        getLogLevel: () => threshold,
+        isEnabled: (level) => isEnabled(level),
+        withLabel: (next) => (next?.trim() ? logger.withLabel(next.trim()) : logger),
+        debug: (...args: unknown[]) => write("debug", args, trimmed),
+        info: (...args: unknown[]) => write("info", args, trimmed),
+        warn: (...args: unknown[]) => write("warn", args, trimmed),
+        error: (...args: unknown[]) => write("error", args, trimmed),
+      };
+    },
     debug: (...args: unknown[]) => write("debug", args),
     info: (...args: unknown[]) => write("info", args),
     warn: (...args: unknown[]) => write("warn", args),
     error: (...args: unknown[]) => write("error", args),
   };
+  return logger;
 }
 
 /** Parse a CLI/config level string; undefined when invalid. */
@@ -102,7 +124,8 @@ export function parseLogLevel(value: string): LogLevel | undefined {
 
 function formatArg(arg: unknown): string {
   if (typeof arg === "string") {
-    return arg.length > MAX_STRING ? `${arg.slice(0, MAX_STRING)}…(+${arg.length - MAX_STRING} chars)` : arg;
+    const oneLine = arg.replace(/\r\n|\r|\n/g, "⏎");
+    return oneLine.length > MAX_STRING ? `${oneLine.slice(0, MAX_STRING)}…(+${oneLine.length - MAX_STRING} chars)` : oneLine;
   }
   if (typeof arg === "object" && arg !== null) {
     try {
