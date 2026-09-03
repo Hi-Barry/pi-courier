@@ -225,6 +225,18 @@ pi 0.83.0 就绪。
 **`src/transports/matrix-utils.ts`** —— Matrix 纯函数(无 SDK/网络依赖,直测)
 - markdown 渲染(`formatForMatrix`)、事件过滤(`shouldSkipEvent`)、提及解析(`wasBotMentioned`/`stripBotMention`)、群/DM 判定(`isGroupChatRoom`)与入群提示谓词(`shouldPostJoinHint`)
 
+**`src/logger.ts`** —— 分级日志门面(spec #34 后支持项目标签)
+- 输出 `[ISO时间] [LEVEL] [标签] 消息`;`withLabel()` 派生视图打项目标签(视图动态读父阈值);字符串参数换行净化为 `⏎`,一次调用恒一条物理行(打标行不会被续行破坏)
+- 无标签行与历史逐字节一致(单工程模式零变化)
+
+**`src/project-labels.ts`** —— 项目标签单点解析与校验(spec #34)
+- `projectLabelOf`:name ?? 工作目录 basename;`validateProjectLabel`:禁方括号/空白、≤30、大小写不敏感查重(日志格式与过滤正确性的地基)
+- 消费方:/pmctl new·rename 校验、日志打标、`logs <项目>` 匹配 —— 三处共用一条规则
+
+**`src/log-filter.ts`** —— journalctl argv 纯构造器(spec #34)
+- 级别档位与项目标签编译为锚定 `--grep`(`--case=0` 大小写不敏感、正则转义、多项目 OR);未知项目报错列可用
+- 背景:journald 不解析 stdout 自定义字段(实测 systemd 257),`-p` priority 在 `StandardOutput=inherit` 下恒 6(`--level warn` 因此从未生效)——改为行内锚定 grep 一并修复
+
 **`src/management-room.ts`** —— 管理房间文案单点组装(房间名 + 使用指南),DM 采纳与空间自建两条入口共用,杜绝文案漂移
 
 **`src/standalone.ts`** —— 独立入口
@@ -425,8 +437,8 @@ pi-courier enable     安装用户级 systemd 服务 + 开机自启 + 启动
 pi-courier start      启动服务
 pi-courier stop       停止服务
 pi-courier restart    重启服务
-pi-courier status     服务状态 + 最近日志
-pi-courier logs       跟踪日志
+pi-courier status     服务状态 + 最近日志(可加项目名过滤)
+pi-courier logs       跟踪日志(可加项目名过滤:logs <项目...> [--level <lvl>])
 pi-courier disable    卸载服务(停止 + 取消自启 + 删 unit)
 pi-courier update     更新本项目(自动走 npm)
 ```
@@ -497,7 +509,7 @@ npm install -g pi-courier
 
 ---
 
-## 11. 阶段八:从单工程到多工程、再到空间组织(0.1.17–0.1.33)
+## 11. 阶段八:从单工程到多工程、再到空间组织(0.1.17–0.1.36)
 
 0.1.16 之后,项目进入**功能迭代与架构收敛**阶段。这一阶段从"补体验细节"开始,逐步长出多工程模式、统一工程管理(`/pmctl`)和 Element 空间组织三大能力,最后以一次大规模架构重构(spec #11)收官。
 
@@ -594,6 +606,12 @@ matrix.ts 三职责拆分的收官票系,接口与消费路径零改动:
 ### 11.8 spec #22 的日志行为差异说明
 
 票 #25 有两处有意可见性变化(其余为语义等价迁移):SDK trace/debug 在默认 info 阈值下静默(原 RichConsoleLogger 全打,`--level debug` 仍可见);同步噪音过滤从"仅 error 级 + 两个 SDK 模块门控"放宽为"窗口期内任意模块/级别的子串匹配"——门面不认识 SDK 模块名,窗口受 `client.start()` 作用域约束、finally 保证关闭(旧实现在 start() 失败后会永久遗留过滤 logger)。
+
+### 11.9 日志按项目区分:spec #34(0.1.36)
+
+多工程模式所有日志曾混在一条 journald 流里无法区分归属。方案实测后定为**行内标签 + 锚定 grep**:每条项目相关日志渲染 `[时间] [LEVEL] [项目] 消息`(📥 收信、📤 回信、全部 [agent] 事件、项目进程生命周期),`pi-courier logs <项目...>` 编译为 `journalctl --grep '\[(档位)\] \[(转义标签…)\]' --case=0`。未走结构化字段路线的原因见 §5.1 log-filter 条目(实测:journald 不解析 stdout 自定义字段;native socket 收益不抵成本)。
+
+行为说明(有意变化):① `--level warn/error` 过去因 `-p` 失效恒返回空,现在真正过滤(行内档位锚定);② `logs --level debug` 过去同样恒空,现在显示全部(不传 grep);③ 单工程模式逐字节不变;④ `/pmctl list/show` 对未命名项目显示工作目录名(原先显示 roomId);⑤ 项目名新增格式约束(禁 `[]`/空白/超长/大小写撞名);⑥ 含换行的消息日志改为单行渲染(`⏎` 连接)。过滤依赖 journald PCRE2(Debian/Ubuntu 标准支持),缺失时 `logs`/`status` 会报错而非静默放宽。
 
 ---
 
@@ -772,8 +790,11 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 | 0.1.31 | CLI `-v/--version` 显示安装版本 |
 | 0.1.32 | README/usage/头注释统一呈现 `-v/--version` |
 | 0.1.33 | **架构重构(spec #11)+ 空间组织(spec #16)**:授权单管道、Transport/RoomOps 拆分、ConfigStore 单写者、RoomBinding 回复路由、PmctlController、纯策略认证;Element 空间懒创建 + bot 自建管理房间、工程房间挂空间、challenge 自动邀请进空间,失败降级无空间行为 |
+| 0.1.34 | **spec #22 Matrix 深化**(见 11.7–11.8):matrix.ts 三职责拆分——RoomOps 适配器独立、消息过滤纯化、SDK 日志统一走 logger 门面 |
+| 0.1.35 | hotfix:postinstall 自检补下 crypto 原生库(npm 11 allow-scripts 兼容) |
+| 0.1.36 | **日志按项目区分(spec #34)**:多工程日志行带 `[项目]` 标签,`logs <项目...> [--level]`/`status [项目]` 经锚定 grep 过滤;`--level` 修复(journalctl -p 在 inherit 管道下从未生效,改为行内档位过滤);含方括号/空白/超长/撞名的项目名被 /pmctl 拒绝 |
 
-GitHub 仓库:[github.com/Hi-Barry/pi-courier](https://github.com/Hi-Barry/pi-courier)(私有)
+GitHub 仓库:[github.com/Hi-Barry/pi-courier](https://github.com/Hi-Barry/pi-courier)(公开)
 npm 包:[pi-courier](https://www.npmjs.com/package/pi-courier)
 ---
 

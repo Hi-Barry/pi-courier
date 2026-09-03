@@ -15,6 +15,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { activeSpaceRoomId, type ConfigStore } from "../config.js";
+import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
 
@@ -164,6 +165,13 @@ export class PmctlController {
     }
     // Path is optional: default to <project root>/<name>.
     const resolvedWorkdir = workdirArg ? this.resolveProjectPath(workdirArg) : this.resolveProjectPath(pname);
+    // The project name becomes the log label (spec #34): validate before any
+    // side effects — a rejected name must not create a room or register.
+    const labelError = validateProjectLabel(pname, this.currentLabels());
+    if (labelError) {
+      await reply(`❌ ${labelError}`);
+      return;
+    }
     if (!call.senderMxid) {
       await reply("❌ 缺少邀请对象(未配置信任用户)");
       return;
@@ -202,6 +210,12 @@ export class PmctlController {
     }
   }
 
+  /** All current project labels (name ?? workdir basename) — the collision
+   *  set for label validation. */
+  private currentLabels(): string[] {
+    return this.opts.projectManager.listProjects().map(([, p]) => projectLabelOf(p));
+  }
+
   private listText(): string {
     const pm = this.opts.projectManager;
     const projects = pm.listProjects();
@@ -210,13 +224,15 @@ export class PmctlController {
     }
     const lines = projects.map(([roomId, p]) => {
       const status = pm.isRunning(roomId) ? "✅ 运行中" : "⏸️ 未启动";
-      return `• ${p.name ?? roomId} — ${status}\n  ${p.workdir} (${roomId})`;
+      return `• ${projectLabelOf(p)} — ${status}\n  ${p.workdir} (${roomId})`;
     });
     return `**项目列表** (${projects.length}):\n${lines.join("\n")}`;
   }
 
+  /** Resolve a user-supplied target ("name" or room ID) to a project,
+   *  matching against the same labels the log filter uses (projectLabelOf). */
   private findProject(target: string): [string, ProjectEntry] | undefined {
-    return this.opts.projectManager.listProjects().find(([roomId, p]) => p.name === target || roomId === target);
+    return this.opts.projectManager.listProjects().find(([roomId, p]) => projectLabelOf(p) === target || roomId === target);
   }
 
   private async show(rest: string, reply: Reply): Promise<void> {
@@ -233,7 +249,7 @@ export class PmctlController {
     const [roomId, entry] = found;
     const pm = this.opts.projectManager;
     await reply(
-      `📁 项目: ${entry.name ?? roomId}\n` +
+      `📁 项目: ${projectLabelOf(entry)}\n` +
         `• 房间: ${roomId}\n` +
         `• 工作目录: ${entry.workdir}\n` +
         `• 状态: ${pm.isRunning(roomId) ? "✅ 运行中" : "⏸️ 未启动(lazy)"}\n` +
@@ -272,7 +288,7 @@ export class PmctlController {
       this.pendingRm.delete(call.chatId);
       await pm.removeProject(roomId);
       await reply(
-        `🗑️ 项目「${entry.name ?? roomId}」已删除\n` +
+        `🗑️ 项目「${projectLabelOf(entry)}」已删除\n` +
           `• 已解除映射并停止进程\n` +
           `• 工作目录保留: ${entry.workdir}(如需删除请自行处理)\n` +
           `• 正在主动退出房间…`
@@ -298,8 +314,8 @@ export class PmctlController {
     // First send: arm the confirmation only, never delete.
     this.pendingRm.set(call.chatId, { roomId, ts: Date.now() });
     await reply(
-      `⚠️ 确认删除项目「${entry.name ?? roomId}」?\n\n` +
-        `再次发送 \`/pmctl rm ${entry.name ?? roomId}\` 确认删除。\n` +
+      `⚠️ 确认删除项目「${projectLabelOf(entry)}」?\n\n` +
+        `再次发送 \`/pmctl rm ${projectLabelOf(entry)}\` 确认删除。\n` +
         `确认后我会停止进程并主动退出该房间。\n` +
         `(发送 \`/pmctl rm cancel\` 取消)`
     );
@@ -320,7 +336,7 @@ export class PmctlController {
     const [roomId, entry] = found;
     this.opts.projectManager.updateProjectWorkdir(roomId, resolvedWorkdir);
     await reply(
-      `🚚 项目「${entry.name ?? roomId}」已迁移\n` +
+      `🚚 项目「${projectLabelOf(entry)}」已迁移\n` +
         `• 新工作目录: ${resolvedWorkdir}\n` +
         `• 会话将重新开始(旧会话保留在旧目录 .pi-session)`
     );
@@ -338,6 +354,18 @@ export class PmctlController {
       return;
     }
     const [roomId] = found;
+    // The new name becomes the log label — same rules as `new`, but colliding
+    // with the renamed project's own current label is a rename to the same
+    // name (or a case variant), not a collision.
+    const existing = this.opts.projectManager
+      .listProjects()
+      .filter(([id]) => id !== roomId)
+      .map(([, p]) => projectLabelOf(p));
+    const labelError = validateProjectLabel(newName, existing);
+    if (labelError) {
+      await reply(`❌ ${labelError}`);
+      return;
+    }
     this.opts.projectManager.renameProject(roomId, newName);
     const renamed = `✏️ 项目已重命名为「${newName}」`;
     // The project mapping is already renamed; surface room-rename failures

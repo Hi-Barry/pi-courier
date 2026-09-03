@@ -17,7 +17,7 @@ import {
   hasToolCalls,
   splitMessage,
 } from "../formatting.js";
-import { isEnabled, logger } from "../logger.js";
+import { isEnabled, type LeveledLogger, logger } from "../logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "../management-room.js";
 import { inviteUserToSpaceOnce } from "../space.js";
 import type { RoomOps } from "../transports/interface.js";
@@ -104,10 +104,16 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       const text = msg.content.trim();
       if (!text) return;
 
+      // Project tagging (spec #34): a mapped room's lines carry its label;
+      // everything else (single-project mode, DM, unmapped rooms) resolves to
+      // undefined = the plain logger, byte-identical to the old output.
+      const label = projectManager.labelForRoom(msg.chatId);
+      const log = logger.withLabel(label);
+
       if (isEnabled("debug")) {
-        logger.debug(`📥 [${msg.transport}] @${msg.username}: ${text.slice(0, 500)}${text.length > 500 ? "…" : ""}`);
+        log.debug(`📥 [${msg.transport}] @${msg.username}: ${text.slice(0, 500)}${text.length > 500 ? "…" : ""}`);
       } else {
-        logger.info(`📥 [${msg.transport}] @${msg.username}: ${text.slice(0, 200)}${text.length > 200 ? "…" : ""}`);
+        log.info(`📥 [${msg.transport}] @${msg.username}: ${text.slice(0, 200)}${text.length > 200 ? "…" : ""}`);
       }
 
       // Authorization (initiates 6-digit challenge for unknown users in DMs)
@@ -293,12 +299,16 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // pinned to their room, the default rpc follows its latest prompter.
       const target = bindings.get(rpc)?.replyTarget;
 
+      // Tagged view: a project rpc's events all carry its label; the default
+      // rpc's do not (rpc.label is undefined there — spec #34).
+      const log = logger.withLabel(rpc.label);
+
       // extension_error is emitted by the RPC layer but is not part of the
       // typed AgentSessionEvent union — widen for runtime event checking.
       const event = rawEvent as AgentEventView;
 
 
-      logAgentEvent(event);
+      logAgentEvent(event, log);
 
       if (event.type === "turn_start") {
         if (target) {
@@ -314,7 +324,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // Reply summary at INFO level — the full conversation is also in pi's
         // session file.
         const replyPreview = turn.text ?? "";
-        logger.info(`[agent] 回复 @${target.username}: ${replyPreview.slice(0, 500)}${replyPreview.length > 500 ? "…" : ""}`);
+        log.info(`[agent] 回复 @${target.username}: ${replyPreview.slice(0, 500)}${replyPreview.length > 500 ? "…" : ""}`);
 
         if (turn.text === null) {
           // No content this turn — keep the binding for a follow-up turn
@@ -336,7 +346,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
 
       if (event.type === "extension_error") {
-        logger.error(`[agent] 扩展错误 (${event.extensionPath ?? "unknown"}): ${event.error ?? "unknown"}`);
+        log.error(`[agent] 扩展错误 (${event.extensionPath ?? "unknown"}): ${event.error ?? "unknown"}`);
         if (target) {
           sendReply(
             target.chatId,
@@ -395,66 +405,66 @@ type AgentEventView = {
  * Session-replay logging, fully separated from routing: muting it (log
  * level, or removing calls) can never affect reply routing.
  */
-function logAgentEvent(event: AgentEventView): void {
+function logAgentEvent(event: AgentEventView, log: LeveledLogger): void {
   switch (event.type) {
     case "agent_start":
-      logger.debug("[agent] run 开始");
+      log.debug("[agent] run 开始");
       break;
     case "agent_end":
-      logger.debug(`[agent] run 结束(willRetry: ${event.willRetry ?? false})`);
+      log.debug(`[agent] run 结束(willRetry: ${event.willRetry ?? false})`);
       break;
     case "agent_settled":
-      logger.debug("[agent] 已收敛");
+      log.debug("[agent] 已收敛");
       break;
     case "message_start":
-      logger.debug("[agent] 消息开始");
+      log.debug("[agent] 消息开始");
       break;
     case "message_update":
       // Streaming delta (includes thinking deltas). DEBUG level, truncated.
-      logger.debug(`[agent] 流式增量: ${summarizeStreamDelta(event)}`);
+      log.debug(`[agent] 流式增量: ${summarizeStreamDelta(event)}`);
       break;
     case "message_end":
-      logger.debug("[agent] 消息完成");
+      log.debug("[agent] 消息完成");
       break;
     case "tool_execution_start":
-      logger.info(`[agent] 🔧 工具调用: ${event.toolName ?? "?"}(${summarizeArg(event.args)})`);
+      log.info(`[agent] 🔧 工具调用: ${event.toolName ?? "?"}(${summarizeArg(event.args)})`);
       break;
     case "tool_execution_update":
-      logger.debug(`[agent] 工具进度: ${event.toolName ?? "?"} → ${summarizeArg(event.partialResult, 300)}`);
+      log.debug(`[agent] 工具进度: ${event.toolName ?? "?"} → ${summarizeArg(event.partialResult, 300)}`);
       break;
     case "tool_execution_end":
-      logger.info(
+      log.info(
         `[agent] 工具完成: ${event.toolName ?? "?"} → ${event.isError ? "❌ 错误" : "✅ 成功"} ${summarizeArg(event.result, 500)}`
       );
       break;
     case "compaction_start":
-      logger.warn(`[agent] 上下文压缩开始(${event.reason ?? "?"})`);
+      log.warn(`[agent] 上下文压缩开始(${event.reason ?? "?"})`);
       break;
     case "compaction_end":
-      logger.warn(
+      log.warn(
         `[agent] 上下文压缩${event.aborted ? "中止" : "结束"}(${event.reason ?? "?"}${event.errorMessage ? `, 错误: ${event.errorMessage}` : ""})`
       );
       break;
     case "auto_retry_start":
-      logger.warn(`[agent] 自动重试 ${event.attempt}/${event.maxAttempts}(${event.errorMessage ?? ""})`);
+      log.warn(`[agent] 自动重试 ${event.attempt}/${event.maxAttempts}(${event.errorMessage ?? ""})`);
       break;
     case "auto_retry_end":
-      logger.warn(`[agent] 自动重试结束: ${event.success ? "成功" : `失败(${event.finalError ?? ""})`}`);
+      log.warn(`[agent] 自动重试结束: ${event.success ? "成功" : `失败(${event.finalError ?? ""})`}`);
       break;
     case "queue_update":
-      logger.debug(`[agent] 队列更新(steer: ${event.steering?.length ?? 0}, followUp: ${event.followUp?.length ?? 0})`);
+      log.debug(`[agent] 队列更新(steer: ${event.steering?.length ?? 0}, followUp: ${event.followUp?.length ?? 0})`);
       break;
     case "thinking_level_changed":
-      logger.info(`[agent] 思考级别: ${String(event.level ?? "?")}`);
+      log.info(`[agent] 思考级别: ${String(event.level ?? "?")}`);
       break;
     case "session_info_changed":
-      logger.debug(`[agent] 会话名称: ${event.name ?? "(清除)"}`);
+      log.debug(`[agent] 会话名称: ${event.name ?? "(清除)"}`);
       break;
     case "entry_appended":
-      logger.debug("[agent] 会话条目已写入");
+      log.debug("[agent] 会话条目已写入");
       break;
     default:
-      logger.debug(`[agent] 事件: ${event.type}`);
+      log.debug(`[agent] 事件: ${event.type}`);
       break;
   }
 }

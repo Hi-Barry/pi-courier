@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { ConfigStore } from "../src/config";
 import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { logger } from "../src/logger";
@@ -6,6 +6,7 @@ import { buildTurnReply } from "../src/rpc/message-router";
 import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createMessageRouter } from "../src/rpc/message-router";
+import { captureConsole } from "./helpers";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
 import type { ExternalMessage } from "../src/types";
@@ -52,6 +53,7 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
   const projectManager = {
     getRpcForRoom: vi.fn().mockReturnValue(rpc),
     isProjectRoom: vi.fn().mockReturnValue(false),
+    labelForRoom: vi.fn().mockReturnValue(undefined),
     isMultiProject: opts.multiProject ?? true,
     registerProject: vi.fn(),
     listProjects: vi.fn().mockReturnValue([] as Array<[string, { name?: string; workdir: string }]>),
@@ -654,5 +656,81 @@ describe("space invite on trust transition (spec #16 ticket 4)", () => {
     expect(fx.replies.some((r) => r.text.includes("Authenticated"))).toBe(true);
     // Not recorded — the startup ensure self-heals it on the next run.
     expect(fx.store.get().space?.invitedUsers ?? []).not.toContain("matrix:@eve:server");
+  });
+});
+
+describe("multi-project log tagging (spec #34 票3)", () => {
+  let lines: string[];
+  let fx: ReturnType<typeof makeFixtures>;
+
+  const capture = () => {
+    lines = captureConsole();
+  };
+
+  beforeEach(() => {
+    capture();
+    fx = makeFixtures();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const projectRpc = () => ({ label: "ai-api", prompt: vi.fn().mockResolvedValue(undefined) }) as unknown as PiRpc;
+
+  it("📥 line for a mapped room carries the project label", async () => {
+    (fx.projectManager.labelForRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => (roomId === "!proj:server" ? "ai-api" : undefined)
+    );
+    const router = fx.makeRouter();
+    await router.handleIncoming(makeMsg({ chatId: "!proj:server", content: "do work" }));
+    const inbound = lines.find((l) => l.includes("📥"));
+    expect(inbound).toContain("[INFO] [ai-api]");
+  });
+
+  it("📥 line for an unmapped room (DM) carries no label", async () => {
+    const router = fx.makeRouter();
+    await router.handleIncoming(makeMsg({ content: "hello" }));
+    const inbound = lines.find((l) => l.includes("📥"));
+    expect(inbound).toMatch(/\[INFO\] 📥/);
+  });
+
+  it("[agent] event lines carry the emitting rpc's label", async () => {
+    const prj = projectRpc();
+    (fx.projectManager.getRpcForRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      async (roomId: string) => (roomId === "!proj:server" ? prj : fx.rpc)
+    );
+    (fx.projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => roomId === "!proj:server"
+    );
+    const router = fx.makeRouter();
+    await router.handleIncoming(makeMsg({ chatId: "!proj:server", content: "go" }));
+    router.handleEvent({ type: "tool_execution_start", toolName: "bash", args: { command: "ls" } }, prj);
+    const toolLine = lines.find((l) => l.includes("🔧 工具调用"));
+    expect(toolLine).toContain("[INFO] [ai-api]");
+    // The reply line rides the same label:
+    router.handleEvent({ type: "turn_end", message: textMessage("done") }, prj);
+    const replyLine = lines.find((l) => l.includes("[agent] 回复"));
+    expect(replyLine).toContain("[ai-api]");
+  });
+
+  it("default-rpc events log untagged", async () => {
+    const router = fx.makeRouter();
+    await router.handleIncoming(makeMsg({ content: "hi" }));
+    router.handleEvent({ type: "tool_execution_start", toolName: "bash", args: {} }, fx.rpc);
+    const toolLine = lines.find((l) => l.includes("🔧 工具调用"));
+    expect(toolLine).toMatch(/\[INFO\] \[agent\]/);
+    expect(toolLine).not.toMatch(/ai-api/);
+  });
+
+  it("auth lines stay untagged even inside a project room", async () => {
+    (fx.projectManager.labelForRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => (roomId === "!proj:server" ? "ai-api" : undefined)
+    );
+    fx.auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
+    const router = fx.makeRouter();
+    await router.handleIncoming(makeMsg({ chatId: "!proj:server", isGroupChat: true, content: "/enable all" }));
+    const authLine = lines.find((l) => l.includes("[auth]"));
+    expect(authLine).toBeDefined();
+    expect(authLine).not.toContain("ai-api");
   });
 });

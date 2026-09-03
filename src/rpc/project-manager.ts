@@ -12,6 +12,8 @@
 import * as path from "node:path";
 import type { RpcEventListener } from "@earendil-works/pi-coding-agent";
 import type { ConfigStore } from "../config.js";
+import { logger } from "../logger.js";
+import { projectLabelOf } from "../project-labels.js";
 import { PiRpc, type PiRpcOptions } from "./pi-rpc.js";
 
 export interface ProjectEntry {
@@ -30,6 +32,8 @@ export interface ProjectManagerOptions {
   multiProject?: boolean;
   /** Injected config store (single read/write path for the projects map). */
   store: ConfigStore;
+  /** PiRpc constructor seam (tests inject fakes; production uses `new PiRpc`). */
+  rpcFactory?: (options: PiRpcOptions) => PiRpc;
 }
 
 export class ProjectManager {
@@ -38,6 +42,7 @@ export class ProjectManager {
   private onRoomEvent: (roomId: string, event: unknown, rpc: PiRpc) => void;
   private multiProject: boolean;
   private store: ConfigStore;
+  private newRpc: (options: PiRpcOptions) => PiRpc;
   /** roomId -> PiRpc for project rooms (lazily started). */
   private projectRpcs = new Map<string, PiRpc>();
 
@@ -47,6 +52,7 @@ export class ProjectManager {
     this.onRoomEvent = opts.onRoomEvent;
     this.multiProject = opts.multiProject === true;
     this.store = opts.store;
+    this.newRpc = opts.rpcFactory ?? ((options) => new PiRpc(options));
   }
 
   /** Current projects mapping (roomId -> entry) — in-memory, no disk read. */
@@ -68,9 +74,18 @@ export class ProjectManager {
     if (!this.multiProject) return this.defaultRpc;
     const entry = this.projectMap()[roomId];
     if (entry) {
-      return this.getProjectRpc(roomId, entry.workdir);
+      return this.getProjectRpc(roomId, entry);
     }
     return this.defaultRpc;
+  }
+
+  /** The log label for a room's project (name ?? workdir basename), or
+   *  undefined when the room is not a mapped project / single-project mode.
+   *  The same projectLabelOf rule the CLI filter matches against (spec #34). */
+  labelForRoom(roomId: string): string | undefined {
+    if (!this.multiProject) return undefined;
+    const entry = this.projectMap()[roomId];
+    return entry ? projectLabelOf(entry) : undefined;
   }
 
   /** Whether this room is a mapped project room (only meaningful in multi-project). */
@@ -89,7 +104,7 @@ export class ProjectManager {
     return this.projectRpcs.has(roomId);
   }
 
-  private async getProjectRpc(roomId: string, workdir: string): Promise<PiRpc> {
+  private async getProjectRpc(roomId: string, entry: ProjectEntry): Promise<PiRpc> {
     const existing = this.projectRpcs.get(roomId);
     if (existing) {
       // Wait for (or reuse) the in-flight connection so a fast second message
@@ -101,13 +116,15 @@ export class ProjectManager {
     // Per-project session dir: each project's conversation state lives in
     // its own workdir/.pi-session — isolated and resumable (--continue).
     const args = [...(this.baseOptions.args ?? [])];
-    const projectSessionDir = path.join(workdir, ".pi-session");
+    const projectSessionDir = path.join(entry.workdir, ".pi-session");
     args.push("--session-dir", projectSessionDir);
 
-    const rpc = new PiRpc({
+    const label = projectLabelOf(entry);
+    const rpc = this.newRpc({
       ...this.baseOptions,
-      cwd: workdir,
+      cwd: entry.workdir,
       args,
+      label,
     });
 
     const listener: RpcEventListener = (event) => {
@@ -118,6 +135,7 @@ export class ProjectManager {
     this.projectRpcs.set(roomId, rpc);
     // Lazy start: spawn the pi process and wait for the handshake. PiRpc.start
     // is idempotent, so subsequent calls reuse the running process.
+    logger.withLabel(label).info(`🚀 项目 pi 进程启动: ${entry.workdir}`);
     await rpc.start();
     return rpc;
   }
@@ -144,9 +162,12 @@ export class ProjectManager {
       projects[roomId] = { ...entry, workdir };
     });
     // Stop and drop the running process so the next message starts fresh in
-    // the new dir (prevents an orphaned pi process from a stale cwd).
+    // the new dir (prevents an orphaned pi process from a stale cwd). The
+    // stop is logged under the project's CURRENT label (the new one is only
+    // taken up by the next spawn).
     const old = this.projectRpcs.get(roomId);
     if (old) {
+      logger.withLabel(old.label).info(`🛑 项目 pi 进程停止(/pmctl mv 换目录,下次消息在新目录启动)`);
       await old.stop().catch(() => {});
       this.projectRpcs.delete(roomId);
     }
@@ -159,12 +180,18 @@ export class ProjectManager {
     this.updateProjects((projects) => {
       projects[roomId] = { ...entry, name };
     });
+    // Re-label the running process so its log lines carry the new name from
+    // here on (spec #34: 改名只影响之后的新日志) — via the SAME resolution
+    // rule every other consumer uses, never the raw string.
+    const rpc = this.projectRpcs.get(roomId);
+    if (rpc) rpc.label = projectLabelOf({ name, workdir: entry.workdir });
   }
 
   /** Remove a project (used by /pmctl rm): stop its process, drop the mapping. */
   async removeProject(roomId: string): Promise<void> {
     const rpc = this.projectRpcs.get(roomId);
     if (rpc) {
+      logger.withLabel(rpc.label).info(`🛑 项目 pi 进程停止(/pmctl rm)`);
       await rpc.stop().catch(() => {});
       this.projectRpcs.delete(roomId);
     }

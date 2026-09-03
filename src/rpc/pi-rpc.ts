@@ -26,6 +26,8 @@ export interface PiRpcOptions {
   cwd?: string;
   /** Extra CLI args, e.g. ["--session-dir", "/path"] */
   args?: string[];
+  /** Project label for tagged log lines (multi-project mode; spec #34). */
+  label?: string;
 }
 
 /** Minimal shape of a slash command returned by get_commands (duck-typed, not exported by the package) */
@@ -44,8 +46,13 @@ export class PiRpc {
   /** Listeners registered before start() — attached once the client connects */
   private listeners: Array<RpcEventListener | undefined> = [];
 
+  /** Project label for tagged logging (undefined for the shared default rpc).
+   *  Mutable: /pmctl rename & mv re-label a running project rpc. */
+  label: string | undefined;
+
   constructor(options: PiRpcOptions = {}) {
     this.options = options;
+    this.label = options.label;
   }
 
   get isConnected(): boolean {

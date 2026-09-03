@@ -8,8 +8,8 @@
  *   pi-courier enable   install a user-level systemd service (auto-start) and start it
  *   pi-courier start    start the systemd service
  *   pi-courier stop     stop the systemd service
- *   pi-courier status   show service status + recent logs
- *   pi-courier logs     tail the service logs
+ *   pi-courier status   show service status + recent logs (optional project filter)
+ *   pi-courier logs     tail the service logs (optional: <project...> [--level])
  *   pi-courier update   update this project (git pull + npm install + build)
  *   pi-courier -v       show the installed version (--version / version)
  *
@@ -22,6 +22,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
+import { buildLogFilterArgs } from "./log-filter.js";
+import { projectLabelOf } from "./project-labels.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
 suppressKnownWarnings();
@@ -71,8 +73,9 @@ function usage(): void {
   pi-courier start      启动服务
   pi-courier stop       停止服务
   pi-courier restart    重启服务
-  pi-courier status     查看服务状态与最近日志
-  pi-courier logs      跟踪服务日志(Ctrl+C 退出)
+  pi-courier status     查看服务状态与最近日志(可带项目名过滤)
+  pi-courier logs      跟踪服务日志(Ctrl+C 退出);多工程下可加项目名过滤:
+                       pi-courier logs <项目> [项目...] [--level debug|info|warn|error]
   pi-courier disable   卸载服务(停止 + 取消自启 + 删除 unit 文件)
   pi-courier update    更新本项目(git pull + 安装依赖 + 重新构建)
   pi-courier -v        显示版本号(--version / version 亦可)
@@ -167,34 +170,63 @@ function runSystemctl(args: string[]): void {
   }
 }
 
+/** Project labels from the config (the single source `log-filter` matches against). */
+function projectLabels(): { labels: string[]; multiProject: boolean } {
+  const config = loadConfig();
+  const projects = config.projects ?? {};
+  return { labels: Object.values(projects).map((p) => projectLabelOf(p)), multiProject: config.multiProject === true };
+}
+
 function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", args: string[] = []): void {
   const unitPath = userUnitPath();
   if (!fs.existsSync(unitPath)) {
     console.error(`❌ 服务未安装。先运行 \`pi-courier enable\` 安装。`);
     process.exit(1);
   }
-  let cmd: string[];
-  if (action === "logs") {
-    // `--level debug|info|warn|error` maps to journalctl priority (default: info)
-    let level = "info";
-    for (let i = 0; i < args.length; i++) {
-      if (args[i] === "--level") level = args[++i] ?? level;
+  if (action === "logs" || action === "status") {
+    // status first shows the unit itself (systemctl), then the log window.
+    if (action === "status") {
+      spawnSync("systemctl", ["--user", "status", SERVICE_NAME], { stdio: "inherit" });
     }
-    const prio: Record<string, string> = { debug: "debug", info: "info", warn: "warning", error: "err" };
-    cmd = ["journalctl", "--user", "-u", SERVICE_NAME, "-f", "-p", prio[level] ?? "info"];
-  } else {
-    cmd = ["systemctl", "--user", action, SERVICE_NAME];
-  }
-  const res = spawnSync(cmd[0], cmd.slice(1), { stdio: "inherit" });
-  if (res.status !== 0 && action !== "logs") {
-    process.exit(res.status ?? 1);
-  }
-  if (action === "status") {
-    // Append recent logs for convenience
-    const logs = spawnSync("journalctl", ["--user", "-u", SERVICE_NAME, "-n", "15", "--no-pager"], {
-      encoding: "utf-8",
+    // Split args: `--level <lvl>` option vs positional project labels.
+    let level = "info";
+    const positional: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--level") level = args[++i] ?? "";
+      else positional.push(args[i]);
+    }
+    const { labels, multiProject } = projectLabels();
+    // Single-project mode tags nothing, so a project filter can never match —
+    // say so instead of silently presenting an empty view (spec #34).
+    if (positional.length > 0 && !multiProject) {
+      console.error("❌ 当前为单工程模式,日志不区分项目(多工程模式才打项目标签)。");
+      process.exit(1);
+    }
+    const filter = buildLogFilterArgs({
+      unit: SERVICE_NAME,
+      availableLabels: labels,
+      requestedProjects: positional,
+      level,
+      follow: action === "logs",
+      lineCount: action === "status" ? 15 : undefined,
     });
-    if (logs.stdout) console.log(logs.stdout);
+    if (!filter.ok) {
+      console.error(`❌ ${filter.message}`);
+      process.exit(1);
+    }
+    const journalArgs = action === "status" ? ["--no-pager", ...filter.args] : filter.args;
+    const res = spawnSync("journalctl", journalArgs, { stdio: "inherit" });
+    // logs runs in follow mode: Ctrl+C can surface a non-zero exit — ignore it
+    // (same tolerance as before); status's window exit is meaningful.
+    if (res.status !== 0 && action === "status") {
+      process.exit(res.status ?? 1);
+    }
+    return;
+  }
+  const cmd = ["systemctl", "--user", action, SERVICE_NAME];
+  const res = spawnSync(cmd[0], cmd.slice(1), { stdio: "inherit" });
+  if (res.status !== 0) {
+    process.exit(res.status ?? 1);
   }
 }
 
@@ -302,11 +334,11 @@ async function main(): Promise<void> {
     case "start":
     case "stop":
     case "restart":
-    case "status":
       cmdService(cmd);
       break;
+    case "status":
     case "logs":
-      cmdService("logs", rest);
+      cmdService(cmd, rest);
       break;
     case "disable":
       cmdDisable();

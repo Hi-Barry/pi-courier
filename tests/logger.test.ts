@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLogger, parseLogLevel, suppressLogLines } from "../src/logger.js";
+import { captureConsole } from "./helpers";
 
 describe("logger levels", () => {
   it("parses level strings", () => {
@@ -32,6 +33,76 @@ describe("logger levels", () => {
     a.setLogLevel("debug");
     expect(b.getLogLevel()).toBe("info");
     expect(b.isEnabled("debug")).toBe(false);
+  });
+});
+
+describe("project labels", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders `[ts] [LEVEL] [label] message` through a tagged view", () => {
+    const lines = captureConsole();
+    const log = createLogger("info");
+    log.withLabel("ai-api").info("hello");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\] \[INFO\] \[ai-api\] hello$/);
+  });
+
+  it("keeps untagged output byte-identical to the level-only format", () => {
+    const lines = captureConsole();
+    createLogger("info").info("plain");
+    expect(lines[0]).toMatch(/^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\] \[INFO\] plain$/);
+    createLogger("info").withLabel("   ").info("blank label = untagged");
+    expect(lines[1]).toMatch(/\[INFO\] blank label = untagged$/);
+    expect(lines[1]).not.toMatch(/\[ \]/);
+  });
+
+  it("derives one label at a time — re-deriving replaces it", () => {
+    const lines = captureConsole();
+    const log = createLogger("info");
+    log.withLabel("a").withLabel("b").info("x");
+    expect(lines[0]).toContain("[INFO] [b] x");
+    expect(lines[0]).not.toContain("[a]");
+  });
+
+  it("reads the parent's live threshold and level changes", () => {
+    const lines = captureConsole();
+    const log = createLogger("info");
+    const view = log.withLabel("ai-api");
+    view.debug("hidden");
+    expect(lines).toHaveLength(0);
+    log.setLogLevel("debug");
+    view.debug("shown now");
+    expect(lines[0]).toContain("[DEBUG] [ai-api] shown now");
+  });
+});
+
+describe("single-line rendering (newline sanitisation)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("flattens newlines in string args to ⏎ so one call is one physical line", () => {
+    const lines = captureConsole();
+    createLogger("info").info("line1\nline2\r\nline3");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("line1⏎line2⏎line3");
+    expect(lines[0]).not.toContain("\n");
+  });
+
+  it("keeps serialized objects single-line (JSON escaping, no raw newlines)", () => {
+    const lines = captureConsole();
+    createLogger("info").info({ msg: "a\nb" });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toMatch(/\n/);
+  });
+
+  it("leaves single-line messages untouched", () => {
+    const lines = captureConsole();
+    createLogger("info").info("no newlines here");
+    expect(lines[0]).toContain("no newlines here");
+    expect(lines[0].split("⏎")).toHaveLength(1);
   });
 });
 
