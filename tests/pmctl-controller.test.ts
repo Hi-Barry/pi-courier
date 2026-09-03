@@ -133,6 +133,67 @@ describe("PmctlController", () => {
     expect(pm.registerProject).not.toHaveBeenCalled();
   });
 
+  // ---- label validation (spec #34 票2) ----------------------------------------
+
+  it("rejects new-project names that would break the log label format", async () => {
+    await handle("/pmctl new a]b");
+    expect(replies.at(-1)).toContain("方括号");
+    await handle(`/pmctl new ${"x".repeat(31)}`);
+    expect(replies.at(-1)).toContain("30");
+    expect(roomOps.createProjectRoom).not.toHaveBeenCalled();
+    expect(pm.registerProject).not.toHaveBeenCalled();
+  });
+
+  it("rejects a new name colliding case-insensitively with an existing label", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!proj:server", { name: "MyApp", workdir: "/w/myapp" }],
+    ]);
+    await handle("/pmctl new myapp");
+    expect(replies.at(-1)).toContain("MyApp");
+    expect(roomOps.createProjectRoom).not.toHaveBeenCalled();
+  });
+
+  it("rejects rename to a name colliding with another project (case-insensitive)", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!a:server", { name: "alpha", workdir: "/w/a" }],
+      ["!b:server", { name: "beta", workdir: "/w/b" }],
+    ]);
+    await handle("/pmctl rename alpha BETA");
+    expect(replies.at(-1)).toContain("大小写");
+    expect(pm.renameProject).not.toHaveBeenCalled();
+  });
+
+  it("renaming a project to its own name is not a self-collision", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!a:server", { name: "alpha", workdir: "/w/a" }],
+      ["!b:server", { name: "beta", workdir: "/w/b" }],
+    ]);
+    await handle("/pmctl rename alpha alpha");
+    expect(pm.renameProject).toHaveBeenCalledWith("!a:server", "alpha");
+  });
+
+  it("rejects rename with brackets", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!a:server", { name: "alpha", workdir: "/w/a" }],
+    ]);
+    await handle("/pmctl rename alpha [oops]");
+    expect(replies.at(-1)).toContain("方括号");
+    expect(pm.renameProject).not.toHaveBeenCalled();
+  });
+
+  // ---- labels resolve via projectLabelOf (name ?? workdir basename) -----------
+
+  it("lists unnamed projects by workdir basename, findable by it", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!legacy:server", { workdir: "/w/legacy-app" }],
+    ]);
+    await handle("/pmctl list");
+    expect(replies.at(-1)).toContain("legacy-app");
+    expect(replies.at(-1)).not.toContain("!legacy:server —");
+    await handle("/pmctl show legacy-app");
+    expect(replies.at(-1)).toContain("📁 项目: legacy-app");
+  });
+
   // ---- rm: the 60-second confirmation window ---------------------------------
 
   it("arms on first rm, confirms on the second within the window", async () => {
