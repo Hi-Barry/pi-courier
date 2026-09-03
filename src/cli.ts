@@ -171,9 +171,10 @@ function runSystemctl(args: string[]): void {
 }
 
 /** Project labels from the config (the single source `log-filter` matches against). */
-function projectLabels(): string[] {
-  const projects = loadConfig().projects ?? {};
-  return Object.values(projects).map((p) => projectLabelOf(p as { name?: string; workdir: string }));
+function projectLabels(): { labels: string[]; multiProject: boolean } {
+  const config = loadConfig();
+  const projects = config.projects ?? {};
+  return { labels: Object.values(projects).map((p) => projectLabelOf(p)), multiProject: config.multiProject === true };
 }
 
 function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", args: string[] = []): void {
@@ -194,8 +195,16 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
       if (args[i] === "--level") level = args[++i] ?? "";
       else positional.push(args[i]);
     }
+    const { labels, multiProject } = projectLabels();
+    // Single-project mode tags nothing, so a project filter can never match —
+    // say so instead of silently presenting an empty view (spec #34).
+    if (positional.length > 0 && !multiProject) {
+      console.error("❌ 当前为单工程模式,日志不区分项目(多工程模式才打项目标签)。");
+      process.exit(1);
+    }
     const filter = buildLogFilterArgs({
-      availableLabels: projectLabels(),
+      unit: SERVICE_NAME,
+      availableLabels: labels,
       requestedProjects: positional,
       level,
       follow: action === "logs",

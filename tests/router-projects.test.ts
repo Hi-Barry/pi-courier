@@ -6,6 +6,7 @@ import { buildTurnReply } from "../src/rpc/message-router";
 import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createMessageRouter } from "../src/rpc/message-router";
+import { captureConsole } from "./helpers";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
 import type { ExternalMessage } from "../src/types";
@@ -663,12 +664,7 @@ describe("multi-project log tagging (spec #34 票3)", () => {
   let fx: ReturnType<typeof makeFixtures>;
 
   const capture = () => {
-    lines = [];
-    const push = (...args: unknown[]) => {
-      lines.push(args.map(String).join(" "));
-    };
-    vi.spyOn(console, "log").mockImplementation(push);
-    vi.spyOn(console, "error").mockImplementation(push);
+    lines = captureConsole();
   };
 
   beforeEach(() => {

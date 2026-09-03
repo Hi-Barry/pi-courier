@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLogger, parseLogLevel, suppressLogLines } from "../src/logger.js";
+import { captureConsole } from "./helpers";
 
 describe("logger levels", () => {
   it("parses level strings", () => {
@@ -34,17 +35,6 @@ describe("logger levels", () => {
     expect(b.isEnabled("debug")).toBe(false);
   });
 });
-
-/** Capture every console line (log + error) into one ordered buffer. */
-function captureConsole(): string[] {
-  const lines: string[] = [];
-  const push = (...args: unknown[]) => {
-    lines.push(args.map(String).join(" "));
-  };
-  vi.spyOn(console, "log").mockImplementation(push);
-  vi.spyOn(console, "error").mockImplementation(push);
-  return lines;
-}
 
 describe("project labels", () => {
   afterEach(() => {

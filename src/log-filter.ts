@@ -35,8 +35,8 @@ export interface LogFilterRequest {
   follow: boolean;
   /** For status: -n <lineCount> after the filters. */
   lineCount?: number;
-  /** Service unit name. */
-  unit?: string;
+  /** Service unit name (cli passes its SERVICE_NAME constant — one owner). */
+  unit: string;
 }
 
 export type LogFilterResult = { ok: true; args: string[] } | { ok: false; message: string };
@@ -49,8 +49,7 @@ function escapeRe(s: string): string {
 }
 
 export function buildLogFilterArgs(req: LogFilterRequest): LogFilterResult {
-  const unit = req.unit ?? "pi-courier";
-  const args: string[] = ["--user", "-u", unit];
+  const args: string[] = ["--user", "-u", req.unit];
   if (req.follow) args.push("-f");
 
   const level = parseLogLevel(req.level);

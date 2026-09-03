@@ -181,9 +181,10 @@ export class ProjectManager {
       projects[roomId] = { ...entry, name };
     });
     // Re-label the running process so its log lines carry the new name from
-    // here on (spec #34: 改名只影响之后的新日志).
+    // here on (spec #34: 改名只影响之后的新日志) — via the SAME resolution
+    // rule every other consumer uses, never the raw string.
     const rpc = this.projectRpcs.get(roomId);
-    if (rpc) rpc.label = name;
+    if (rpc) rpc.label = projectLabelOf({ name, workdir: entry.workdir });
   }
 
   /** Remove a project (used by /pmctl rm): stop its process, drop the mapping. */

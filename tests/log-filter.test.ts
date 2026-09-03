@@ -3,6 +3,7 @@ import { buildLogFilterArgs } from "../src/log-filter";
 
 const labels = ["ai-api", "www", "MyApp"];
 const req = (over: Partial<Parameters<typeof buildLogFilterArgs>[0]> = {}) => ({
+  unit: "pi-courier",
   availableLabels: labels,
   requestedProjects: [] as string[],
   level: "info" as const,

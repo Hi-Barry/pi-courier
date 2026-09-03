@@ -96,8 +96,8 @@ export function createLogger(initial: LogLevel = "info"): LeveledLogger {
       if (!trimmed) return logger;
       return {
         setLogLevel: logger.setLogLevel,
-        getLogLevel: () => threshold,
-        isEnabled: (level) => isEnabled(level),
+        getLogLevel: logger.getLogLevel,
+        isEnabled: logger.isEnabled,
         withLabel: (next) => (next?.trim() ? logger.withLabel(next.trim()) : logger),
         debug: (...args: unknown[]) => write("debug", args, trimmed),
         info: (...args: unknown[]) => write("info", args, trimmed),

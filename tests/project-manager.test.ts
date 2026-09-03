@@ -3,17 +3,7 @@ import { ConfigStore } from "../src/config";
 import { logger } from "../src/logger";
 import { PiRpc } from "../src/rpc/pi-rpc";
 import { ProjectManager } from "../src/rpc/project-manager";
-
-/** Capture every console line (log + error) into one ordered buffer. */
-function captureConsole(): string[] {
-  const lines: string[] = [];
-  const push = (...args: unknown[]) => {
-    lines.push(args.map(String).join(" "));
-  };
-  vi.spyOn(console, "log").mockImplementation(push);
-  vi.spyOn(console, "error").mockImplementation(push);
-  return lines;
-}
+import { captureConsole } from "./helpers";
 
 function fakeRpc() {
   return {

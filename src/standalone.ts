@@ -143,8 +143,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // Project rooms get their own pi process (isolated cwd/session); DM and
   // unmapped rooms use the shared default Rpc. Agent events from a project
   // process are routed back to the owning room.
-  // Declared BEFORE sendReply: outbound 📤 lines resolve their project label
-  // through it (spec #34).
+  // Declared before sendReply below: outbound 📤 lines resolve their label
+  // through labelForRoom (spec #34) — ordering kept explicit so the closure
+  // does not rely on hoisting.
   const projectManager = new ProjectManager({
     defaultRpc: rpc,
     baseOptions: { cliPath, args: ["--continue"] },
