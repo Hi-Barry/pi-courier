@@ -19,6 +19,32 @@ const LEVEL_NAMES: Record<LogLevel, string> = { debug: "DEBUG", info: "INFO", wa
 /** Truncation limits keep log lines bounded (journald-friendly). */
 const MAX_STRING = 2000;
 
+/**
+ * Log-line suppression window, shared by every logger instance: while open,
+ * lines whose message contains one of the substrings are dropped at every
+ * level, from any module. Matching runs on the UNtruncated rendering — a
+ * >2000-char noise line must not escape by having its pattern past the
+ * truncation point. The one consumer is the Matrix adapter, which opens the
+ * window around the SDK's initial sync (it replays history and emits two
+ * known-benign error patterns — see matrix.ts). Process-wide state is
+ * honest here: the SDK's LogService is itself process-wide. The returned
+ * closer removes exactly the substrings this call added.
+ */
+let suppressionPatterns: string[] = [];
+
+export function suppressLogLines(...substrings: string[]): () => void {
+  suppressionPatterns.push(...substrings);
+  return () => {
+    suppressionPatterns = suppressionPatterns.filter(p => !substrings.includes(p));
+  };
+}
+
+function isSuppressed(args: unknown[]): boolean {
+  if (suppressionPatterns.length === 0) return false;
+  const msg = args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
+  return suppressionPatterns.some(p => msg.includes(p));
+}
+
 export interface LeveledLogger {
   setLogLevel(level: LogLevel): void;
   getLogLevel(): LogLevel;
@@ -31,8 +57,10 @@ export interface LeveledLogger {
 
 /**
  * Create an isolated leveled logger. The write threshold lives in the
- * instance, so tests never share mutable module state. The exported
- * `logger` below is the process-wide default instance.
+ * instance, so tests never share that piece of module state; the one
+ * deliberately shared piece is the suppression window below, which models
+ * a process-wide event (the SDK sync whose noise it hides) rather than
+ * logger configuration.
  */
 export function createLogger(initial: LogLevel = "info"): LeveledLogger {
   let threshold: LogLevel = initial;
@@ -41,6 +69,7 @@ export function createLogger(initial: LogLevel = "info"): LeveledLogger {
 
   const write = (level: LogLevel, args: unknown[]): void => {
     if (!isEnabled(level)) return;
+    if (isSuppressed(args)) return;
     const line = [`[${new Date().toISOString()}]`, `[${LEVEL_NAMES[level]}]`, ...args.map(formatArg)].join(" ");
     if (level === "error" || level === "warn") {
       console.error(line);

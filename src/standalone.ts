@@ -108,7 +108,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   if (config.matrix?.homeserverUrl && config.matrix?.accessToken) {
     const matrix = new MatrixProvider(config.matrix, (chatId) => auth.isChannelEnabled(chatId));
     transports.push(matrix);
-    roomOps = matrix;
+    roomOps = matrix.roomOps;
   }
 
   if (transports.length === 0) {

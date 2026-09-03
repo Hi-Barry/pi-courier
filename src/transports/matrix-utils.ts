@@ -73,6 +73,16 @@ export function stripBotMention(text: string, botUserId: string): string {
   return out.trim();
 }
 
+/** A room is a group chat when it holds more than two members (bot + one other = DM). */
+export function isGroupChatRoom(memberCount: number): boolean {
+  return memberCount > 2;
+}
+
+/** Whether to post the one-time join hint: a multi-user room that is not yet enabled. */
+export function shouldPostJoinHint(memberCount: number, isEnabled: boolean): boolean {
+  return isGroupChatRoom(memberCount) && !isEnabled;
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

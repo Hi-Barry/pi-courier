@@ -5,16 +5,19 @@ import {
   AutojoinRoomsMixin,
   LogService,
   MatrixClient,
-  RichConsoleLogger,
   RustSdkCryptoStorageProvider,
   RustSdkCryptoStoreType,
   SimpleFsStorageProvider,
 } from "matrix-bot-sdk";
+import { logger, suppressLogLines } from "../logger.js";
 import type { ExternalMessage } from "../types.js";
-import type { RoomOps, Transport } from "./interface.js";
+import type { Transport } from "./interface.js";
+import { MatrixRoomOps } from "./matrix-rooms.js";
 import {
   extractUsername,
   formatForMatrix,
+  isGroupChatRoom,
+  shouldPostJoinHint,
   shouldSkipEvent,
   stripBotMention,
   wasBotMentioned,
@@ -23,8 +26,12 @@ import {
 /**
  * Matrix transport provider using matrix-bot-sdk
  * Works with any Matrix homeserver — Element X, Element Web, FluffyChat, etc.
+ *
+ * Message I/O only. The room-capability half (RoomOps) lives in the
+ * composed matrix-rooms adapter; the composition root hands that to the
+ * /pmctl path and the startup space ensure.
  */
-export class MatrixProvider implements Transport, RoomOps {
+export class MatrixProvider implements Transport {
   readonly type = "matrix";
   private client?: MatrixClient;
   private _isConnected = false;
@@ -34,8 +41,16 @@ export class MatrixProvider implements Transport, RoomOps {
   private joinedRooms = new Set<string>();
   private roomMemberCount = new Map<string, number>();
   private connectedAt = 0;
-  /** Whether the E2EE crypto stack actually loaded (see RoomOps doc). */
-  encryptionAvailable = false;
+
+  /** Room-capability half of the Matrix integration (see matrix-rooms.ts). */
+  readonly roomOps = new MatrixRoomOps({
+    getClient: () => this.client,
+    getBotUserId: () => this.botUserId,
+    onLeftRoom: (roomId) => {
+      this.joinedRooms.delete(roomId);
+      this.roomMemberCount.delete(roomId);
+    },
+  });
 
   constructor(
     private config: { homeserverUrl: string; accessToken: string; encryption?: boolean },
@@ -47,111 +62,6 @@ export class MatrixProvider implements Transport, RoomOps {
 
   get isConnected(): boolean {
     return this._isConnected;
-  }
-
-  /** Create a private room — the general primitive (name + invitees; E2EE
-   *  state opt-in, only pass encrypted=true when encryptionAvailable). */
-  async createRoom(opts: { name: string; inviteUserIds: string[]; encrypted?: boolean }): Promise<string> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    const roomId = await this.client.createRoom({
-      name: opts.name,
-      invite: opts.inviteUserIds,
-      preset: "private_chat",
-      ...(opts.encrypted
-        ? {
-            initial_state: [
-              {
-                type: "m.room.encryption",
-                state_key: "",
-                content: { algorithm: "m.megolm.v1.aes-sha2" },
-              },
-            ],
-          }
-        : {}),
-    });
-    return roomId;
-  }
-
-  /** Create a private project room (used by /pmctl new). */
-  async createProjectRoom(name: string, inviteUserId: string): Promise<string> {
-    return this.createRoom({ name, inviteUserIds: [inviteUserId] });
-  }
-
-  /** Create a private space (m.space organizational container). */
-  async createSpace(opts: { name: string; inviteUserIds: string[] }): Promise<string> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    return this.client.createRoom({
-      name: opts.name,
-      invite: opts.inviteUserIds,
-      preset: "private_chat",
-      visibility: "private",
-      creation_content: { type: "m.space" },
-    });
-  }
-
-  /** Link a room into a space (used by the startup space ensure). */
-  async addRoomToSpace(spaceRoomId: string, childRoomId: string): Promise<void> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    const via = this.botUserId ? [this.botUserId.split(":")[1] ?? ""] : [];
-    // m.space.child (state_key = child room id) is what makes Element show
-    // the room inside the space.
-    await this.client.sendStateEvent(spaceRoomId, "m.space.child", childRoomId, { via });
-    // m.room.parent lives in the child room; the bot may lack power there
-    // (rooms it did not create). Element works from m.space.child alone.
-    try {
-      await this.client.sendStateEvent(childRoomId, "m.room.parent", spaceRoomId, {
-        via,
-        canonical: true,
-      });
-    } catch {
-      // best-effort
-    }
-  }
-
-  /** Unlink a room from a space (used by /pmctl rm). */
-  async removeRoomFromSpace(spaceRoomId: string, childRoomId: string): Promise<void> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    // Empty content drops the child from the space's view (m.space.child
-    // with no via servers is not a resolvable child).
-    await this.client.sendStateEvent(spaceRoomId, "m.space.child", childRoomId, {});
-    // Clear the child-side badge too — best-effort; the bot leaves the room
-    // right after, so remaining members keep a clean room header.
-    try {
-      await this.client.sendStateEvent(childRoomId, "m.room.parent", spaceRoomId, {});
-    } catch {
-      // best-effort
-    }
-  }
-
-  /** Invite a user into a room (space membership). */
-  async inviteUser(roomId: string, userId: string): Promise<void> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    await this.client.inviteUser(userId, roomId);
-  }
-
-  /** Rename a room (used to brand the DM as the management room). */
-  async setRoomName(roomId: string, name: string): Promise<void> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    await this.client.sendStateEvent(roomId, "m.room.name", "", { name });
-  }
-
-  /** Have the bot actively leave a room (used by /pmctl rm). */
-  async leaveRoom(roomId: string, reason?: string): Promise<void> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    await this.client.leaveRoom(roomId, reason);
-    this.joinedRooms.delete(roomId);
-    this.roomMemberCount.delete(roomId);
-  }
-
-  /** The bot's own Matrix user ID (null if not connected). */
-  getBotUserId(): string | null {
-    return this.botUserId ?? null;
-  }
-
-  /** Set a user's power level in a room (used to make the project owner admin). */
-  async setUserPowerLevel(roomId: string, userId: string, level: number): Promise<void> {
-    if (!this.client) throw new Error("Matrix 未连接");
-    await this.client.setUserPowerLevel(userId, roomId, level);
   }
 
   // Formatting delegated to matrix-utils.ts (pure, testable)
@@ -185,9 +95,9 @@ export class MatrixProvider implements Transport, RoomOps {
           "pi-courier-matrix-crypto"
         );
         cryptoProvider = new RustSdkCryptoStorageProvider(cryptoStorePath, RustSdkCryptoStoreType.Sqlite);
-        console.log("[Matrix] E2EE crypto storage enabled (Rust/SQLite)");
+        logger.info("[Matrix] E2EE crypto storage enabled (Rust/SQLite)");
       } catch (err) {
-        console.warn("[Matrix] E2EE crypto not available, continuing without encryption:", (err as Error).message);
+        logger.warn("[Matrix] E2EE crypto not available, continuing without encryption:", (err as Error).message);
       }
     }
 
@@ -214,7 +124,7 @@ export class MatrixProvider implements Transport, RoomOps {
           // Multi-user room that isn't explicitly enabled: post a one-time
           // hint so the inviter knows how to enable it. The room.join event
           // only fires on (re)join, so this is naturally idempotent.
-          if (members.length > 2 && !this.isRoomEnabled(roomId)) {
+          if (shouldPostJoinHint(members.length, this.isRoomEnabled(roomId))) {
             this.sendMessage(
               roomId,
               `🤖 我已加入这个群聊,但默认不回应群消息。\n\n` +
@@ -241,39 +151,43 @@ export class MatrixProvider implements Transport, RoomOps {
       }
     });
 
+    // Route SDK-internal logs through the shared leveled logger — trace/debug
+    // land on debug (silent at the default info threshold), info/warn/error
+    // keep their level. The [matrix-sdk:*] prefix keeps SDK lines greppable
+    // apart from the adapter's own [Matrix] state logs.
+    const sdkLogAdapter: ILogger = {
+      trace: (mod, ...args) => logger.debug(`[matrix-sdk:${mod}]`, ...args),
+      debug: (mod, ...args) => logger.debug(`[matrix-sdk:${mod}]`, ...args),
+      info:  (mod, ...args) => logger.info(`[matrix-sdk:${mod}]`, ...args),
+      warn:  (mod, ...args) => logger.warn(`[matrix-sdk:${mod}]`, ...args),
+      error: (mod, ...args) => logger.error(`[matrix-sdk:${mod}]`, ...args),
+    };
+    LogService.setLogger(sdkLogAdapter);
+
     try {
       // During initial sync the SDK replays historical events and tries to
       // decrypt them. For E2EE rooms this produces two known error patterns:
       //   1. "Decryption error" — old messages we don't have keys for
       //   2. "M_NOT_FOUND"     — stale sync token references a purged event
       // Our connectedAt filter skips these events anyway, so the errors are
-      // noise. A filtering logger suppresses only these specific patterns.
-      const defaultLogger = new RichConsoleLogger();
-      const syncFilterLogger: ILogger = {
-        info:  (mod, ...args) => defaultLogger.info(mod, ...args),
-        warn:  (mod, ...args) => defaultLogger.warn(mod, ...args),
-        debug: (mod, ...args) => defaultLogger.debug(mod, ...args),
-        trace: (mod, ...args) => defaultLogger.trace(mod, ...args),
-        error: (mod, ...args) => {
-          const msg = args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
-          if (mod === "MatrixClientLite" && msg.includes("Decryption error")) return;
-          if (mod === "MatrixHttpClient" && msg.includes("M_NOT_FOUND")) return;
-          defaultLogger.error(mod, ...args);
-        },
-      };
-      LogService.setLogger(syncFilterLogger);
-
-      await this.client.start();
-
-      // Restore default logging — real errors after sync should not be filtered
-      LogService.setLogger(defaultLogger);
+      // noise. The facade's suppression window filters exactly these
+      // patterns for the sync only — closing it (even on failure) keeps
+      // real errors afterwards visible.
+      const closeSyncNoiseWindow = suppressLogLines("Decryption error", "M_NOT_FOUND");
+      try {
+        await this.client.start();
+      } finally {
+        closeSyncNoiseWindow();
+      }
     } catch (error) {
       // Clean up dangling state so connect() can be retried
       this.client = undefined;
       this.botUserId = undefined;
       this.joinedRooms.clear();
       this.roomMemberCount.clear();
-      console.error("[Matrix] Failed to connect:", error);
+      // The facade renders Error objects as "{}", so pass the stack (which
+      // carries the message) to keep the old console.error's diagnostic value.
+      logger.error("[Matrix] Failed to connect:", (error as Error).stack ?? String(error));
       throw error;
     }
 
@@ -290,9 +204,9 @@ export class MatrixProvider implements Transport, RoomOps {
     }));
     this.connectedAt = Date.now();
     this._isConnected = true;
-    this.encryptionAvailable = cryptoProvider !== undefined;
+    this.roomOps.encryptionAvailable = cryptoProvider !== undefined;
     const cryptoStatus = cryptoProvider ? "E2EE enabled" : "E2EE disabled";
-    console.log(`✅ Matrix connected as ${this.botUserId} (${rooms.length} rooms, ${cryptoStatus})`);
+    logger.info(`✅ Matrix connected as ${this.botUserId} (${rooms.length} rooms, ${cryptoStatus})`);
   }
 
   async disconnect(): Promise<void> {
@@ -305,7 +219,7 @@ export class MatrixProvider implements Transport, RoomOps {
     this.joinedRooms.clear();
     this.roomMemberCount.clear();
     this.connectedAt = 0;
-    console.log("[Matrix] Disconnected");
+    logger.info("[Matrix] Disconnected");
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {
@@ -368,7 +282,7 @@ export class MatrixProvider implements Transport, RoomOps {
         memberCount = 2; // Default to DM if we can't check
       }
     }
-    const isGroupChat = memberCount > 2;
+    const isGroupChat = isGroupChatRoom(memberCount);
 
     // Check if bot was mentioned (pure utility)
     const wasMentioned = isGroupChat ? wasBotMentioned(messageText, this.botUserId) : false;

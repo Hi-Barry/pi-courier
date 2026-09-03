@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   extractUsername,
   formatForMatrix,
+  isGroupChatRoom,
+  shouldPostJoinHint,
   shouldSkipEvent,
   stripBotMention,
   wasBotMentioned,
@@ -278,6 +280,38 @@ describe("stripBotMention properties", () => {
         expect(result).not.toContain(botId);
       })
     );
+  });
+});
+
+// ─── isGroupChatRoom ──────────────────────────────────────────
+
+describe("isGroupChatRoom", () => {
+  it("classifies >2 members as a group chat", () => {
+    expect(isGroupChatRoom(3)).toBe(true);
+    expect(isGroupChatRoom(40)).toBe(true);
+  });
+  it("classifies 2 members (bot + 1 other) as a DM", () => {
+    expect(isGroupChatRoom(2)).toBe(false);
+  });
+  it("classifies the 1-member edge as a DM (not a group)", () => {
+    expect(isGroupChatRoom(1)).toBe(false);
+  });
+});
+
+// ─── shouldPostJoinHint ──────────────────────────────────────
+
+describe("shouldPostJoinHint", () => {
+  it("posts the hint for a multi-user, not-yet-enabled room", () => {
+    expect(shouldPostJoinHint(5, false)).toBe(true);
+  });
+  it("does not post the hint for an enabled multi-user room", () => {
+    expect(shouldPostJoinHint(5, true)).toBe(false);
+  });
+  it("does not post the hint for a DM (<=2 members) even when disabled", () => {
+    expect(shouldPostJoinHint(2, false)).toBe(false);
+  });
+  it("does not post the hint for a lone bot room (1 member)", () => {
+    expect(shouldPostJoinHint(1, false)).toBe(false);
   });
 });
 

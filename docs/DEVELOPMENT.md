@@ -213,6 +213,18 @@ pi 0.83.0 就绪。
 - 任何失败降级为无空间行为(警告 + 下次启动重试);空间链接(m.space.child)每次启动幂等重挂
 - `inviteUserToSpaceOnce`:fire-once 邀请(space.invitedUsers 记账,拒绝者含内;失败不记账由自愈重试),router 的 spaceInvite 效应与此处自愈共用
 
+**`src/transports/matrix.ts`** —— Matrix Transport(只做消息 I/O,spec #22 后不再内嵌其他职责)
+- connect/disconnect、`sendMessage`(markdown → Matrix HTML)、typing、事件分发
+- 群/DM 判定与入群 enable 提示消费 `matrix-utils.ts` 纯函数;成员计数经缓存(不逐条消息打 API)
+- SDK 内部日志经 `logger.ts` 门面(初始同步期用 `suppressLogLines` 窗口滤掉两类已知良性错误)
+
+**`src/transports/matrix-rooms.ts`** —— Matrix RoomOps 适配器(spec #22 从 matrix.ts 拆出)
+- `MatrixRoomOps implements RoomOps`:createRoom/createSpace、空间挂链/摘链(m.space.child + m.room.parent)、邀请/改名/权力等级/退房、`encryptionAvailable`
+- 经注入访问器(getClient/getBotUserId/onLeftRoom)触达 live client,不反向持有 transport;组合根(standalone)把 `matrix.roomOps` 交给 /pmctl 与 space ensure
+
+**`src/transports/matrix-utils.ts`** —— Matrix 纯函数(无 SDK/网络依赖,直测)
+- markdown 渲染(`formatForMatrix`)、事件过滤(`shouldSkipEvent`)、提及解析(`wasBotMentioned`/`stripBotMention`)、群/DM 判定(`isGroupChatRoom`)与入群提示谓词(`shouldPostJoinHint`)
+
 **`src/management-room.ts`** —— 管理房间文案单点组装(房间名 + 使用指南),DM 采纳与空间自建两条入口共用,杜绝文案漂移
 
 **`src/standalone.ts`** —— 独立入口
@@ -567,6 +579,21 @@ Element 空间的纯组织视图,五张票收官:
 | #5 | 文档同步(中英 README + DEVELOPMENT.md) |
 
 空间特性与 §14 的"空间=纯组织视图"设计决策一致:只做展示层收纳,不承载任何授权判定。
+
+### 11.7 Matrix 深化:spec #22(0.1.33 后,未发版)
+
+matrix.ts 三职责拆分的收官票系,接口与消费路径零改动:
+
+| 票 | 内容 |
+|---|---|
+| #23 | 消息过滤策略纯化:群/DM 判定(`isGroupChatRoom`)与入群 enable 提示谓词(`shouldPostJoinHint`)抽进 matrix-utils 纯函数,`> 2` 阈值收敛为单一实现 |
+| #24 | RoomOps 适配器独立:房间能力 11 个方法迁入 `matrix-rooms.ts`(`MatrixRoomOps`),MatrixProvider 组合之,只剩消息 I/O(405 行 → 三票合计约 320 行) |
+| #25 | 日志统一走 `logger.ts` 门面:删 `console.*` 与 SDK `RichConsoleLogger` 直用;同步期两类良性错误(Decryption error / M_NOT_FOUND)改为门面内的 `suppressLogLines` 过滤窗口 |
+| #30 | 文档同步(本节 + §5.1 模块清单)+ 全量门禁收官 |
+
+### 11.8 spec #22 的日志行为差异说明
+
+票 #25 有两处有意可见性变化(其余为语义等价迁移):SDK trace/debug 在默认 info 阈值下静默(原 RichConsoleLogger 全打,`--level debug` 仍可见);同步噪音过滤从"仅 error 级 + 两个 SDK 模块门控"放宽为"窗口期内任意模块/级别的子串匹配"——门面不认识 SDK 模块名,窗口受 `client.start()` 作用域约束、finally 保证关闭(旧实现在 start() 失败后会永久遗留过滤 logger)。
 
 ---
 
