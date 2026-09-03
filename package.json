@@ -11,12 +11,14 @@
     "dist/",
     "deploy/",
     "extensions/",
+    "scripts/",
     "README.md",
     "README.zh-CN.md"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc",
     "prepare": "npm run build",
+    "postinstall": "node scripts/ensure-crypto-native.mjs",
     "watch": "tsc --watch",
     "clean": "rm -rf dist",
     "start": "node dist/standalone.js",

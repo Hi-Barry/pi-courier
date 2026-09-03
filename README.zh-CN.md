@@ -56,7 +56,7 @@ npm run build
 npm link          # 让 `pi-courier` 命令全局可用
 ```
 
-**不要用 `--ignore-scripts`**:Matrix E2EE 库的 postinstall 会下载原生二进制。如果被 npm 拦截,报 `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'` 时手动补:
+**不要用 `--ignore-scripts`**:Matrix E2EE 库的 postinstall 会下载原生二进制。npm >= 11 的 `allow-scripts` 默认可能拦截该依赖的 postinstall;`pi-courier` 自己的 postinstall 会自检并**自动补下**缺失的原生二进制(首次安装多下载一次)。若仍报 `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'`(比如自检被跳过),再手动补:
 
 ```bash
 cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs
