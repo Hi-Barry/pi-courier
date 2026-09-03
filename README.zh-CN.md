@@ -218,8 +218,10 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 ### 服务管理
 
 ```bash
-pi-courier status              # 状态 + 最近日志
+pi-courier status              # 状态 + 最近日志(可加项目名:pi-courier status <项目>)
 pi-courier logs                # 跟踪日志(INFO 及以上)
+pi-courier logs ai-api         # 多工程:只看该项目的打标日志
+pi-courier logs ai-api www --level debug   # 多项目 + 全量细节
 pi-courier logs --level debug  # 跟踪全部日志(含思考、流式增量)
 pi-courier logs --level error  # 只看错误
 pi-courier run --level debug   # 前台运行,全量显示
@@ -231,7 +233,7 @@ pi-courier update              # 更新 pi-courier 自身
 pi-courier -v                  # 显示当前版本(--version/version 亦可)
 ```
 
-日志级别:`debug < info < warn < error`。服务会把全部内容写入日志;`logs` 默认显示 INFO 及以上,`--level debug` 显示完整会话回放(用户消息、思考、工具调用、回复)。完整对话始终保存在 pi 的会话文件(`~/.pi/agent/sessions/`)。
+日志级别:`debug < info < warn < error`。服务会把全部内容写入日志;`logs` 默认显示 INFO 及以上,`--level debug` 显示完整会话回放(用户消息、思考、工具调用、回复)。多工程模式下,项目相关日志行带有 `[项目名]` 标签,`logs <项目名>` 即可只看该工程(大小写不敏感;项目名 = `/pmctl` 的名称,未命名时为工作目录的目录名)。过滤经 `journalctl --grep` 实现,要求 journald 支持 PCRE2(Debian/Ubuntu 标准支持)。完整对话始终保存在 pi 的会话文件(`~/.pi/agent/sessions/`)。
 
 **升级 pi** 是独立的事 —— pi-courier 始终通过 `which pi` 连接系统 pi:
 

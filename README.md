@@ -218,8 +218,10 @@ One bot account can serve multiple projects — each project gets its own privat
 ### Managing the service
 
 ```bash
-pi-courier status          # status + recent logs
+pi-courier status          # status + recent logs (optionally: pi-courier status <project>)
 pi-courier logs            # tail logs (INFO and above)
+pi-courier logs ai-api     # multi-project: only this project's tagged lines
+pi-courier logs ai-api www --level debug   # several projects, full detail
 pi-courier logs --level debug   # tail ALL logs (incl. thinking, stream deltas)
 pi-courier logs --level error   # errors only
 pi-courier run --level debug    # foreground with full detail
@@ -233,8 +235,13 @@ pi-courier -v             # show the installed version
 
 Log levels: `debug < info < warn < error`. The service writes everything;
 `logs` shows INFO+ by default, `--level debug` shows the full session replay
-(user messages, thinking, tool calls, replies). The complete conversation is
-always stored in pi's session files (`~/.pi/agent/sessions/`).
+(user messages, thinking, tool calls, replies). In multi-project mode every
+project-related line carries a `[project]` tag, and `logs <project>` filters
+by it (case-insensitive; project = the `/pmctl` name, or the working
+directory's name when the project is unnamed). Filtering runs through
+`journalctl --grep` — it requires journald with PCRE2 support (standard on
+Debian/Ubuntu). The complete conversation is always stored in pi's session
+files (`~/.pi/agent/sessions/`).
 
 Upgrading **pi** is independent — pi-courier always uses the system pi via `which pi`:
 
