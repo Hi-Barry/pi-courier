@@ -5,11 +5,11 @@ import {
   AutojoinRoomsMixin,
   LogService,
   MatrixClient,
-  RichConsoleLogger,
   RustSdkCryptoStorageProvider,
   RustSdkCryptoStoreType,
   SimpleFsStorageProvider,
 } from "matrix-bot-sdk";
+import { logger, suppressLogLines } from "../logger.js";
 import type { ExternalMessage } from "../types.js";
 import type { Transport } from "./interface.js";
 import { MatrixRoomOps } from "./matrix-rooms.js";
@@ -95,9 +95,9 @@ export class MatrixProvider implements Transport {
           "pi-courier-matrix-crypto"
         );
         cryptoProvider = new RustSdkCryptoStorageProvider(cryptoStorePath, RustSdkCryptoStoreType.Sqlite);
-        console.log("[Matrix] E2EE crypto storage enabled (Rust/SQLite)");
+        logger.info("[Matrix] E2EE crypto storage enabled (Rust/SQLite)");
       } catch (err) {
-        console.warn("[Matrix] E2EE crypto not available, continuing without encryption:", (err as Error).message);
+        logger.warn("[Matrix] E2EE crypto not available, continuing without encryption:", (err as Error).message);
       }
     }
 
@@ -151,39 +151,43 @@ export class MatrixProvider implements Transport {
       }
     });
 
+    // Route SDK-internal logs through the shared leveled logger — trace/debug
+    // land on debug (silent at the default info threshold), info/warn/error
+    // keep their level. The [matrix-sdk:*] prefix keeps SDK lines greppable
+    // apart from the adapter's own [Matrix] state logs.
+    const sdkLogAdapter: ILogger = {
+      trace: (mod, ...args) => logger.debug(`[matrix-sdk:${mod}]`, ...args),
+      debug: (mod, ...args) => logger.debug(`[matrix-sdk:${mod}]`, ...args),
+      info:  (mod, ...args) => logger.info(`[matrix-sdk:${mod}]`, ...args),
+      warn:  (mod, ...args) => logger.warn(`[matrix-sdk:${mod}]`, ...args),
+      error: (mod, ...args) => logger.error(`[matrix-sdk:${mod}]`, ...args),
+    };
+    LogService.setLogger(sdkLogAdapter);
+
     try {
       // During initial sync the SDK replays historical events and tries to
       // decrypt them. For E2EE rooms this produces two known error patterns:
       //   1. "Decryption error" — old messages we don't have keys for
       //   2. "M_NOT_FOUND"     — stale sync token references a purged event
       // Our connectedAt filter skips these events anyway, so the errors are
-      // noise. A filtering logger suppresses only these specific patterns.
-      const defaultLogger = new RichConsoleLogger();
-      const syncFilterLogger: ILogger = {
-        info:  (mod, ...args) => defaultLogger.info(mod, ...args),
-        warn:  (mod, ...args) => defaultLogger.warn(mod, ...args),
-        debug: (mod, ...args) => defaultLogger.debug(mod, ...args),
-        trace: (mod, ...args) => defaultLogger.trace(mod, ...args),
-        error: (mod, ...args) => {
-          const msg = args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
-          if (mod === "MatrixClientLite" && msg.includes("Decryption error")) return;
-          if (mod === "MatrixHttpClient" && msg.includes("M_NOT_FOUND")) return;
-          defaultLogger.error(mod, ...args);
-        },
-      };
-      LogService.setLogger(syncFilterLogger);
-
-      await this.client.start();
-
-      // Restore default logging — real errors after sync should not be filtered
-      LogService.setLogger(defaultLogger);
+      // noise. The facade's suppression window filters exactly these
+      // patterns for the sync only — closing it (even on failure) keeps
+      // real errors afterwards visible.
+      const closeSyncNoiseWindow = suppressLogLines("Decryption error", "M_NOT_FOUND");
+      try {
+        await this.client.start();
+      } finally {
+        closeSyncNoiseWindow();
+      }
     } catch (error) {
       // Clean up dangling state so connect() can be retried
       this.client = undefined;
       this.botUserId = undefined;
       this.joinedRooms.clear();
       this.roomMemberCount.clear();
-      console.error("[Matrix] Failed to connect:", error);
+      // The facade renders Error objects as "{}", so pass the stack (which
+      // carries the message) to keep the old console.error's diagnostic value.
+      logger.error("[Matrix] Failed to connect:", (error as Error).stack ?? String(error));
       throw error;
     }
 
@@ -202,7 +206,7 @@ export class MatrixProvider implements Transport {
     this._isConnected = true;
     this.roomOps.encryptionAvailable = cryptoProvider !== undefined;
     const cryptoStatus = cryptoProvider ? "E2EE enabled" : "E2EE disabled";
-    console.log(`✅ Matrix connected as ${this.botUserId} (${rooms.length} rooms, ${cryptoStatus})`);
+    logger.info(`✅ Matrix connected as ${this.botUserId} (${rooms.length} rooms, ${cryptoStatus})`);
   }
 
   async disconnect(): Promise<void> {
@@ -215,7 +219,7 @@ export class MatrixProvider implements Transport {
     this.joinedRooms.clear();
     this.roomMemberCount.clear();
     this.connectedAt = 0;
-    console.log("[Matrix] Disconnected");
+    logger.info("[Matrix] Disconnected");
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {
