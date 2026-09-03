@@ -12,8 +12,8 @@
 import * as path from "node:path";
 import type { RpcEventListener } from "@earendil-works/pi-coding-agent";
 import type { ConfigStore } from "../config.js";
-import { projectLabelOf } from "../project-labels.js";
 import { logger } from "../logger.js";
+import { projectLabelOf } from "../project-labels.js";
 import { PiRpc, type PiRpcOptions } from "./pi-rpc.js";
 
 export interface ProjectEntry {
