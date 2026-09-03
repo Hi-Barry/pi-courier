@@ -139,6 +139,22 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     args: rpcArgs,
   });
 
+  // ---- multi-project routing -------------------------------------------------
+  // Project rooms get their own pi process (isolated cwd/session); DM and
+  // unmapped rooms use the shared default Rpc. Agent events from a project
+  // process are routed back to the owning room.
+  // Declared BEFORE sendReply: outbound 📤 lines resolve their project label
+  // through it (spec #34).
+  const projectManager = new ProjectManager({
+    defaultRpc: rpc,
+    baseOptions: { cliPath, args: ["--continue"] },
+    onRoomEvent: (_roomId, event, rpc) => {
+      router.handleEvent(event, rpc);
+    },
+    store,
+    multiProject: store.get().multiProject === true,
+  });
+
   // ---- message routing ------------------------------------------------------
   const sendReply = async (chatId: string, transport: string, text: string): Promise<void> => {
     try {
@@ -147,7 +163,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       if (!t.isConnected) throw new Error(`Transport ${transport} not connected`);
       await t.sendMessage(chatId, text);
       const short = text.replace(/\s+/g, " ").trim();
-      logger.debug(`📤 [${transport}] ${short.slice(0, 500)}${short.length > 500 ? "…" : ""}`);
+      logger.withLabel(projectManager.labelForRoom(chatId)).debug(`📤 [${transport}] ${short.slice(0, 500)}${short.length > 500 ? "…" : ""}`);
     } catch (err) {
       logger.error(`发送失败 (${transport}): ${(err as Error).message}`);
     }
@@ -158,20 +174,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     if (t?.isConnected) await t.sendTyping(chatId);
   };
   const disconnectAll = (): Promise<unknown> => Promise.allSettled(transports.map((t) => t.disconnect()));
-
-  // ---- multi-project routing -------------------------------------------------
-  // Project rooms get their own pi process (isolated cwd/session); DM and
-  // unmapped rooms use the shared default Rpc. Agent events from a project
-  // process are routed back to the owning room.
-  const projectManager = new ProjectManager({
-    defaultRpc: rpc,
-    baseOptions: { cliPath, args: ["--continue"] },
-    onRoomEvent: (_roomId, event, rpc) => {
-      router.handleEvent(event, rpc);
-    },
-    store,
-    multiProject: store.get().multiProject === true,
-  });
 
   // ---- space (organizational) mode -----------------------------------------
   // With the space enabled (multi-project only), the management room is
