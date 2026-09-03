@@ -56,7 +56,7 @@ npm run build
 npm link          # make the `pi-courier` command available globally
 ```
 
-**Do not use `--ignore-scripts`**: the Matrix E2EE library downloads its native binary via postinstall. If your npm blocks it and you hit `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'`, run:
+**Do not use `--ignore-scripts`**: the Matrix E2EE library downloads its native binary via postinstall. On npm >= 11 the `allow-scripts` default may block that dependency's postinstall; `pi-courier`'s own postinstall self-checks for it and auto-downloads the missing native binary (one extra download on first install). If you still hit `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'` (e.g. the auto-download was skipped), run manually:
 
 ```bash
 cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs
