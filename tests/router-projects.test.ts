@@ -826,6 +826,7 @@ describe("management room invite on trust transition (issue #43 票2)", () => {
       inviteUser: vi.fn().mockResolvedValue(undefined),
       setRoomName: vi.fn().mockResolvedValue(undefined),
       setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
+      getPowerLevels: vi.fn().mockResolvedValue({ users: {} }),
       leaveRoom: vi.fn().mockResolvedValue(undefined),
       getBotUserId: vi.fn().mockReturnValue("@bot:server"),
       encryptionAvailable: true,
