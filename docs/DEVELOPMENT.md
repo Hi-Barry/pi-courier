@@ -677,6 +677,8 @@ TypeError: webidl.util.markAsUncloneable is not a function
 
 **加密房间的结论**:bot 账号没有交叉签名,Element 里"用户验证不可用";实测即使取消"仅向已验证设备共享密钥"也拿不到密钥。**最可靠的方案就是非加密房间** —— 配置 `encryption: true` 不影响普通房间。
 
+**crypto 原生库缓存与校验(0.1.38 起)**:postinstall 自检把下载成功的 `.node` 副本缓存到 `~/.cache/pi-courier/native-crypto/<crypto 包版本>/`(目录 0700/文件 0600,临时文件+原子重命名),更新重装后 node_modules 缺失时优先从缓存恢复,不再重复 21MB 下载;下载与恢复均对 `scripts/crypto-native-hashes.json` 清单做 sha256 校验——清单命中不符即删除产物拒绝加载(E2EE 降级),未录入版本走 TOFU 并告警提醒补录。**维护仪式:上游 `@matrix-org/matrix-sdk-crypto-nodejs` 升版时,从其官方 release 下载各平台库、`sha256sum` 录入清单并走 PR 评审。**
+
 ### 12.4 npm link / 安装
 
 | 坑 | 现象 | 解决 |
@@ -811,6 +813,8 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 | 0.1.34 | **spec #22 Matrix 深化**(见 11.7–11.8):matrix.ts 三职责拆分——RoomOps 适配器独立、消息过滤纯化、SDK 日志统一走 logger 门面 |
 | 0.1.35 | hotfix:postinstall 自检补下 crypto 原生库(npm 11 allow-scripts 兼容) |
 | 0.1.36 | **日志按项目区分(spec #34)**:多工程日志行带 `[项目]` 标签,`logs <项目...> [--level]`/`status [项目]` 经锚定 grep 过滤;`--level` 修复(journalctl -p 在 inherit 管道下从未生效,改为行内档位过滤);含方括号/空白/超长/撞名的项目名被 /pmctl 拒绝 |
+| 0.1.37 | **信任即管理员(spec #41)**:信任用户在全部托管房间自动 PL 100(幂等补权+启动自愈,零新增配置),邀请扩为空间+管理房间(修挑战码用户进不了管理房间的缺口),/revoke 同步全房间降权(名单簿记兜底,名单外高权用户永不动) |
+| 0.1.38 | **crypto 原生库缓存 + sha256 校验(spec #47)**:更新免重下(缓存 `~/.cache/pi-courier/native-crypto/`),下载与恢复验哈希,防代理侧篡改与 release 替换 |
 
 GitHub 仓库:[github.com/Hi-Barry/pi-courier](https://github.com/Hi-Barry/pi-courier)(公开)
 npm 包:[pi-courier](https://www.npmjs.com/package/pi-courier)
