@@ -90,6 +90,7 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     inviteUser: vi.fn().mockResolvedValue(undefined),
     setRoomName: vi.fn().mockResolvedValue(undefined),
     setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
+    getPowerLevels: vi.fn().mockResolvedValue(undefined),
     leaveRoom: vi.fn().mockResolvedValue(undefined),
     getBotUserId: vi.fn().mockReturnValue("@bot:server"),
     encryptionAvailable: true,
@@ -191,7 +192,6 @@ describe("message-router multi-project routing", () => {
     await router.handleIncoming(makeMsg({ content: "/newproject myapp /tmp/myapp" }));
     await new Promise((r) => setTimeout(r, 20)); // let fire-and-forget branding settle
     expect(roomOps.createProjectRoom).toHaveBeenCalledWith(expect.stringContaining("myapp("), "@barry:server");
-    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!newproj:server", "@barry:server", 100);
     expect(projectManager.registerProject).toHaveBeenCalledWith("!newproj:server", "/tmp/myapp", "myapp");
     const reply = replies.at(-1)!;
     expect(reply.text).toContain("myapp");
@@ -436,14 +436,16 @@ describe("message-router multi-project routing", () => {
     expect(projectManager.registerProject).not.toHaveBeenCalled();
   });
 
-  it("owner-promotion failure warns but the project is still registered", async () => {
-    store.update({ managementRooms: ["!dm:server"] });
+  it("trusted-user elevation failure warns but the project is still registered (issue #42)", async () => {
+    // The fixtures store has no trustedUsers; seed one so the unified
+    // elevation path runs — its failure must not fail the project.
+    store.update({ managementRooms: ["!dm:server"], auth: { trustedUsers: ["matrix:@barry:server"] } });
     roomOps.setUserPowerLevel.mockRejectedValue(new Error("power level too low"));
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ content: "/pmctl new myapp" }));
     expect(projectManager.registerProject).toHaveBeenCalledWith("!newproj:server", expect.any(String), "myapp");
     expect(replies.some((r) => r.text.includes("创建完成"))).toBe(true);
-    expect(replies.some((r) => r.text.includes("设为管理员失败"))).toBe(true);
+    expect(replies.some((r) => r.text.includes("补权失败"))).toBe(true);
   });
 
   it("room-rename failure is surfaced while the project rename stands", async () => {

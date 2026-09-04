@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { ConfigStore } from "../src/config";
 import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { ProjectEntry, ProjectManager } from "../src/rpc/project-manager";
@@ -8,6 +11,7 @@ import type { RoomOps } from "../src/transports/interface";
  *  and the gate order were historical bug territory and are pinned here
  *  without going through the router. */
 describe("PmctlController", () => {
+  let tmpDir: string;
   let pm: Record<string, ReturnType<typeof vi.fn>> & { isMultiProject: boolean };
   let roomOps: Record<string, ReturnType<typeof vi.fn>>;
   let store: ConfigStore;
@@ -21,6 +25,7 @@ describe("PmctlController", () => {
     controller.handle(text, { ...call, ...overrides }, reply);
 
   beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-courier-pmctl-"));
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);
     replies = [];
@@ -54,6 +59,7 @@ describe("PmctlController", () => {
       removeRoomFromSpace: vi.fn().mockResolvedValue(undefined),
       setRoomName: vi.fn().mockResolvedValue(undefined),
       setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
+      getPowerLevels: vi.fn().mockResolvedValue(undefined),
       leaveRoom: vi.fn().mockResolvedValue(undefined),
       getBotUserId: vi.fn().mockReturnValue("@bot:server"),
     };
@@ -67,6 +73,7 @@ describe("PmctlController", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    rmSync(tmpDir, { recursive: true, force: true });
   });
 
   // ---- gates ---------------------------------------------------------------
@@ -121,7 +128,6 @@ describe("PmctlController", () => {
     // The invite target is passed as-is — no prefix stripping in the controller.
     expect(String((roomOps.createProjectRoom as ReturnType<typeof vi.fn>).mock.calls[0][1])).not.toContain("matrix:");
     expect(pm.registerProject).toHaveBeenCalledWith("!newroom:server", "/home/you/Projects/myapp", "myapp");
-    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!newroom:server", "@barry:server", 100);
     expect(replies.at(-1)).toContain("创建完成");
   });
 
@@ -360,5 +366,95 @@ describe("PmctlController", () => {
     await c.handle("/pmctl rm myapp", call, reply); // confirm
     expect(roomOps.removeRoomFromSpace).not.toHaveBeenCalled();
     expect(roomOps.leaveRoom).toHaveBeenCalledWith("!proj:server", "项目已删除");
+  });
+
+  // ---- new: unified trusted-user elevation (issue #42) -------------------------
+  // /pmctl new elevates EVERY trusted user in the new room via the shared
+  // space.ts path. Elevation writes config (powerElevatedUsers bookkeeping)
+  // through store.update(), so these tests isolate os.homedir() into a tmpDir
+  // (same doMock pattern as tests/space.test.ts) — the real ~/.pi config must
+  // never be touched.
+
+  function makeIsolatedPmMock() {
+    const projects = new Map<string, ProjectEntry>();
+    return {
+      isMultiProject: true,
+      isProjectRoom: vi.fn().mockReturnValue(false),
+      registerProject: vi.fn((roomId: string, workdir: string, name?: string) => {
+        projects.set(roomId, { name, workdir });
+      }),
+      listProjects: vi.fn(() => Array.from(projects.entries())),
+      isRunning: vi.fn().mockReturnValue(false),
+    };
+  }
+
+  function makeIsolatedRoomOps(overrides: Record<string, unknown> = {}) {
+    return {
+      createProjectRoom: vi.fn().mockResolvedValue("!newroom:server"),
+      setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
+      getPowerLevels: vi.fn().mockResolvedValue(undefined),
+      addRoomToSpace: vi.fn().mockResolvedValue(undefined),
+      removeRoomFromSpace: vi.fn().mockResolvedValue(undefined),
+      setRoomName: vi.fn().mockResolvedValue(undefined),
+      leaveRoom: vi.fn().mockResolvedValue(undefined),
+      ...overrides,
+    };
+  }
+
+  async function isolatedController(configOverrides: Record<string, unknown> = {}, roomOpsOverrides: Record<string, unknown> = {}) {
+    vi.resetModules();
+    const homedirMock = async () => {
+      const actual = await vi.importActual<typeof import("os")>("os");
+      return { ...actual, homedir: () => tmpDir };
+    };
+    vi.doMock("os", homedirMock);
+    vi.doMock("node:os", homedirMock);
+    const { ConfigStore: IsolatedStore } = await import("../src/config");
+    const { PmctlController: IsolatedPmctlController } = await import("../src/rpc/pmctl-controller");
+    const store = new IsolatedStore({
+      managementRooms: [],
+      projects: {},
+      workdir: "/home/you/Projects",
+      ...configOverrides,
+    });
+    const pmMock = makeIsolatedPmMock();
+    const ops = makeIsolatedRoomOps(roomOpsOverrides);
+    const isolatedReplies: string[] = [];
+    const isolatedReply = async (text: string) => {
+      isolatedReplies.push(text);
+    };
+    const ctl = new IsolatedPmctlController({
+      projectManager: pmMock as unknown as ProjectManager,
+      roomOps: ops as unknown as RoomOps,
+      store,
+    });
+    const handleIsolated = (text: string) =>
+      ctl.handle(text, { chatId: "!mgmt:server", senderMxid: "@barry:server", isManagementRoom: true }, isolatedReply);
+    return { store, ops, pmMock, replies: isolatedReplies, handle: handleIsolated };
+  }
+
+  it("/pmctl new elevates every trusted user in the new room and books the elevation", async () => {
+    const { handle, ops, store, replies } = await isolatedController({
+      auth: { trustedUsers: ["matrix:@barry:server", "matrix:@carol:server"] },
+    });
+    await handle("/pmctl new myapp");
+    // All trusted users (sender or not), in native MXID form, at PL 100.
+    expect(ops.setUserPowerLevel).toHaveBeenCalledWith("!newroom:server", "@barry:server", 100);
+    expect(ops.setUserPowerLevel).toHaveBeenCalledWith("!newroom:server", "@carol:server", 100);
+    // Both were actually elevated from below 100 — both are booked (namespaced).
+    expect(store.get().powerElevatedUsers).toEqual(["matrix:@barry:server", "matrix:@carol:server"]);
+    expect(replies.at(-1)).toContain("创建完成");
+  });
+
+  it("/pmctl new elevation failure warns but the project is still created", async () => {
+    const { handle, ops, pmMock, replies } = await isolatedController(
+      { auth: { trustedUsers: ["matrix:@barry:server"] } },
+      { setUserPowerLevel: vi.fn().mockRejectedValue(new Error("没有权限")) }
+    );
+    await handle("/pmctl new myapp");
+    expect(ops.setUserPowerLevel).toHaveBeenCalledWith("!newroom:server", "@barry:server", 100);
+    expect(pmMock.registerProject).toHaveBeenCalledWith("!newroom:server", "/home/you/Projects/myapp", "myapp");
+    expect(replies.some((r) => r.includes("信任用户补权失败"))).toBe(true);
+    expect(replies.at(-1)).toContain("创建完成");
   });
 });

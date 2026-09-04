@@ -1,4 +1,4 @@
-import type { MatrixClient } from "matrix-bot-sdk";
+import { type MatrixClient, MatrixError } from "matrix-bot-sdk";
 import type { RoomOps } from "./interface.js";
 
 /**
@@ -11,7 +11,8 @@ import type { RoomOps } from "./interface.js";
  * of holding the provider, so nothing in here can accidentally grow
  * transport concerns. Failure semantics follow the RoomOps doc: every
  * operation throws with a meaningful message, the query members
- * (getBotUserId, encryptionAvailable) report not-connected instead.
+ * (getBotUserId, encryptionAvailable, getPowerLevels) report not-connected
+ * or not-present instead.
  */
 export class MatrixRoomOps implements RoomOps {
   /** Set by MatrixProvider after connect, once the crypto stack verdict is in. */
@@ -116,6 +117,20 @@ export class MatrixRoomOps implements RoomOps {
   /** Set a user's power level in a room (used to make the project owner admin). */
   async setUserPowerLevel(roomId: string, userId: string, level: number): Promise<void> {
     await this.client.setUserPowerLevel(userId, roomId, level);
+  }
+
+  /** Read a room's power-level state (m.room.power_levels); null when the
+   *  room reports 404 / M_NOT_FOUND for it (the query-member contract). */
+  async getPowerLevels(roomId: string): Promise<Record<string, unknown> | null> {
+    try {
+      return (await this.client.getRoomStateEvent(roomId, "m.room.power_levels", "")) as Record<string, unknown>;
+    } catch (err) {
+      // A room without (visible) power levels is a query result, not a
+      // failure: 404 / M_NOT_FOUND reports null and the unified trusted-user
+      // elevation treats it as an empty users map (writes anyway).
+      if (err instanceof MatrixError && (err.statusCode === 404 || err.errcode === "M_NOT_FOUND")) return null;
+      throw err;
+    }
   }
 
   /** Have the bot actively leave a room (used by /pmctl rm). */

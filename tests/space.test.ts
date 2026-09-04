@@ -19,6 +19,7 @@ describe("space ensure", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -33,7 +34,10 @@ describe("space ensure", () => {
     });
     const config = await import("../src/config");
     const space = await import("../src/space");
-    return { config, space };
+    // The dynamically imported graph holds its own logger instance — return
+    // it so warn-spies observe the same object space.ts writes through.
+    const loggerModule = await import("../src/logger");
+    return { config, space, loggerModule };
   }
 
   function makeRoomOps(overrides: Record<string, unknown> = {}) {
@@ -45,6 +49,7 @@ describe("space ensure", () => {
       inviteUser: vi.fn().mockResolvedValue(undefined),
       setRoomName: vi.fn().mockResolvedValue(undefined),
       setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
+      getPowerLevels: vi.fn().mockResolvedValue(null),
       leaveRoom: vi.fn().mockResolvedValue(undefined),
       getBotUserId: vi.fn().mockReturnValue("@bot:server"),
       encryptionAvailable: true,
@@ -299,5 +304,102 @@ describe("space ensure", () => {
     expect(result).toBe("ready");
     expect(store.get().managementRooms).toEqual(["!mgmt:server"]);
     expect(store.get().space?.roomId).toBe("!space:server");
+  });
+
+  // ---- trusted-user power self-heal (issue #42) ------------------------------
+  // The unified elevation: every trusted user is admin (PL 100) in every
+  // managed room, regardless of join state; a full sweep derives the room set
+  // from config (space + management rooms + projects). RoomOps stays a pure
+  // vi.fn() seam; the store writes into the tmpDir home.
+
+  const fullRooms = {
+    space: { enabled: true, roomId: "!space:server" },
+    managementRooms: ["!mgmt:server"],
+    projects: { "!proj:server": { workdir: "/w/p" } },
+  };
+
+  async function runHeal(configOverrides: Record<string, unknown> = {}, roomOpsOverrides: Record<string, unknown> = {}) {
+    const { config, space } = await importModules();
+    const store = new config.ConfigStore({ ...baseConfig(), ...configOverrides });
+    const roomOps = makeRoomOps(roomOpsOverrides);
+    await space.healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
+    return { store, roomOps };
+  }
+
+  it("elevates below-target trusted users to 100 across space, management and project rooms", async () => {
+    const { store, roomOps } = await runHeal(fullRooms, {
+      // barry is a member at 0; carol is absent (non-member) — written anyway.
+      getPowerLevels: vi.fn().mockResolvedValue({ users: { "@barry:server": 0 } }),
+    });
+    for (const roomId of ["!space:server", "!mgmt:server", "!proj:server"]) {
+      expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith(roomId, "@barry:server", 100);
+      expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith(roomId, "@carol:server", 100);
+    }
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(6);
+    // Both were actually elevated — both are booked (namespaced ids).
+    expect(store.get().powerElevatedUsers).toEqual(["matrix:@barry:server", "matrix:@carol:server"]);
+  });
+
+  it("is idempotent: users already at 100 produce no writes and no bookkeeping", async () => {
+    const { store, roomOps } = await runHeal(fullRooms, {
+      getPowerLevels: vi.fn().mockResolvedValue({ users: { "@barry:server": 100, "@carol:server": 100 } }),
+    });
+    expect(roomOps.setUserPowerLevel).not.toHaveBeenCalled();
+    expect(store.get().powerElevatedUsers).toBeUndefined();
+  });
+
+  it("treats a missing power-level event (null) as an empty users map and writes everyone", async () => {
+    const { roomOps } = await runHeal(
+      { ...fullRooms, projects: {} },
+      { getPowerLevels: vi.fn().mockResolvedValue(null) }
+    );
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!space:server", "@barry:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!space:server", "@carol:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!mgmt:server", "@barry:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!mgmt:server", "@carol:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(4);
+  });
+
+  it("a single-room failure warns (with the roomId) and the sweep continues elsewhere", async () => {
+    const { config, space, loggerModule } = await importModules();
+    const warnSpy = vi.spyOn(loggerModule.logger, "warn");
+    const store = new config.ConfigStore({
+      ...baseConfig(),
+      ...fullRooms,
+      projects: {},
+    });
+    const roomOps = makeRoomOps({
+      getPowerLevels: vi.fn().mockImplementation((roomId: string) =>
+        roomId === "!mgmt:server"
+          ? Promise.reject(new Error("M_LIMIT_EXCEEDED"))
+          : Promise.resolve({ users: {} })
+      ),
+    });
+    await space.healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!mgmt:server"));
+    // The other room in the sweep was still processed.
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!space:server", "@barry:server", 100);
+    expect(roomOps.setUserPowerLevel).not.toHaveBeenCalledWith("!mgmt:server", expect.anything(), expect.anything());
+  });
+
+  it("bookkeeping records only actually-elevated users, deduped against prior entries", async () => {
+    const { store } = await runHeal(
+      { ...fullRooms, projects: {}, powerElevatedUsers: ["matrix:@carol:server"] },
+      // carol already at 100 (must not be re-booked), barry gets elevated.
+      { getPowerLevels: vi.fn().mockResolvedValue({ users: { "@carol:server": 100 } }) }
+    );
+    expect(store.get().powerElevatedUsers).toEqual(["matrix:@carol:server", "matrix:@barry:server"]);
+  });
+
+  it("degraded mode (no space.roomId) still heals management rooms and projects", async () => {
+    const { roomOps } = await runHeal(
+      { space: undefined, managementRooms: ["!mgmt:server"], projects: { "!proj:server": { workdir: "/w/p" } } },
+      { getPowerLevels: vi.fn().mockResolvedValue({ users: {} }) }
+    );
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!mgmt:server", "@barry:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!mgmt:server", "@carol:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!proj:server", "@barry:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!proj:server", "@carol:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(4);
   });
 });
