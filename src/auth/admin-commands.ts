@@ -16,7 +16,11 @@ export type AdminEffect =
   | { kind: "hideToolCalls"; value: boolean }
   /** Trust was just granted to this user via a passed challenge — the caller
    *  invites them into the organizational space (fire-once, best-effort). */
-  | { kind: "spaceInvite"; userId: string; transport?: string };
+  | { kind: "spaceInvite"; userId: string; transport?: string }
+  /** Trust was just granted to this user via a passed challenge — the caller
+   *  also invites them into the management room (where /pmctl lives;
+   *  fire-once, best-effort, space mode only). */
+  | { kind: "managementRoomInvite"; userId: string; transport?: string };
 
 export interface AdminNotification {
   message: string;
@@ -72,6 +76,7 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
             effects: [
               { kind: "persistAuth" },
               { kind: "spaceInvite", userId: input.userId, transport: input.transport },
+              { kind: "managementRoomInvite", userId: input.userId, transport: input.transport },
             ],
           });
         case "expired":

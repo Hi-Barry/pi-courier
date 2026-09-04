@@ -94,6 +94,10 @@ export interface SpaceConfig {
   /** 已向其发出过空间邀请的命名空间用户 ID(含已拒绝者)——
    *  每人只邀请一次,不重复打扰;未入列的信任用户由启动自愈补邀。 */
   invitedUsers?: string[];
+  /** 已向其发出过管理房间邀请的命名空间用户 ID(含已拒绝者)——与
+   *  invitedUsers 同构:每人只邀请一次;未入列的信任用户由启动自愈补邀。
+   *  仅空间模式使用;降级模式的认养管理 DM 不向任何人发邀请。 */
+  managementInvitedUsers?: string[];
 }
 
 /**

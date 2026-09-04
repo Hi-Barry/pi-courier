@@ -69,7 +69,16 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
       });
       // The room exists now — persist it before the optional steps so a
       // crash can never lead to a duplicate management room on the next start.
-      store.update({ managementRooms: [managementRoomId] });
+      // Creation's invite list covered every trusted user — record them in the
+      // management bookkeeping too (mirror of invitedUsers above) so the
+      // self-heal never re-invites them (Matrix rejects re-invites).
+      store.update({
+        managementRooms: [managementRoomId],
+        space: {
+          ...(store.get().space ?? {}),
+          managementInvitedUsers: cfg.auth?.trustedUsers ?? [],
+        },
+      });
       logger.info(
         `[space] 管理房间已创建: ${managementRoomId}${encrypted ? " (E2EE)" : ""}`
       );
@@ -96,9 +105,15 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
     // Invite self-heal: trusted users missing from invitedUsers — trust
     // granted while degraded, or an invite that failed earlier — get their
     // (single) invite now. Failures stay unrecorded and retry next start.
+    // The same pass covers the management-room bookkeeping (issue #43): a
+    // trusted user without that invite sees the /pmctl room under the space
+    // but could never enter it.
     const current = store.get();
     for (const user of (cfg.auth?.trustedUsers ?? []).filter((u) => !(current.space?.invitedUsers ?? []).includes(u))) {
       await inviteUserToSpaceOnce(roomOps, store, user);
+    }
+    for (const user of (cfg.auth?.trustedUsers ?? []).filter((u) => !(current.space?.managementInvitedUsers ?? []).includes(u))) {
+      await inviteUserToManagementRoomOnce(roomOps, store, user);
     }
 
     return "ready";
@@ -133,6 +148,39 @@ export async function inviteUserToSpaceOnce(
     return true;
   } catch (err) {
     logger.warn(`[space] 邀请 ${namespacedUser} 进空间失败(下次启动自愈): ${(err as Error).message}`);
+    return false;
+  }
+}
+
+/** Fire-once management-room invite for ONE namespaced user — the issue #43
+ *  twin of inviteUserToSpaceOnce: the management room is where /pmctl lives,
+ *  and a space member who was never invited into it could see the room under
+ *  the space but never enter it. Guards: space mode must be active with a
+ *  created space (activeSpaceRoomId) AND managementRooms[0] must exist — the
+ *  degraded path's adopted management DM is never used to pull people in.
+ *  Bookkeeping: space.managementInvitedUsers; a failed invite is NOT
+ *  recorded — the startup ensure self-heals it. Returns true when the invite
+ *  went out. */
+export async function inviteUserToManagementRoomOnce(
+  roomOps: RoomOps,
+  store: ConfigStore,
+  namespacedUser: string
+): Promise<boolean> {
+  const cfg = store.get();
+  if (!activeSpaceRoomId(cfg)) return false;
+  const managementRoomId = (cfg.managementRooms ?? [])[0];
+  if (!managementRoomId) return false;
+  const invited = cfg.space?.managementInvitedUsers ?? [];
+  if (invited.includes(namespacedUser)) return false;
+  try {
+    await roomOps.inviteUser(managementRoomId, nativeMxid(namespacedUser));
+    store.update({
+      space: { ...(store.get().space ?? {}), managementInvitedUsers: [...invited, namespacedUser] },
+    });
+    logger.info(`[space] 信任用户已邀请进管理房间: ${namespacedUser}`);
+    return true;
+  } catch (err) {
+    logger.warn(`[space] 邀请 ${namespacedUser} 进管理房间失败(下次启动自愈): ${(err as Error).message}`);
     return false;
   }
 }

@@ -129,7 +129,13 @@ describe("space ensure", () => {
 
   it("self-heal invites trusted users missing from invitedUsers (recorded on success)", async () => {
     const { store, roomOps, result } = await runEnsure({
-      space: { enabled: true, roomId: "!space:server", invitedUsers: ["matrix:@barry:server"] },
+      space: {
+        enabled: true,
+        roomId: "!space:server",
+        invitedUsers: ["matrix:@barry:server"],
+        // Management bookkeeping already complete — this test targets the space pass.
+        managementInvitedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
+      },
       managementRooms: ["!mgmt:server"],
     });
     expect(result).toBe("ready");
@@ -157,7 +163,12 @@ describe("space ensure", () => {
 
   it("self-heal is a no-op when everyone is already invited", async () => {
     const { roomOps } = await runEnsure({
-      space: { enabled: true, roomId: "!space:server", invitedUsers: ["matrix:@barry:server", "matrix:@carol:server"] },
+      space: {
+        enabled: true,
+        roomId: "!space:server",
+        invitedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
+        managementInvitedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
+      },
       managementRooms: ["!mgmt:server"],
     });
     expect(roomOps.inviteUser).not.toHaveBeenCalled();
@@ -299,5 +310,108 @@ describe("space ensure", () => {
     expect(result).toBe("ready");
     expect(store.get().managementRooms).toEqual(["!mgmt:server"]);
     expect(store.get().space?.roomId).toBe("!space:server");
+  });
+
+  it("management-room creation records every trusted user in the management bookkeeping (issue #43)", async () => {
+    const { store, roomOps, result } = await runEnsure();
+    expect(result).toBe("ready");
+    // createRoom's invite list covered everyone — recorded (namespaced), so
+    // the self-heal never re-pings them (Matrix rejects re-invites).
+    expect(store.get().space?.managementInvitedUsers).toEqual([
+      "matrix:@barry:server",
+      "matrix:@carol:server",
+    ]);
+    expect(roomOps.inviteUser).not.toHaveBeenCalled();
+  });
+
+  it("self-heal catches up trusted users missing from the management-room bookkeeping (issue #43)", async () => {
+    const { store, roomOps, result } = await runEnsure({
+      space: {
+        enabled: true,
+        roomId: "!space:server",
+        invitedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
+        managementInvitedUsers: ["matrix:@barry:server"],
+      },
+      managementRooms: ["!mgmt:server"],
+    });
+    expect(result).toBe("ready");
+    // Native MXID over the wire, namespaced form in the bookkeeping.
+    expect(roomOps.inviteUser).toHaveBeenCalledTimes(1);
+    expect(roomOps.inviteUser).toHaveBeenCalledWith("!mgmt:server", "@carol:server");
+    expect(store.get().space?.managementInvitedUsers).toEqual([
+      "matrix:@barry:server",
+      "matrix:@carol:server",
+    ]);
+  });
+
+  it("management-room invite failure stays unrecorded and retries next start", async () => {
+    // Space bookkeeping is complete: the only invites attempted are the
+    // management-room ones, and both fail.
+    const overrides = { inviteUser: vi.fn().mockRejectedValue(new Error("M_LIMIT_EXCEEDED")) };
+    const first = await runEnsure(
+      {
+        space: {
+          enabled: true,
+          roomId: "!space:server",
+          invitedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
+        },
+        managementRooms: ["!mgmt:server"],
+      },
+      overrides
+    );
+    expect(first.result).toBe("ready"); // best-effort — the run stays ready
+    expect(first.store.get().space?.managementInvitedUsers).toBeUndefined();
+    // Next start (default stub): the missing invites are retried.
+    const second = await runEnsure({
+      space: {
+        enabled: true,
+        roomId: "!space:server",
+        invitedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
+      },
+      managementRooms: ["!mgmt:server"],
+    });
+    expect(second.roomOps.inviteUser).toHaveBeenCalledWith("!mgmt:server", "@barry:server");
+    expect(second.roomOps.inviteUser).toHaveBeenCalledWith("!mgmt:server", "@carol:server");
+    expect(second.store.get().space?.managementInvitedUsers).toEqual([
+      "matrix:@barry:server",
+      "matrix:@carol:server",
+    ]);
+  });
+
+  it("management-room invite is a silent no-op in degraded mode (the adopted DM is never used to pull people in)", async () => {
+    const { config, space } = await importModules();
+    const store = new config.ConfigStore({
+      multiProject: true,
+      // Degraded: the space never materialized, but a DM was adopted as the
+      // management room — trust spread must not reach into that DM.
+      managementRooms: ["!dm:server"],
+      auth: { trustedUsers: ["matrix:@carol:server"], adminUserId: "matrix:@carol:server" },
+    });
+    const roomOps = makeRoomOps();
+    const invited = await space.inviteUserToManagementRoomOnce(
+      roomOps as unknown as RoomOps,
+      store,
+      "matrix:@carol:server"
+    );
+    expect(invited).toBe(false);
+    expect(roomOps.inviteUser).not.toHaveBeenCalled();
+    expect(store.get().space?.managementInvitedUsers).toBeUndefined();
+  });
+
+  it("management-room invite is a no-op while the management room does not exist yet", async () => {
+    const { config, space } = await importModules();
+    const store = new config.ConfigStore({
+      multiProject: true,
+      space: { enabled: true, roomId: "!space:server" },
+      managementRooms: [],
+    });
+    const roomOps = makeRoomOps();
+    const invited = await space.inviteUserToManagementRoomOnce(
+      roomOps as unknown as RoomOps,
+      store,
+      "matrix:@carol:server"
+    );
+    expect(invited).toBe(false);
+    expect(roomOps.inviteUser).not.toHaveBeenCalled();
   });
 });
