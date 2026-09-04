@@ -19,7 +19,7 @@ import {
 } from "../formatting.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "../management-room.js";
-import { inviteUserToSpaceOnce } from "../space.js";
+import { inviteUserToManagementRoomOnce, inviteUserToSpaceOnce } from "../space.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, ReplyTarget } from "../types.js";
 import { handleSlashCommand } from "./command-map.js";
@@ -154,6 +154,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
                 // Trust just granted (challenge passed): invite into the
                 // organizational space — fire-once, best-effort (see space.ts).
                 await inviteUserToSpaceOnce(
+                  roomOps,
+                  store,
+                  namespacedId(effect.userId, effect.transport)
+                );
+              } else if (effect.kind === "managementRoomInvite" && roomOps) {
+                // Trust just granted: the management room (/pmctl home) must be
+                // reachable too — fire-once, best-effort, space mode only; the
+                // degraded path's adopted DM is never used to pull people in.
+                await inviteUserToManagementRoomOnce(
                   roomOps,
                   store,
                   namespacedId(effect.userId, effect.transport)
