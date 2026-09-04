@@ -169,20 +169,26 @@ export async function elevateTrustedUsersInRoom(
   const users = (levels?.users ?? {}) as Record<string, unknown>;
 
   const elevated: string[] = [];
-  for (const namespaced of trusted) {
-    const mxid = nativeMxid(namespaced);
-    const current = users[mxid];
-    if (typeof current === "number" && current >= TRUSTED_POWER_LEVEL) continue;
-    await roomOps.setUserPowerLevel(roomId, mxid, TRUSTED_POWER_LEVEL);
-    elevated.push(namespaced);
-  }
-  if (elevated.length > 0) {
-    store.update({
-      powerElevatedUsers: [...new Set([...(store.get().powerElevatedUsers ?? []), ...elevated])],
-    });
-    logger.info(
-      `[power] 房间 ${roomId}: ${elevated.length} 名信任用户已提为管理员(PL ${TRUSTED_POWER_LEVEL})`
-    );
+  // Book in a finally: a write that throws mid-loop must not lose the users
+  // already elevated — they are at 100 now, so a retry would skip (and never
+  // book) them, leaving demotion blind. The error still propagates.
+  try {
+    for (const namespaced of trusted) {
+      const mxid = nativeMxid(namespaced);
+      const current = users[mxid];
+      if (typeof current === "number" && current >= TRUSTED_POWER_LEVEL) continue;
+      await roomOps.setUserPowerLevel(roomId, mxid, TRUSTED_POWER_LEVEL);
+      elevated.push(namespaced);
+    }
+  } finally {
+    if (elevated.length > 0) {
+      store.update({
+        powerElevatedUsers: [...new Set([...(store.get().powerElevatedUsers ?? []), ...elevated])],
+      });
+      logger.info(
+        `[power] 房间 ${roomId}: ${elevated.length} 名信任用户已提为管理员(PL ${TRUSTED_POWER_LEVEL})`
+      );
+    }
   }
   return elevated;
 }
