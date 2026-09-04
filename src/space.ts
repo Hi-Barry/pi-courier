@@ -10,9 +10,12 @@
  * of the room's power levels, then only trusted users actually below the
  * target get written. `healTrustedPowerLevels` sweeps every managed room
  * (derived from config) at startup, in space mode and degraded mode alike.
- * Actual low→100 elevations are booked into config.powerElevatedUsers for
- * the later demotion loop (ticket 3) — legacy admins from the old
- * /pmctl-new sender special case are deliberately not in the books.
+ * Actual low→100 elevations are booked into config.powerElevatedUsers, and
+ * the same heal runs the symmetric demotion loop (ticket 3, issue #44):
+ * booked users who have since lost trust are stripped back to PL 0 across
+ * every managed room — the books are the sole authority, so nobody else
+ * (external admins, the bot itself) is ever demoted. Legacy admins from the
+ * old /pmctl-new sender special case are deliberately not in the books.
  *
  * The space itself remains an organizational view (m.space): when the space
  * feature is enabled (multi-project only), the bot lazily creates a private
@@ -34,6 +37,7 @@ import { activeSpaceRoomId, type ConfigStore, defaultProjectsRoot, isSpaceMode, 
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
 import type { RoomOps } from "./transports/interface.js";
+import type { MsgBridgeConfig } from "./types.js";
 
 export interface SpaceEnsureDeps {
   roomOps: RoomOps;
@@ -193,22 +197,41 @@ export async function elevateTrustedUsersInRoom(
   return elevated;
 }
 
-/** Full startup self-heal (#42): sweep every room this instance manages —
- *  the space, the management room(s) and every project room (derived from
- *  config, deduped, empties dropped). Runs in space mode AND degraded mode
- *  (an adopted management DM needs it as much as a bot-created one).
- *  Per-room failures (no power-level access, network) warn with the roomId
- *  and skip just that room — the sweep never throws and never affects the
- *  startup result tri-state. */
-export async function healTrustedPowerLevels(roomOps: RoomOps, store: ConfigStore): Promise<void> {
-  const cfg = store.get();
-  const roomIds = [
+/** Derive every room this instance manages from config: the space, the
+ *  management room(s) and every project room — deduped, empties dropped.
+ *  Shared by the elevation sweep (#42) and the demotion loop (#44) so both
+ *  always agree on what "everywhere" means. */
+export function managedRoomIds(cfg: MsgBridgeConfig): string[] {
+  return [
     ...new Set(
       [cfg.space?.roomId, ...(cfg.managementRooms ?? []), ...Object.keys(cfg.projects ?? {})].filter(
         (id): id is string => Boolean(id)
       )
     ),
   ];
+}
+
+/** Full startup self-heal (#42 + #44): first strip the power that was granted
+ *  to users who have since lost trust (the demotion loop), then sweep every
+ *  room this instance manages (derived from config, deduped, empties dropped)
+ *  re-granting it to the currently trusted. Runs in space mode AND degraded
+ *  mode (an adopted management DM needs it as much as a bot-created one).
+ *  Per-room failures (no power-level access, network) warn with the roomId
+ *  and skip just that room — the sweep never throws and never affects the
+ *  startup result tri-state. */
+export async function healTrustedPowerLevels(roomOps: RoomOps, store: ConfigStore): Promise<void> {
+  const cfg = store.get();
+  const roomIds = managedRoomIds(cfg);
+  // Demotion loop (ticket 3, issue #44): book-kept users no longer in the
+  // trust set get their granted power stripped before the elevation pass.
+  // `stale` is disjoint from trusted by construction, so nobody is demoted
+  // and re-elevated in the same sweep; and the books are the sole authority —
+  // users outside them (external admins, the bot itself) are never touched.
+  // Failed demotions stay booked and retry on the next start.
+  const trusted = cfg.auth?.trustedUsers ?? [];
+  for (const user of (cfg.powerElevatedUsers ?? []).filter((u) => !trusted.includes(u))) {
+    await demoteTrustedUserEverywhere(roomOps, store, user);
+  }
   for (const roomId of roomIds) {
     try {
       await elevateTrustedUsersInRoom(roomOps, store, roomId);
@@ -216,6 +239,41 @@ export async function healTrustedPowerLevels(roomOps: RoomOps, store: ConfigStor
       logger.warn(`[power] 房间 ${roomId} 信任用户补权失败(跳过,下次启动自动重试): ${(err as Error).message}`);
     }
   }
+}
+
+/** Symmetric closed loop (ticket 3, issue #44): strip the admin power this
+ *  instance once granted. Writes PL 0 for ONE namespaced user in every
+ *  managed room — blind writes, so retrying an already-demoted room is
+ *  harmless. Only when ALL rooms succeeded is the user removed from
+ *  config.powerElevatedUsers (through ConfigStore.update(), the single write
+ *  path); any per-room failure warns with the roomId and keeps the entry so
+ *  the next startup heal retries. Returns whether the demotion fully
+ *  succeeded. The caller names the target (the /revoke effect or a stale
+ *  book entry) — this never picks victims on its own. */
+export async function demoteTrustedUserEverywhere(
+  roomOps: RoomOps,
+  store: ConfigStore,
+  namespacedUser: string
+): Promise<boolean> {
+  let failed = false;
+  for (const roomId of managedRoomIds(store.get())) {
+    try {
+      await roomOps.setUserPowerLevel(roomId, nativeMxid(namespacedUser), 0);
+    } catch (err) {
+      failed = true;
+      logger.warn(
+        `[power] 房间 ${roomId} 撤销降权失败(保留簿记,下次启动自动重试): ${(err as Error).message}`
+      );
+    }
+  }
+  if (failed) return false;
+  const books = store.get().powerElevatedUsers ?? [];
+  const next = books.filter((u) => u !== namespacedUser);
+  if (next.length !== books.length) {
+    store.update({ powerElevatedUsers: next });
+    logger.info(`[power] 已撤销信任的用户 ${namespacedUser} 已在全部托管房间降为 PL 0,并移出提权簿记`);
+  }
+  return true;
 }
 
 /** Fire-once space invite for ONE namespaced user: space.invitedUsers records

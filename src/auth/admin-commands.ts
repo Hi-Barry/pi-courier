@@ -20,7 +20,13 @@ export type AdminEffect =
   /** Trust was just granted to this user via a passed challenge — the caller
    *  also invites them into the management room (where /pmctl lives;
    *  fire-once, best-effort, space mode only). */
-  | { kind: "managementRoomInvite"; userId: string; transport?: string };
+  | { kind: "managementRoomInvite"; userId: string; transport?: string }
+  /** Trust was just revoked from this user — the caller strips the admin
+   *  power this instance once granted (every managed room, PL 0; best-effort,
+   *  see demoteTrustedUserEverywhere). The userId arrives in the stored
+   *  namespaced form ("matrix:@user:server") so the demotion hits the right
+   *  MXID however the admin spelled the command argument. */
+  | { kind: "powerDemote"; userId: string; transport?: string };
 
 export interface AdminNotification {
   message: string;
@@ -180,12 +186,25 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
         });
       }
       const revokeId = parts[1];
+      // Capture the stored entry the revoke removes so the demotion effect can
+      // carry it in its canonical namespaced form — the command argument may be
+      // a bare display id (revokeUser also matches ":<id>" suffixes).
+      const trustedBefore = auth.exportConfig().trustedUsers;
       const revoked = auth.revokeUser(revokeId);
       if (revoked) {
+        const removed = trustedBefore.find((id) => !auth.exportConfig().trustedUsers.includes(id));
+        const effects: AdminEffect[] = [{ kind: "persistAuth" }];
+        if (removed) {
+          // Symmetric closed loop (ticket 3, issue #44): whoever was elevated
+          // on trust gets demoted everywhere on revoke. Best-effort, same
+          // failure semantics as the invite effects — a failed demotion never
+          // un-revokes and never changes the reply.
+          effects.push({ kind: "powerDemote", userId: removed });
+        }
         return handled({
           replies: [`🔓 Revoked trust for ${revokeId}`],
           notifications: [{ message: `Revoked: ${revokeId}`, level: "warning" }],
-          effects: [{ kind: "persistAuth" }],
+          effects,
         });
       }
       return handled({

@@ -430,6 +430,92 @@ describe("space ensure", () => {
     expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(4);
   });
 
+  // ---- revoke demotion loop (issue #44) --------------------------------------
+  // The symmetric closed loop: book-kept users who have since lost trust get
+  // the granted power stripped (PL 0) in every managed room; the bookkeeping
+  // is the sole authority — anyone outside it is never written a 0.
+
+  it("demotes book-kept users who lost trust to 0 everywhere and clears the book", async () => {
+    // eve was elevated once (booked) and has since been revoked; barry and
+    // carol are still trusted and already at 100 (no elevation writes).
+    const { store, roomOps } = await runHeal(
+      {
+        ...fullRooms,
+        powerElevatedUsers: ["matrix:@barry:server", "matrix:@carol:server", "matrix:@eve:server"],
+      },
+      {
+        getPowerLevels: vi.fn().mockResolvedValue({
+          users: { "@barry:server": 100, "@carol:server": 100, "@eve:server": 100 },
+        }),
+      }
+    );
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(3);
+    for (const roomId of ["!space:server", "!mgmt:server", "!proj:server"]) {
+      expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith(roomId, "@eve:server", 0);
+    }
+    // Only the revoked user left the books.
+    expect(store.get().powerElevatedUsers).toEqual(["matrix:@barry:server", "matrix:@carol:server"]);
+  });
+
+  it("a partial demotion failure keeps the book entry, warns, and still strips the rooms that succeeded", async () => {
+    const { config, space, loggerModule } = await importModules();
+    const warnSpy = vi.spyOn(loggerModule.logger, "warn");
+    const store = new config.ConfigStore({
+      ...baseConfig(),
+      ...fullRooms,
+      powerElevatedUsers: ["matrix:@eve:server"],
+    });
+    const roomOps = makeRoomOps({
+      // Everyone already at target level — the only writes are eve's demotion.
+      getPowerLevels: vi.fn().mockResolvedValue({
+        users: { "@barry:server": 100, "@carol:server": 100, "@eve:server": 100 },
+      }),
+      // The management room refuses; the other two go through.
+      setUserPowerLevel: vi.fn().mockImplementation((roomId: string) =>
+        roomId === "!mgmt:server" ? Promise.reject(new Error("M_FORBIDDEN")) : Promise.resolve()
+      ),
+    });
+    await space.healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
+    // Successful rooms were stripped...
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!space:server", "@eve:server", 0);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!proj:server", "@eve:server", 0);
+    // ...the failed one warned with its roomId...
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!mgmt:server"));
+    // ...and the bookkeeping survives whole for the next-start retry (already-
+    // demoted rooms are rewritten to 0 harmlessly — idempotent).
+    expect(store.get().powerElevatedUsers).toEqual(["matrix:@eve:server"]);
+  });
+
+  it("high-power users outside the books (external admins, the bot itself) are never written a 0", async () => {
+    const { roomOps } = await runHeal(fullRooms, {
+      getPowerLevels: vi.fn().mockResolvedValue({
+        users: {
+          "@barry:server": 0, // trusted — elevated as usual
+          "@carol:server": 0, // trusted — elevated as usual
+          "@owner:server": 100, // external room owner: not trusted, not booked
+          "@bot:server": 100, // the bot itself (room creator)
+        },
+      }),
+    });
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!space:server", "@barry:server", 100);
+    // Every write in the sweep is an elevation: the demotion loop's authority
+    // is the books, and neither the owner nor the bot is in them.
+    for (const call of (roomOps.setUserPowerLevel as ReturnType<typeof vi.fn>).mock.calls) {
+      expect(call[2]).not.toBe(0);
+      expect(call[1]).not.toBe("@owner:server");
+      expect(call[1]).not.toBe("@bot:server");
+    }
+  });
+
+  it("books consistent with the trust set produce no demotion writes at all", async () => {
+    const { store, roomOps } = await runHeal(
+      { ...fullRooms, powerElevatedUsers: ["matrix:@barry:server", "matrix:@carol:server"] },
+      { getPowerLevels: vi.fn().mockResolvedValue({ users: { "@barry:server": 100, "@carol:server": 100 } }) }
+    );
+    expect(roomOps.setUserPowerLevel).not.toHaveBeenCalled();
+    expect(store.get().powerElevatedUsers).toEqual(["matrix:@barry:server", "matrix:@carol:server"]);
+  });
+
   it("management-room creation records every trusted user in the management bookkeeping (issue #43)", async () => {
     const { store, roomOps, result } = await runEnsure();
     expect(result).toBe("ready");

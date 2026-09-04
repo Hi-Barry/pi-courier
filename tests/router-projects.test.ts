@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigStore } from "../src/config";
@@ -895,5 +895,164 @@ describe("management room invite on trust transition (issue #43 票2)", () => {
     expect(fx.roomOps.inviteUser).not.toHaveBeenCalled();
     // persistAuth still applied — trust survives without Matrix room ops.
     expect(fx.store.get().auth?.trustedUsers).toContain("matrix:@eve:server");
+  });
+});
+
+/**
+ * Revoke demotion closed loop (issue #44 票3): revoking trust must strip the
+ * admin power this instance once granted — every managed room, PL 0 — while
+ * the powerElevatedUsers bookkeeping stays the sole authority and is cleared
+ * only on full success. Same tmp-dir isolation as the 票2 block above:
+ * persistAuth and the bookkeeping update go through store.update(), which
+ * must never touch the real ~/.pi/pi-courier.json.
+ */
+describe("power demotion on revoke (issue #44 票3)", () => {
+  let tmpDir: string;
+  let IsoConfigStore: typeof ConfigStore;
+
+  beforeEach(async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-courier-router-demote-"));
+    vi.resetModules();
+    vi.doMock("os", async () => {
+      const actual = await vi.importActual<typeof import("os")>("os");
+      return { ...actual, homedir: () => tmpDir };
+    });
+    vi.doMock("node:os", async () => {
+      const actual = await vi.importActual<typeof import("node:os")>("node:os");
+      return { ...actual, homedir: () => tmpDir };
+    });
+    const config = await import("../src/config");
+    IsoConfigStore = config.ConfigStore;
+  });
+
+  afterEach(() => {
+    vi.doUnmock("os");
+    vi.doUnmock("node:os");
+    vi.resetModules();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Fixtures for an admin (barry) revoking eve: eve is trusted so the revoke
+   *  succeeds, and the store is pre-booked via powerElevatedUsers. */
+  function makeRevokeFixtures(
+    opts: {
+      space?: { enabled?: boolean; roomId?: string };
+      managementRooms?: string[];
+      projects?: Record<string, { name?: string; workdir: string }>;
+      powerElevatedUsers?: string[];
+    } = {}
+  ) {
+    const replies: Array<{ chatId: string; transport: string; text: string }> = [];
+    const sendReply = async (chatId: string, transport: string, text: string) => {
+      replies.push({ chatId, transport, text });
+    };
+    const rpc = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      onEvent: vi.fn(),
+    } as unknown as PiRpc;
+    const projectManager = {
+      getRpcForRoom: vi.fn().mockReturnValue(rpc),
+      isProjectRoom: vi.fn().mockReturnValue(false),
+      labelForRoom: vi.fn().mockReturnValue(undefined),
+      isMultiProject: true,
+      registerProject: vi.fn(),
+      listProjects: vi.fn().mockReturnValue([] as Array<[string, { name?: string; workdir: string }]>),
+      renameProject: vi.fn(),
+      stopAll: vi.fn(),
+    } as unknown as ProjectManager;
+    const store = new IsoConfigStore({
+      managementRooms: opts.managementRooms ?? [],
+      projects: opts.projects ?? {},
+      multiProject: true,
+      ...(opts.space ? { space: opts.space } : {}),
+      ...(opts.powerElevatedUsers ? { powerElevatedUsers: opts.powerElevatedUsers } : {}),
+    });
+    const auth = new ChallengeAuth(
+      () => {},
+      () => {}
+    );
+    auth.loadFromConfig({
+      trustedUsers: ["matrix:@barry:server", "matrix:@carol:server", "matrix:@eve:server"],
+      adminUserId: "matrix:@barry:server",
+      channels: {},
+    });
+    const sendTyping = vi.fn(async (_chatId: string, _transport: string): Promise<void> => {});
+    const roomOps = {
+      createRoom: vi.fn().mockResolvedValue("!newroom:server"),
+      createProjectRoom: vi.fn().mockResolvedValue("!newproj:server"),
+      createSpace: vi.fn().mockResolvedValue("!space:server"),
+      addRoomToSpace: vi.fn().mockResolvedValue(undefined),
+      removeRoomFromSpace: vi.fn().mockResolvedValue(undefined),
+      inviteUser: vi.fn().mockResolvedValue(undefined),
+      setRoomName: vi.fn().mockResolvedValue(undefined),
+      setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
+      getPowerLevels: vi.fn().mockResolvedValue({ users: {} }),
+      leaveRoom: vi.fn().mockResolvedValue(undefined),
+      getBotUserId: vi.fn().mockReturnValue("@bot:server"),
+      encryptionAvailable: true,
+    };
+    const pmctl = new PmctlController({ projectManager, roomOps, store });
+    const makeRouter = () =>
+      createMessageRouter({ projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl });
+    return { replies, auth, roomOps, store, makeRouter };
+  }
+
+  it("/revoke appends a powerDemote effect carrying the removed entry in stored (namespaced) form", () => {
+    const fx = makeRevokeFixtures();
+    const result = handleAdminCommand(fx.auth, {
+      text: "/revoke @eve:server",
+      userId: "@barry:server",
+      transport: "matrix",
+    });
+    expect(result.handled).toBe(true);
+    expect(result.effects).toEqual([
+      { kind: "persistAuth" },
+      { kind: "powerDemote", userId: "matrix:@eve:server" },
+    ]);
+    // A failed revoke (unknown user) stays effect-free.
+    const miss = handleAdminCommand(fx.auth, {
+      text: "/revoke nobody",
+      userId: "@barry:server",
+      transport: "matrix",
+    });
+    expect(miss.effects).toEqual([]);
+  });
+
+  it("consuming the effect strips the revoked user in every managed room and clears the book (persisted)", async () => {
+    const fx = makeRevokeFixtures({
+      space: { enabled: true, roomId: "!space:server" },
+      managementRooms: ["!mgmt:server"],
+      projects: { "!proj:server": { workdir: "/w/p" } },
+      powerElevatedUsers: ["matrix:@barry:server", "matrix:@eve:server"],
+    });
+    await fx.makeRouter().handleIncoming(makeMsg({ content: "/revoke @eve:server" }));
+    for (const roomId of ["!space:server", "!mgmt:server", "!proj:server"]) {
+      expect(fx.roomOps.setUserPowerLevel).toHaveBeenCalledWith(roomId, "@eve:server", 0);
+    }
+    expect(fx.roomOps.setUserPowerLevel).toHaveBeenCalledTimes(3);
+    // The revoke confirmation is unchanged by the demotion side effect.
+    expect(fx.replies.some((r) => r.text === "🔓 Revoked trust for @eve:server")).toBe(true);
+    // Trust revocation persisted; exactly the revoked user left the books.
+    expect(fx.store.get().auth?.trustedUsers).not.toContain("matrix:@eve:server");
+    expect(fx.store.get().powerElevatedUsers).toEqual(["matrix:@barry:server"]);
+    const persisted = JSON.parse(
+      readFileSync(join(tmpDir, ".pi", "pi-courier.json"), "utf-8")
+    ) as { powerElevatedUsers?: string[] };
+    expect(persisted.powerElevatedUsers).toEqual(["matrix:@barry:server"]);
+  });
+
+  it("a demotion failure never un-revokes: the confirmation stands and the book keeps the entry for retry", async () => {
+    const fx = makeRevokeFixtures({
+      space: { enabled: true, roomId: "!space:server" },
+      managementRooms: ["!mgmt:server"],
+      powerElevatedUsers: ["matrix:@eve:server"],
+    });
+    (fx.roomOps.setUserPowerLevel as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("M_FORBIDDEN"));
+    await fx.makeRouter().handleIncoming(makeMsg({ content: "/revoke @eve:server" }));
+    expect(fx.replies.some((r) => r.text === "🔓 Revoked trust for @eve:server")).toBe(true);
+    // Trust revocation persisted even though the demotion failed...
+    expect(fx.store.get().auth?.trustedUsers).not.toContain("matrix:@eve:server");
+    // ...while the bookkeeping survives whole for the startup heal to retry.
+    expect(fx.store.get().powerElevatedUsers).toEqual(["matrix:@eve:server"]);
   });
 });

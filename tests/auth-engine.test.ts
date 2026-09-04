@@ -164,11 +164,12 @@ describe("handleAdminCommand (pure in/out)", () => {
     });
     expect(result.handled).toBe(true);
     expect(result.replies).toEqual(["✅ Authenticated! You can now chat with the agent."]);
-    // The space invite rides the same effect chain as trust persistence —
-    // the caller (router) applies it; the engine stays free of Matrix I/O.
+    // The invites ride the same effect chain as trust persistence — the
+    // caller (router) applies them; the engine stays free of Matrix I/O.
     expect(result.effects).toEqual([
       { kind: "persistAuth" },
       { kind: "spaceInvite", userId: "@eve:server", transport: "matrix" },
+      { kind: "managementRoomInvite", userId: "@eve:server", transport: "matrix" },
     ]);
     expect(auth.isTrustedUser("@eve:server", "matrix")).toBe(true);
   });
@@ -215,12 +216,17 @@ describe("handleAdminCommand (pure in/out)", () => {
     expect(shownAgain.effects).toEqual([{ kind: "hideToolCalls", value: false }]);
   });
 
-  it("/revoke emits a warning notification plus persistAuth; unknown users reply only", () => {
+  it("/revoke emits a warning notification plus persistAuth and the powerDemote effect; unknown users reply only", () => {
     const { auth } = makeEngine();
     const ok = handleAdminCommand(auth, { text: "/revoke @carol:server", userId: "@barry:server", transport: "matrix" });
     expect(ok.replies).toEqual(["🔓 Revoked trust for @carol:server"]);
     expect(ok.notifications).toEqual([{ message: "Revoked: @carol:server", level: "warning" }]);
-    expect(ok.effects).toEqual([{ kind: "persistAuth" }]);
+    // The demotion effect carries the removed entry in its stored (namespaced)
+    // form, however the admin spelled the command argument.
+    expect(ok.effects).toEqual([
+      { kind: "persistAuth" },
+      { kind: "powerDemote", userId: "matrix:@carol:server" },
+    ]);
 
     const miss = handleAdminCommand(auth, { text: "/revoke nobody", userId: "@barry:server", transport: "matrix" });
     expect(miss.replies).toEqual(["❌ User nobody not found in trusted users"]);
