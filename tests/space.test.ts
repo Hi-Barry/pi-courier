@@ -19,6 +19,7 @@ describe("space ensure", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -33,7 +34,10 @@ describe("space ensure", () => {
     });
     const config = await import("../src/config");
     const space = await import("../src/space");
-    return { config, space };
+    // The dynamically imported graph holds its own logger instance — return
+    // it so warn-spies observe the same object space.ts writes through.
+    const loggerModule = await import("../src/logger");
+    return { config, space, loggerModule };
   }
 
   function makeRoomOps(overrides: Record<string, unknown> = {}) {
@@ -45,6 +49,7 @@ describe("space ensure", () => {
       inviteUser: vi.fn().mockResolvedValue(undefined),
       setRoomName: vi.fn().mockResolvedValue(undefined),
       setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
+      getPowerLevels: vi.fn().mockResolvedValue(null),
       leaveRoom: vi.fn().mockResolvedValue(undefined),
       getBotUserId: vi.fn().mockReturnValue("@bot:server"),
       encryptionAvailable: true,
@@ -129,7 +134,13 @@ describe("space ensure", () => {
 
   it("self-heal invites trusted users missing from invitedUsers (recorded on success)", async () => {
     const { store, roomOps, result } = await runEnsure({
-      space: { enabled: true, roomId: "!space:server", invitedUsers: ["matrix:@barry:server"] },
+      space: {
+        enabled: true,
+        roomId: "!space:server",
+        invitedUsers: ["matrix:@barry:server"],
+        // Management bookkeeping already complete — this test targets the space pass.
+        managementInvitedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
+      },
       managementRooms: ["!mgmt:server"],
     });
     expect(result).toBe("ready");
@@ -157,7 +168,12 @@ describe("space ensure", () => {
 
   it("self-heal is a no-op when everyone is already invited", async () => {
     const { roomOps } = await runEnsure({
-      space: { enabled: true, roomId: "!space:server", invitedUsers: ["matrix:@barry:server", "matrix:@carol:server"] },
+      space: {
+        enabled: true,
+        roomId: "!space:server",
+        invitedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
+        managementInvitedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
+      },
       managementRooms: ["!mgmt:server"],
     });
     expect(roomOps.inviteUser).not.toHaveBeenCalled();
@@ -299,5 +315,307 @@ describe("space ensure", () => {
     expect(result).toBe("ready");
     expect(store.get().managementRooms).toEqual(["!mgmt:server"]);
     expect(store.get().space?.roomId).toBe("!space:server");
+  });
+
+  // ---- trusted-user power self-heal (issue #42) ------------------------------
+  // The unified elevation: every trusted user is admin (PL 100) in every
+  // managed room, regardless of join state; a full sweep derives the room set
+  // from config (space + management rooms + projects). RoomOps stays a pure
+  // vi.fn() seam; the store writes into the tmpDir home.
+
+  const fullRooms = {
+    space: { enabled: true, roomId: "!space:server" },
+    managementRooms: ["!mgmt:server"],
+    projects: { "!proj:server": { workdir: "/w/p" } },
+  };
+
+  async function runHeal(configOverrides: Record<string, unknown> = {}, roomOpsOverrides: Record<string, unknown> = {}) {
+    const { config, space } = await importModules();
+    const store = new config.ConfigStore({ ...baseConfig(), ...configOverrides });
+    const roomOps = makeRoomOps(roomOpsOverrides);
+    await space.healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
+    return { store, roomOps };
+  }
+
+  it("elevates below-target trusted users to 100 across space, management and project rooms", async () => {
+    const { store, roomOps } = await runHeal(fullRooms, {
+      // barry is a member at 0; carol is absent (non-member) — written anyway.
+      getPowerLevels: vi.fn().mockResolvedValue({ users: { "@barry:server": 0 } }),
+    });
+    for (const roomId of ["!space:server", "!mgmt:server", "!proj:server"]) {
+      expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith(roomId, "@barry:server", 100);
+      expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith(roomId, "@carol:server", 100);
+    }
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(6);
+    // Both were actually elevated — both are booked (namespaced ids).
+    expect(store.get().powerElevatedUsers).toEqual(["matrix:@barry:server", "matrix:@carol:server"]);
+  });
+
+  it("is idempotent: users already at 100 produce no writes and no bookkeeping", async () => {
+    const { store, roomOps } = await runHeal(fullRooms, {
+      getPowerLevels: vi.fn().mockResolvedValue({ users: { "@barry:server": 100, "@carol:server": 100 } }),
+    });
+    expect(roomOps.setUserPowerLevel).not.toHaveBeenCalled();
+    expect(store.get().powerElevatedUsers).toBeUndefined();
+  });
+
+  it("treats a missing power-level event (null) as an empty users map and writes everyone", async () => {
+    const { roomOps } = await runHeal(
+      { ...fullRooms, projects: {} },
+      { getPowerLevels: vi.fn().mockResolvedValue(null) }
+    );
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!space:server", "@barry:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!space:server", "@carol:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!mgmt:server", "@barry:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!mgmt:server", "@carol:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(4);
+  });
+
+  it("a single-room failure warns (with the roomId) and the sweep continues elsewhere", async () => {
+    const { config, space, loggerModule } = await importModules();
+    const warnSpy = vi.spyOn(loggerModule.logger, "warn");
+    const store = new config.ConfigStore({
+      ...baseConfig(),
+      ...fullRooms,
+      projects: {},
+    });
+    const roomOps = makeRoomOps({
+      getPowerLevels: vi.fn().mockImplementation((roomId: string) =>
+        roomId === "!mgmt:server"
+          ? Promise.reject(new Error("M_LIMIT_EXCEEDED"))
+          : Promise.resolve({ users: {} })
+      ),
+    });
+    await space.healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!mgmt:server"));
+    // The other room in the sweep was still processed.
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!space:server", "@barry:server", 100);
+    expect(roomOps.setUserPowerLevel).not.toHaveBeenCalledWith("!mgmt:server", expect.anything(), expect.anything());
+  });
+
+  it("bookkeeping records only actually-elevated users, deduped against prior entries", async () => {
+    const { store } = await runHeal(
+      { ...fullRooms, projects: {}, powerElevatedUsers: ["matrix:@carol:server"] },
+      // carol already at 100 (must not be re-booked), barry gets elevated.
+      { getPowerLevels: vi.fn().mockResolvedValue({ users: { "@carol:server": 100 } }) }
+    );
+    expect(store.get().powerElevatedUsers).toEqual(["matrix:@carol:server", "matrix:@barry:server"]);
+  });
+
+  it("a mid-loop write failure still books the users elevated before it", async () => {
+    const { config, space, loggerModule } = await importModules();
+    const warnSpy = vi.spyOn(loggerModule.logger, "warn");
+    const store = new config.ConfigStore({ ...baseConfig(), ...fullRooms, projects: {} });
+    const roomOps = makeRoomOps({
+      getPowerLevels: vi.fn().mockResolvedValue({ users: {} }),
+      // barry lands, carol throws — barry must still be booked.
+      setUserPowerLevel: vi.fn().mockImplementation((roomId: string, userId: string) =>
+        userId === "@carol:server" ? Promise.reject(new Error("M_LIMIT_EXCEEDED")) : Promise.resolve()
+      ),
+    });
+    await space.healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!space:server"));
+    expect(store.get().powerElevatedUsers).toEqual(["matrix:@barry:server"]);
+  });
+
+  it("degraded mode (no space.roomId) still heals management rooms and projects", async () => {
+    const { roomOps } = await runHeal(
+      { space: undefined, managementRooms: ["!mgmt:server"], projects: { "!proj:server": { workdir: "/w/p" } } },
+      { getPowerLevels: vi.fn().mockResolvedValue({ users: {} }) }
+    );
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!mgmt:server", "@barry:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!mgmt:server", "@carol:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!proj:server", "@barry:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!proj:server", "@carol:server", 100);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(4);
+  });
+
+  // ---- revoke demotion loop (issue #44) --------------------------------------
+  // The symmetric closed loop: book-kept users who have since lost trust get
+  // the granted power stripped (PL 0) in every managed room; the bookkeeping
+  // is the sole authority — anyone outside it is never written a 0.
+
+  it("demotes book-kept users who lost trust to 0 everywhere and clears the book", async () => {
+    // eve was elevated once (booked) and has since been revoked; barry and
+    // carol are still trusted and already at 100 (no elevation writes).
+    const { store, roomOps } = await runHeal(
+      {
+        ...fullRooms,
+        powerElevatedUsers: ["matrix:@barry:server", "matrix:@carol:server", "matrix:@eve:server"],
+      },
+      {
+        getPowerLevels: vi.fn().mockResolvedValue({
+          users: { "@barry:server": 100, "@carol:server": 100, "@eve:server": 100 },
+        }),
+      }
+    );
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(3);
+    for (const roomId of ["!space:server", "!mgmt:server", "!proj:server"]) {
+      expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith(roomId, "@eve:server", 0);
+    }
+    // Only the revoked user left the books.
+    expect(store.get().powerElevatedUsers).toEqual(["matrix:@barry:server", "matrix:@carol:server"]);
+  });
+
+  it("a partial demotion failure keeps the book entry, warns, and still strips the rooms that succeeded", async () => {
+    const { config, space, loggerModule } = await importModules();
+    const warnSpy = vi.spyOn(loggerModule.logger, "warn");
+    const store = new config.ConfigStore({
+      ...baseConfig(),
+      ...fullRooms,
+      powerElevatedUsers: ["matrix:@eve:server"],
+    });
+    const roomOps = makeRoomOps({
+      // Everyone already at target level — the only writes are eve's demotion.
+      getPowerLevels: vi.fn().mockResolvedValue({
+        users: { "@barry:server": 100, "@carol:server": 100, "@eve:server": 100 },
+      }),
+      // The management room refuses; the other two go through.
+      setUserPowerLevel: vi.fn().mockImplementation((roomId: string) =>
+        roomId === "!mgmt:server" ? Promise.reject(new Error("M_FORBIDDEN")) : Promise.resolve()
+      ),
+    });
+    await space.healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
+    // Successful rooms were stripped...
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!space:server", "@eve:server", 0);
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!proj:server", "@eve:server", 0);
+    // ...the failed one warned with its roomId...
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!mgmt:server"));
+    // ...and the bookkeeping survives whole for the next-start retry (already-
+    // demoted rooms are rewritten to 0 harmlessly — idempotent).
+    expect(store.get().powerElevatedUsers).toEqual(["matrix:@eve:server"]);
+  });
+
+  it("high-power users outside the books (external admins, the bot itself) are never written a 0", async () => {
+    const { roomOps } = await runHeal(fullRooms, {
+      getPowerLevels: vi.fn().mockResolvedValue({
+        users: {
+          "@barry:server": 0, // trusted — elevated as usual
+          "@carol:server": 0, // trusted — elevated as usual
+          "@owner:server": 100, // external room owner: not trusted, not booked
+          "@bot:server": 100, // the bot itself (room creator)
+        },
+      }),
+    });
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!space:server", "@barry:server", 100);
+    // Every write in the sweep is an elevation: the demotion loop's authority
+    // is the books, and neither the owner nor the bot is in them.
+    for (const call of (roomOps.setUserPowerLevel as ReturnType<typeof vi.fn>).mock.calls) {
+      expect(call[2]).not.toBe(0);
+      expect(call[1]).not.toBe("@owner:server");
+      expect(call[1]).not.toBe("@bot:server");
+    }
+  });
+
+  it("books consistent with the trust set produce no demotion writes at all", async () => {
+    const { store, roomOps } = await runHeal(
+      { ...fullRooms, powerElevatedUsers: ["matrix:@barry:server", "matrix:@carol:server"] },
+      { getPowerLevels: vi.fn().mockResolvedValue({ users: { "@barry:server": 100, "@carol:server": 100 } }) }
+    );
+    expect(roomOps.setUserPowerLevel).not.toHaveBeenCalled();
+    expect(store.get().powerElevatedUsers).toEqual(["matrix:@barry:server", "matrix:@carol:server"]);
+  });
+
+  it("management-room creation records every trusted user in the management bookkeeping (issue #43)", async () => {
+    const { store, roomOps, result } = await runEnsure();
+    expect(result).toBe("ready");
+    // createRoom's invite list covered everyone — recorded (namespaced), so
+    // the self-heal never re-pings them (Matrix rejects re-invites).
+    expect(store.get().space?.managementInvitedUsers).toEqual([
+      "matrix:@barry:server",
+      "matrix:@carol:server",
+    ]);
+    expect(roomOps.inviteUser).not.toHaveBeenCalled();
+  });
+
+  it("self-heal catches up trusted users missing from the management-room bookkeeping (issue #43)", async () => {
+    const { store, roomOps, result } = await runEnsure({
+      space: {
+        enabled: true,
+        roomId: "!space:server",
+        invitedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
+        managementInvitedUsers: ["matrix:@barry:server"],
+      },
+      managementRooms: ["!mgmt:server"],
+    });
+    expect(result).toBe("ready");
+    // Native MXID over the wire, namespaced form in the bookkeeping.
+    expect(roomOps.inviteUser).toHaveBeenCalledTimes(1);
+    expect(roomOps.inviteUser).toHaveBeenCalledWith("!mgmt:server", "@carol:server");
+    expect(store.get().space?.managementInvitedUsers).toEqual([
+      "matrix:@barry:server",
+      "matrix:@carol:server",
+    ]);
+  });
+
+  it("management-room invite failure stays unrecorded and retries next start", async () => {
+    // Space bookkeeping is complete: the only invites attempted are the
+    // management-room ones, and both fail.
+    const overrides = { inviteUser: vi.fn().mockRejectedValue(new Error("M_LIMIT_EXCEEDED")) };
+    const first = await runEnsure(
+      {
+        space: {
+          enabled: true,
+          roomId: "!space:server",
+          invitedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
+        },
+        managementRooms: ["!mgmt:server"],
+      },
+      overrides
+    );
+    expect(first.result).toBe("ready"); // best-effort — the run stays ready
+    expect(first.store.get().space?.managementInvitedUsers).toBeUndefined();
+    // Next start (default stub): the missing invites are retried.
+    const second = await runEnsure({
+      space: {
+        enabled: true,
+        roomId: "!space:server",
+        invitedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
+      },
+      managementRooms: ["!mgmt:server"],
+    });
+    expect(second.roomOps.inviteUser).toHaveBeenCalledWith("!mgmt:server", "@barry:server");
+    expect(second.roomOps.inviteUser).toHaveBeenCalledWith("!mgmt:server", "@carol:server");
+    expect(second.store.get().space?.managementInvitedUsers).toEqual([
+      "matrix:@barry:server",
+      "matrix:@carol:server",
+    ]);
+  });
+
+  it("management-room invite is a silent no-op in degraded mode (the adopted DM is never used to pull people in)", async () => {
+    const { config, space } = await importModules();
+    const store = new config.ConfigStore({
+      multiProject: true,
+      // Degraded: the space never materialized, but a DM was adopted as the
+      // management room — trust spread must not reach into that DM.
+      managementRooms: ["!dm:server"],
+      auth: { trustedUsers: ["matrix:@carol:server"], adminUserId: "matrix:@carol:server" },
+    });
+    const roomOps = makeRoomOps();
+    const invited = await space.inviteUserToManagementRoomOnce(
+      roomOps as unknown as RoomOps,
+      store,
+      "matrix:@carol:server"
+    );
+    expect(invited).toBe(false);
+    expect(roomOps.inviteUser).not.toHaveBeenCalled();
+    expect(store.get().space?.managementInvitedUsers).toBeUndefined();
+  });
+
+  it("management-room invite is a no-op while the management room does not exist yet", async () => {
+    const { config, space } = await importModules();
+    const store = new config.ConfigStore({
+      multiProject: true,
+      space: { enabled: true, roomId: "!space:server" },
+      managementRooms: [],
+    });
+    const roomOps = makeRoomOps();
+    const invited = await space.inviteUserToManagementRoomOnce(
+      roomOps as unknown as RoomOps,
+      store,
+      "matrix:@carol:server"
+    );
+    expect(invited).toBe(false);
+    expect(roomOps.inviteUser).not.toHaveBeenCalled();
   });
 });

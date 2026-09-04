@@ -78,10 +78,18 @@ export interface MsgBridgeConfig {
    */
   managementRooms?: string[];
   /**
-   * Element 空间(Space)组织视图——纯展示层,不影响信任模型与房间权限:
-   * 把本实例创建的房间收纳进一个私有空间,便于在 Element 中管理。
+   * Element 空间(Space)组织视图——把本实例创建的房间收纳进一个私有空间,
+   * 便于在 Element 中管理。空间本身仍是展示层;信任用户的房间权限
+   * (自动管理员,见 #42)由统一补权负责,与是否挂入空间无关。
    */
   space?: SpaceConfig;
+  /**
+   * 信任用户自动管理员(#42)的提权簿记:曾被实际从低于管理员提升为
+   * PL 100 的命名空间用户 ID(去重)。后续撤销/降权(票3)以它圈定范围。
+   * 注意:旧特例(/pmctl new 仅提升发起人)时代产生的管理员不在簿记,
+   * 这是文档写明的存量包袱。
+   */
+  powerElevatedUsers?: string[];
 }
 
 /** @see MsgBridgeConfig.space */
@@ -94,6 +102,10 @@ export interface SpaceConfig {
   /** 已向其发出过空间邀请的命名空间用户 ID(含已拒绝者)——
    *  每人只邀请一次,不重复打扰;未入列的信任用户由启动自愈补邀。 */
   invitedUsers?: string[];
+  /** 已向其发出过管理房间邀请的命名空间用户 ID(含已拒绝者)——与
+   *  invitedUsers 同构:每人只邀请一次;未入列的信任用户由启动自愈补邀。
+   *  仅空间模式使用;降级模式的认养管理 DM 不向任何人发邀请。 */
+  managementInvitedUsers?: string[];
 }
 
 /**

@@ -19,7 +19,7 @@ import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
-import { ensureSpaceAndManagementRoom } from "./space.js";
+import { ensureSpaceAndManagementRoom, healTrustedPowerLevels } from "./space.js";
 import type { RoomOps, Transport } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
 import { suppressKnownWarnings } from "./warnings.js";
@@ -248,6 +248,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   if (roomOps) {
     const spaceResult = await ensureSpaceAndManagementRoom({ roomOps, store, sendReply });
     if (spaceResult === "degraded") managementRoomAdoptionAllowed = true;
+
+    // #42 票1: trusted users are admins in every managed room. Runs
+    // unconditionally — space or degraded mode alike (the adopted-DM
+    // management room and project rooms need it as much as a bot-created
+    // one); per-room failures warn inside and never touch the startup
+    // tri-state above.
+    await healTrustedPowerLevels(roomOps, store);
   }
 
   try {

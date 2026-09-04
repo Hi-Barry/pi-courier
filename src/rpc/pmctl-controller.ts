@@ -16,6 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { activeSpaceRoomId, type ConfigStore } from "../config.js";
 import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
+import { elevateTrustedUsersInRoom } from "../space.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
 
@@ -179,13 +180,13 @@ export class PmctlController {
     try {
       const roomId = await roomOps.createProjectRoom(`${pname}(${this.instanceName()})`, call.senderMxid);
       pm.registerProject(roomId, resolvedWorkdir, pname);
-      // The bot creates the room, so make the sender the room admin so they
-      // can rename / invite / manage it themselves. Failure here must not
-      // fail the (already created) project.
+      // #42: every trusted user gets admin in the new room via the unified
+      // elevation — not just the sender. Failure must not fail the (already
+      // created) project.
       try {
-        await roomOps.setUserPowerLevel(roomId, call.senderMxid, 100);
+        await elevateTrustedUsersInRoom(roomOps, this.opts.store, roomId);
       } catch (err) {
-        await reply(`⚠️ 房间已创建,但设为管理员失败(可手动设置): ${(err as Error).message}`);
+        await reply(`⚠️ 房间已创建,但信任用户补权失败(可手动设置): ${(err as Error).message}`);
       }
       // File the new room under the organizational space (display layer
       // only — a link failure never fails the project).

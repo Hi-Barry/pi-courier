@@ -58,8 +58,9 @@ export interface Transport {
  * Failure semantics are uniform for operations: every method THROWS with a
  * meaningful message (callers reply with it). No null returns, no silent
  * no-ops. The exceptions are the QUERY members (getBotUserId,
- * encryptionAvailable), which legitimately report a not-yet-connected or
- * unavailable capability instead of throwing.
+ * encryptionAvailable, getPowerLevels), which legitimately report a
+ * not-yet-connected or unavailable/not-present capability instead of
+ * throwing.
  */
 export interface RoomOps {
   /** Create a private room — the general primitive (name + invitees; E2EE
@@ -87,8 +88,15 @@ export interface RoomOps {
    *  on while the Rust crypto stack failed to load — rooms must not be
    *  marked encrypted in that case). */
   readonly encryptionAvailable: boolean;
-  /** Set a user's power level in a room (project owner -> admin). */
+  /** Set a user's power level in a room (project owner -> admin; since #42
+   *  also the trusted-user admin rule). */
   setUserPowerLevel(roomId: string, userId: string, level: number): Promise<void>;
+  /** Read a room's power-level state (m.room.power_levels content), or null
+   *  when the room has no (visible) such state — 404 / M_NOT_FOUND. Like the
+   *  other query members this reports absence instead of throwing; the
+   *  trusted-user elevation treats null as an empty users map and writes
+   *  anyway. */
+  getPowerLevels(roomId: string): Promise<Record<string, unknown> | null>;
   /** Have the bot actively leave a room. */
   leaveRoom(roomId: string, reason?: string): Promise<void>;
 }
