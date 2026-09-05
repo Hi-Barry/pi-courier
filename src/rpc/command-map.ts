@@ -15,6 +15,9 @@
  *  help surface; ChallengeAuth no longer has its own help text.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
 import type { PiRpc } from "./pi-rpc.js";
 
@@ -91,6 +94,93 @@ async function replyQueueView(rpc: PiRpc, snapshot: QueueSnapshot | undefined, r
   await reply(lines.join("\n"));
 }
 
+// --- Session directory scanning (/sessions, /switch — issue #56 票5) ----------
+
+export interface SessionSummary {
+  /** Absolute path — what /switch hands to switchSession. */
+  path: string;
+  /** File name, e.g. 2026-09-05T12-00-00-000Z_<sessionId>.jsonl. */
+  file: string;
+  /** Last-modified time (ms epoch) — the list sorts by it, newest first. */
+  mtimeMs: number;
+}
+
+/**
+ * Scan a session dir for pi session files (*.jsonl), newest first. A missing
+ * or unreadable dir yields [] (the caller reports "找不到会话目录").
+ */
+export function listSessions(dir: string): SessionSummary[] {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const sessions: SessionSummary[] = [];
+  for (const file of names) {
+    if (!file.endsWith(".jsonl")) continue;
+    const full = path.join(dir, file);
+    try {
+      sessions.push({ path: full, file, mtimeMs: fs.statSync(full).mtimeMs });
+    } catch {
+      // Raced deletion between readdir and stat — skip.
+    }
+  }
+  return sessions.sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+/** The session dir a process scans: its own --session-dir, else pi's default. */
+export function resolveSessionDir(rpc: PiRpc): string {
+  return rpc.sessionDir ?? path.join(os.homedir(), ".pi", "agent", "sessions");
+}
+
+/**
+ * Display name of a session: the LAST "session_info" entry's name field.
+ * Regex-scanned per jsonl line (no full JSON parse); giant files skip the
+ * lookup — the name is a display nicety, never load-bearing.
+ */
+export function readSessionName(filePath: string): string | undefined {
+  try {
+    if (fs.statSync(filePath).size > 2 * 1024 * 1024) return undefined;
+    const text = fs.readFileSync(filePath, "utf-8");
+    let last: string | undefined;
+    for (const match of text.matchAll(/"type":"session_info".*?"name":"((?:[^"\\]|\\.)*)"/g)) {
+      try {
+        last = JSON.parse(`"${match[1]}"`) as string;
+      } catch {
+        last = match[1];
+      }
+    }
+    const name = last?.replace(/\s+/g, " ").trim();
+    return name || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Compact local time for the /sessions list: YYYY-MM-DD HH:mm. */
+function formatMtime(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** "/sessions" — the top-10 newest sessions with a /switch hint. */
+async function replySessionList(rpc: PiRpc, reply: (text: string) => Promise<void>): Promise<void> {
+  const dir = resolveSessionDir(rpc);
+  const sessions = listSessions(dir).slice(0, 10);
+  if (sessions.length === 0) {
+    const reason = fs.existsSync(dir) ? "会话目录为空" : "找不到会话目录";
+    await reply(`📭 ${reason}: ${dir}`);
+    return;
+  }
+  const lines = sessions.map((s, i) => {
+    const name = readSessionName(s.path);
+    return `${i + 1}. ${s.file}  ${formatMtime(s.mtimeMs)}${name ? `  ${name}` : ""}`;
+  });
+  await reply(`📚 会话(最近修改优先):\n${lines.join("\n")}\n\n用 /switch <序号> 切换。`);
+}
+
 /** Returns true if the command was handled (something was done / replied). */
 export async function handleSlashCommand(
   text: string,
@@ -162,6 +252,94 @@ export async function handleSlashCommand(
         await rpc.waitForIdle();
         await rpc.prompt(args);
         await reply(withQueueWarning("🛑 已打断,新指令已发出。", queueView?.()));
+        return true;
+      }
+
+      // --- Small utilities (issue #56 票5) ------------------------------------
+      case "/last": {
+        const last = await rpc.getLastAssistantText();
+        const text = last?.trim();
+        if (!text) {
+          await reply("💤 没有可复述的回复(本会话还没有 assistant 输出)。");
+          return true;
+        }
+        await reply(text.length > 3000 ? `${text.slice(0, 3000)}\n…(已截断)` : text);
+        return true;
+      }
+
+      case "/cyclemodel": {
+        const result = await rpc.cycleModel();
+        if (!result) {
+          await reply("❌ 没有可轮换的模型(启动未限定模型列表?)。用 /model <provider/id> 直接指定。");
+          return true;
+        }
+        await reply(`✅ 已切换模型: ${result.model.provider}/${result.model.id}(思考: ${result.thinkingLevel})`);
+        return true;
+      }
+
+      case "/cyclethinking": {
+        const result = await rpc.cycleThinkingLevel();
+        if (!result) {
+          await reply("❌ 没有可轮换的思考级别。");
+          return true;
+        }
+        await reply(`✅ 思考级别已轮换为: ${result.level}`);
+        return true;
+      }
+
+      case "/autocompact": {
+        const arg = args.toLowerCase();
+        if (arg !== "on" && arg !== "off") {
+          const state = await rpc.getState();
+          await reply(
+            `当前自动压缩: ${state.autoCompactionEnabled ? "开" : "关"}\n` +
+              "用法: /autocompact on|off(实例级生效:写入 pi 全局设置,一个项目房间切换影响全部项目)"
+          );
+          return true;
+        }
+        await rpc.setAutoCompaction(arg === "on");
+        await reply(`✅ 自动压缩已${arg === "on" ? "开启" : "关闭"}(实例级生效)。`);
+        return true;
+      }
+
+      case "/autoretry": {
+        const arg = args.toLowerCase();
+        if (arg !== "on" && arg !== "off") {
+          // RpcSessionState exposes no autoRetry query field — usage only.
+          await reply(
+            "用法: /autoretry on|off\n(上游未暴露当前状态查询;实例级生效:写入 pi 全局设置,一个项目房间切换影响全部项目)"
+          );
+          return true;
+        }
+        await rpc.setAutoRetry(arg === "on");
+        await reply(`✅ 自动重试已${arg === "on" ? "开启" : "关闭"}(实例级生效)。`);
+        return true;
+      }
+
+      case "/sessions": {
+        await replySessionList(rpc, reply);
+        return true;
+      }
+
+      case "/switch": {
+        const state = await rpc.getState();
+        if (state.isStreaming) {
+          await reply("⚠️ 当前任务流式进行中,请先 /stop 再切换会话。");
+          return true;
+        }
+        const index = Number.parseInt(args, 10);
+        if (!args || Number.isNaN(index) || index < 1) {
+          await reply("用法: /switch <序号> — 切换到 /sessions 列表中的会话。");
+          return true;
+        }
+        const sessions = listSessions(resolveSessionDir(rpc)).slice(0, 10);
+        const target = sessions[index - 1];
+        if (!target) {
+          await reply(`❌ 序号超出范围: ${index}(用 /sessions 查看当前列表)。`);
+          return true;
+        }
+        const result = await rpc.switchSession(target.path);
+        await reply(result.cancelled ? "⚠️ 切换会话被扩展取消" : `✅ 已切换会话: ${target.file}`);
         return true;
       }
 
@@ -329,6 +507,12 @@ function helpText(): string {
     "• `/model` / `/model <provider/id>` — 查看/切换模型",
     "• `/models` — 列出可用模型",
     "• `/thinking [level]` — 查看/设置思考级别",
+    "• `/cyclemodel` / `/cyclethinking` — 轮换到下一个模型 / 思考级别",
+    "• `/autocompact on|off` — 自动压缩开关(实例级生效:写入 pi 全局设置,一个项目房间切换影响全部项目)",
+    "• `/autoretry on|off` — 自动重试开关(实例级生效,同上)",
+    "• `/sessions` — 列出最近会话(按修改时间)",
+    "• `/switch <序号>` — 切换到 /sessions 列出的会话(流式中需先 /stop)",
+    "• `/last` — 复述 agent 最近一次回复",
     "• `/session` — 会话统计与费用",
     "• `/status` — 当前模型与状态",
     "• `/name <名字>` — 会话命名",

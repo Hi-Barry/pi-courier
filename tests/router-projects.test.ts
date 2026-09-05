@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigStore } from "../src/config";
@@ -56,6 +56,14 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     getState: vi.fn().mockResolvedValue({ model: { id: "m" }, isStreaming: false, pendingMessageCount: 0 }),
     newSession: vi.fn().mockResolvedValue({ cancelled: false }),
     onEvent: vi.fn(),
+    // Small-command batch (issue #56 票5) — defaults overridden per test.
+    getLastAssistantText: vi.fn().mockResolvedValue(null),
+    cycleModel: vi.fn().mockResolvedValue(null),
+    cycleThinkingLevel: vi.fn().mockResolvedValue(null),
+    setAutoCompaction: vi.fn().mockResolvedValue(undefined),
+    setAutoRetry: vi.fn().mockResolvedValue(undefined),
+    switchSession: vi.fn().mockResolvedValue({ cancelled: false }),
+    sessionDir: undefined as string | undefined,
   } as unknown as PiRpc;
   const projectManager = {
     getRpcForRoom: vi.fn().mockReturnValue(rpc),
@@ -1013,6 +1021,192 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
     expect(help).toContain("/queue");
     expect(help).toContain("/interrupt");
     expect(help).toContain("/stop");
+  });
+});
+
+/**
+ * Small-command batch + reply quotes (issue #56, spec #51 ticket 5): the
+ * pure-mapping commands (/last, /cyclemodel, /cyclethinking, /autocompact,
+ * /autoretry, /sessions, /switch) and the quote prefix assembled onto plain
+ * prompts when the transport resolved a Matrix reply reference.
+ */
+describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
+  let rpc: PiRpc;
+  let replies: Array<{ chatId: string; transport: string; text: string }>;
+  let makeRouter: () => ReturnType<typeof createMessageRouter>;
+
+  beforeEach(() => {
+    const fx = makeFixtures({ multiProject: false });
+    rpc = fx.rpc;
+    replies = fx.replies;
+    makeRouter = fx.makeRouter;
+  });
+
+  const getState = (overrides: { isStreaming?: boolean; autoCompactionEnabled?: boolean }) => {
+    (rpc.getState as ReturnType<typeof vi.fn>).mockResolvedValue({
+      model: { id: "m" },
+      isStreaming: false,
+      pendingMessageCount: 0,
+      autoCompactionEnabled: true,
+      ...overrides,
+    });
+  };
+
+  // --- /last -----------------------------------------------------------------
+  it("/last replays the agent's most recent reply", async () => {
+    (rpc.getLastAssistantText as ReturnType<typeof vi.fn>).mockResolvedValue("the previous answer");
+    await makeRouter().handleIncoming(makeMsg({ content: "/last" }));
+    expect(rpc.getLastAssistantText).toHaveBeenCalledTimes(1);
+    expect(replies.at(-1)!.text).toContain("the previous answer");
+    expect(rpc.prompt).not.toHaveBeenCalled();
+  });
+
+  it("/last reports when there is no reply yet", async () => {
+    (rpc.getLastAssistantText as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    await makeRouter().handleIncoming(makeMsg({ content: "/last" }));
+    expect(replies.at(-1)!.text).toContain("没有可复述");
+  });
+
+  // --- /cyclemodel / /cyclethinking -------------------------------------------
+  it("/cyclemodel reports the cycled provider/model", async () => {
+    (rpc.cycleModel as ReturnType<typeof vi.fn>).mockResolvedValue({
+      model: { provider: "anthropic", id: "claude-next" },
+      thinkingLevel: "high",
+      isScoped: false,
+    });
+    await makeRouter().handleIncoming(makeMsg({ content: "/cyclemodel" }));
+    expect(rpc.cycleModel).toHaveBeenCalledTimes(1);
+    expect(replies.at(-1)!.text).toContain("anthropic/claude-next");
+  });
+
+  it("/cyclemodel reports when there is nothing to cycle", async () => {
+    (rpc.cycleModel as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    await makeRouter().handleIncoming(makeMsg({ content: "/cyclemodel" }));
+    expect(replies.at(-1)!.text).toContain("没有可轮换");
+  });
+
+  it("/cyclethinking reports the new level", async () => {
+    (rpc.cycleThinkingLevel as ReturnType<typeof vi.fn>).mockResolvedValue({ level: "medium" });
+    await makeRouter().handleIncoming(makeMsg({ content: "/cyclethinking" }));
+    expect(rpc.cycleThinkingLevel).toHaveBeenCalledTimes(1);
+    expect(replies.at(-1)!.text).toContain("medium");
+  });
+
+  // --- /autocompact / /autoretry -----------------------------------------------
+  it("/autocompact on|off maps to setAutoCompaction, no-args shows state and usage", async () => {
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ content: "/autocompact on" }));
+    expect(rpc.setAutoCompaction).toHaveBeenCalledWith(true);
+    await router.handleIncoming(makeMsg({ content: "/autocompact off" }));
+    expect(rpc.setAutoCompaction).toHaveBeenCalledWith(false);
+    expect(replies.at(-1)!.text).toContain("已关闭");
+
+    getState({ autoCompactionEnabled: false });
+    await router.handleIncoming(makeMsg({ content: "/autocompact" }));
+    expect(rpc.setAutoCompaction).toHaveBeenCalledTimes(2); // unchanged by the query
+    expect(replies.at(-1)!.text).toContain("当前自动压缩: 关");
+    expect(replies.at(-1)!.text).toContain("实例级生效");
+  });
+
+  it("/autoretry on|off maps to setAutoRetry, no-args gives usage (upstream exposes no query)", async () => {
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ content: "/autoretry off" }));
+    expect(rpc.setAutoRetry).toHaveBeenCalledWith(false);
+    expect(replies.at(-1)!.text).toContain("已关闭");
+
+    await router.handleIncoming(makeMsg({ content: "/autoretry" }));
+    expect(rpc.setAutoRetry).toHaveBeenCalledTimes(1); // no-args never toggles
+    expect(replies.at(-1)!.text).toContain("/autoretry on|off");
+    expect(replies.at(-1)!.text).toContain("实例级生效");
+  });
+
+  // --- /sessions / /switch -------------------------------------------------------
+  let sessionDir: string;
+  beforeEach(() => {
+    sessionDir = mkdtempSync(join(tmpdir(), "pi-courier-sessions-"));
+    // Three pi session files, deliberately non-chronological mtimes; the
+    // newest carries a session_info display name (real jsonl header shape).
+    writeFileSync(join(sessionDir, "old_1111.jsonl"), '{"type":"session","id":"1111"}\n');
+    writeFileSync(
+      join(sessionDir, "new_2222.jsonl"),
+      '{"type":"session","id":"2222"}\n{"type":"session_info","id":"e1","parentId":null,"name":"named session"}\n'
+    );
+    writeFileSync(join(sessionDir, "mid_3333.jsonl"), '{"type":"session","id":"3333"}\n');
+    const t = (file: string, sec: number) => utimesSync(join(sessionDir, file), sec * 1000, sec * 1000);
+    t("old_1111.jsonl", 1_000_000);
+    t("new_2222.jsonl", 3_000_000);
+    t("mid_3333.jsonl", 2_000_000);
+    (rpc as unknown as { sessionDir?: string }).sessionDir = sessionDir;
+  });
+  afterEach(() => {
+    rmSync(sessionDir, { recursive: true, force: true });
+  });
+
+  it("/sessions lists jsonl files newest-first with the parsed session name", async () => {
+    await makeRouter().handleIncoming(makeMsg({ content: "/sessions" }));
+    const text = replies.at(-1)!.text;
+    const order = [text.indexOf("new_2222.jsonl"), text.indexOf("mid_3333.jsonl"), text.indexOf("old_1111.jsonl")];
+    expect(order.every((i) => i > 0)).toBe(true);
+    expect(order[0]).toBeLessThan(order[1]);
+    expect(order[1]).toBeLessThan(order[2]);
+    expect(text).toContain("named session");
+    expect(text).toContain("/switch");
+  });
+
+  it("/sessions reports a missing session directory", async () => {
+    (rpc as unknown as { sessionDir?: string }).sessionDir = join(sessionDir, "does-not-exist");
+    await makeRouter().handleIncoming(makeMsg({ content: "/sessions" }));
+    expect(replies.at(-1)!.text).toContain("找不到会话目录");
+  });
+
+  it("/switch rejects while streaming (asked to /stop first)", async () => {
+    getState({ isStreaming: true });
+    await makeRouter().handleIncoming(makeMsg({ content: "/switch 1" }));
+    expect(replies.at(-1)!.text).toContain("/stop");
+    expect(rpc.switchSession).not.toHaveBeenCalled();
+  });
+
+  it("/switch <n> switches to the nth newest session file", async () => {
+    await makeRouter().handleIncoming(makeMsg({ content: "/switch 1" }));
+    expect(rpc.switchSession).toHaveBeenCalledWith(join(sessionDir, "new_2222.jsonl"));
+    expect(replies.at(-1)!.text).toContain("已切换会话");
+
+    (rpc.switchSession as ReturnType<typeof vi.fn>).mockClear();
+    await makeRouter().handleIncoming(makeMsg({ content: "/switch 3" }));
+    expect(rpc.switchSession).toHaveBeenCalledWith(join(sessionDir, "old_1111.jsonl"));
+  });
+
+  it("/switch without args shows usage; an out-of-range index is rejected", async () => {
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ content: "/switch" }));
+    expect(replies.at(-1)!.text).toContain("用法");
+    expect(rpc.switchSession).not.toHaveBeenCalled();
+
+    await router.handleIncoming(makeMsg({ content: "/switch 9" }));
+    expect(replies.at(-1)!.text).toContain("超出范围");
+  });
+
+  // --- /help -------------------------------------------------------------------
+  it("/help lists the new commands with the instance-level scope note", async () => {
+    await makeRouter().handleIncoming(makeMsg({ content: "/help" }));
+    const help = replies.at(-1)!.text;
+    for (const cmd of ["/last", "/cyclemodel", "/cyclethinking", "/autocompact", "/autoretry", "/sessions", "/switch"]) {
+      expect(help).toContain(cmd);
+    }
+    expect(help).toContain("实例级生效");
+  });
+
+  // --- Reply-quote prefix -----------------------------------------------------
+  it("a resolved quote prefixes the prompt sent to pi (raw text stays for commands)", async () => {
+    await makeRouter().handleIncoming(
+      makeMsg({ content: "这个是什么意思", quoted: { username: "carol", excerpt: "被引用的旧消息" } })
+    );
+    expect(rpc.prompt).toHaveBeenCalledWith("「@carol: 被引用的旧消息」\n这个是什么意思");
+  });
+
+  it("without a quote the prompt is the raw text, unchanged", async () => {
+    await makeRouter().handleIncoming(makeMsg({ content: "plain prompt" }));
+    expect(rpc.prompt).toHaveBeenCalledWith("plain prompt");
   });
 });
 

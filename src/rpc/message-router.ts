@@ -198,6 +198,20 @@ export function parseExtensionUIAnswer(request: ExtensionUIRequestView, text: st
   }
 }
 
+/**
+ * Reply-quote prefix (issue #56 票5): when a message replies to a known
+ * historical message, prepend a one-line excerpt so the agent can resolve
+ * "这个"/"上面那个". Only the text sent to pi changes — slash-command
+ * detection runs earlier on the raw text and stays untouched.
+ */
+export function withQuotePrefix(
+  text: string,
+  quoted?: { username: string; excerpt: string }
+): string {
+  if (!quoted?.excerpt) return text;
+  return `「@${quoted.username}: ${quoted.excerpt}」\n${text}`;
+}
+
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const { projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl, managementRoomAdoptionAllowed } = deps;
   const bindings = new WeakMap<PiRpc, RoomBinding>();
@@ -535,9 +549,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         }
       }
 
-      // Plain message → prompt
+      // Plain message → prompt (a resolved reply quote is prepended — see
+      // withQuotePrefix; command handling above saw the raw text).
       try {
-        await roomRpc.prompt(text);
+        await roomRpc.prompt(withQuotePrefix(text, msg.quoted));
       } catch (err) {
         await sendReply(msg.chatId, msg.transport, `❌ 无法发送给 pi: ${(err as Error).message}`);
       }

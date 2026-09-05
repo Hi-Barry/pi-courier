@@ -70,6 +70,14 @@ export class PiRpc {
     return this.client !== undefined;
   }
 
+  /** The --session-dir this process was spawned with, if any (issue #56 票5:
+   *  /sessions scans it; undefined = pi's default ~/.pi/agent/sessions). */
+  get sessionDir(): string | undefined {
+    const args = this.options.args ?? [];
+    const index = args.indexOf("--session-dir");
+    return index >= 0 ? args[index + 1] : undefined;
+  }
+
   /** Locate the pi CLI entry point. */
   static async resolveCliPath(): Promise<string> {
     // 1. Explicit env override
@@ -260,6 +268,35 @@ export class PiRpc {
 
   async setThinkingLevel(level: string): Promise<void> {
     await this.requireClient().setThinkingLevel(level as never);
+  }
+
+  /** The agent's most recent assistant reply (null before the first turn). */
+  async getLastAssistantText(): Promise<string | null> {
+    return this.requireClient().getLastAssistantText();
+  }
+
+  /** Cycle to the next model in the scoped list (null when nothing to cycle). */
+  async cycleModel(): Promise<{
+    model: { provider: string; id: string };
+    thinkingLevel: string;
+    isScoped: boolean;
+  } | null> {
+    return this.requireClient().cycleModel();
+  }
+
+  /** Cycle to the next thinking level (null when nothing to cycle). */
+  async cycleThinkingLevel(): Promise<{ level: string } | null> {
+    return this.requireClient().cycleThinkingLevel();
+  }
+
+  /** Toggle auto-compaction (persists to pi's global settings — instance-wide). */
+  async setAutoCompaction(enabled: boolean): Promise<void> {
+    await this.requireClient().setAutoCompaction(enabled);
+  }
+
+  /** Toggle auto-retry (persists to pi's global settings — instance-wide). */
+  async setAutoRetry(enabled: boolean): Promise<void> {
+    await this.requireClient().setAutoRetry(enabled);
   }
 
   async setSessionName(name: string): Promise<void> {
