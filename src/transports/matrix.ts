@@ -10,6 +10,7 @@ import {
   SimpleFsStorageProvider,
 } from "matrix-bot-sdk";
 import { logger, suppressLogLines } from "../logger.js";
+import { createQuoteCache, type QuoteCache, toExcerpt } from "../quote-cache.js";
 import type { ExternalMessage } from "../types.js";
 import type { Transport } from "./interface.js";
 import { MatrixRoomOps } from "./matrix-rooms.js";
@@ -41,6 +42,8 @@ export class MatrixProvider implements Transport {
   private joinedRooms = new Set<string>();
   private roomMemberCount = new Map<string, number>();
   private connectedAt = 0;
+  /** Per-room event_id → excerpt ring cache backing reply quotes (issue #56 票5). */
+  private quoteCache: QuoteCache = createQuoteCache();
 
   /** Room-capability half of the Matrix integration (see matrix-rooms.ts). */
   readonly roomOps = new MatrixRoomOps({
@@ -298,6 +301,20 @@ export class MatrixProvider implements Transport {
       ? stripBotMention(messageText, this.botUserId)
       : messageText;
 
+    // Reply quotes (issue #56 票5): record this message first, then resolve a
+    // m.relates_to reply target against the per-room ring cache. A miss (old
+    // message from before this process started, unknown event) is a silent
+    // downgrade — the message flows on without a quote. E2EE rooms arrive
+    // decrypted, so content is read the same way as body above.
+    this.quoteCache.record(roomId, messageId, {
+      username,
+      excerpt: toExcerpt(cleanContent ?? ""),
+    });
+    const replyTargetEventId: string | undefined = event.content?.["m.relates_to"]?.["m.in_reply_to"]?.event_id;
+    const quoted = replyTargetEventId
+      ? this.quoteCache.lookup(roomId, replyTargetEventId)
+      : undefined;
+
     // Forward to message handler
     if (this.messageHandler && cleanContent) {
       const externalMessage: ExternalMessage = {
@@ -310,6 +327,7 @@ export class MatrixProvider implements Transport {
         messageId,
         isGroupChat,
         wasMentioned,
+        ...(quoted && { quoted }),
       };
 
       this.messageHandler(externalMessage);

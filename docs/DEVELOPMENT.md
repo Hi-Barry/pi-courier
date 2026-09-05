@@ -176,10 +176,10 @@ pi 0.83.0 就绪。
 
 在 pi-messenger-bridge 的 fork 基础上,新增了三个核心模块:
 
-**`src/rpc/pi-rpc.ts`**(213 行)—— PiRpc 封装
+**`src/rpc/pi-rpc.ts`**(366 行)—— PiRpc 封装
 - pi CLI 探测:`PI_CLI_PATH` 环境变量 → `which pi` → 本地 node_modules,三级回退
 - 冷启动握手重试:pi 进程起来需要时间,封装了就绪等待
-- 流式中发消息自动降级:`prompt` 在流式进行中会失败,自动附加 `streamingBehavior: "steer"/"followUp"`
+- 发送语义恒定显式(0.1.39 起):每条 `prompt` 都携带 `streamingBehavior` —— steer = Enter 语义 / followUp = Alt+Enter 排队,空闲会话自动忽略该参数,一条消息覆盖两种状态;参数经上游私有 `send` 下发(公开 `prompt()` 不暴露它),不再依赖报错文案降级
 - `get_commands` 60 秒缓存:避免频繁查询命令列表
 - 监听器队列:修复了"先注册事件监听、后启动连接"会抛错的问题
 
@@ -194,8 +194,11 @@ pi 0.83.0 就绪。
 - `/name <名字>` → `set_session_name`
 - `/export [路径]` → `export_html`
 - `/bash <命令>` → `bash`
-- `/abort` → `abort`
-- `/reload` → 重启 pi 进程(后加)
+- `/stop`(别名 `/abort`)→ `abort`
+- `/queue [文本]` → 队列查看 / 排队;`/interrupt <指令>` → 打断并重发(spec #51)
+- `/last` `/cyclemodel` `/cyclethinking` `/sessions`+`/switch` `/autocompact` `/autoretry` → 小命令批(spec #51)
+- `/reload` → 重启 pi 进程(后加);`/reload all` → 本实例全部空闲进程(spec #51)
+- `/login` `/logout` `/auth` → 无头登录,门禁在 router(spec #51)
 - 其余 `/xxx` → 透传给 pi 的 `prompt`,由 pi 展开命令/技能/模板
 
 **`src/rpc/pmctl-controller.ts`** —— /pmctl 家族(门禁 + new/list/show/rm/mv/rename;rm 60 秒确认状态为实例字段)
@@ -203,8 +206,8 @@ pi 0.83.0 就绪。
 - 邀请目标由 router 以 transport 原生 MXID 传入(控制器不做前缀剥离)
 
 **`src/rpc/message-router.ts`** —— 核心接线
-- 认证 → bridge 管理命令 → /pmctl 家族 → RPC 映射命令 → 透传 prompt,五级路由
-- agent 事件流(`message_end` / `turn_end` / `agent_start`…)→ 回发到 Matrix
+- 认证 → bridge 管理命令 → /pmctl 家族 → 登录管理(/login 家族)→ RPC 映射命令 → 应答捕获 → 透传 prompt(命中回复引用时摘录前缀一并下发),七级路由(spec #51 增加后两级)
+- agent 事件流(`message_end` / `turn_end` / `agent_start`…)→ 回发到 Matrix;extension_ui 提问/应答、auto_retry 与错误回发、steering/followUp 队列镜像也在事件路径上(spec #51)
 - 回复按 RoomBinding 路由:每个 pi 进程绑定自己的回复目标(项目房间钉住、共享默认进程随最近一次 DM 提示刷新,完整对话轮结束后释放)——不存在进程级单槽
 - typing 指示:`agent_start` / `turn_start` 触发 Matrix 输入中状态
 
@@ -236,6 +239,14 @@ pi 0.83.0 就绪。
 **`src/log-filter.ts`** —— journalctl argv 纯构造器(spec #34)
 - 级别档位与项目标签编译为锚定 `--grep`(`--case=0` 大小写不敏感、正则转义、多项目 OR);未知项目报错列可用
 - 背景:journald 不解析 stdout 自定义字段(实测 systemd 257),`-p` priority 在 `StandardOutput=inherit` 下恒 6(`--level warn` 因此从未生效)——改为行内锚定 grep 一并修复
+
+**`src/quote-cache.ts`** —— 回复引用环形缓存(spec #51 票5)
+- 每房间 50 条 FIFO(重见即刷新)、摘录单行 200 字上限,纯内存零 I/O
+- 只记用户消息(bot 自身消息在事件过滤即被跳过),未命中静默无前缀 —— 引用是尽力而为的上下文,不是承诺
+
+**`src/auth/headless-login.ts`** —— 无头登录(spec #51 票4)
+- 上游 `AuthInteraction` → 聊天往返翻译(纯函数直测):prompt 变房间提问、notify(auth_url/device_code/progress)变展示行、「取消」= abort signal 中止(prompt reject 即上游的异常退出取消路径)
+- 凭据经注入的 ModelRuntime 直写 pi 标准 auth.json(文件锁合并写),courier 不经手密钥;成功后复用 command-map 的 `restartIdleRpcs` 重启空闲进程、提示忙碌进程稍后 /reload
 
 **`src/management-room.ts`** —— 管理房间文案单点组装(房间名 + 使用指南),DM 采纳与空间自建两条入口共用,杜绝文案漂移
 
@@ -630,6 +641,23 @@ setup 把信任用户拉进空间和管理房间后,他们在 Matrix 客户端�
 
 与 §14 决策 9 的关系:空间本身仍是组织视图,但"信任模型与房间权限零改动"的表述自 0.1.37 起作废——信任即管理员成为正式权限模型(决策 13)。
 
+### 11.11 远程会话控制:spec #51(0.1.39 起)
+
+此前 RPC 层的"发消息"只有一种形态:流式中发消息自动降级是实现细节,用户表达不了"排队"与"打断"的意图;模型调用失败在房间里静默;extension_ui 的确认框/选择/输入在 RPC 模式下直接丢失;provider 登录必须开终端。spec #51 用五张票把这批远程会话控制一次补齐:
+
+| 票 | 内容 |
+|---|---|
+| #52 | 错误可见性:turn 以 stopReason "error" 结束必回 `❌ 本轮失败: <原因>`(此前 text=null 路径会静默吞掉失败轮并永久占住未钉绑定);auto_retry_start/end 回发 `⚠️ 调用失败,正在重试 n/N` 与耗尽终错,成功重试不打扰;主动 /stop 中止不误报 |
+| #53 | 发送语义对齐 pi TUI:prompt 恒带 streamingBehavior(steer = Enter:空闲即执行、运行中注入当前运行;/queue = followUp:排队不打断,空闲退化直发);`/queue` 无参查看队列(条数+内容,与上游 pendingMessageCount 交叉核对);`/interrupt` 一条消息完成打断+重发(空闲直接执行);RPC 无 clear_queue、abort 不清队列 —— /stop 与 /interrupt 回复显式回显"⚠️ 队列中仍有 N 条消息将在下一轮生效" |
+| #54 | extension_ui 交互:confirm/select/input/editor 提问发进绑定房间、下一条普通消息即答案(confirm→y/n、select→序号、input/editor→直接打字;「取消」精确匹配放弃);FIFO 最老优先、"/"开头仍走命令通道;notify 分档(warning/error 进房间,info 留日志,TUI 专属展示方法忽略);`extensionUiTimeoutMinutes`(默认 10 分钟,不进向导)兜底超时代答取消 |
+| #55 | 无头登录:`/login` 列可登录 provider(oauth/api_key 能力+已认证标记)、`/login <provider> [oauth|api_key]` 交互式登录(OAuth 开链接任意浏览器授权后把重定向 URL 粘回房间;API key 聊天直贴,提示会留房间历史)、`/logout`、`/auth`;门禁仅管理员+管理房间(单工程 = DM);凭据经独立 ModelRuntime 直写 pi 标准 auth.json,成功后空闲进程自动重启、忙碌提示稍后 /reload |
+| #56 | 小命令批 + 回复引用:`/last`(复述最近回复)、`/cyclemodel`、`/cyclethinking`、`/sessions`+`/switch <序号>`(流式中拒绝)、`/autocompact on|off`、`/autoretry on|off`(后两者写 pi 全局设置并持久化:本机全部 pi 进程生效、重启仍有效);Matrix reply 引用命中时摘录前缀(≈200 字)拼进 prompt,未命中静默忽略 |
+| #57 | 文档同步(本节 + 双语 README) |
+
+局限如实写进文档(双语 README 的"pi 运行中:steer / 排队 / 打断"节):**队列不清空** —— abort 后 steering/followUp 队列原样保留,打断前已排队的消息在下一轮生效,靠回复中的显式警示兜底而非假装没发生;**密钥留房间历史** —— API key 登录直贴聊天,提示用后删消息;**autocompact/autoretry 全局生效** —— 写 pi 全局设置,一个项目房间切换影响本机全部项目。
+
+两个实现坑值得记(细节在代码注释):上游 `RpcClient.prompt()` 不暴露 streamingBehavior,经私有 `send` 直发;`extension_ui_response` 若走通用 `send()` 会被改写成 `req_N` 的请求 id,pi 按收不到的 id 丢弃应答、对话框永久悬挂 —— 应答改为直写子进程 stdin 的严格 JSONL 行。房间应答捕获的优先级是登录流程 > extension_ui 悬置提问(票面要求);登录流程任意时刻「取消」可中止,两次提示之间的消息(如 OAuth 轮询期的闲聊)不会被吞,房间保持可用。
+
 ---
 
 ## 12. 踩坑全记录
@@ -736,8 +764,10 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
     → 认证检查(trusted / challenge)
       → bridge 管理命令(/trusted /revoke /channels /enable <chatId> /disable /toggletools)
         → /pmctl 家族(PmctlController:门禁 + new/list/show/rm/mv/rename;空间启用时 new 挂链、rm 先摘链再退房)
-          → RPC 映射命令(/new /compact /model ...;DM /help 也在这里,统一输出 pi 命令 + bridge 命令)
-            → 透传 prompt(/skill:xxx /template 普通文本)
+          → 登录管理(/login /logout /auth —— 仅管理员 + 管理房间,单工程模式 DM 即管理房间)
+            → RPC 映射命令(/new /compact /model /queue /interrupt ...;DM /help 也在这里,统一输出 pi 命令 + bridge 命令)
+              → 应答捕获(非 / 消息:登录流程优先于 extension_ui 悬置提问;「取消」一律中止)
+                → 透传 prompt(命中回复引用时摘录前缀一并下发;/skill:xxx /template 普通文本)
 ```
 
 策略(认证、挑战码、群 /enable)只存在于 router 的 `handleIncoming` 管道一份,管理命令判定在 `src/auth/admin-commands.ts`(纯输入输出,effects 由 router 落盘——`persistAuth` 写 auth 快照、`hideToolCalls` 写开关、`spaceInvite` 触发空间 fire-once 邀请);transport 侧不做任何授权判定(否则未启用房间的消息到不了 `/enable`,该功能在真实链路上不可达)。注意:/enable 步骤在「授权生效」之前执行,但位于「授权计算」之后——两者缺一不可。/pmctl 的门禁与动作集中在 PmctlController,邀请目标由 router 以 transport 原生 MXID 传入。
@@ -747,7 +777,10 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 - 对话类回复:监听 agent 事件流的 `turn_end`,按来源进程的 RoomBinding 回信(`message_end` 仅记录日志)
 - 同一默认进程内跨 DM 的对话归属是协议限制(pi 的 RPC 无 chat 概念):绑定跟随最近一次提示;项目房间进程独占、天然钉住
 - 命令类回复(统计/模型列表):直接等 RPC 响应
-- 流式期间发消息:自动附加 `streamingBehavior: "steer"/"followUp"`
+- 发送语义(0.1.39 起):prompt 恒带 `streamingBehavior` —— 普通文本 = steer(空闲即执行、运行中注入当前运行),`/queue` = followUp(排队不打断);`/interrupt` = abort → waitForIdle → prompt
+- 错误可见性(#52):turn 以 stopReason "error" 结束必回失败行(哪怕模型无正文);auto_retry_start 与失败收场的 auto_retry_end 回发房间,成功重试不打扰
+- extension_ui(#54):提问进绑定房间 FIFO 排队,下一条普通消息即答案;notify 仅 warning/error 进房间
+- 回复引用(#56):Matrix reply 命中环形缓存时,摘录前缀拼进 prompt 前缀,帮助 agent 理解指代
 
 ### 13.4 会话模型
 
@@ -774,6 +807,8 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 11. **每个工程一个独立 pi 进程**:工程间进程隔离、会话独立、互不干扰;懒启动按需拉起,避免多工程常驻资源浪费。
 12. **固定设备 ID**:password 登录用稳定 device_id,把"重跑 setup 就触发 E2EE 设备坑"这类可预见问题从根上消除,而不是靠 FAQ 让用户手动删 crypto store。
 13. **信任即管理员(0.1.37)**:托管房间内信任用户 = 管理员(PL 100),Matrix 权限轴与命令信任轴合一条规则——不引入第三种档位、不加配置项;撤销信任对称降权,以提权名单簿记为降权依据,名单之外的高权用户永不动。
+14. **发送语义镜像 TUI(0.1.39)**:聊天里 Enter / Alt+Enter / Esc 都有对应物 —— 普通文本 = steer、`/queue` = followUp、`/stop`·`/interrupt` = abort;协议没给的能力(clear_queue)不假装给了,队列局限随命令回复显式告知。
+15. **凭据不过手(0.1.39)**:无头登录的凭据经独立 ModelRuntime 直写 pi 标准 auth.json,courier 不保存、不回显密钥;房间只是录入通道,密钥留房间历史的风险如实提示。
 
 ---
 

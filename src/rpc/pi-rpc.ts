@@ -6,7 +6,8 @@
  *  - Retry startup handshake (cold start can take a moment)
  *  - Provide typed convenience methods used by the command map
  *  - Cache get_commands results briefly
- *  - Fall back to steer() when a prompt arrives while the agent is streaming
+ *  - Carry the pi TUI send semantics: prompts go out with an explicit
+ *    streamingBehavior (steer = Enter, followUp = Alt+Enter queueing)
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -39,6 +40,16 @@ export interface RpcSlashCommandInfo {
   path?: string;
 }
 
+/**
+ * Wire payload of an extension_ui_response (issue #54). Upstream's parse
+ * step reads `value` for select/input/editor, `confirmed` for confirm and
+ * treats `cancelled: true` as "user backed out" (default value).
+ */
+export type ExtensionUIResponsePayload =
+  | { id: string; value: string }
+  | { id: string; confirmed: boolean }
+  | { id: string; cancelled: true };
+
 export class PiRpc {
   private client?: RpcClient;
   private commandsCache?: { at: number; list: RpcSlashCommandInfo[] };
@@ -57,6 +68,14 @@ export class PiRpc {
 
   get isConnected(): boolean {
     return this.client !== undefined;
+  }
+
+  /** The --session-dir this process was spawned with, if any (issue #56 票5:
+   *  /sessions scans it; undefined = pi's default ~/.pi/agent/sessions). */
+  get sessionDir(): string | undefined {
+    const args = this.options.args ?? [];
+    const index = args.indexOf("--session-dir");
+    return index >= 0 ? args[index + 1] : undefined;
   }
 
   /** Locate the pi CLI entry point. */
@@ -165,20 +184,44 @@ export class PiRpc {
   }
 
   /**
-   * Send a user prompt. If the agent is streaming, the RPC server rejects a
-   * plain prompt — retry as a steering message (queued, delivered after the
-   * current tool calls finish).
+   * Send a user prompt with Enter semantics (pi TUI parity): a fresh task when
+   * idle, injected into the running task when streaming. The upstream `prompt`
+   * command natively carries `streamingBehavior` ("steer" | "followUp") and
+   * idle sessions ignore it — so one plain send covers both cases, with no
+   * error-message sniffing. Sent via the private `send` (any-cast) because
+   * RpcClient.prompt() does not expose the parameter.
    */
   async prompt(text: string): Promise<void> {
-    if (!this.client) throw new Error("pi RPC not connected");
-    try {
-      await this.client.prompt(text);
-    } catch (err) {
-      if (/streaming/i.test((err as Error).message)) {
-        await this.client.steer(text);
-      } else {
-        throw err;
-      }
+    await this.sendPrompt(text, "steer");
+  }
+
+  /**
+   * Queue a message without disturbing the running task (pi TUI Alt+Enter
+   * semantics): lands in the followUp queue while streaming; an idle session
+   * degenerates to a plain prompt (upstream handles that automatically, so no
+   * state check is needed here).
+   */
+  async promptQueued(text: string): Promise<void> {
+    await this.sendPrompt(text, "followUp");
+  }
+
+  /** Resolve once the agent settles ("agent_settled"). Rejects on timeout (ms). */
+  async waitForIdle(timeout?: number): Promise<void> {
+    await this.requireClient().waitForIdle(timeout);
+  }
+
+  /** Raw `prompt` command with an explicit streaming behavior, via private send. */
+  private async sendPrompt(text: string, streamingBehavior: "steer" | "followUp"): Promise<void> {
+    const client = this.requireClient() as unknown as {
+      send: (command: {
+        type: "prompt";
+        message: string;
+        streamingBehavior: "steer" | "followUp";
+      }) => Promise<{ success: boolean; error?: string }>;
+    };
+    const response = await client.send({ type: "prompt", message: text, streamingBehavior });
+    if (!response.success) {
+      throw new Error(response.error ?? "prompt failed");
     }
   }
 
@@ -227,6 +270,35 @@ export class PiRpc {
     await this.requireClient().setThinkingLevel(level as never);
   }
 
+  /** The agent's most recent assistant reply (null before the first turn). */
+  async getLastAssistantText(): Promise<string | null> {
+    return this.requireClient().getLastAssistantText();
+  }
+
+  /** Cycle to the next model in the scoped list (null when nothing to cycle). */
+  async cycleModel(): Promise<{
+    model: { provider: string; id: string };
+    thinkingLevel: string;
+    isScoped: boolean;
+  } | null> {
+    return this.requireClient().cycleModel();
+  }
+
+  /** Cycle to the next thinking level (null when nothing to cycle). */
+  async cycleThinkingLevel(): Promise<{ level: string } | null> {
+    return this.requireClient().cycleThinkingLevel();
+  }
+
+  /** Toggle auto-compaction (persists to pi's global settings — instance-wide). */
+  async setAutoCompaction(enabled: boolean): Promise<void> {
+    await this.requireClient().setAutoCompaction(enabled);
+  }
+
+  /** Toggle auto-retry (persists to pi's global settings — instance-wide). */
+  async setAutoRetry(enabled: boolean): Promise<void> {
+    await this.requireClient().setAutoRetry(enabled);
+  }
+
   async setSessionName(name: string): Promise<void> {
     await this.requireClient().setSessionName(name);
   }
@@ -263,6 +335,28 @@ export class PiRpc {
     const commands = list.commands ?? [];
     this.commandsCache = { at: Date.now(), list: commands };
     return commands;
+  }
+
+  /**
+   * Write an extension_ui_response to pi's stdin (issue #54). RpcClient has
+   * no public method for it — and its generic send() cannot be used here: it
+   * overwrites the command's `id` with its own `req_N` id (the extension
+   * request id would be lost, pi would drop the response and the dialog
+   * would hang) and then waits 30s for a reply that never comes. So the
+   * response goes straight to the child process's stdin as one strict JSONL
+   * line (LF framing, same as serializeJsonLine upstream).
+   */
+  async respondExtensionUI(payload: ExtensionUIResponsePayload): Promise<void> {
+    const client = this.requireClient() as unknown as {
+      process?: {
+        stdin?: { write: (chunk: string) => unknown; destroyed: boolean; writable: boolean };
+      } | null;
+    };
+    const stdin = client.process?.stdin;
+    if (!stdin || stdin.destroyed || !stdin.writable) {
+      throw new Error("pi RPC stdin is not writable");
+    }
+    stdin.write(`${JSON.stringify({ type: "extension_ui_response", ...payload })}\n`);
   }
 
   private requireClient(): RpcClient {
