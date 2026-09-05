@@ -16,6 +16,7 @@ Matrix bot ←→ pi-courier ←→ pi --mode rpc(系统安装)
 
 - **你和 Matrix bot 账号对话**;消息通过 RPC 协议转发给 pi
 - **命令全支持**:`/new`、`/compact`、`/model`、`/thinking`、`/skill:名称`、提示词模板、扩展命令
+- **聊天原生操控**:pi 运行中可 steer / 排队 / 打断;扩展提问在房间里直接答;登录 provider 不用离开 Matrix
 - **不捆绑 pi** —— pi 独立安装、独立升级
 - **会话持久化**到 `~/.pi/agent/sessions`,重启自动恢复
 - **一条命令的 CLI**:配置向导、systemd 开机自启、自动更新
@@ -208,13 +209,65 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 | `/name <名字>` | 会话命名 |
 | `/export [路径]` | 导出会话 HTML |
 | `/bash <命令>` | 执行 shell 命令 |
-| `/stop` | 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`) |
-| `/reload` | 重启 pi(装完扩展/配置后) |
+| `/stop` | 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`;已排队的消息不会被清空 —— 见下文) |
+| `/queue [文本]` | 查看队列 / 排队一条消息到运行中的任务之后(Alt+Enter 语义) |
+| `/interrupt <文本>` | 打断运行中的任务并发送新指令 —— 一条消息完成两件事 |
+| `/last` | 复述 agent 最近一次回复 |
+| `/cyclemodel` / `/cyclethinking` | 轮换到下一个模型 / 思考级别 |
+| `/sessions` / `/switch <序号>` | 列出最近会话 / 切换(流式中拒绝) |
+| `/autocompact on\|off` / `/autoretry on\|off` | 自动压缩 / 自动重试开关(写入 pi 全局设置 —— 本机全部 pi 进程生效,重启后仍有效) |
+| `/login` / `/logout <provider>` / `/auth` | provider 登录管理(仅管理员 + 管理房间) |
+| `/reload` | 重启 pi(装完扩展/配置后);`/reload all` 重启本实例全部空闲 pi 进程 |
 | `/help` | 完整帮助 |
 
 **bridge 管理命令**:`/trusted`、`/revoke <userId>`、`/channels`、`/enable [chatId] <模式>`、`/disable <chatId>`、`/toggletools`
 
 **其他任何 `/` 开头的内容**都直接透传给 pi —— 扩展命令、`/skill:名称`、提示词模板由 pi 展开。普通文本就是正常对话。
+
+### pi 运行中:steer / 排队 / 打断
+
+0.1.39 起发送语义与 pi 的 TUI 对齐。普通文本消息恒定以 steering 语义发送(≈ TUI 的 Enter):pi 空闲 → 立即执行;pi 运行中 → 注入当前运行的任务。
+
+- `/queue <文本>` — TUI 的 Alt+Enter:pi 运行中时排队,任务跑完自动执行;空闲时退化为立即执行
+- `/queue` — 查看当前 steering / followUp 队列(条数 + 内容,并与 pi 上报的待处理条数交叉核对)
+- `/interrupt <文本>` — 空闲:直接执行;运行中:打断当前任务并发送新指令
+- `/stop` — 立即停止所有任务;语义不变
+
+**队列局限,提前说明**:pi 的 RPC 没有"清空队列"—— 中止不会丢弃打断前已排队的消息。`/stop` 或 `/interrupt` 之后,此前排队的消息会在**下一轮**生效;两条命令的回复都会显式附带 `⚠️ 队列中仍有 N 条消息将在下一轮生效` 并列出内容,不会有消息悄悄触发。
+
+### 扩展提问直接在房间回答
+
+扩展经 RPC 发起 confirm / select / input / editor 交互时,bot 会把问题发成一条聊天消息 —— 你的下一条普通回复就是答案:
+
+- confirm → 回复 `y` / `n`(`yes` / `no` 也可以);select → 回复序号;input / editor → 直接打字
+- 发送「取消」(精确匹配)即可放弃
+- 多个问题悬置时最老的先答;`/` 开头的消息仍走命令通道
+- 扩展通知按级别分档:warning / error 进房间,info 只留日志
+
+悬置问题超过 `extensionUiTimeoutMinutes`(默认 10)分钟后自动按取消处理 —— 房间收到通知,扩展收到取消应答。该字段**不进** setup 向导:手动加进 `~/.pi/pi-courier.json`,然后 `pi-courier restart` 生效:
+
+```json
+{ "extensionUiTimeoutMinutes": 10 }
+```
+
+### 模型调用失败时
+
+某一轮调用失败(用量耗尽、认证过期、provider 不可达……)会通知房间:`❌ 本轮失败: <原因>`。自动重试全程可见 —— 每次重试发 `⚠️ 调用失败,正在重试 n/N`,重试耗尽后发最终错误。用户主动 `/stop` 不会触发错误通知。
+
+### 聊天里登录 provider:`/login`
+
+不用开终端也能(重新)登录 provider:
+
+- `/login` — 列出可登录的 provider(标注 oauth / api_key 能力,已认证的带 ✅ 标记)
+- `/login <provider> [oauth|api_key]` — 在房间里交互式登录,任意时刻发送「取消」可中止。**OAuth**:点开链接在任意浏览器完成授权,把重定向 URL 粘贴回房间。**API key**:直接粘贴。⚠️ 粘贴的内容会留在房间历史 —— 在意的话事后删除该消息。
+- `/logout <provider>` — 删除已存凭据(运行中的 pi 进程仍持有内存里的旧凭据;空闲后执行 `/reload all` 生效)
+- `/auth` — 查看已认证的 provider
+
+门禁:仅管理员 + 仅管理房间(单工程模式 = 与 bot 的私聊)。登录成功后**空闲的** pi 进程自动重启以加载新凭据;忙碌的会提示稍后 `/reload`。凭据直写 pi 的标准凭据文件(`~/.pi/agent/auth.json`),与本机全部 pi 进程共享 —— pi-courier 自身既不保存也不显示密钥。
+
+### 引用更早的消息
+
+在房间里回复(reply)一条更早的**用户**消息(比如你自己之前发的长指令)再发新指令:被引用原文的单行摘录(约 200 字)会自动拼进 prompt 前缀,让 agent 能理解"这个""上面那个"的指代。摘录缓存是每房间独立的内存缓存(最近 50 条);bot 自己的回复不入缓存,未命中的引用(太旧、或重启之前的消息)静默忽略 —— 消息照常发出,只是没有前缀。
 
 ### 服务管理
 

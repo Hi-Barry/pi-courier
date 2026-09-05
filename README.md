@@ -16,6 +16,7 @@ Matrix bot ←→ pi-courier ←→ pi --mode rpc (system-installed)
 
 - **You talk to a Matrix bot account**; messages are forwarded to pi over the RPC protocol
 - **Full command support**: `/new`, `/compact`, `/model`, `/thinking`, `/skill:name`, prompt templates, extension commands
+- **Chat-native control**: steer, queue or interrupt while pi runs; answer extension questions right in the room; log a provider in without leaving Matrix
 - **pi is not bundled** — installed independently on the system, upgraded on its own
 - **Sessions persist** to `~/.pi/agent/sessions` and resume automatically after restarts
 - **One-command CLI**: setup wizard, systemd auto-start, self-update
@@ -167,13 +168,65 @@ You are now a trusted user (the first trusted user also becomes admin). In multi
 | `/name <name>` | Name the session |
 | `/export [path]` | Export session HTML |
 | `/bash <cmd>` | Run a shell command |
-| `/stop` | Stop all tasks immediately (like Esc in the TUI; alias `/abort`) |
-| `/reload` | Restart pi (after installing extensions/config) |
+| `/stop` | Stop all tasks immediately (like Esc in the TUI; alias `/abort`; queued messages are not cleared — see below) |
+| `/queue [text]` | Show the queue / queue a message for after the running task (Alt+Enter semantics) |
+| `/interrupt <text>` | Interrupt the running task and send a new instruction — one message does both |
+| `/last` | Repeat the agent's last reply |
+| `/cyclemodel` / `/cyclethinking` | Cycle to the next model / thinking level |
+| `/sessions` / `/switch <n>` | List recent sessions / switch to one (rejected while streaming) |
+| `/autocompact on\|off` / `/autoretry on\|off` | Toggle pi's auto-compaction / auto-retry (writes pi's global settings — affects every pi process on this machine, survives restarts) |
+| `/login` / `/logout <provider>` / `/auth` | Provider login management (admin + management room only) |
+| `/reload` | Restart pi (after installing extensions/config); `/reload all` restarts every idle pi process of the instance |
 | `/help` | Full help |
 
 **Bridge admin commands**: `/trusted`, `/revoke <userId>`, `/channels`, `/enable [chatId] <mode>`, `/disable <chatId>`, `/toggletools`
 
 **Anything else** starting with `/` passes through to pi directly — extension commands, `/skill:name`, prompt templates. Plain text is a normal conversation turn.
+
+### While pi is busy: steer, queue, interrupt
+
+Since 0.1.39 sending mirrors pi's TUI. A plain text message always rides with steering semantics (TUI Enter): pi idle → it runs immediately; pi mid-task → it is injected into the running task.
+
+- `/queue <text>` — TUI Alt+Enter: while pi runs, the message is queued and executes when the task finishes; an idle pi simply runs it at once
+- `/queue` — show the current steering/followUp queues (count + content, cross-checked against pi's own pending-message count)
+- `/interrupt <text>` — idle: runs directly; mid-task: stops the current task and sends the new instruction
+- `/stop` — stop everything now; semantics unchanged
+
+**Queue limitation, stated up front**: pi's RPC has no "clear queue" — aborting does not discard messages that were queued before the stop. After `/stop` or `/interrupt`, messages queued beforehand take effect on the **next** turn; both commands reply with an explicit `⚠️ 队列中仍有 N 条消息将在下一轮生效` listing them, so nothing fires unseen.
+
+### Extension questions land in the room
+
+When an extension asks you something (confirm / select / input / editor dialogs over RPC), the bot posts the question as a chat message — your next plain reply IS the answer:
+
+- confirm → reply `y` / `n` (`yes` / `no` work too); select → reply the number; input / editor → just type the content
+- send 「取消」 (exactly) to back out
+- several questions pending: the oldest is answered first; messages starting with `/` still go through the command channel
+- extension notifications are filtered by level: warning / error reach the room, info stays in the log
+
+Pending questions auto-cancel after `extensionUiTimeoutMinutes` (default 10) — the room gets a notice and the extension receives a cancel. This field is **not** part of the setup wizard: add it to `~/.pi/pi-courier.json` by hand, then `pi-courier restart`:
+
+```json
+{ "extensionUiTimeoutMinutes": 10 }
+```
+
+### When a model call fails
+
+A failed turn (usage exhausted, auth expired, provider unreachable…) tells the room: `❌ 本轮失败: <原因>`. Auto-retries are visible too — `⚠️ 调用失败,正在重试 n/N` per attempt, and the final error once retries are exhausted. A manual `/stop` never produces error notices.
+
+### Provider login from chat: `/login`
+
+No shell needed to (re-)login a provider:
+
+- `/login` — list login-able providers (oauth / api_key capability, ✅ badge for authenticated ones)
+- `/login <provider> [oauth|api_key]` — interactive login in the room; send 「取消」 at any moment to abort. **OAuth**: open the link in any browser, authorize, then paste the redirect URL back into the chat. **API key**: just paste the key. ⚠️ What you paste stays in the room history — delete the message afterwards if that matters to you.
+- `/logout <provider>` — delete a stored credential (running pi processes keep theirs in memory; `/reload all` once idle)
+- `/auth` — the authenticated providers
+
+Gate: admin + management room only (single-project mode: your DM with the bot). On success the **idle** pi processes restart automatically so the new credential loads; busy ones are told to `/reload` later. Credentials go straight into pi's standard credential file (`~/.pi/agent/auth.json`), shared with every pi process on the machine — pi-courier itself neither stores nor displays them.
+
+### Replying to an earlier message
+
+Reply (Matrix reply) to an earlier **user** message — e.g. one of your own long prompts — and send the new instruction: a one-line excerpt (≈200 chars) of the referenced text is prepended to the prompt, so "这个" / "the one above" resolve for the agent. The excerpt cache is per-room, in-memory, 50 most recent messages; the bot's own replies are not cached, and quotes that miss (too old, or from before a restart) are silently ignored — the message just goes out without the prefix.
 
 **Group chats**: rooms with **more than 2 members** are silent by default — the bot posts a one-time hint when invited, then answers nothing until enabled. **Enable without the room ID**: send `/enable <all|mentions|trusted-only>` right in the group (trusted users only, defaults to `trusted-only`), or in a DM with `/enable <roomId> <mode>` (or add it during `setup`). Two-person rooms (you + the bot) answer automatically. Room IDs look like `!xxx:server`.
 
