@@ -952,6 +952,13 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
     expect(replies.at(-1)!.text).toContain("队列为空");
   });
 
+  it("/queue empty mirror still cross-checks upstream pendingMessageCount (missed events)", async () => {
+    // No queue_update ever seen — a bare "队列为空" would hide missed events.
+    getState({ isStreaming: false, pendingMessageCount: 2 });
+    await makeRouter().handleIncoming(makeMsg({ content: "/queue" }));
+    expect(replies.at(-1)!.text).toContain("上游报告仍有 2 条待处理消息");
+  });
+
   it("/queue without args renders the queue_update mirror and cross-checks pendingMessageCount", async () => {
     const router = makeRouter();
     router.handleEvent(

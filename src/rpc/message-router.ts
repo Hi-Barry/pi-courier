@@ -219,15 +219,6 @@ export function withQuotePrefix(
 
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const { projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl, managementRoomAdoptionAllowed } = deps;
-  // Headless login (issue #55): /login /logout /auth + answer capture. The
-  // default manager writes credentials straight to pi's auth.json via an
-  // independent ModelRuntime (never through the RPC subprocesses).
-  const login =
-    deps.login ??
-    new LoginManager({
-      sendReply,
-      allRpcs: () => projectManager.allRpcs(),
-    });
   const bindings = new WeakMap<PiRpc, RoomBinding>();
   const bindReplyTarget = (rpc: PiRpc, replyTarget: ReplyTarget, pinned: boolean): void => {
     bindings.set(rpc, { pinned, replyTarget });
@@ -242,6 +233,29 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // Pending extension UI questions per rpc, FIFO — the oldest question is
   // answered by the room's next plain message (issue #54).
   const pendingQuestions = new WeakMap<PiRpc, PendingExtensionQuestion[]>();
+
+  // A restarted subprocess knows nothing of the questions (or queue) the old
+  // one left behind — keep them from swallowing the room's next message as a
+  // bogus "answer" to a question the new process will never resolve.
+  const clearRpcState = (rpc: PiRpc): void => {
+    queueMirrors.delete(rpc);
+    const queue = pendingQuestions.get(rpc);
+    if (queue) {
+      for (const question of queue) clearTimeout(question.timer);
+      pendingQuestions.delete(rpc);
+    }
+  };
+
+  // Headless login (issue #55): /login /logout /auth + answer capture. The
+  // default manager writes credentials straight to pi's auth.json via an
+  // independent ModelRuntime (never through the RPC subprocesses).
+  const login =
+    deps.login ??
+    new LoginManager({
+      sendReply,
+      allRpcs: () => projectManager.allRpcs(),
+      onRestarted: clearRpcState,
+    });
 
   /** Timeout expiry (issue #54): answer cancelled on the user's behalf, tell
    *  the room, and drop the question. A no-op when it was answered already. */
@@ -579,6 +593,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             reply: async (replyText) => sendReply(msg.chatId, msg.transport, replyText),
             queueView: () => queueMirrors.get(roomRpc),
             allRpcs: () => projectManager.allRpcs(),
+            clearRpcState,
           });
           if (handled) return;
         } catch (err) {

@@ -37,6 +37,11 @@ export interface SlashCommandContext {
   /** Every rpc of this instance (default + started project rpcs) — enables
    *  `/reload all` (issue #55). Absent = /reload stays single-process. */
   allRpcs?: () => PiRpc[];
+  /** Router-owned per-rpc transient state (queue mirror, pending extension
+   *  questions) must not survive a restart: the new subprocess knows nothing
+   *  of old question ids, and a stale question would swallow the room's next
+   *  message as a bogus "answer". */
+  clearRpcState?: (rpc: PiRpc) => void;
 }
 
 /** Collapse a queue entry to one bounded line for chat display. */
@@ -90,7 +95,10 @@ function rpcDisplayName(rpc: PiRpc): string {
  * Unqueryable rpcs (lazy, never started) are skipped: their FIRST start reads
  * the fresh file anyway.
  */
-export async function restartIdleRpcs(rpcs: readonly PiRpc[]): Promise<ReloadAllResult> {
+export async function restartIdleRpcs(
+  rpcs: readonly PiRpc[],
+  onRestarted?: (rpc: PiRpc) => void
+): Promise<ReloadAllResult> {
   const result: ReloadAllResult = { restarted: [], busy: [], skipped: [] };
   for (const rpc of rpcs) {
     const name = rpcDisplayName(rpc);
@@ -101,6 +109,7 @@ export async function restartIdleRpcs(rpcs: readonly PiRpc[]): Promise<ReloadAll
         continue;
       }
       await rpc.restart();
+      onRestarted?.(rpc);
       result.restarted.push(name);
     } catch {
       result.skipped.push(name);
@@ -126,11 +135,26 @@ export function formatReloadAllResult(result: ReloadAllResult): string {
   return parts.join("\n");
 }
 
-/** "/queue" without arguments — render the steering/followUp mirror. */
+/** "/queue" without arguments — render the steering/followUp mirror. The
+ *  pendingMessageCount cross-check runs on the EMPTY path too: a mirror that
+ *  looks empty only because queue_update events were missed must not read as
+ *  "queue is empty" when upstream still holds pending messages. */
 async function replyQueueView(rpc: PiRpc, snapshot: QueueSnapshot | undefined, reply: (text: string) => Promise<void>): Promise<void> {
   const steering = snapshot?.steering ?? [];
   const followUp = snapshot?.followUp ?? [];
-  if (steering.length === 0 && followUp.length === 0) {
+  let upstream: number | undefined;
+  try {
+    const state = await rpc.getState();
+    if (typeof state.pendingMessageCount === "number") upstream = state.pendingMessageCount;
+  } catch {
+    // State query is best-effort; the mirror alone still serves the reply.
+  }
+  const mirrored = steering.length + followUp.length;
+  if (mirrored === 0) {
+    if (typeof upstream === "number" && upstream > 0) {
+      await reply(`📋 本地队列为空,但上游报告仍有 ${upstream} 条待处理消息(以实际执行为准)。`);
+      return;
+    }
     await reply("📋 队列为空:没有排队中的 steering / followUp 消息。");
     return;
   }
@@ -145,15 +169,8 @@ async function replyQueueView(rpc: PiRpc, snapshot: QueueSnapshot | undefined, r
   }
   // Cross-check the in-memory mirror against upstream's pendingMessageCount —
   // a mismatch means the mirror is stale (e.g. events were missed); upstream wins.
-  try {
-    const state = await rpc.getState();
-    const upstream = state.pendingMessageCount;
-    const mirrored = steering.length + followUp.length;
-    if (typeof upstream === "number" && upstream !== mirrored) {
-      lines.push(`ℹ️ 上游报告待处理 ${upstream} 条(本地镜像 ${mirrored} 条),以实际执行为准。`);
-    }
-  } catch {
-    // get_state unavailable — the mirror-only view still stands.
+  if (typeof upstream === "number" && upstream !== mirrored) {
+    lines.push(`ℹ️ 上游报告待处理 ${upstream} 条(本地镜像 ${mirrored} 条),以实际执行为准。`);
   }
   await reply(lines.join("\n"));
 }
@@ -415,13 +432,14 @@ export async function handleSlashCommand(
             return true;
           }
           await reply("🔄 正在逐个重启全部 pi 进程(空闲才重启,忙碌跳过)…");
-          const result = await restartIdleRpcs(ctx.allRpcs());
+          const result = await restartIdleRpcs(ctx.allRpcs(), ctx.clearRpcState);
           await reply(formatReloadAllResult(result));
           return true;
         }
         await reply("🔄 正在重启 pi 进程(扩展/技能/配置将重新加载)…");
         try {
           await rpc.restart();
+          ctx.clearRpcState?.(rpc);
           const state = await rpc.getState();
           await reply(`✅ pi 已重启,模型: ${state.model?.id ?? "unknown"}`);
         } catch (err) {

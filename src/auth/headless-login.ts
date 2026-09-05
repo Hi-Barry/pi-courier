@@ -224,6 +224,10 @@ export interface LoginManagerDeps {
   /** Every rpc of this instance (default + started project rpcs): the idle
    *  ones restart after a successful login so the new credential loads. */
   allRpcs: () => PiRpc[];
+  /** Router hook: drop per-rpc transient state (queue mirror, pending
+   *  extension questions) for each rpc this manager restarts — the new
+   *  subprocess knows nothing of the old question ids. */
+  onRestarted?: (rpc: PiRpc) => void;
   /** Runtime seam (tests inject a mock; default = real ModelRuntime). */
   runtimeFactory?: (authPath: string) => Promise<LoginRuntime>;
   /** pi credential file (defaults to <agentDir>/auth.json; tests inject a tmp dir). */
@@ -425,7 +429,7 @@ export class LoginManager {
       try {
         // pi subprocesses read the credential file once at startup — restart
         // the idle ones now, tell the room about the busy ones (issue #55).
-        lines.push(formatReloadAllResult(await restartIdleRpcs(this.deps.allRpcs())));
+        lines.push(formatReloadAllResult(await restartIdleRpcs(this.deps.allRpcs(), this.deps.onRestarted)));
       } catch {
         // Restart trouble must never fail the (already persisted) login reply.
       }

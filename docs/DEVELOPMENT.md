@@ -176,10 +176,10 @@ pi 0.83.0 就绪。
 
 在 pi-messenger-bridge 的 fork 基础上,新增了三个核心模块:
 
-**`src/rpc/pi-rpc.ts`**(213 行)—— PiRpc 封装
+**`src/rpc/pi-rpc.ts`**(366 行)—— PiRpc 封装
 - pi CLI 探测:`PI_CLI_PATH` 环境变量 → `which pi` → 本地 node_modules,三级回退
 - 冷启动握手重试:pi 进程起来需要时间,封装了就绪等待
-- 流式中发消息自动降级:`prompt` 在流式进行中会失败,自动附加 `streamingBehavior: "steer"/"followUp"`(0.1.39 起改为恒定显式:每条 prompt 都带 `streamingBehavior` —— steer = Enter 语义 / followUp = Alt+Enter 排队,空闲会话自动忽略该参数,一条消息覆盖两种状态,不再靠报错降级;参数经上游私有 `send` 下发,公开 `prompt()` 不暴露它)
+- 发送语义恒定显式(0.1.39 起):每条 `prompt` 都携带 `streamingBehavior` —— steer = Enter 语义 / followUp = Alt+Enter 排队,空闲会话自动忽略该参数,一条消息覆盖两种状态;参数经上游私有 `send` 下发(公开 `prompt()` 不暴露它),不再依赖报错文案降级
 - `get_commands` 60 秒缓存:避免频繁查询命令列表
 - 监听器队列:修复了"先注册事件监听、后启动连接"会抛错的问题
 

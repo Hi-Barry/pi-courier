@@ -76,6 +76,7 @@ function makeFixtures(opts: { extensionUiTimeoutMinutes?: number } = {}) {
       extensionResponses.push(payload);
     }),
     getState: vi.fn().mockResolvedValue({ model: { id: "m" }, isStreaming: false, pendingMessageCount: 0 }),
+    restart: vi.fn().mockResolvedValue(undefined),
     onEvent: vi.fn(),
   } as unknown as PiRpc;
   const projectManager = {
@@ -338,6 +339,19 @@ describe("extension UI questions in the room (issue #54)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("/reload drops pending questions: the next plain message prompts instead of answering", async () => {
+    const fx = makeFixtures();
+    await askInDm(fx, uiRequest("q1"));
+    await fx.router.handleIncoming(makeMsg({ content: "/reload", messageId: "m2" }));
+    expect(fx.rpc.restart).toHaveBeenCalledTimes(1);
+    // The new subprocess never sees question q1 — its room message must be a
+    // prompt, not a bogus "✅ 已回应" answer to a dead question.
+    await fx.router.handleIncoming(makeMsg({ content: "deploy now", messageId: "m3" }));
+    expect(fx.rpc.prompt).toHaveBeenCalledWith("deploy now");
+    expect(fx.rpc.respondExtensionUI).not.toHaveBeenCalled();
+    expect(fx.replies.at(-1)!.text).not.toContain("已回应");
   });
 });
 
