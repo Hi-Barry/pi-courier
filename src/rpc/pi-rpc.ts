@@ -40,6 +40,16 @@ export interface RpcSlashCommandInfo {
   path?: string;
 }
 
+/**
+ * Wire payload of an extension_ui_response (issue #54). Upstream's parse
+ * step reads `value` for select/input/editor, `confirmed` for confirm and
+ * treats `cancelled: true` as "user backed out" (default value).
+ */
+export type ExtensionUIResponsePayload =
+  | { id: string; value: string }
+  | { id: string; confirmed: boolean }
+  | { id: string; cancelled: true };
+
 export class PiRpc {
   private client?: RpcClient;
   private commandsCache?: { at: number; list: RpcSlashCommandInfo[] };
@@ -288,6 +298,28 @@ export class PiRpc {
     const commands = list.commands ?? [];
     this.commandsCache = { at: Date.now(), list: commands };
     return commands;
+  }
+
+  /**
+   * Write an extension_ui_response to pi's stdin (issue #54). RpcClient has
+   * no public method for it — and its generic send() cannot be used here: it
+   * overwrites the command's `id` with its own `req_N` id (the extension
+   * request id would be lost, pi would drop the response and the dialog
+   * would hang) and then waits 30s for a reply that never comes. So the
+   * response goes straight to the child process's stdin as one strict JSONL
+   * line (LF framing, same as serializeJsonLine upstream).
+   */
+  async respondExtensionUI(payload: ExtensionUIResponsePayload): Promise<void> {
+    const client = this.requireClient() as unknown as {
+      process?: {
+        stdin?: { write: (chunk: string) => unknown; destroyed: boolean; writable: boolean };
+      } | null;
+    };
+    const stdin = client.process?.stdin;
+    if (!stdin || stdin.destroyed || !stdin.writable) {
+      throw new Error("pi RPC stdin is not writable");
+    }
+    stdin.write(`${JSON.stringify({ type: "extension_ui_response", ...payload })}\n`);
   }
 
   private requireClient(): RpcClient {

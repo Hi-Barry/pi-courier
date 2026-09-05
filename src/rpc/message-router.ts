@@ -21,9 +21,9 @@ import { isEnabled, type LeveledLogger, logger } from "../logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "../management-room.js";
 import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUserToSpaceOnce } from "../space.js";
 import type { RoomOps } from "../transports/interface.js";
-import type { ExternalMessage, ReplyTarget } from "../types.js";
+import type { ExternalMessage, MsgBridgeConfig, ReplyTarget } from "../types.js";
 import { handleSlashCommand, type QueueSnapshot } from "./command-map.js";
-import type { PiRpc } from "./pi-rpc.js";
+import type { ExtensionUIResponsePayload, PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
 
@@ -101,6 +101,103 @@ export function buildTurnReply(
   return { text: parts.join("\n\n"), pendingTools };
 }
 
+/**
+ * Extension UI (issue #54): extensions ask the user questions over RPC
+ * (confirm/select/input/editor). The courier posts the question to the bound
+ * room; the user's next plain message IS the answer. A courier-side timeout
+ * answers `cancelled` when nobody is around. Fire-and-forget requests are
+ * presented by level (notify) or ignored (TUI-only display methods).
+ */
+
+/** Runtime view of the upstream RpcExtensionUIRequest — widened like
+ *  AgentEventView because the fire-and-forget methods share the wire type. */
+export type ExtensionUIRequestView = {
+  type: "extension_ui_request";
+  id: string;
+  method: string;
+  title?: string;
+  message?: string;
+  options?: string[];
+  placeholder?: string;
+  timeout?: number;
+  notifyType?: string;
+};
+
+/** A question asked in a room and still awaiting the answer. FIFO per rpc —
+ *  the oldest pending question is answered first. The target is captured at
+ *  ask time so the answer/timeout routes back even if the default rpc's
+ *  binding moves on to another prompter in between. */
+interface PendingExtensionQuestion {
+  request: ExtensionUIRequestView;
+  target: ReplyTarget;
+  timer: NodeJS.Timeout;
+}
+
+/** Fallback timeout for pending extension UI questions: the config value is
+ *  in minutes, default 10 (issue #54). Read at enqueue time. Upstream's own
+ *  shorter select/confirm/input timeouts don't conflict — whichever fires
+ *  first wins, and late responses are dropped by id upstream. For editor
+ *  (no upstream timeout) this is the only guarantee. */
+export function extensionUiTimeoutMs(config: MsgBridgeConfig): number {
+  return (config.extensionUiTimeoutMinutes ?? 10) * 60_000;
+}
+
+/** Collapse whitespace and bound the length of a question/notify text. */
+function oneLine(text: string, max: number): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  return collapsed.length > max ? `${collapsed.slice(0, max)}…` : collapsed;
+}
+
+/** The question message posted to the room (issue #54). The phrasing doubles
+ *  as the user-facing protocol: reply content is the answer, 「取消」 backs out. */
+export function extensionUIQuestionText(request: ExtensionUIRequestView): string {
+  const title = oneLine(request.title ?? "(无标题)", 200);
+  switch (request.method) {
+    case "confirm":
+      return `❓ ${title}\n${oneLine(request.message ?? "", 300)}\n回复 y / n(发送「取消」放弃)`;
+    case "select": {
+      const lines = (request.options ?? []).map((option, i) => `${i + 1}. ${option}`);
+      return `❓ ${title}\n${lines.join("\n")}\n回复序号选择(发送「取消」放弃)`;
+    }
+    default: // input / editor
+      return `❓ ${title}\n直接回复内容作为答案(发送「取消」放弃)`;
+  }
+}
+
+/** Parsed room message as an answer to a pending question. */
+export type ExtensionUIAnswer =
+  | { kind: "cancel" }
+  | { kind: "value"; value: string }
+  | { kind: "confirmed"; confirmed: boolean }
+  | { kind: "invalid"; hint: string };
+
+/** Map a room message onto a pending question's answer (issue #54). Pure —
+ *  the confirm/select mapping rules are directly testable. 「取消」 must match
+ *  exactly; confirm accepts y/yes/n/no case-insensitively (anything else
+ *  re-asks); select maps the 1-based index onto options (out of range
+ *  re-asks); input/editor take the whole message as the value. */
+export function parseExtensionUIAnswer(request: ExtensionUIRequestView, text: string): ExtensionUIAnswer {
+  if (text === "取消") return { kind: "cancel" };
+  switch (request.method) {
+    case "confirm": {
+      const normalized = text.toLowerCase();
+      if (normalized === "y" || normalized === "yes") return { kind: "confirmed", confirmed: true };
+      if (normalized === "n" || normalized === "no") return { kind: "confirmed", confirmed: false };
+      return { kind: "invalid", hint: "⚠️ 请回复 y 或 n(发送「取消」放弃)" };
+    }
+    case "select": {
+      const options = request.options ?? [];
+      const index = /^\d+$/.test(text) ? Number.parseInt(text, 10) : 0;
+      if (index >= 1 && index <= options.length) {
+        return { kind: "value", value: options[index - 1]! };
+      }
+      return { kind: "invalid", hint: `⚠️ 请回复 1 到 ${options.length} 之间的序号(发送「取消」放弃)` };
+    }
+    default: // input / editor — the whole message is the answer
+      return { kind: "value", value: text };
+  }
+}
+
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const { projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl, managementRoomAdoptionAllowed } = deps;
   const bindings = new WeakMap<PiRpc, RoomBinding>();
@@ -113,6 +210,107 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // clear_queue, so the mirror intentionally keeps reflecting the upstream
   // queues even after abort — that persistence is surfaced to the user.
   const queueMirrors = new WeakMap<PiRpc, QueueSnapshot>();
+
+  // Pending extension UI questions per rpc, FIFO — the oldest question is
+  // answered by the room's next plain message (issue #54).
+  const pendingQuestions = new WeakMap<PiRpc, PendingExtensionQuestion[]>();
+
+  /** Timeout expiry (issue #54): answer cancelled on the user's behalf, tell
+   *  the room, and drop the question. A no-op when it was answered already. */
+  const expireQuestion = (rpc: PiRpc, entry: PendingExtensionQuestion, log: LeveledLogger): void => {
+    const queue = pendingQuestions.get(rpc);
+    const index = queue?.indexOf(entry) ?? -1;
+    if (index === -1) return; // answered or cancelled in the meantime
+    queue!.splice(index, 1);
+    const title = oneLine(entry.request.title ?? "(无标题)", 80);
+    log.info(`[extension-ui] 提问超时未答,已代答取消 (id ${entry.request.id})`);
+    rpc.respondExtensionUI({ id: entry.request.id, cancelled: true }).catch((err: unknown) => {
+      log.error(`[extension-ui] 超时代答回写失败 (id ${entry.request.id}): ${(err as Error).message}`);
+    });
+    sendReply(entry.target.chatId, entry.target.transport, `⌛ 问题「${title}」超时未答,已按取消处理`).catch(() => {});
+  };
+
+  /** Extension UI request intake (issue #54). Questions go to the bound room
+   *  and park in the FIFO; without a binding they are answered cancelled
+   *  right away (an unanswered dialog would hang the extension). notify is
+   *  presented by level; the TUI-only display methods are ignored. */
+  const handleExtensionUIRequest = (request: ExtensionUIRequestView, rpc: PiRpc, target: ReplyTarget | undefined, log: LeveledLogger): void => {
+    switch (request.method) {
+      case "confirm":
+      case "select":
+      case "input":
+      case "editor": {
+        if (!target) {
+          log.warn(`[extension-ui] ${request.method} 请求无绑定房间,已代答取消 (id ${request.id})`);
+          rpc.respondExtensionUI({ id: request.id, cancelled: true }).catch((err: unknown) => {
+            log.error(`[extension-ui] 代答取消失败 (id ${request.id}): ${(err as Error).message}`);
+          });
+          return;
+        }
+        const entry: PendingExtensionQuestion = {
+          request,
+          target,
+          timer: setTimeout(() => expireQuestion(rpc, entry, log), extensionUiTimeoutMs(store.get())),
+        };
+        // A pending question must never keep the bridge process alive by itself.
+        entry.timer.unref?.();
+        const queue = pendingQuestions.get(rpc) ?? [];
+        queue.push(entry);
+        pendingQuestions.set(rpc, queue);
+        sendReply(target.chatId, target.transport, extensionUIQuestionText(request)).catch(() => {});
+        log.debug(`[extension-ui] ${request.method} 提问已发往房间 (id ${request.id})`);
+        return;
+      }
+      case "notify": {
+        // Presentational: only warning/error reach the room, info stays in
+        // the log — the room is not a dumping ground for progress chatter.
+        const level = request.notifyType ?? "info";
+        const message = oneLine(request.message ?? "", 500);
+        if (level === "warning" || level === "error") {
+          if (target) {
+            const icon = level === "error" ? "🔴" : "⚠️";
+            sendReply(target.chatId, target.transport, `${icon} 扩展通知: ${message}`).catch(() => {});
+          } else {
+            log.warn(`[extension-ui] 扩展通知(${level},无绑定房间): ${message}`);
+          }
+        } else {
+          log.debug(`[extension-ui] 扩展通知(info): ${message}`);
+        }
+        return;
+      }
+      default:
+        // setStatus / setWidget / setTitle / set_editor_text — TUI-only display.
+        log.debug(`[extension-ui] ${request.method} 为 TUI 专属展示,已忽略`);
+        return;
+    }
+  };
+
+  /** Commit an answer to the oldest pending question (issue #54): write the
+   *  extension_ui_response and acknowledge in the room. Invalid input re-asks
+   *  without dequeuing — the question stays pending for the next message. */
+  const captureAnswer = async (rpc: PiRpc, queue: PendingExtensionQuestion[], entry: PendingExtensionQuestion, text: string, msg: ExternalMessage, log: LeveledLogger): Promise<void> => {
+    const answer = parseExtensionUIAnswer(entry.request, text);
+    if (answer.kind === "invalid") {
+      await sendReply(msg.chatId, msg.transport, answer.hint);
+      return;
+    }
+    queue.splice(queue.indexOf(entry), 1);
+    clearTimeout(entry.timer);
+    const payload: ExtensionUIResponsePayload =
+      answer.kind === "cancel"
+        ? { id: entry.request.id, cancelled: true }
+        : answer.kind === "confirmed"
+          ? { id: entry.request.id, confirmed: answer.confirmed }
+          : { id: entry.request.id, value: answer.value };
+    try {
+      await rpc.respondExtensionUI(payload);
+    } catch (err) {
+      log.error(`[extension-ui] 应答回写失败 (id ${entry.request.id}): ${(err as Error).message}`);
+      await sendReply(msg.chatId, msg.transport, "❌ 答案无法回传给 pi(进程可能已退出)");
+      return;
+    }
+    await sendReply(msg.chatId, msg.transport, answer.kind === "cancel" ? "已取消" : "✅ 已回应");
+  };
 
   return {
     async handleIncoming(msg: ExternalMessage): Promise<void> {
@@ -322,6 +520,21 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         }
       }
 
+      // Extension UI answer capture (issue #54): while a question is pending
+      // for this room, the next plain message IS the answer — "/" messages
+      // always went through the command channel above and never count.
+      // Only the oldest pending question takes the answer, and only from the
+      // room it was asked in (a parallel DM to the same shared rpc must not
+      // have its prompt eaten as an "answer").
+      if (!text.startsWith("/")) {
+        const queue = pendingQuestions.get(roomRpc);
+        const oldest = queue?.[0];
+        if (oldest && oldest.target.chatId === msg.chatId) {
+          await captureAnswer(roomRpc, queue!, oldest, text, msg, log);
+          return;
+        }
+      }
+
       // Plain message → prompt
       try {
         await roomRpc.prompt(text);
@@ -353,6 +566,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           steering: [...(event.steering ?? [])],
           followUp: [...(event.followUp ?? [])],
         });
+      }
+
+      // Extension UI (issue #54): questions are asked in the bound room and
+      // parked for the next plain message to answer; notify is presented by
+      // level; TUI-only display methods are ignored.
+      if (event.type === "extension_ui_request") {
+        handleExtensionUIRequest(rawEvent as ExtensionUIRequestView, rpc, target, log);
+        return;
       }
 
       if (event.type === "turn_start") {

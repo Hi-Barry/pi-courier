@@ -90,6 +90,13 @@ export interface MsgBridgeConfig {
    * 这是文档写明的存量包袱。
    */
   powerElevatedUsers?: string[];
+  /**
+   * 扩展 UI 提问(issue #54)的兜底超时(分钟,默认 10)。扩展经 RPC 发起的
+   * confirm/select/input/editor 悬置超过该时长后,courier 代答 cancelled
+   * 并在房间通知。上游对 select/confirm/input 可能自带更短 timeout(二者
+   * 不冲突);editor 上游无超时,此项是唯一保证。不进 setup 向导。
+   */
+  extensionUiTimeoutMinutes?: number;
 }
 
 /** @see MsgBridgeConfig.space */
