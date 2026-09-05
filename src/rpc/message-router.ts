@@ -76,7 +76,9 @@ interface RoomBinding {
 }
 
 /** Format a completed turn into reply text. Returns text = null when the turn
- *  has no replyable content (the binding is kept for the follow-up turn). */
+ *  has no replyable content (the binding is kept for the follow-up turn).
+ *  Error turns (stopReason "error") always yield replyable text — the failure
+ *  line rides along even when the model produced no content (issue #52). */
 export function buildTurnReply(
   message: AssistantMessage,
   hideToolCalls?: boolean
@@ -88,6 +90,13 @@ export function buildTurnReply(
   const trimmed = responseText.trim();
   if (trimmed) parts.push(trimmed);
   if (toolCallsText && !hideToolCalls) parts.push(toolCallsText);
+  // Error visibility (issue #52): a turn ending with stopReason "error" must
+  // reach the room even when the model produced no text — the text=null path
+  // used to swallow failed turns silently (holding an unpinned binding
+  // forever). Partial content survives; the failure line rides along.
+  if (message.stopReason === "error") {
+    parts.push(`❌ 本轮失败: ${message.errorMessage ?? "未知错误"}`);
+  }
   if (parts.length === 0) return { text: null, pendingTools };
   return { text: parts.join("\n\n"), pendingTools };
 }
@@ -361,6 +370,33 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         const binding = bindings.get(rpc);
         if (!turn.pendingTools && binding && !binding.pinned) {
           bindings.delete(rpc);
+        }
+        return;
+      }
+
+      // Error visibility (issue #52): auto-retry progress reaches the room so
+      // a failing round is never silent. Same guard as turn_start's typing:
+      // only with a live binding (logAgentEvent above already logs both).
+      if (event.type === "auto_retry_start") {
+        if (target) {
+          sendReply(
+            target.chatId,
+            target.transport,
+            `⚠️ 调用失败,正在重试 ${event.attempt ?? "?"}/${event.maxAttempts ?? "?"}: ${summarizeArg(event.errorMessage, 200) || "未知错误"}`
+          ).catch(() => {});
+        }
+        return;
+      }
+
+      // Retries exhausted: the final error goes to the room; a successful
+      // retry (success === true) needs no reply — the turn continues normally.
+      if (event.type === "auto_retry_end") {
+        if (event.success !== true && target) {
+          sendReply(
+            target.chatId,
+            target.transport,
+            `❌ 自动重试耗尽: ${summarizeArg(event.finalError, 300) || "未知错误"}`
+          ).catch(() => {});
         }
         return;
       }
