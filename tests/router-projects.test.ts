@@ -49,8 +49,11 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
   };
   const rpc = {
     prompt: vi.fn().mockResolvedValue(undefined),
+    promptQueued: vi.fn().mockResolvedValue(undefined),
+    abort: vi.fn().mockResolvedValue(undefined),
+    waitForIdle: vi.fn().mockResolvedValue(undefined),
     restart: vi.fn().mockResolvedValue(undefined),
-    getState: vi.fn().mockResolvedValue({ model: { id: "m" } }),
+    getState: vi.fn().mockResolvedValue({ model: { id: "m" }, isStreaming: false, pendingMessageCount: 0 }),
     newSession: vi.fn().mockResolvedValue({ cancelled: false }),
     onEvent: vi.fn(),
   } as unknown as PiRpc;
@@ -895,6 +898,121 @@ describe("management room invite on trust transition (issue #43 票2)", () => {
     expect(fx.roomOps.inviteUser).not.toHaveBeenCalled();
     // persistAuth still applied — trust survives without Matrix room ops.
     expect(fx.store.get().auth?.trustedUsers).toContain("matrix:@eve:server");
+  });
+});
+
+/**
+ * Send-semantics command family (issue #53, spec #51 ticket 2): plain text is
+ * always a steer-carrying prompt (asserted at the PiRpc level in
+ * pi-rpc-send.test.ts — the router only sees PiRpc.prompt), /queue routes to
+ * the followUp queue or renders the mirror, /interrupt composes
+ * abort → waitForIdle → prompt while streaming, and /stop //interrupt replies
+ * surface the surviving-queue limitation (abort preserves upstream queues).
+ */
+describe("send semantics command family (issue #53 ticket 2)", () => {
+  let rpc: PiRpc;
+  let replies: Array<{ chatId: string; transport: string; text: string }>;
+  let makeRouter: () => ReturnType<typeof createMessageRouter>;
+
+  beforeEach(() => {
+    // Single-project mode keeps the reply stream free of branding noise.
+    const fx = makeFixtures({ multiProject: false });
+    rpc = fx.rpc;
+    replies = fx.replies;
+    makeRouter = fx.makeRouter;
+  });
+
+  const getState = (overrides: { isStreaming?: boolean; pendingMessageCount?: number }) => {
+    (rpc.getState as ReturnType<typeof vi.fn>).mockResolvedValue({
+      model: { id: "m" },
+      isStreaming: false,
+      pendingMessageCount: 0,
+      ...overrides,
+    });
+  };
+
+  it("/queue <text> goes to promptQueued (followUp) and never to prompt", async () => {
+    await makeRouter().handleIncoming(makeMsg({ content: "/queue run the tests" }));
+    expect(rpc.promptQueued).toHaveBeenCalledWith("run the tests");
+    expect(rpc.prompt).not.toHaveBeenCalled();
+    expect(replies.at(-1)!.text).toContain("已排队");
+  });
+
+  it("/queue without args reports an empty queue when nothing was seen", async () => {
+    await makeRouter().handleIncoming(makeMsg({ content: "/queue" }));
+    expect(rpc.promptQueued).not.toHaveBeenCalled();
+    expect(replies.at(-1)!.text).toContain("队列为空");
+  });
+
+  it("/queue without args renders the queue_update mirror and cross-checks pendingMessageCount", async () => {
+    const router = makeRouter();
+    router.handleEvent(
+      { type: "queue_update", steering: ["inject this"], followUp: ["then that"] },
+      rpc
+    );
+    getState({ isStreaming: true, pendingMessageCount: 3 }); // upstream disagrees with the mirror (2)
+    await router.handleIncoming(makeMsg({ content: "/queue" }));
+    const text = replies.at(-1)!.text;
+    expect(text).toContain("steering(1 条");
+    expect(text).toContain("followUp(1 条");
+    expect(text).toContain("- inject this");
+    expect(text).toContain("- then that");
+    expect(text).toContain("上游报告待处理 3 条");
+  });
+
+  it("/interrupt on an idle session degrades to a plain prompt (no abort)", async () => {
+    getState({ isStreaming: false, pendingMessageCount: 0 });
+    await makeRouter().handleIncoming(makeMsg({ content: "/interrupt fix the lint" }));
+    expect(rpc.abort).not.toHaveBeenCalled();
+    expect(rpc.waitForIdle).not.toHaveBeenCalled();
+    expect(rpc.prompt).toHaveBeenCalledWith("fix the lint");
+    expect(replies.at(-1)!.text).toContain("没有运行中的任务");
+    expect(replies.at(-1)!.text).not.toContain("⚠️");
+  });
+
+  it("/interrupt while streaming aborts, waits for idle, then prompts — and warns about the surviving queue", async () => {
+    getState({ isStreaming: true, pendingMessageCount: 1 });
+    const router = makeRouter();
+    router.handleEvent({ type: "queue_update", steering: ["old task"], followUp: [] }, rpc);
+    await router.handleIncoming(makeMsg({ content: "/interrupt new order" }));
+    expect(rpc.abort).toHaveBeenCalledTimes(1);
+    expect(rpc.waitForIdle).toHaveBeenCalledTimes(1);
+    expect(rpc.prompt).toHaveBeenCalledWith("new order");
+    // The sequence is strict: abort → waitForIdle → prompt.
+    const order = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
+    expect(order(rpc.abort)).toBeLessThan(order(rpc.waitForIdle));
+    expect(order(rpc.waitForIdle)).toBeLessThan(order(rpc.prompt));
+    const text = replies.at(-1)!.text;
+    expect(text).toContain("已打断,新指令已发出");
+    expect(text).toContain("⚠️ 队列中仍有 1 条消息将在下一轮生效");
+    expect(text).toContain("- old task");
+  });
+
+  it("/stop appends the queue warning when the upstream queues survive the abort", async () => {
+    const router = makeRouter();
+    router.handleEvent({ type: "queue_update", steering: ["queued A"], followUp: ["queued B"] }, rpc);
+    await router.handleIncoming(makeMsg({ content: "/stop" }));
+    expect(rpc.abort).toHaveBeenCalledTimes(1);
+    const text = replies.at(-1)!.text;
+    expect(text).toContain("已停止所有任务");
+    expect(text).toContain("⚠️ 队列中仍有 2 条消息将在下一轮生效");
+    expect(text).toContain("- queued A");
+    expect(text).toContain("- queued B");
+  });
+
+  it("/stop with an empty queue carries no warning", async () => {
+    await makeRouter().handleIncoming(makeMsg({ content: "/stop" }));
+    const text = replies.at(-1)!.text;
+    expect(text).toContain("已停止所有任务");
+    expect(text).not.toContain("⚠️");
+  });
+
+  it("/help lists the new send-semantics commands", async () => {
+    await makeRouter().handleIncoming(makeMsg({ content: "/help" }));
+    const help = replies.at(-1)!.text;
+    expect(help).toContain("/queue");
+    expect(help).toContain("/interrupt");
+    expect(help).toContain("/stop");
   });
 });
 
