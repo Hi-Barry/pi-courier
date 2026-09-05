@@ -20,6 +20,13 @@ export interface ExternalMessage {
   isGroupChat: boolean;
   /** Was the bot mentioned? (for group chats) */
   wasMentioned?: boolean;
+  /**
+   * Quoted-message excerpt (issue #56 票5): when this message is a Matrix
+   * reply to a known historical message, the transport attaches a short
+   * cleaned quote of it. Undefined when there is no reply relation or the
+   * referenced event is not in the per-room cache (silent downgrade).
+   */
+  quoted?: { username: string; excerpt: string };
 }
 
 /**
