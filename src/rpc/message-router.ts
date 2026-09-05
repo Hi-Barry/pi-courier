@@ -22,7 +22,7 @@ import { buildManagementRoomHelp, managementRoomName } from "../management-room.
 import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUserToSpaceOnce } from "../space.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, ReplyTarget } from "../types.js";
-import { handleSlashCommand } from "./command-map.js";
+import { handleSlashCommand, type QueueSnapshot } from "./command-map.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
@@ -107,6 +107,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const bindReplyTarget = (rpc: PiRpc, replyTarget: ReplyTarget, pinned: boolean): void => {
     bindings.set(rpc, { pinned, replyTarget });
   };
+
+  // Live steering/followUp queue mirror per rpc, refreshed by queue_update
+  // events (/queue display and the stop/interrupt warning read it). RPC has no
+  // clear_queue, so the mirror intentionally keeps reflecting the upstream
+  // queues even after abort — that persistence is surfaced to the user.
+  const queueMirrors = new WeakMap<PiRpc, QueueSnapshot>();
 
   return {
     async handleIncoming(msg: ExternalMessage): Promise<void> {
@@ -307,6 +313,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           const handled = await handleSlashCommand(text, {
             rpc: roomRpc,
             reply: async (replyText) => sendReply(msg.chatId, msg.transport, replyText),
+            queueView: () => queueMirrors.get(roomRpc),
           });
           if (handled) return;
         } catch (err) {
@@ -338,6 +345,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
 
       logAgentEvent(event, log);
+
+      // Refresh the queue mirror before any routing decisions — /queue and the
+      // stop/interrupt queue warning read this snapshot.
+      if (event.type === "queue_update") {
+        queueMirrors.set(rpc, {
+          steering: [...(event.steering ?? [])],
+          followUp: [...(event.followUp ?? [])],
+        });
+      }
 
       if (event.type === "turn_start") {
         if (target) {

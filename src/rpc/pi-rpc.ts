@@ -6,7 +6,8 @@
  *  - Retry startup handshake (cold start can take a moment)
  *  - Provide typed convenience methods used by the command map
  *  - Cache get_commands results briefly
- *  - Fall back to steer() when a prompt arrives while the agent is streaming
+ *  - Carry the pi TUI send semantics: prompts go out with an explicit
+ *    streamingBehavior (steer = Enter, followUp = Alt+Enter queueing)
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -165,20 +166,44 @@ export class PiRpc {
   }
 
   /**
-   * Send a user prompt. If the agent is streaming, the RPC server rejects a
-   * plain prompt — retry as a steering message (queued, delivered after the
-   * current tool calls finish).
+   * Send a user prompt with Enter semantics (pi TUI parity): a fresh task when
+   * idle, injected into the running task when streaming. The upstream `prompt`
+   * command natively carries `streamingBehavior` ("steer" | "followUp") and
+   * idle sessions ignore it — so one plain send covers both cases, with no
+   * error-message sniffing. Sent via the private `send` (any-cast) because
+   * RpcClient.prompt() does not expose the parameter.
    */
   async prompt(text: string): Promise<void> {
-    if (!this.client) throw new Error("pi RPC not connected");
-    try {
-      await this.client.prompt(text);
-    } catch (err) {
-      if (/streaming/i.test((err as Error).message)) {
-        await this.client.steer(text);
-      } else {
-        throw err;
-      }
+    await this.sendPrompt(text, "steer");
+  }
+
+  /**
+   * Queue a message without disturbing the running task (pi TUI Alt+Enter
+   * semantics): lands in the followUp queue while streaming; an idle session
+   * degenerates to a plain prompt (upstream handles that automatically, so no
+   * state check is needed here).
+   */
+  async promptQueued(text: string): Promise<void> {
+    await this.sendPrompt(text, "followUp");
+  }
+
+  /** Resolve once the agent settles ("agent_settled"). Rejects on timeout (ms). */
+  async waitForIdle(timeout?: number): Promise<void> {
+    await this.requireClient().waitForIdle(timeout);
+  }
+
+  /** Raw `prompt` command with an explicit streaming behavior, via private send. */
+  private async sendPrompt(text: string, streamingBehavior: "steer" | "followUp"): Promise<void> {
+    const client = this.requireClient() as unknown as {
+      send: (command: {
+        type: "prompt";
+        message: string;
+        streamingBehavior: "steer" | "followUp";
+      }) => Promise<{ success: boolean; error?: string }>;
+    };
+    const response = await client.send({ type: "prompt", message: text, streamingBehavior });
+    if (!response.success) {
+      throw new Error(response.error ?? "prompt failed");
     }
   }
 

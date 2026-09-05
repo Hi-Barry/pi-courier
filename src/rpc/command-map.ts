@@ -18,10 +18,77 @@
 import { adminCommandHelpText } from "../auth/admin-commands.js";
 import type { PiRpc } from "./pi-rpc.js";
 
+/** Mirror of the upstream steering/followUp queues (router's queue_update view). */
+export interface QueueSnapshot {
+  steering: string[];
+  followUp: string[];
+}
+
 export interface SlashCommandContext {
   rpc: PiRpc;
   /** Send a reply back to the originating chat */
   reply: (text: string) => Promise<void>;
+  /** Live queue snapshot maintained by the router (queue_update mirror).
+   *  Absent/undefined entries mean "no queue seen yet" = empty. */
+  queueView?: () => QueueSnapshot | undefined;
+}
+
+/** Collapse a queue entry to one bounded line for chat display. */
+function truncateLine(text: string, max = 120): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
+}
+
+/**
+ * Unified queue warning for /stop and /interrupt replies: abort preserves the
+ * upstream queues (RPC has no clear_queue), so remaining messages would fire
+ * on the NEXT turn — surface that explicitly. Null when nothing is queued.
+ */
+export function queueWarning(snapshot: QueueSnapshot | undefined): string | null {
+  const steering = snapshot?.steering ?? [];
+  const followUp = snapshot?.followUp ?? [];
+  const total = steering.length + followUp.length;
+  if (total === 0) return null;
+  const lines = [...steering, ...followUp].map((m) => `- ${truncateLine(m)}`);
+  return `⚠️ 队列中仍有 ${total} 条消息将在下一轮生效:\n${lines.join("\n")}`;
+}
+
+/** Append the queue warning (if any) to a reply line. */
+function withQueueWarning(replyText: string, snapshot: QueueSnapshot | undefined): string {
+  const warning = queueWarning(snapshot);
+  return warning ? `${replyText}\n${warning}` : replyText;
+}
+
+/** "/queue" without arguments — render the steering/followUp mirror. */
+async function replyQueueView(rpc: PiRpc, snapshot: QueueSnapshot | undefined, reply: (text: string) => Promise<void>): Promise<void> {
+  const steering = snapshot?.steering ?? [];
+  const followUp = snapshot?.followUp ?? [];
+  if (steering.length === 0 && followUp.length === 0) {
+    await reply("📋 队列为空:没有排队中的 steering / followUp 消息。");
+    return;
+  }
+  const lines: string[] = ["📋 当前消息队列:"];
+  if (steering.length > 0) {
+    lines.push(`steering(${steering.length} 条,注入当前运行):`);
+    for (const m of steering) lines.push(`- ${truncateLine(m)}`);
+  }
+  if (followUp.length > 0) {
+    lines.push(`followUp(${followUp.length} 条,后续轮次执行):`);
+    for (const m of followUp) lines.push(`- ${truncateLine(m)}`);
+  }
+  // Cross-check the in-memory mirror against upstream's pendingMessageCount —
+  // a mismatch means the mirror is stale (e.g. events were missed); upstream wins.
+  try {
+    const state = await rpc.getState();
+    const upstream = state.pendingMessageCount;
+    const mirrored = steering.length + followUp.length;
+    if (typeof upstream === "number" && upstream !== mirrored) {
+      lines.push(`ℹ️ 上游报告待处理 ${upstream} 条(本地镜像 ${mirrored} 条),以实际执行为准。`);
+    }
+  } catch {
+    // get_state unavailable — the mirror-only view still stands.
+  }
+  await reply(lines.join("\n"));
 }
 
 /** Returns true if the command was handled (something was done / replied). */
@@ -29,7 +96,7 @@ export async function handleSlashCommand(
   text: string,
   ctx: SlashCommandContext
 ): Promise<boolean> {
-  const { rpc, reply } = ctx;
+  const { rpc, reply, queueView } = ctx;
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return false;
 
@@ -61,7 +128,40 @@ export async function handleSlashCommand(
       case "/stop":
       case "/abort": {
         await rpc.abort();
-        await reply("🛑 已停止所有任务,等待下一步指示。");
+        // abort preserves the upstream queues (RPC has no clear_queue) — the
+        // warning makes that limitation explicit instead of surprising the user.
+        await reply(withQueueWarning("🛑 已停止所有任务,等待下一步指示。", queueView?.()));
+        return true;
+      }
+
+      // --- Send semantics (pi TUI parity) -------------------------------------
+      case "/queue": {
+        if (!args) {
+          await replyQueueView(rpc, queueView?.(), reply);
+          return true;
+        }
+        // Alt+Enter semantics: followUp queue while streaming; an idle session
+        // degenerates to a plain prompt upstream (deliberately no state check).
+        await rpc.promptQueued(args);
+        await reply("📥 已排队:不打断当前任务,将在空闲后自动执行。");
+        return true;
+      }
+
+      case "/interrupt": {
+        if (!args) {
+          await reply("用法: /interrupt <新指令> — 打断当前任务并立即下发新指令。");
+          return true;
+        }
+        const state = await rpc.getState();
+        if (!state.isStreaming) {
+          await rpc.prompt(args);
+          await reply("▶️ 当前没有运行中的任务,已直接下发新指令。");
+          return true;
+        }
+        await rpc.abort();
+        await rpc.waitForIdle();
+        await rpc.prompt(args);
+        await reply(withQueueWarning("🛑 已打断,新指令已发出。", queueView?.()));
         return true;
       }
 
@@ -234,6 +334,8 @@ function helpText(): string {
     "• `/name <名字>` — 会话命名",
     "• `/export [路径]` — 导出会话 HTML",
     "• `/bash <命令>` — 执行 shell 命令(写入上下文)",
+    "• `/queue [文本]` — 无参:查看队列;带文本:排队不打断当前任务(≈ Alt+Enter)",
+    "• `/interrupt <新指令>` — 打断当前任务并立即下发新指令(一条消息完成)",
     "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)",
     "• `/reload` — 重启 pi 进程(装插件/改配置后使用)",
     "• `/pmctl new <名称> <路径>` — 创建项目(管理房间)",
