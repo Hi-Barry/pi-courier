@@ -10,6 +10,7 @@ import * as os from "node:os";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth, namespacedId } from "../auth/challenge-auth.js";
+import { LoginManager } from "../auth/headless-login.js";
 import { type ConfigStore, defaultProjectsRoot } from "../config.js";
 import {
   extractTextFromMessage,
@@ -48,6 +49,10 @@ export interface MessageRouterDeps {
    *  reserved for the degraded path (space ensure failed this run). Absent
    *  = always allowed (legacy deployments). */
   managementRoomAdoptionAllowed?: () => boolean;
+  /** Headless login (issue #55): owns /login /logout /auth and captures the
+   *  answers of in-flight login flows. Injected by tests (mock runtime);
+   *  defaults to a real ModelRuntime at pi's standard credential file. */
+  login?: LoginManager;
 }
 
 export interface MessageRouter {
@@ -214,6 +219,15 @@ export function withQuotePrefix(
 
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const { projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl, managementRoomAdoptionAllowed } = deps;
+  // Headless login (issue #55): /login /logout /auth + answer capture. The
+  // default manager writes credentials straight to pi's auth.json via an
+  // independent ModelRuntime (never through the RPC subprocesses).
+  const login =
+    deps.login ??
+    new LoginManager({
+      sendReply,
+      allRpcs: () => projectManager.allRpcs(),
+    });
   const bindings = new WeakMap<PiRpc, RoomBinding>();
   const bindReplyTarget = (rpc: PiRpc, replyTarget: ReplyTarget, pinned: boolean): void => {
     bindings.set(rpc, { pinned, replyTarget });
@@ -519,6 +533,44 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         return;
       }
 
+      // Headless login (issue #55): /login /logout /auth — admin + management
+      // room only. Single-project mode has no management room: a DM counts as
+      // one (that is where the admin talks to the bot there).
+      if (/^\/(login|logout|auth)(\s|$)/.test(text)) {
+        const loginRoomAllowed = multiProject
+          ? isManagementRoom
+          : !msg.isGroupChat;
+        if (!auth.isAdminUser(msg.userId, msg.transport)) {
+          await sendReply(msg.chatId, msg.transport, "❌ 无权限(仅管理员可管理 provider 登录)");
+          return;
+        }
+        if (!loginRoomAllowed) {
+          await sendReply(msg.chatId, msg.transport, "❌ 登录管理仅可在管理房间使用(单工程模式下与 bot 的私聊即可)");
+          return;
+        }
+        const loginCmd = text.split(/\s+/)[0]!.toLowerCase();
+        const loginArgs = text.slice(loginCmd.length).trim();
+        if (loginCmd === "/login") {
+          if (!loginArgs) {
+            await login.listProviders(msg.chatId, msg.transport);
+          } else {
+            const [providerId, method] = loginArgs.split(/\s+/);
+            await login.startLogin(msg.chatId, msg.transport, providerId!, method);
+          }
+          return;
+        }
+        if (loginCmd === "/logout") {
+          if (!loginArgs) {
+            await sendReply(msg.chatId, msg.transport, "用法: /logout <provider>");
+            return;
+          }
+          await login.logout(msg.chatId, msg.transport, loginArgs.split(/\s+/)[0]!);
+          return;
+        }
+        await login.authStatus(msg.chatId, msg.transport);
+        return;
+      }
+
       // Slash commands → RPC mapping (builtin) or passthrough (extensions/skills/templates)
       if (text.startsWith("/")) {
         try {
@@ -526,6 +578,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             rpc: roomRpc,
             reply: async (replyText) => sendReply(msg.chatId, msg.transport, replyText),
             queueView: () => queueMirrors.get(roomRpc),
+            allRpcs: () => projectManager.allRpcs(),
           });
           if (handled) return;
         } catch (err) {
@@ -534,13 +587,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         }
       }
 
-      // Extension UI answer capture (issue #54): while a question is pending
-      // for this room, the next plain message IS the answer — "/" messages
-      // always went through the command channel above and never count.
-      // Only the oldest pending question takes the answer, and only from the
-      // room it was asked in (a parallel DM to the same shared rpc must not
-      // have its prompt eaten as an "answer").
+      // Answer capture for plain (non-"/") messages. Login flows (issue #55)
+      // capture FIRST — while a login waits in this room its answer wins over
+      // any pending extension_ui question (ticket requirement); 「取消」 aborts
+      // the login at any moment. Messages arriving between prompts (OAuth
+      // polling) are NOT consumed — the room stays usable during long waits.
       if (!text.startsWith("/")) {
+        if (login.isPending(msg.chatId) && (await login.deliver(msg.chatId, text))) {
+          return;
+        }
         const queue = pendingQuestions.get(roomRpc);
         const oldest = queue?.[0];
         if (oldest && oldest.target.chatId === msg.chatId) {

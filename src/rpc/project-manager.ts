@@ -104,6 +104,14 @@ export class ProjectManager {
     return this.projectRpcs.has(roomId);
   }
 
+  /** Every rpc of this instance: the shared default first, then all started
+   *  project rpcs (issue #55: login success + /reload all restart the idle
+   *  ones so pi subprocesses re-read the credential file). Not-yet-started
+   *  projects are absent by design — their first start reads the fresh file. */
+  allRpcs(): PiRpc[] {
+    return [this.defaultRpc, ...this.projectRpcs.values()];
+  }
+
   private async getProjectRpc(roomId: string, entry: ProjectEntry): Promise<PiRpc> {
     const existing = this.projectRpcs.get(roomId);
     if (existing) {
