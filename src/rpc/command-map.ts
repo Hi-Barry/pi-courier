@@ -34,6 +34,9 @@ export interface SlashCommandContext {
   /** Live queue snapshot maintained by the router (queue_update mirror).
    *  Absent/undefined entries mean "no queue seen yet" = empty. */
   queueView?: () => QueueSnapshot | undefined;
+  /** Every rpc of this instance (default + started project rpcs) — enables
+   *  `/reload all` (issue #55). Absent = /reload stays single-process. */
+  allRpcs?: () => PiRpc[];
 }
 
 /** Collapse a queue entry to one bounded line for chat display. */
@@ -60,6 +63,67 @@ export function queueWarning(snapshot: QueueSnapshot | undefined): string | null
 function withQueueWarning(replyText: string, snapshot: QueueSnapshot | undefined): string {
   const warning = queueWarning(snapshot);
   return warning ? `${replyText}\n${warning}` : replyText;
+}
+
+// --- Instance-wide restart (/reload all + login success — issue #55) --------
+
+export interface ReloadAllResult {
+  /** Labels of rpcs that were idle and got restarted. */
+  restarted: string[];
+  /** Labels of rpcs that were streaming — skipped, need a later /reload. */
+  busy: string[];
+  /** Labels of rpcs that could not be queried (not started / unreachable) —
+   *  they pick the new credentials up on their next start anyway. */
+  skipped: string[];
+}
+
+/** The display name of an rpc in reload summaries (project label or 默认). */
+function rpcDisplayName(rpc: PiRpc): string {
+  return rpc.label ?? "默认";
+}
+
+/**
+ * Restart every IDLE rpc of the instance so a fresh pi subprocess re-reads
+ * pi's credential/config files (issue #55: after /login writes credentials,
+ * and for /reload all). Busy (streaming) rpcs are skipped — an abrupt restart
+ * would kill a running turn; the room is told to /reload them later.
+ * Unqueryable rpcs (lazy, never started) are skipped: their FIRST start reads
+ * the fresh file anyway.
+ */
+export async function restartIdleRpcs(rpcs: readonly PiRpc[]): Promise<ReloadAllResult> {
+  const result: ReloadAllResult = { restarted: [], busy: [], skipped: [] };
+  for (const rpc of rpcs) {
+    const name = rpcDisplayName(rpc);
+    try {
+      const state = await rpc.getState();
+      if (state.isStreaming) {
+        result.busy.push(name);
+        continue;
+      }
+      await rpc.restart();
+      result.restarted.push(name);
+    } catch {
+      result.skipped.push(name);
+    }
+  }
+  return result;
+}
+
+/** Render a reload summary for the room. Pure — directly testable. */
+export function formatReloadAllResult(result: ReloadAllResult): string {
+  const parts: string[] = [];
+  parts.push(
+    result.restarted.length > 0
+      ? `✅ 已重启 ${result.restarted.length} 个空闲进程: ${result.restarted.join("、")}`
+      : "💤 没有需要重启的空闲进程"
+  );
+  if (result.busy.length > 0) {
+    parts.push(`⚠️ 跳过 ${result.busy.length} 个忙碌进程: ${result.busy.join("、")}(完成后执行 /reload all)`);
+  }
+  if (result.skipped.length > 0) {
+    parts.push(`⏭️ 未启动/不可达(下次启动自动读取新配置): ${result.skipped.join("、")}`);
+  }
+  return parts.join("\n");
 }
 
 /** "/queue" without arguments — render the steering/followUp mirror. */
@@ -344,6 +408,17 @@ export async function handleSlashCommand(
       }
 
       case "/reload": {
+        // /reload all (issue #55): every rpc of the instance, idle ones only.
+        if (args === "all") {
+          if (!ctx.allRpcs) {
+            await reply("❌ /reload all 不可用(当前部署未启用多进程枚举)。");
+            return true;
+          }
+          await reply("🔄 正在逐个重启全部 pi 进程(空闲才重启,忙碌跳过)…");
+          const result = await restartIdleRpcs(ctx.allRpcs());
+          await reply(formatReloadAllResult(result));
+          return true;
+        }
         await reply("🔄 正在重启 pi 进程(扩展/技能/配置将重新加载)…");
         try {
           await rpc.restart();
@@ -521,7 +596,10 @@ function helpText(): string {
     "• `/queue [文本]` — 无参:查看队列;带文本:排队不打断当前任务(≈ Alt+Enter)",
     "• `/interrupt <新指令>` — 打断当前任务并立即下发新指令(一条消息完成)",
     "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)",
-    "• `/reload` — 重启 pi 进程(装插件/改配置后使用)",
+    "• `/reload` — 重启 pi 进程(装插件/改配置后使用);`/reload all` — 重启本实例全部进程(空闲才重启,忙碌跳过)",
+    "• `/login [provider [oauth|api_key]]` — 无参:可登录 provider 列表;带参:无头登录(仅管理员 + 管理房间)",
+    "• `/logout <provider>` — 删除 provider 凭据(仅管理员 + 管理房间)",
+    "• `/auth` — 查看已保存的 provider 凭据(仅管理员 + 管理房间)",
     "• `/pmctl new <名称> <路径>` — 创建项目(管理房间)",
     "• `/pmctl list` — 项目列表",
     "• `/pmctl show|rm|mv|rename` — 项目详情/删除/迁移/重命名(管理房间;",
