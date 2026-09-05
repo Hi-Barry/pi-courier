@@ -56,3 +56,47 @@ describe("PiRpc send semantics (issue #53 ticket 2)", () => {
     expect(client.waitForIdle).toHaveBeenCalledWith(1234);
   });
 });
+
+/**
+ * respondExtensionUI (issue #54): RpcClient has no public method for
+ * extension_ui_response and its generic send() overwrites the command id —
+ * so the payload must go straight to the child process's stdin as one JSONL
+ * line. White-box: `client` is private, the fake records the written lines.
+ */
+describe("PiRpc respondExtensionUI (issue #54)", () => {
+  function withFakeStdin(): { rpc: PiRpc; write: SendMock } {
+    const write = vi.fn();
+    const rpc = new PiRpc();
+    (rpc as unknown as { client: unknown }).client = {
+      process: { stdin: { write, destroyed: false, writable: true } },
+    };
+    return { rpc, write };
+  }
+
+  it("writes one strict JSONL extension_ui_response line (confirmed payload)", async () => {
+    const { rpc, write } = withFakeStdin();
+    await rpc.respondExtensionUI({ id: "ext-1", confirmed: true });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(`${JSON.stringify({ type: "extension_ui_response", id: "ext-1", confirmed: true })}\n`);
+  });
+
+  it("value and cancelled payloads carry their own wire fields", async () => {
+    const { rpc, write } = withFakeStdin();
+    await rpc.respondExtensionUI({ id: "ext-2", value: "prod" });
+    await rpc.respondExtensionUI({ id: "ext-3", cancelled: true });
+    expect(write).toHaveBeenNthCalledWith(1, `${JSON.stringify({ type: "extension_ui_response", id: "ext-2", value: "prod" })}\n`);
+    expect(write).toHaveBeenNthCalledWith(2, `${JSON.stringify({ type: "extension_ui_response", id: "ext-3", cancelled: true })}\n`);
+  });
+
+  it("throws when the pi process is gone (stdin destroyed/not writable)", async () => {
+    const rpc = new PiRpc();
+    (rpc as unknown as { client: unknown }).client = {
+      process: { stdin: { write: vi.fn(), destroyed: true, writable: false } },
+    };
+    await expect(rpc.respondExtensionUI({ id: "x", cancelled: true })).rejects.toThrow("stdin is not writable");
+  });
+
+  it("throws when not connected at all", async () => {
+    await expect(new PiRpc().respondExtensionUI({ id: "x", cancelled: true })).rejects.toThrow("pi RPC not connected");
+  });
+});
