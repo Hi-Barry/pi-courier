@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import { buildLogFilterArgs } from "./log-filter.js";
 import { projectLabelOf } from "./project-labels.js";
+import { busFailureHint, dirOwnerUid } from "./systemd-hint.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
 suppressKnownWarnings();
@@ -156,18 +157,57 @@ function cmdEnable(): void {
   fs.writeFileSync(unitPath, unit);
   console.log(`📝 已写入 ${unitPath}`);
 
-  runSystemctl(["daemon-reload"]);
-  runSystemctl(["enable", "--now", SERVICE_NAME]);
+  // Issue #60: daemon-reload and enable --now are independent steps — failing
+  // one must not hide whether the other ran, and the user must never be left
+  // guessing whether the service is actually enabled.
+  const failed: string[] = [];
+  if (systemctlUser(["daemon-reload"]) !== 0) failed.push("daemon-reload");
+  if (systemctlUser(["enable", "--now", SERVICE_NAME]) !== 0) failed.push(`enable --now ${SERVICE_NAME}`);
+  if (failed.length > 0) {
+    console.error(`❌ 服务未能启用(unit 文件已写入,但 systemd 操作失败: ${failed.join(", ")})。`);
+    process.exit(1);
+  }
   console.log("✅ 服务已启用并启动(开机自启)。");
   console.log(`   日志: journalctl --user -u ${SERVICE_NAME} -f`);
 }
 
-function runSystemctl(args: string[]): void {
-  const res = spawnSync("systemctl", ["--user", ...args], { stdio: "inherit" });
-  if (res.status !== 0) {
-    console.error(`❌ systemctl ${args.join(" ")} 失败(退出码 ${res.status})`);
-    process.exit(res.status ?? 1);
+/** Issue #59: append the targeted `su`-trap hint when a systemctl failure
+ *  looks like the bus-owner mismatch (XDG_RUNTIME_DIR inherited from another
+ *  user via `su` without `-`). No-op for every other failure. */
+function printBusHint(stderr?: string): void {
+  const hint = busFailureHint({
+    euid: typeof process.getuid === "function" ? process.getuid() : -1,
+    xdgRuntimeDir: process.env.XDG_RUNTIME_DIR,
+    xdgOwnerUid: dirOwnerUid(process.env.XDG_RUNTIME_DIR),
+    stderr,
+  });
+  if (hint) console.error(hint);
+}
+
+/** Spawn `systemctl --user ...` with stderr captured (but still echoed).
+ *  Shared by every caller so the su-trap hint always has stderr to inspect. */
+function spawnSystemctlUser(args: string[]): { status: number; stderr: string } {
+  const res = spawnSync("systemctl", ["--user", ...args], { stdio: ["inherit", "inherit", "pipe"] });
+  const stderr = res.stderr?.toString() ?? "";
+  if (stderr) process.stderr.write(stderr);
+  return { status: res.status ?? 1, stderr };
+}
+
+/** Run `systemctl --user ...`, appending the targeted su-trap hint on
+ *  failure (issue #59). Returns the exit code (0 = ok). */
+function systemctlUser(args: string[]): number {
+  const { status, stderr } = spawnSystemctlUser(args);
+  if (status !== 0) {
+    console.error(`❌ systemctl ${args.join(" ")} 失败(退出码 ${status})`);
+    printBusHint(stderr);
   }
+  return status;
+}
+
+/** systemctlUser + exit-on-failure — the historical runSystemctl contract. */
+function runSystemctl(args: string[]): void {
+  const code = systemctlUser(args);
+  if (code !== 0) process.exit(code);
 }
 
 /** Project labels from the config (the single source `log-filter` matches against). */
@@ -186,7 +226,13 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
   if (action === "logs" || action === "status") {
     // status first shows the unit itself (systemctl), then the log window.
     if (action === "status") {
-      spawnSync("systemctl", ["--user", "status", SERVICE_NAME], { stdio: "inherit" });
+      const st = spawnSystemctlUser(["status", SERVICE_NAME]);
+      if (st.status !== 0) {
+        // Issue #61: the journal window below shows HISTORY — without this
+        // line a dead service's old logs read like "the service is running".
+        console.error(`⚠️ 服务状态查询失败(退出码 ${st.status})——以下为 journald 历史日志,不代表服务当前在运行。`);
+        printBusHint(st.stderr);
+      }
     }
     // Split args: `--level <lvl>` option vs positional project labels.
     let level = "info";
@@ -224,9 +270,10 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
     return;
   }
   const cmd = ["systemctl", "--user", action, SERVICE_NAME];
-  const res = spawnSync(cmd[0], cmd.slice(1), { stdio: "inherit" });
-  if (res.status !== 0) {
-    process.exit(res.status ?? 1);
+  const { status, stderr } = spawnSystemctlUser(cmd.slice(2));
+  if (status !== 0) {
+    printBusHint(stderr);
+    process.exit(status);
   }
 }
 
@@ -237,7 +284,11 @@ function cmdDisable(): void {
     process.exit(1);
   }
   // Stop + remove from autostart, then delete the unit file (full uninstall).
-  runSystemctl(["disable", "--now", SERVICE_NAME]);
+  if (systemctlUser(["disable", "--now", SERVICE_NAME]) !== 0) {
+    // Issue #60: the failure path must not delete the unit — say so explicitly.
+    console.error("ℹ️ unit 文件已保留,修复环境后可再次 `pi-courier disable` 或直接 `pi-courier enable`。");
+    process.exit(1);
+  }
   fs.rmSync(unitPath, { force: true });
   runSystemctl(["daemon-reload"]);
   console.log("✅ 服务已停止并卸载。以后要恢复:`pi-courier enable`(配置不受影响)。");

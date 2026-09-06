@@ -619,3 +619,116 @@ describe("space ensure", () => {
     expect(roomOps.inviteUser).not.toHaveBeenCalled();
   });
 });
+
+describe("invite-once idempotency (issue #62 — already in the room)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-courier-space-invite-"));
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function importInviteModules() {
+    vi.doMock("os", async () => {
+      const actual = await vi.importActual<typeof import("os")>("os");
+      return { ...actual, homedir: () => tmpDir };
+    });
+    vi.doMock("node:os", async () => {
+      const actual = await vi.importActual<typeof import("os")>("os");
+      return { ...actual, homedir: () => tmpDir };
+    });
+    const config = await import("../src/config");
+    const space = await import("../src/space");
+    const loggerModule = await import("../src/logger");
+    return { config, space, loggerModule };
+  }
+
+  function makeRoomOps(overrides: Record<string, unknown> = {}) {
+    return {
+      inviteUser: vi.fn().mockResolvedValue(undefined),
+      ...overrides,
+    };
+  }
+
+  const ALREADY_IN_ROOM = new Error("M_FORBIDDEN: @barry:matrix.purplelin.com is already in the room.");
+  const OTHER_FORBIDDEN = new Error("M_FORBIDDEN: You are not allowed to invite users.");
+
+  it("space invite: already in the room records the user, logs info, returns true", async () => {
+    const { config, space, loggerModule } = await importInviteModules();
+    const warnSpy = vi.spyOn(loggerModule.logger, "warn");
+    const infoSpy = vi.spyOn(loggerModule.logger, "info");
+    const store = new config.ConfigStore({
+      multiProject: true,
+      space: { enabled: true, roomId: "!space:server" },
+    });
+    const roomOps = makeRoomOps({ inviteUser: vi.fn().mockRejectedValue(ALREADY_IN_ROOM) });
+    const invited = await space.inviteUserToSpaceOnce(roomOps as unknown as RoomOps, store, "matrix:@barry:server");
+    expect(invited).toBe(true);
+    expect(store.get().space?.invitedUsers).toEqual(["matrix:@barry:server"]);
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining("已在空间"));
+    expect(warnSpy).not.toHaveBeenCalled();
+    // Fire-once holds: a second call is a no-op (no extra homeserver hit).
+    const again = await space.inviteUserToSpaceOnce(roomOps as unknown as RoomOps, store, "matrix:@barry:server");
+    expect(again).toBe(false);
+    expect(roomOps.inviteUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("space invite: other M_FORBIDDEN reasons still warn and stay unrecorded", async () => {
+    const { config, space, loggerModule } = await importInviteModules();
+    const warnSpy = vi.spyOn(loggerModule.logger, "warn");
+    const store = new config.ConfigStore({
+      multiProject: true,
+      space: { enabled: true, roomId: "!space:server" },
+    });
+    const roomOps = makeRoomOps({ inviteUser: vi.fn().mockRejectedValue(OTHER_FORBIDDEN) });
+    const invited = await space.inviteUserToSpaceOnce(roomOps as unknown as RoomOps, store, "matrix:@barry:server");
+    expect(invited).toBe(false);
+    expect(store.get().space?.invitedUsers).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("失败(下次启动自愈)"));
+  });
+
+  it("management-room invite: already in the room records the user and logs info", async () => {
+    const { config, space, loggerModule } = await importInviteModules();
+    const warnSpy = vi.spyOn(loggerModule.logger, "warn");
+    const infoSpy = vi.spyOn(loggerModule.logger, "info");
+    const store = new config.ConfigStore({
+      multiProject: true,
+      space: { enabled: true, roomId: "!space:server" },
+      managementRooms: ["!mgmt:server"],
+    });
+    const roomOps = makeRoomOps({ inviteUser: vi.fn().mockRejectedValue(ALREADY_IN_ROOM) });
+    const invited = await space.inviteUserToManagementRoomOnce(
+      roomOps as unknown as RoomOps,
+      store,
+      "matrix:@barry:server"
+    );
+    expect(invited).toBe(true);
+    expect(store.get().space?.managementInvitedUsers).toEqual(["matrix:@barry:server"]);
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining("已在管理房间"));
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("management-room invite: other M_FORBIDDEN reasons still warn and stay unrecorded", async () => {
+    const { config, space, loggerModule } = await importInviteModules();
+    const warnSpy = vi.spyOn(loggerModule.logger, "warn");
+    const store = new config.ConfigStore({
+      multiProject: true,
+      space: { enabled: true, roomId: "!space:server" },
+      managementRooms: ["!mgmt:server"],
+    });
+    const roomOps = makeRoomOps({ inviteUser: vi.fn().mockRejectedValue(OTHER_FORBIDDEN) });
+    const invited = await space.inviteUserToManagementRoomOnce(
+      roomOps as unknown as RoomOps,
+      store,
+      "matrix:@barry:server"
+    );
+    expect(invited).toBe(false);
+    expect(store.get().space?.managementInvitedUsers).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("失败(下次启动自愈)"));
+  });
+});
