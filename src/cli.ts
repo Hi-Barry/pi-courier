@@ -219,7 +219,15 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
   if (action === "logs" || action === "status") {
     // status first shows the unit itself (systemctl), then the log window.
     if (action === "status") {
-      spawnSync("systemctl", ["--user", "status", SERVICE_NAME], { stdio: "inherit" });
+      const st = spawnSync("systemctl", ["--user", "status", SERVICE_NAME], { stdio: ["inherit", "inherit", "pipe"] });
+      const stderr = st.stderr?.toString();
+      if (stderr) process.stderr.write(stderr);
+      if (st.status !== 0) {
+        // Issue #61: the journal window below shows HISTORY — without this
+        // line a dead service's old logs read like "the service is running".
+        console.error(`⚠️ 服务状态查询失败(退出码 ${st.status})——以下为 journald 历史日志,不代表服务当前在运行。`);
+        printBusHint(stderr);
+      }
     }
     // Split args: `--level <lvl>` option vs positional project labels.
     let level = "info";
