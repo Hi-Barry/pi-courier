@@ -298,6 +298,15 @@ export async function inviteUserToSpaceOnce(
     logger.info(`[space] 信任用户已邀请进空间: ${namespacedUser}`);
     return true;
   } catch (err) {
+    if (isAlreadyInRoomError(err)) {
+      // Issue #62: the invite's goal state is already reached — record it so
+      // the startup self-heal stops re-inviting (and failing) on every boot.
+      store.update({
+        space: { ...(store.get().space ?? {}), roomId: spaceId, invitedUsers: [...invited, namespacedUser] },
+      });
+      logger.info(`[space] ${namespacedUser} 已在空间,无需重复邀请`);
+      return true;
+    }
     logger.warn(`[space] 邀请 ${namespacedUser} 进空间失败(下次启动自愈): ${(err as Error).message}`);
     return false;
   }
@@ -331,7 +340,23 @@ export async function inviteUserToManagementRoomOnce(
     logger.info(`[space] 信任用户已邀请进管理房间: ${namespacedUser}`);
     return true;
   } catch (err) {
+    if (isAlreadyInRoomError(err)) {
+      // Issue #62: same as the space twin — already in the room means done.
+      store.update({
+        space: { ...(store.get().space ?? {}), managementInvitedUsers: [...invited, namespacedUser] },
+      });
+      logger.info(`[space] ${namespacedUser} 已在管理房间,无需重复邀请`);
+      return true;
+    }
     logger.warn(`[space] 邀请 ${namespacedUser} 进管理房间失败(下次启动自愈): ${(err as Error).message}`);
     return false;
   }
+}
+
+/** Issue #62: an M_FORBIDDEN "already in the room" rejection means the
+ *  invite's goal is already met — the user is in. Treating it as a failure
+ *  made the startup self-heal re-invite (and fail) on every boot. */
+export function isAlreadyInRoomError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /M_FORBIDDEN/.test(message) && /already in the room/i.test(message);
 }

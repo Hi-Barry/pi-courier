@@ -45,7 +45,7 @@ describe("dirOwnerUid", () => {
   it("resolves the owning uid of an existing directory", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-courier-hint-"));
     try {
-      expect(dirOwnerUid(dir)).toBe(process.getuid());
+      expect(dirOwnerUid(dir)).toBe(typeof process.getuid === "function" ? process.getuid() : -1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
