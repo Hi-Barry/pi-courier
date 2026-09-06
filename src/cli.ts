@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import { buildLogFilterArgs } from "./log-filter.js";
 import { projectLabelOf } from "./project-labels.js";
+import { busFailureHint, dirOwnerUid } from "./systemd-hint.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
 suppressKnownWarnings();
@@ -162,12 +163,36 @@ function cmdEnable(): void {
   console.log(`   日志: journalctl --user -u ${SERVICE_NAME} -f`);
 }
 
-function runSystemctl(args: string[]): void {
-  const res = spawnSync("systemctl", ["--user", ...args], { stdio: "inherit" });
+/** Issue #59: append the targeted `su`-trap hint when a systemctl failure
+ *  looks like the bus-owner mismatch (XDG_RUNTIME_DIR inherited from another
+ *  user via `su` without `-`). No-op for every other failure. */
+function printBusHint(stderr?: string): void {
+  const hint = busFailureHint({
+    euid: typeof process.getuid === "function" ? process.getuid() : -1,
+    xdgRuntimeDir: process.env.XDG_RUNTIME_DIR,
+    xdgOwnerUid: dirOwnerUid(process.env.XDG_RUNTIME_DIR),
+    stderr,
+  });
+  if (hint) console.error(hint);
+}
+
+/** Run `systemctl --user ...`, echoing stderr and appending the targeted
+ *  su-trap hint on failure (issue #59). Returns the exit code (0 = ok). */
+function systemctlUser(args: string[]): number {
+  const res = spawnSync("systemctl", ["--user", ...args], { stdio: ["inherit", "inherit", "pipe"] });
+  const stderr = res.stderr?.toString();
+  if (stderr) process.stderr.write(stderr);
   if (res.status !== 0) {
     console.error(`❌ systemctl ${args.join(" ")} 失败(退出码 ${res.status})`);
-    process.exit(res.status ?? 1);
+    printBusHint(stderr);
   }
+  return res.status ?? 1;
+}
+
+/** systemctlUser + exit-on-failure — the historical runSystemctl contract. */
+function runSystemctl(args: string[]): void {
+  const code = systemctlUser(args);
+  if (code !== 0) process.exit(code);
 }
 
 /** Project labels from the config (the single source `log-filter` matches against). */
@@ -224,8 +249,11 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
     return;
   }
   const cmd = ["systemctl", "--user", action, SERVICE_NAME];
-  const res = spawnSync(cmd[0], cmd.slice(1), { stdio: "inherit" });
+  const res = spawnSync(cmd[0], cmd.slice(1), { stdio: ["inherit", "inherit", "pipe"] });
+  const stderr = res.stderr?.toString();
+  if (stderr) process.stderr.write(stderr);
   if (res.status !== 0) {
+    printBusHint(stderr);
     process.exit(res.status ?? 1);
   }
 }
