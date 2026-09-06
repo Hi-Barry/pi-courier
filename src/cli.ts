@@ -157,8 +157,16 @@ function cmdEnable(): void {
   fs.writeFileSync(unitPath, unit);
   console.log(`📝 已写入 ${unitPath}`);
 
-  runSystemctl(["daemon-reload"]);
-  runSystemctl(["enable", "--now", SERVICE_NAME]);
+  // Issue #60: daemon-reload and enable --now are independent steps — failing
+  // one must not hide whether the other ran, and the user must never be left
+  // guessing whether the service is actually enabled.
+  const failed: string[] = [];
+  if (systemctlUser(["daemon-reload"]) !== 0) failed.push("daemon-reload");
+  if (systemctlUser(["enable", "--now", SERVICE_NAME]) !== 0) failed.push(`enable --now ${SERVICE_NAME}`);
+  if (failed.length > 0) {
+    console.error(`❌ 服务未能启用(unit 文件已写入,但 systemd 操作失败: ${failed.join(", ")})。`);
+    process.exit(1);
+  }
   console.log("✅ 服务已启用并启动(开机自启)。");
   console.log(`   日志: journalctl --user -u ${SERVICE_NAME} -f`);
 }
@@ -265,7 +273,11 @@ function cmdDisable(): void {
     process.exit(1);
   }
   // Stop + remove from autostart, then delete the unit file (full uninstall).
-  runSystemctl(["disable", "--now", SERVICE_NAME]);
+  if (systemctlUser(["disable", "--now", SERVICE_NAME]) !== 0) {
+    // Issue #60: the failure path must not delete the unit — say so explicitly.
+    console.error("ℹ️ unit 文件已保留,修复环境后可再次 `pi-courier disable` 或直接 `pi-courier enable`。");
+    process.exit(1);
+  }
   fs.rmSync(unitPath, { force: true });
   runSystemctl(["daemon-reload"]);
   console.log("✅ 服务已停止并卸载。以后要恢复:`pi-courier enable`(配置不受影响)。");
