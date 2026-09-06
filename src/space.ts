@@ -276,11 +276,35 @@ export async function demoteTrustedUserEverywhere(
   return true;
 }
 
-/** Fire-once space invite for ONE namespaced user: space.invitedUsers records
- *  every user we have invited (decliners included) so nobody is pinged twice.
- *  A failed invite is NOT recorded — the startup ensure self-heals it.
- *  Single implementation shared by the router's spaceInvite effect and the
- *  ensure's self-heal pass. Returns true when the invite went out. */
+/** Shared invite outcome (issue #62): whether the invite went out or the
+ *  user was already in the room, the bookkeeping write is the same — one
+ *  list key gets the user appended. Already-in-room logs at info with its
+ *  own phrasing so the two cases stay distinguishable in the journal. */
+function recordInvited(
+  store: ConfigStore,
+  listKey: "invitedUsers" | "managementInvitedUsers",
+  invited: string[],
+  namespacedUser: string,
+  already: boolean,
+  where: string
+): true {
+  store.update({
+    space: { ...(store.get().space ?? {}), [listKey]: [...invited, namespacedUser] },
+  });
+  logger.info(
+    already
+      ? `[space] ${namespacedUser} 已在${where},无需重复邀请`
+      : `[space] 信任用户已邀请进${where}: ${namespacedUser}`
+  );
+  return true;
+}
+
+/** Fire-once space invite for ONE namespaced user. Bookkeeping: space.
+ *  invitedUsers — every user we have invited (decliners included) so nobody
+ *  is pinged twice. A failed invite is NOT recorded — the startup ensure
+ *  self-heals it. Single implementation shared by the router's spaceInvite
+ *  effect and the ensure's self-heal pass. Returns true when the invite
+ *  went out (or was already effectively done — issue #62). */
 export async function inviteUserToSpaceOnce(
   roomOps: RoomOps,
   store: ConfigStore,
@@ -292,20 +316,12 @@ export async function inviteUserToSpaceOnce(
   if (invited.includes(namespacedUser)) return false;
   try {
     await roomOps.inviteUser(spaceId, nativeMxid(namespacedUser));
-    store.update({
-      space: { ...(store.get().space ?? {}), roomId: spaceId, invitedUsers: [...invited, namespacedUser] },
-    });
-    logger.info(`[space] 信任用户已邀请进空间: ${namespacedUser}`);
-    return true;
+    return recordInvited(store, "invitedUsers", invited, namespacedUser, false, "空间");
   } catch (err) {
     if (isAlreadyInRoomError(err)) {
       // Issue #62: the invite's goal state is already reached — record it so
       // the startup self-heal stops re-inviting (and failing) on every boot.
-      store.update({
-        space: { ...(store.get().space ?? {}), roomId: spaceId, invitedUsers: [...invited, namespacedUser] },
-      });
-      logger.info(`[space] ${namespacedUser} 已在空间,无需重复邀请`);
-      return true;
+      return recordInvited(store, "invitedUsers", invited, namespacedUser, true, "空间");
     }
     logger.warn(`[space] 邀请 ${namespacedUser} 进空间失败(下次启动自愈): ${(err as Error).message}`);
     return false;
@@ -334,19 +350,11 @@ export async function inviteUserToManagementRoomOnce(
   if (invited.includes(namespacedUser)) return false;
   try {
     await roomOps.inviteUser(managementRoomId, nativeMxid(namespacedUser));
-    store.update({
-      space: { ...(store.get().space ?? {}), managementInvitedUsers: [...invited, namespacedUser] },
-    });
-    logger.info(`[space] 信任用户已邀请进管理房间: ${namespacedUser}`);
-    return true;
+    return recordInvited(store, "managementInvitedUsers", invited, namespacedUser, false, "管理房间");
   } catch (err) {
     if (isAlreadyInRoomError(err)) {
       // Issue #62: same as the space twin — already in the room means done.
-      store.update({
-        space: { ...(store.get().space ?? {}), managementInvitedUsers: [...invited, namespacedUser] },
-      });
-      logger.info(`[space] ${namespacedUser} 已在管理房间,无需重复邀请`);
-      return true;
+      return recordInvited(store, "managementInvitedUsers", invited, namespacedUser, true, "管理房间");
     }
     logger.warn(`[space] 邀请 ${namespacedUser} 进管理房间失败(下次启动自愈): ${(err as Error).message}`);
     return false;

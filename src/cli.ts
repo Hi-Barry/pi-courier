@@ -184,17 +184,24 @@ function printBusHint(stderr?: string): void {
   if (hint) console.error(hint);
 }
 
-/** Run `systemctl --user ...`, echoing stderr and appending the targeted
- *  su-trap hint on failure (issue #59). Returns the exit code (0 = ok). */
-function systemctlUser(args: string[]): number {
+/** Spawn `systemctl --user ...` with stderr captured (but still echoed).
+ *  Shared by every caller so the su-trap hint always has stderr to inspect. */
+function spawnSystemctlUser(args: string[]): { status: number; stderr: string } {
   const res = spawnSync("systemctl", ["--user", ...args], { stdio: ["inherit", "inherit", "pipe"] });
-  const stderr = res.stderr?.toString();
+  const stderr = res.stderr?.toString() ?? "";
   if (stderr) process.stderr.write(stderr);
-  if (res.status !== 0) {
-    console.error(`❌ systemctl ${args.join(" ")} 失败(退出码 ${res.status})`);
+  return { status: res.status ?? 1, stderr };
+}
+
+/** Run `systemctl --user ...`, appending the targeted su-trap hint on
+ *  failure (issue #59). Returns the exit code (0 = ok). */
+function systemctlUser(args: string[]): number {
+  const { status, stderr } = spawnSystemctlUser(args);
+  if (status !== 0) {
+    console.error(`❌ systemctl ${args.join(" ")} 失败(退出码 ${status})`);
     printBusHint(stderr);
   }
-  return res.status ?? 1;
+  return status;
 }
 
 /** systemctlUser + exit-on-failure — the historical runSystemctl contract. */
@@ -219,14 +226,12 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
   if (action === "logs" || action === "status") {
     // status first shows the unit itself (systemctl), then the log window.
     if (action === "status") {
-      const st = spawnSync("systemctl", ["--user", "status", SERVICE_NAME], { stdio: ["inherit", "inherit", "pipe"] });
-      const stderr = st.stderr?.toString();
-      if (stderr) process.stderr.write(stderr);
+      const st = spawnSystemctlUser(["status", SERVICE_NAME]);
       if (st.status !== 0) {
         // Issue #61: the journal window below shows HISTORY — without this
         // line a dead service's old logs read like "the service is running".
         console.error(`⚠️ 服务状态查询失败(退出码 ${st.status})——以下为 journald 历史日志,不代表服务当前在运行。`);
-        printBusHint(stderr);
+        printBusHint(st.stderr);
       }
     }
     // Split args: `--level <lvl>` option vs positional project labels.
@@ -265,12 +270,10 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
     return;
   }
   const cmd = ["systemctl", "--user", action, SERVICE_NAME];
-  const res = spawnSync(cmd[0], cmd.slice(1), { stdio: ["inherit", "inherit", "pipe"] });
-  const stderr = res.stderr?.toString();
-  if (stderr) process.stderr.write(stderr);
-  if (res.status !== 0) {
+  const { status, stderr } = spawnSystemctlUser(cmd.slice(2));
+  if (status !== 0) {
     printBusHint(stderr);
-    process.exit(res.status ?? 1);
+    process.exit(status);
   }
 }
 
