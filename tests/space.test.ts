@@ -48,6 +48,10 @@ describe("space ensure", () => {
       addRoomToSpace: vi.fn().mockResolvedValue(undefined),
       inviteUser: vi.fn().mockResolvedValue(undefined),
       setRoomName: vi.fn().mockResolvedValue(undefined),
+      getRoomName: vi.fn().mockResolvedValue(null),
+      getRoomAvatar: vi.fn().mockResolvedValue(null),
+      setRoomAvatar: vi.fn().mockResolvedValue(undefined),
+      uploadMedia: vi.fn().mockResolvedValue("mxc://server/avatar"),
       setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
       getPowerLevels: vi.fn().mockResolvedValue(null),
       leaveRoom: vi.fn().mockResolvedValue(undefined),
@@ -109,7 +113,7 @@ describe("space ensure", () => {
     // (the "matrix:" namespace prefix is a config-storage concern only).
     expect(roomOps.createSpace).toHaveBeenCalledTimes(1);
     expect(roomOps.createSpace).toHaveBeenCalledWith({
-      name: "pi-courier · box1",
+      name: "π box1",
       inviteUserIds: ["@barry:server", "@carol:server"],
     });
     expect(store.get().space?.roomId).toBe("!space:server");
@@ -195,7 +199,7 @@ describe("space ensure", () => {
     );
     expect(created.result).toBe("ready");
     expect(created.roomOps.createSpace).toHaveBeenCalledWith({
-      name: "pi-courier · box1",
+      name: "π box1",
       inviteUserIds: ["@barry:server", "@eve:server"],
     });
     expect(created.roomOps.inviteUser).not.toHaveBeenCalled(); // covered by creation
@@ -428,6 +432,80 @@ describe("space ensure", () => {
     expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!proj:server", "@barry:server", 100);
     expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!proj:server", "@carol:server", 100);
     expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(4);
+  });
+
+  // ---- room identity self-heal (short space name + pixel avatars) ------------
+  // The space is renamed ONLY when its name still exactly matches the legacy
+  // `pi-courier · <instance>` template, and an avatar is set ONLY when the
+  // room has none — anything the user set themselves is never clobbered.
+
+  async function runIdentityHeal(configOverrides: Record<string, unknown> = {}, roomOpsOverrides: Record<string, unknown> = {}) {
+    const { config, space, loggerModule } = await importModules();
+    const warnSpy = vi.spyOn(loggerModule.logger, "warn");
+    const store = new config.ConfigStore({ ...baseConfig(), ...configOverrides });
+    const roomOps = makeRoomOps(roomOpsOverrides);
+    await space.healRoomIdentities(roomOps as unknown as RoomOps, store);
+    return { store, roomOps, loggerModule, warnSpy };
+  }
+
+  it("migrates the legacy space name to the short π form", async () => {
+    const { roomOps } = await runIdentityHeal(fullRooms, {
+      getRoomName: vi.fn().mockResolvedValue("pi-courier · box1"),
+    });
+    expect(roomOps.setRoomName).toHaveBeenCalledWith("!space:server", "π box1");
+  });
+
+  it("never renames a space the user named themselves (or already migrated)", async () => {
+    for (const name of ["我的小窝", "π box1"]) {
+      const { roomOps } = await runIdentityHeal(fullRooms, {
+        getRoomName: vi.fn().mockResolvedValue(name),
+      });
+      expect(roomOps.setRoomName).not.toHaveBeenCalled();
+    }
+  });
+
+  it("sets avatars on the space, management room and project rooms that lack one", async () => {
+    const { roomOps } = await runIdentityHeal(fullRooms);
+    // All three managed rooms get an upload + avatar state event.
+    expect(roomOps.uploadMedia).toHaveBeenCalledTimes(3);
+    expect(roomOps.setRoomAvatar).toHaveBeenCalledWith(
+      "!space:server",
+      "mxc://server/avatar",
+      expect.objectContaining({ mimetype: "image/png", width: 128, height: 128 })
+    );
+    expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!mgmt:server", "mxc://server/avatar", expect.anything());
+    expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
+  });
+
+  it("never replaces an avatar the room already has", async () => {
+    const { roomOps } = await runIdentityHeal(fullRooms, {
+      getRoomAvatar: vi.fn().mockResolvedValue("mxc://server/custom"),
+    });
+    expect(roomOps.uploadMedia).not.toHaveBeenCalled();
+    expect(roomOps.setRoomAvatar).not.toHaveBeenCalled();
+  });
+
+  it("a single-room avatar failure warns and the other rooms are still branded", async () => {
+    const { roomOps, warnSpy } = await runIdentityHeal(fullRooms, {
+      getRoomAvatar: vi.fn().mockImplementation((roomId: string) =>
+        roomId === "!mgmt:server" ? Promise.reject(new Error("M_LIMIT_EXCEEDED")) : Promise.resolve(null)
+      ),
+    });
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!mgmt:server"));
+    expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!space:server", "mxc://server/avatar", expect.anything());
+    expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
+    expect(roomOps.setRoomAvatar).not.toHaveBeenCalledWith("!mgmt:server", expect.anything(), expect.anything());
+  });
+
+  it("is a no-op without a materialized space (degraded runs touch no room)", async () => {
+    const { roomOps } = await runIdentityHeal({
+      space: { enabled: true },
+      managementRooms: ["!mgmt:server"],
+      projects: { "!proj:server": { workdir: "/w/p" } },
+    });
+    expect(roomOps.getRoomName).not.toHaveBeenCalled();
+    expect(roomOps.getRoomAvatar).not.toHaveBeenCalled();
+    expect(roomOps.setRoomAvatar).not.toHaveBeenCalled();
   });
 
   // ---- revoke demotion loop (issue #44) --------------------------------------

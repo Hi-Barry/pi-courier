@@ -19,7 +19,7 @@ import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
-import { ensureSpaceAndManagementRoom, healTrustedPowerLevels } from "./space.js";
+import { ensureSpaceAndManagementRoom, healRoomIdentities, healTrustedPowerLevels } from "./space.js";
 import type { RoomOps, Transport } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
 import { suppressKnownWarnings } from "./warnings.js";
@@ -255,6 +255,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // one); per-room failures warn inside and never touch the startup
     // tri-state above.
     await healTrustedPowerLevels(roomOps, store);
+
+    // Room identity (short space name + pixel avatars): space mode only,
+    // best-effort per room — never blocks or fails the startup.
+    await healRoomIdentities(roomOps, store);
   }
 
   try {

@@ -36,6 +36,14 @@ import * as os from "node:os";
 import { activeSpaceRoomId, type ConfigStore, defaultProjectsRoot, isSpaceMode, nativeMxid } from "./config.js";
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
+import {
+  avatarInfo,
+  isLegacySpaceName,
+  managementAvatarFile,
+  pickPoolAvatarFile,
+  readAvatarBundled,
+  spaceDisplayName,
+} from "./space-identity.js";
 import type { RoomOps } from "./transports/interface.js";
 import type { MsgBridgeConfig } from "./types.js";
 
@@ -64,7 +72,7 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
     let spaceId = cfg.space?.roomId;
     if (!spaceId) {
       spaceId = await roomOps.createSpace({
-        name: `pi-courier · ${instanceName}`,
+        name: spaceDisplayName(instanceName),
         inviteUserIds,
       });
       // createRoom's invite list covers every trusted user — record them all
@@ -148,6 +156,62 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
       `[space] 空间初始化失败,本次以无空间模式运行(下次启动自动重试): ${(err as Error).message}`
     );
     return "degraded";
+  }
+}
+
+/** Startup identity self-heal: brand the managed rooms with the short space
+ *  name and the bundled pixel avatars (space + management + project rooms).
+ *  Space mode only — a degraded run's adopted management DM is never touched.
+ *  Two safety rules keep user intent sticky: a space is renamed ONLY when its
+ *  name still exactly matches the legacy `pi-courier · <instance>` template,
+ *  and an avatar is set ONLY when the room has none — anything the user set
+ *  themselves is left alone. Per-room failures warn and retry on the next
+ *  start; like healTrustedPowerLevels this never throws and never affects
+ *  the startup tri-state. */
+export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): Promise<void> {
+  const cfg = store.get();
+  if (!isSpaceMode(cfg)) return;
+  const spaceId = activeSpaceRoomId(cfg);
+  if (!spaceId) return;
+
+  const instanceName = cfg.instanceName ?? os.hostname();
+
+  // Legacy name migration (exact old-template match only, see above).
+  try {
+    const name = await roomOps.getRoomName(spaceId);
+    if (name && isLegacySpaceName(name, instanceName)) {
+      const renamed = spaceDisplayName(instanceName);
+      await roomOps.setRoomName(spaceId, renamed);
+      logger.info(`[identity] 空间名已迁移: ${name} → ${renamed}`);
+    }
+  } catch (err) {
+    logger.warn(`[identity] 空间改名检查失败(跳过,下次启动自动重试): ${spaceId}: ${(err as Error).message}`);
+  }
+
+  // Avatars: space picks by instance name, the management room has its own
+  // dedicated image, project rooms pick by project name (roomId fallback for
+  // legacy records without one) — same name, same image, forever.
+  const targets: Array<{ roomId: string; file: string; label: string }> = [
+    { roomId: spaceId, file: pickPoolAvatarFile(instanceName), label: "空间" },
+  ];
+  const managementRoomId = (cfg.managementRooms ?? [])[0];
+  if (managementRoomId) {
+    targets.push({ roomId: managementRoomId, file: managementAvatarFile(), label: "管理房间" });
+  }
+  for (const [roomId, project] of Object.entries(cfg.projects ?? {})) {
+    targets.push({ roomId, file: pickPoolAvatarFile(project.name ?? roomId), label: `项目房间 ${project.name ?? roomId}` });
+  }
+
+  for (const target of targets) {
+    try {
+      if (await roomOps.getRoomAvatar(target.roomId)) continue;
+      const data = readAvatarBundled(target.file);
+      const mxcUrl = await roomOps.uploadMedia(data, "image/png");
+      await roomOps.setRoomAvatar(target.roomId, mxcUrl, avatarInfo(data));
+      logger.info(`[identity] ${target.label}头像已设置: ${target.file}`);
+    } catch (err) {
+      logger.warn(`[identity] ${target.label}(${target.roomId})头像设置失败(跳过,下次启动自动重试): ${(err as Error).message}`);
+    }
   }
 }
 
