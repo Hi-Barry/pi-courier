@@ -40,3 +40,6 @@ deploy/docker/.env
 
 # ZCode local session dir
 .zcode/
+
+# Avatar drafts (human-in-the-loop review, not shipped)
+assets/avatars-drafts/

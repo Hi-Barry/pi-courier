@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 /**
+ * ⚠️ RETIRED v1 generator — running this overwrites the current AI-generated
+ * avatar pool (assets/avatars/, made with scripts/generate-avatars-seedream.mjs)
+ * with the old hand-drawn designs. Only run it deliberately to roll back.
+ *
  * Generate the bundled pixel avatars (assets/avatars/*.png) — 12 generic pool
  * images + 1 dedicated management-room image. Blocky pixel style, 16×16 grid
  * rendered at 8× (128×128), zero dependencies (zlib PNG encoder below).
