@@ -1,6 +1,12 @@
 import { type MatrixClient, MatrixError } from "matrix-bot-sdk";
 import type { RoomOps } from "./interface.js";
 
+/** A missing (or not-visible) state event is a query answer, not a failure —
+ *  shared by every getRoomStateEvent-backed query member. */
+function isStateNotFound(err: unknown): boolean {
+  return err instanceof MatrixError && (err.statusCode === 404 || err.errcode === "M_NOT_FOUND");
+}
+
 /**
  * RoomOps adapter for Matrix — the room-capability half of the Matrix
  * integration. MatrixProvider composes this instance and the composition
@@ -114,6 +120,42 @@ export class MatrixRoomOps implements RoomOps {
     await this.client.sendStateEvent(roomId, "m.room.name", "", { name });
   }
 
+  /** Read a room's display name; null when absent (query-member contract,
+   *  same 404 / M_NOT_FOUND handling as getPowerLevels). */
+  async getRoomName(roomId: string): Promise<string | null> {
+    try {
+      const event = (await this.client.getRoomStateEvent(roomId, "m.room.name", "")) as { name?: string };
+      return event?.name ?? null;
+    } catch (err) {
+      if (isStateNotFound(err)) return null;
+      throw err;
+    }
+  }
+
+  /** Read a room's avatar mxc URL; null when the room has none. */
+  async getRoomAvatar(roomId: string): Promise<string | null> {
+    try {
+      const event = (await this.client.getRoomStateEvent(roomId, "m.room.avatar", "")) as { url?: string };
+      return event?.url ?? null;
+    } catch (err) {
+      if (isStateNotFound(err)) return null;
+      throw err;
+    }
+  }
+
+  /** Set a room's avatar from an uploaded mxc URL (m.room.avatar state). */
+  async setRoomAvatar(roomId: string, avatarUrl: string, info?: Record<string, unknown>): Promise<void> {
+    await this.client.sendStateEvent(roomId, "m.room.avatar", "", {
+      url: avatarUrl,
+      ...(info ? { info } : {}),
+    });
+  }
+
+  /** Upload media to the homeserver's content repository; returns mxc URL. */
+  async uploadMedia(data: Buffer, contentType: string): Promise<string> {
+    return this.client.uploadContent(data, contentType);
+  }
+
   /** Set a user's power level in a room (used to make the project owner admin). */
   async setUserPowerLevel(roomId: string, userId: string, level: number): Promise<void> {
     await this.client.setUserPowerLevel(userId, roomId, level);
@@ -128,7 +170,7 @@ export class MatrixRoomOps implements RoomOps {
       // A room without (visible) power levels is a query result, not a
       // failure: 404 / M_NOT_FOUND reports null and the unified trusted-user
       // elevation treats it as an empty users map (writes anyway).
-      if (err instanceof MatrixError && (err.statusCode === 404 || err.errcode === "M_NOT_FOUND")) return null;
+      if (isStateNotFound(err)) return null;
       throw err;
     }
   }

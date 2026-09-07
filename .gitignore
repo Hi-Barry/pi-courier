@@ -37,3 +37,6 @@ docs/DEVLOG.md
 
 # Local env (secrets)
 deploy/docker/.env
+
+# ZCode local session dir
+.zcode/

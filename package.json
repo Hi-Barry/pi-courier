@@ -12,6 +12,7 @@
     "deploy/",
     "extensions/",
     "scripts/",
+    "assets/",
     "README.md",
     "README.zh-CN.md"
   ],
