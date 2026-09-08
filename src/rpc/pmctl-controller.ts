@@ -131,9 +131,12 @@ export class PmctlController {
     }
   }
 
-  /** Resolve a project path: absolute as-is; relative against the project
-   *  root (config.workdir) — `/pmctl new myapp myapp` lands in ~/Projects/myapp. */
+  /** Resolve a project path: `~`/`~/` expands to the home directory;
+   *  absolute as-is; relative against the project root (config.workdir) —
+   *  `/pmctl new myapp myapp` lands in ~/Projects/myapp. */
   private resolveProjectPath(p: string): string {
+    if (p === "~") return os.homedir();
+    if (p.startsWith("~/")) p = path.join(os.homedir(), p.slice(2));
     if (p.startsWith("/")) return p;
     const root = this.opts.store.get().workdir ?? path.join(os.homedir(), "Projects");
     return path.join(root, p);
