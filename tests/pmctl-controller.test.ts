@@ -143,6 +143,30 @@ describe("PmctlController", () => {
     expect(pm.registerProject).not.toHaveBeenCalled();
   });
 
+  it("brands the brand-new project room with its pixel avatar immediately", async () => {
+    await handle("/pmctl new myapp");
+    // The startup heal only reaches mid-session rooms on the next restart —
+    // creation applies the avatar itself (只补缺: no pre-existing avatar here).
+    expect(roomOps.getRoomAvatar).toHaveBeenCalledWith("!newroom:server");
+    expect(roomOps.uploadMedia).toHaveBeenCalledWith(expect.any(Buffer), "image/png");
+    expect(roomOps.setRoomAvatar).toHaveBeenCalledWith(
+      "!newroom:server",
+      "mxc://server/avatar",
+      expect.objectContaining({ mimetype: "image/png", width: 128, height: 128 })
+    );
+    expect(replies.at(-1)).toContain("创建完成");
+    expect(replies.at(-1)).not.toContain("头像设置失败");
+  });
+
+  it("an avatar failure is cosmetic: the project still completes, note promises self-heal", async () => {
+    roomOps.setRoomAvatar.mockRejectedValue(new Error("M_LIMIT_EXCEEDED"));
+    await handle("/pmctl new myapp");
+    expect(pm.registerProject).toHaveBeenCalledWith("!newroom:server", "/home/you/Projects/myapp", "myapp");
+    expect(replies.at(-1)).toContain("创建完成");
+    expect(replies.at(-1)).toContain("头像设置失败");
+    expect(replies.at(-1)).toContain("下次启动自动补");
+  });
+
   // ---- label validation (spec #34 票2) ----------------------------------------
 
   it("rejects new-project names that would break the log label format", async () => {

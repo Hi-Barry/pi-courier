@@ -159,6 +159,21 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
   }
 }
 
+/** Set the bundled avatar on ONE room — but only when the room has none:
+ *  anything the user set themselves is never replaced. Throws on failure —
+ *  callers pick the policy (the startup heal warns + retries next start; the
+ *  /pmctl new path surfaces a non-fatal note). Returns true when an avatar
+ *  was set, false when the room already had one. Shared by the startup
+ *  identity heal and the project-room creation path (a mid-session room
+ *  must not wait for the next restart to get its face). */
+export async function ensureRoomAvatar(roomOps: RoomOps, roomId: string, file: string): Promise<boolean> {
+  if (await roomOps.getRoomAvatar(roomId)) return false;
+  const data = readAvatarBundled(file);
+  const mxcUrl = await roomOps.uploadMedia(data, "image/png");
+  await roomOps.setRoomAvatar(roomId, mxcUrl, avatarInfo(data));
+  return true;
+}
+
 /** Startup identity self-heal: brand the managed rooms with the short space
  *  name and the bundled pixel avatars (space + management + project rooms).
  *  Space mode only — a degraded run's adopted management DM is never touched.
@@ -204,11 +219,9 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
 
   for (const target of targets) {
     try {
-      if (await roomOps.getRoomAvatar(target.roomId)) continue;
-      const data = readAvatarBundled(target.file);
-      const mxcUrl = await roomOps.uploadMedia(data, "image/png");
-      await roomOps.setRoomAvatar(target.roomId, mxcUrl, avatarInfo(data));
-      logger.info(`[identity] ${target.label}头像已设置: ${target.file}`);
+      if (await ensureRoomAvatar(roomOps, target.roomId, target.file)) {
+        logger.info(`[identity] ${target.label}头像已设置: ${target.file}`);
+      }
     } catch (err) {
       logger.warn(`[identity] ${target.label}(${target.roomId})头像设置失败(跳过,下次启动自动重试): ${(err as Error).message}`);
     }

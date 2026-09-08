@@ -16,7 +16,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { activeSpaceRoomId, type ConfigStore } from "../config.js";
 import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
-import { elevateTrustedUsersInRoom } from "../space.js";
+import { elevateTrustedUsersInRoom, ensureRoomAvatar } from "../space.js";
+import { pickPoolAvatarFile } from "../space-identity.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
 
@@ -199,12 +200,21 @@ export class PmctlController {
           spaceNote = `\n⚠️ 挂入空间失败(不影响项目): ${(err as Error).message}`;
         }
       }
+      // Brand the room with its bundled pixel avatar immediately — the
+      // startup identity heal would only reach a mid-session room on the
+      // next restart. Same 只补缺 rule; a failure is cosmetic and self-heals.
+      let avatarNote = "";
+      try {
+        await ensureRoomAvatar(roomOps, roomId, pickPoolAvatarFile(pname));
+      } catch (err) {
+        avatarNote = `\n⚠️ 头像设置失败(下次启动自动补): ${(err as Error).message}`;
+      }
       await reply(
         `✅ 项目「${pname}」创建完成!\n\n` +
           `• 房间: ${roomId}\n` +
           `• 工作目录: ${resolvedWorkdir}\n` +
           `• 已邀请你进入新房间\n\n` +
-          `项目对话请到新房间进行(独立上下文与工作目录)。${spaceNote}`
+          `项目对话请到新房间进行(独立上下文与工作目录)。${spaceNote}${avatarNote}`
       );
     } catch (err) {
       await reply(`❌ 创建项目失败: ${(err as Error).message}`);
