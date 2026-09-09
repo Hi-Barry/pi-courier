@@ -48,7 +48,7 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
   const sendReply = async (chatId: string, transport: string, text: string) => {
     replies.push({ chatId, transport, text });
   };
-  const rpc = {
+  const rpc: PiRpc = {
     prompt: vi.fn().mockResolvedValue(undefined),
     promptQueued: vi.fn().mockResolvedValue(undefined),
     abort: vi.fn().mockResolvedValue(undefined),
@@ -56,6 +56,7 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     restart: vi.fn().mockResolvedValue(undefined),
     getState: vi.fn().mockResolvedValue({ model: { id: "m" }, isStreaming: false, pendingMessageCount: 0 }),
     newSession: vi.fn().mockResolvedValue({ cancelled: false }),
+    requireClient: () => rpc,
     onEvent: vi.fn(),
     // Small-command batch (issue #56 票5) — defaults overridden per test.
     getLastAssistantText: vi.fn().mockResolvedValue(null),
@@ -940,7 +941,7 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
   });
 
   const getState = (overrides: { isStreaming?: boolean; pendingMessageCount?: number }) => {
-    (rpc.getState as ReturnType<typeof vi.fn>).mockResolvedValue({
+    (rpc.requireClient().getState as ReturnType<typeof vi.fn>).mockResolvedValue({
       model: { id: "m" },
       isStreaming: false,
       pendingMessageCount: 0,
@@ -987,8 +988,8 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
   it("/interrupt on an idle session degrades to a plain prompt (no abort)", async () => {
     getState({ isStreaming: false, pendingMessageCount: 0 });
     await makeRouter().handleIncoming(makeMsg({ text: "/interrupt fix the lint" }));
-    expect(rpc.abort).not.toHaveBeenCalled();
-    expect(rpc.waitForIdle).not.toHaveBeenCalled();
+    expect(rpc.requireClient().abort).not.toHaveBeenCalled();
+    expect(rpc.requireClient().waitForIdle).not.toHaveBeenCalled();
     expect(rpc.prompt).toHaveBeenCalledWith("fix the lint");
     expect(replies.at(-1)!.text).toContain("没有运行中的任务");
     expect(replies.at(-1)!.text).not.toContain("⚠️");
@@ -999,13 +1000,13 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
     const router = makeRouter();
     router.handleEvent({ type: "queue_update", steering: ["old task"], followUp: [] }, rpc);
     await router.handleIncoming(makeMsg({ text: "/interrupt new order" }));
-    expect(rpc.abort).toHaveBeenCalledTimes(1);
-    expect(rpc.waitForIdle).toHaveBeenCalledTimes(1);
+    expect(rpc.requireClient().abort).toHaveBeenCalledTimes(1);
+    expect(rpc.requireClient().waitForIdle).toHaveBeenCalledTimes(1);
     expect(rpc.prompt).toHaveBeenCalledWith("new order");
     // The sequence is strict: abort → waitForIdle → prompt.
     const order = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
-    expect(order(rpc.abort)).toBeLessThan(order(rpc.waitForIdle));
-    expect(order(rpc.waitForIdle)).toBeLessThan(order(rpc.prompt));
+    expect(order(rpc.requireClient().abort)).toBeLessThan(order(rpc.requireClient().waitForIdle));
+    expect(order(rpc.requireClient().waitForIdle)).toBeLessThan(order(rpc.prompt));
     const text = replies.at(-1)!.text;
     expect(text).toContain("已打断,新指令已发出");
     expect(text).toContain("⚠️ 队列中仍有 1 条消息将在下一轮生效");
@@ -1016,7 +1017,7 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
     const router = makeRouter();
     router.handleEvent({ type: "queue_update", steering: ["queued A"], followUp: ["queued B"] }, rpc);
     await router.handleIncoming(makeMsg({ text: "/stop" }));
-    expect(rpc.abort).toHaveBeenCalledTimes(1);
+    expect(rpc.requireClient().abort).toHaveBeenCalledTimes(1);
     const text = replies.at(-1)!.text;
     expect(text).toContain("已停止所有任务");
     expect(text).toContain("⚠️ 队列中仍有 2 条消息将在下一轮生效");
@@ -1059,7 +1060,7 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
   });
 
   const getState = (overrides: { isStreaming?: boolean; autoCompactionEnabled?: boolean }) => {
-    (rpc.getState as ReturnType<typeof vi.fn>).mockResolvedValue({
+    (rpc.requireClient().getState as ReturnType<typeof vi.fn>).mockResolvedValue({
       model: { id: "m" },
       isStreaming: false,
       pendingMessageCount: 0,
@@ -1070,41 +1071,41 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
 
   // --- /last -----------------------------------------------------------------
   it("/last replays the agent's most recent reply", async () => {
-    (rpc.getLastAssistantText as ReturnType<typeof vi.fn>).mockResolvedValue("the previous answer");
+    (rpc.requireClient().getLastAssistantText as ReturnType<typeof vi.fn>).mockResolvedValue("the previous answer");
     await makeRouter().handleIncoming(makeMsg({ text: "/last" }));
-    expect(rpc.getLastAssistantText).toHaveBeenCalledTimes(1);
+    expect(rpc.requireClient().getLastAssistantText).toHaveBeenCalledTimes(1);
     expect(replies.at(-1)!.text).toContain("the previous answer");
     expect(rpc.prompt).not.toHaveBeenCalled();
   });
 
   it("/last reports when there is no reply yet", async () => {
-    (rpc.getLastAssistantText as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (rpc.requireClient().getLastAssistantText as ReturnType<typeof vi.fn>).mockResolvedValue(null);
     await makeRouter().handleIncoming(makeMsg({ text: "/last" }));
     expect(replies.at(-1)!.text).toContain("没有可复述");
   });
 
   // --- /cyclemodel / /cyclethinking -------------------------------------------
   it("/cyclemodel reports the cycled provider/model", async () => {
-    (rpc.cycleModel as ReturnType<typeof vi.fn>).mockResolvedValue({
+    (rpc.requireClient().cycleModel as ReturnType<typeof vi.fn>).mockResolvedValue({
       model: { provider: "anthropic", id: "claude-next" },
       thinkingLevel: "high",
       isScoped: false,
     });
     await makeRouter().handleIncoming(makeMsg({ text: "/cyclemodel" }));
-    expect(rpc.cycleModel).toHaveBeenCalledTimes(1);
+    expect(rpc.requireClient().cycleModel).toHaveBeenCalledTimes(1);
     expect(replies.at(-1)!.text).toContain("anthropic/claude-next");
   });
 
   it("/cyclemodel reports when there is nothing to cycle", async () => {
-    (rpc.cycleModel as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (rpc.requireClient().cycleModel as ReturnType<typeof vi.fn>).mockResolvedValue(null);
     await makeRouter().handleIncoming(makeMsg({ text: "/cyclemodel" }));
     expect(replies.at(-1)!.text).toContain("没有可轮换");
   });
 
   it("/cyclethinking reports the new level", async () => {
-    (rpc.cycleThinkingLevel as ReturnType<typeof vi.fn>).mockResolvedValue({ level: "medium" });
+    (rpc.requireClient().cycleThinkingLevel as ReturnType<typeof vi.fn>).mockResolvedValue({ level: "medium" });
     await makeRouter().handleIncoming(makeMsg({ text: "/cyclethinking" }));
-    expect(rpc.cycleThinkingLevel).toHaveBeenCalledTimes(1);
+    expect(rpc.requireClient().cycleThinkingLevel).toHaveBeenCalledTimes(1);
     expect(replies.at(-1)!.text).toContain("medium");
   });
 
@@ -1112,14 +1113,14 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
   it("/autocompact on|off maps to setAutoCompaction, no-args shows state and usage", async () => {
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ text: "/autocompact on" }));
-    expect(rpc.setAutoCompaction).toHaveBeenCalledWith(true);
+    expect(rpc.requireClient().setAutoCompaction).toHaveBeenCalledWith(true);
     await router.handleIncoming(makeMsg({ text: "/autocompact off" }));
-    expect(rpc.setAutoCompaction).toHaveBeenCalledWith(false);
+    expect(rpc.requireClient().setAutoCompaction).toHaveBeenCalledWith(false);
     expect(replies.at(-1)!.text).toContain("已关闭");
 
     getState({ autoCompactionEnabled: false });
     await router.handleIncoming(makeMsg({ text: "/autocompact" }));
-    expect(rpc.setAutoCompaction).toHaveBeenCalledTimes(2); // unchanged by the query
+    expect(rpc.requireClient().setAutoCompaction).toHaveBeenCalledTimes(2); // unchanged by the query
     expect(replies.at(-1)!.text).toContain("当前自动压缩: 关");
     expect(replies.at(-1)!.text).toContain("实例级生效");
   });
@@ -1127,11 +1128,11 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
   it("/autoretry on|off maps to setAutoRetry, no-args gives usage (upstream exposes no query)", async () => {
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ text: "/autoretry off" }));
-    expect(rpc.setAutoRetry).toHaveBeenCalledWith(false);
+    expect(rpc.requireClient().setAutoRetry).toHaveBeenCalledWith(false);
     expect(replies.at(-1)!.text).toContain("已关闭");
 
     await router.handleIncoming(makeMsg({ text: "/autoretry" }));
-    expect(rpc.setAutoRetry).toHaveBeenCalledTimes(1); // no-args never toggles
+    expect(rpc.requireClient().setAutoRetry).toHaveBeenCalledTimes(1); // no-args never toggles
     expect(replies.at(-1)!.text).toContain("/autoretry on|off");
     expect(replies.at(-1)!.text).toContain("实例级生效");
   });
@@ -1179,24 +1180,24 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
     getState({ isStreaming: true });
     await makeRouter().handleIncoming(makeMsg({ text: "/switch 1" }));
     expect(replies.at(-1)!.text).toContain("/stop");
-    expect(rpc.switchSession).not.toHaveBeenCalled();
+    expect(rpc.requireClient().switchSession).not.toHaveBeenCalled();
   });
 
   it("/switch <n> switches to the nth newest session file", async () => {
     await makeRouter().handleIncoming(makeMsg({ text: "/switch 1" }));
-    expect(rpc.switchSession).toHaveBeenCalledWith(join(sessionDir, "new_2222.jsonl"));
+    expect(rpc.requireClient().switchSession).toHaveBeenCalledWith(join(sessionDir, "new_2222.jsonl"));
     expect(replies.at(-1)!.text).toContain("已切换会话");
 
-    (rpc.switchSession as ReturnType<typeof vi.fn>).mockClear();
+    (rpc.requireClient().switchSession as ReturnType<typeof vi.fn>).mockClear();
     await makeRouter().handleIncoming(makeMsg({ text: "/switch 3" }));
-    expect(rpc.switchSession).toHaveBeenCalledWith(join(sessionDir, "old_1111.jsonl"));
+    expect(rpc.requireClient().switchSession).toHaveBeenCalledWith(join(sessionDir, "old_1111.jsonl"));
   });
 
   it("/switch without args shows usage; an out-of-range index is rejected", async () => {
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ text: "/switch" }));
     expect(replies.at(-1)!.text).toContain("用法");
-    expect(rpc.switchSession).not.toHaveBeenCalled();
+    expect(rpc.requireClient().switchSession).not.toHaveBeenCalled();
 
     await router.handleIncoming(makeMsg({ text: "/switch 9" }));
     expect(replies.at(-1)!.text).toContain("超出范围");

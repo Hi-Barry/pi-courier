@@ -278,7 +278,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   try {
     await rpc.start();
-    const state = await rpc.getState();
+    const state = await rpc.requireClient().getState();
     logger.info(`✅ pi RPC connected (model: ${state.model?.id ?? "unknown"}, session: ${state.sessionId ?? "?"})`);
   } catch (err) {
     logger.error("[bridge] failed to start pi RPC:", (err as Error).message);

@@ -11,10 +11,11 @@
  * message as a bogus "answer" to a question the new process will never
  * resolve.
  */
-import type { PiRpc } from "./pi-rpc.js";
+
+import type { ReplyTarget } from "../types.js";
 import type { QueueSnapshot } from "./command-map.js";
 import type { ExtensionUIRequestView } from "./message-router.js";
-import type { ReplyTarget } from "../types.js";
+import type { PiRpc } from "./pi-rpc.js";
 
 /** A question asked in a room and still awaiting the answer. FIFO per rpc —
  *  the oldest pending question is answered first. The target is captured at

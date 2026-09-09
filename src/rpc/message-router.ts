@@ -28,8 +28,8 @@ import type { ExternalMessage, MessageAttachment, MsgBridgeConfig, ReplyTarget }
 import { handleSlashCommand, type QueueSnapshot } from "./command-map.js";
 import type { ExtensionUIResponsePayload, PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
-import { RpcTransientState, type PendingExtensionQuestion } from "./rpc-transient-state.js";
 import type { ProjectManager } from "./project-manager.js";
+import { type PendingExtensionQuestion, RpcTransientState } from "./rpc-transient-state.js";
 
 export interface MessageRouterDeps {
   /** Multi-project routing: resolves the PiRpc for a room (default when unmapped). */

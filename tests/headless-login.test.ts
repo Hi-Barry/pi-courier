@@ -163,14 +163,16 @@ describe("AuthInteraction translation (issue #55)", () => {
 // --- pure: restartIdleRpcs + summary ------------------------------------------
 
 function makeRpc(label: string | undefined, state: "idle" | "streaming" | "unreachable"): PiRpc {
-  return {
+  const rpc: PiRpc = {
     label,
     getState:
       state === "unreachable"
         ? vi.fn().mockRejectedValue(new Error("pi RPC not connected"))
         : vi.fn().mockResolvedValue({ isStreaming: state === "streaming", model: { id: "m" } }),
     restart: vi.fn().mockResolvedValue(undefined),
+    requireClient: () => rpc,
   } as unknown as PiRpc;
+  return rpc;
 }
 
 describe("restartIdleRpcs (issue #55)", () => {

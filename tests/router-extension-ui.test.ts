@@ -71,7 +71,7 @@ function makeFixtures(opts: { extensionUiTimeoutMinutes?: number } = {}) {
   };
   const extensionResponses: ExtensionUIResponsePayload[] = [];
   const restartListeners = new Set<(r: unknown) => void>();
-  const rpc: Record<string, unknown> = {
+  const rpc = {
     prompt: vi.fn().mockResolvedValue(undefined),
     promptQueued: vi.fn().mockResolvedValue(undefined),
     respondExtensionUI: vi.fn().mockImplementation(async (payload: ExtensionUIResponsePayload) => {
@@ -85,6 +85,7 @@ function makeFixtures(opts: { extensionUiTimeoutMinutes?: number } = {}) {
     restart: vi.fn(async () => {
       for (const listener of restartListeners) listener(rpc);
     }),
+    requireClient: () => rpc,
     onEvent: vi.fn(),
   } as unknown as PiRpc;
   const projectManager = {

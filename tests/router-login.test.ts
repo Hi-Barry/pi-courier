@@ -38,7 +38,7 @@ function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): 
 function makeRpc(label: string | undefined, isStreaming = false, onExtensionResponse?: (payload: ExtensionUIResponsePayload) => void) {
   const prompt = vi.fn().mockResolvedValue(undefined);
   const restartListeners = new Set<(r: unknown) => void>();
-  const rpc: Record<string, unknown> = {
+  const rpc: PiRpc = {
     label,
     prompt,
     getState: vi.fn().mockResolvedValue({ isStreaming, model: { id: "m" }, pendingMessageCount: 0 }),
@@ -49,6 +49,7 @@ function makeRpc(label: string | undefined, isStreaming = false, onExtensionResp
     restart: vi.fn(async () => {
       for (const listener of restartListeners) listener(rpc);
     }),
+    requireClient: () => rpc,
     respondExtensionUI: vi.fn().mockImplementation(async (payload: ExtensionUIResponsePayload) => {
       onExtensionResponse?.(payload);
     }),

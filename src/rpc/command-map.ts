@@ -18,6 +18,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
 import type { PiRpc } from "./pi-rpc.js";
 
@@ -101,7 +102,7 @@ export async function restartIdleRpcs(
   for (const rpc of rpcs) {
     const name = rpcDisplayName(rpc);
     try {
-      const state = await rpc.getState();
+      const state = await rpc.requireClient().getState();
       if (state.isStreaming) {
         result.busy.push(name);
         continue;
@@ -142,7 +143,7 @@ async function replyQueueView(rpc: PiRpc, snapshot: QueueSnapshot | undefined, r
   const followUp = snapshot?.followUp ?? [];
   let upstream: number | undefined;
   try {
-    const state = await rpc.getState();
+    const state = await rpc.requireClient().getState();
     if (typeof state.pendingMessageCount === "number") upstream = state.pendingMessageCount;
   } catch {
     // State query is best-effort; the mirror alone still serves the reply.
@@ -278,13 +279,13 @@ export async function handleSlashCommand(
       // --- Session lifecycle -------------------------------------------------
       case "/new":
       case "/clear": {
-        const { cancelled } = await rpc.newSession();
+        const { cancelled } = await rpc.requireClient().newSession();
         await reply(cancelled ? "⚠️ 新会话被扩展取消" : "✅ 已开始新会话");
         return true;
       }
 
       case "/compact": {
-        const result = await rpc.compact(args || undefined);
+        const result = await rpc.requireClient().compact(args || undefined);
         const line = [
           "✅ 已压缩",
           `  tokens: ${result.tokensBefore} → 压缩后(见摘要)`,
@@ -296,7 +297,7 @@ export async function handleSlashCommand(
 
       case "/stop":
       case "/abort": {
-        await rpc.abort();
+        await rpc.requireClient().abort();
         // abort preserves the upstream queues (RPC has no clear_queue) — the
         // warning makes that limitation explicit instead of surprising the user.
         await reply(withQueueWarning("🛑 已停止所有任务,等待下一步指示。", queueView?.()));
@@ -321,14 +322,14 @@ export async function handleSlashCommand(
           await reply("用法: /interrupt <新指令> — 打断当前任务并立即下发新指令。");
           return true;
         }
-        const state = await rpc.getState();
+        const state = await rpc.requireClient().getState();
         if (!state.isStreaming) {
           await rpc.prompt(args);
           await reply("▶️ 当前没有运行中的任务,已直接下发新指令。");
           return true;
         }
-        await rpc.abort();
-        await rpc.waitForIdle();
+        await rpc.requireClient().abort();
+        await rpc.requireClient().waitForIdle();
         await rpc.prompt(args);
         await reply(withQueueWarning("🛑 已打断,新指令已发出。", queueView?.()));
         return true;
@@ -336,7 +337,7 @@ export async function handleSlashCommand(
 
       // --- Small utilities (issue #56 票5) ------------------------------------
       case "/last": {
-        const last = await rpc.getLastAssistantText();
+        const last = await rpc.requireClient().getLastAssistantText();
         const text = last?.trim();
         if (!text) {
           await reply("💤 没有可复述的回复(本会话还没有 assistant 输出)。");
@@ -347,7 +348,7 @@ export async function handleSlashCommand(
       }
 
       case "/cyclemodel": {
-        const result = await rpc.cycleModel();
+        const result = await rpc.requireClient().cycleModel();
         if (!result) {
           await reply("❌ 没有可轮换的模型(启动未限定模型列表?)。用 /model <provider/id> 直接指定。");
           return true;
@@ -357,7 +358,7 @@ export async function handleSlashCommand(
       }
 
       case "/cyclethinking": {
-        const result = await rpc.cycleThinkingLevel();
+        const result = await rpc.requireClient().cycleThinkingLevel();
         if (!result) {
           await reply("❌ 没有可轮换的思考级别。");
           return true;
@@ -369,14 +370,14 @@ export async function handleSlashCommand(
       case "/autocompact": {
         const arg = args.toLowerCase();
         if (arg !== "on" && arg !== "off") {
-          const state = await rpc.getState();
+          const state = await rpc.requireClient().getState();
           await reply(
             `当前自动压缩: ${state.autoCompactionEnabled ? "开" : "关"}\n` +
               "用法: /autocompact on|off(实例级生效:写入 pi 全局设置,一个项目房间切换影响全部项目)"
           );
           return true;
         }
-        await rpc.setAutoCompaction(arg === "on");
+        await rpc.requireClient().setAutoCompaction(arg === "on");
         await reply(`✅ 自动压缩已${arg === "on" ? "开启" : "关闭"}(实例级生效)。`);
         return true;
       }
@@ -390,7 +391,7 @@ export async function handleSlashCommand(
           );
           return true;
         }
-        await rpc.setAutoRetry(arg === "on");
+        await rpc.requireClient().setAutoRetry(arg === "on");
         await reply(`✅ 自动重试已${arg === "on" ? "开启" : "关闭"}(实例级生效)。`);
         return true;
       }
@@ -401,7 +402,7 @@ export async function handleSlashCommand(
       }
 
       case "/switch": {
-        const state = await rpc.getState();
+        const state = await rpc.requireClient().getState();
         if (state.isStreaming) {
           await reply("⚠️ 当前任务流式进行中,请先 /stop 再切换会话。");
           return true;
@@ -417,7 +418,7 @@ export async function handleSlashCommand(
           await reply(`❌ 序号超出范围: ${index}(用 /sessions 查看当前列表)。`);
           return true;
         }
-        const result = await rpc.switchSession(target.path);
+        const result = await rpc.requireClient().switchSession(target.path);
         await reply(result.cancelled ? "⚠️ 切换会话被扩展取消" : `✅ 已切换会话: ${target.file}`);
         return true;
       }
@@ -437,7 +438,7 @@ export async function handleSlashCommand(
         await reply("🔄 正在重启 pi 进程(扩展/技能/配置将重新加载)…");
         try {
           await rpc.restart();
-          const state = await rpc.getState();
+          const state = await rpc.requireClient().getState();
           await reply(`✅ pi 已重启,模型: ${state.model?.id ?? "unknown"}`);
         } catch (err) {
           await reply(`❌ 重启失败: ${(err as Error).message}`);
@@ -448,12 +449,12 @@ export async function handleSlashCommand(
       // --- Model / thinking --------------------------------------------------
       case "/model": {
         if (!args) {
-          const models = await rpc.getAvailableModels();
+          const models = await rpc.requireClient().getAvailableModels();
           if (models.length === 0) {
             await reply("没有可用模型(未配置 provider?)");
             return true;
           }
-          const current = await rpc.getState();
+          const current = await rpc.requireClient().getState();
           const list = models
             .map((m) => `• ${m.provider}/${m.id}${m.id === current.model?.id ? " ← 当前" : ""}`)
             .join("\n");
@@ -463,7 +464,7 @@ export async function handleSlashCommand(
         const parsed = parseModelArg(args);
         if (!parsed.provider) {
           // Bare id — try to find a matching model and use its provider
-          const models = await rpc.getAvailableModels();
+          const models = await rpc.requireClient().getAvailableModels();
           const match = models.find((m) => m.id.includes(parsed.modelId));
           if (!match) {
             await reply(`❌ 找不到模型 "${parsed.modelId}"。用 /models 查看可用列表。`);
@@ -472,18 +473,18 @@ export async function handleSlashCommand(
           parsed.provider = match.provider;
           parsed.modelId = match.id;
         }
-        const result = (await rpc.setModel(parsed.provider, parsed.modelId)) as { id?: string };
+        const result = (await rpc.requireClient().setModel(parsed.provider, parsed.modelId)) as { id?: string };
         await reply(`✅ 已切换模型: ${result.id ?? `${parsed.provider}/${parsed.modelId}`}`);
         return true;
       }
 
       case "/models": {
-        const models = await rpc.getAvailableModels();
+        const models = await rpc.requireClient().getAvailableModels();
         if (models.length === 0) {
           await reply("没有可用模型(未配置 provider?)");
           return true;
         }
-        const current = await rpc.getState();
+        const current = await rpc.requireClient().getState();
         await reply(
           models
             .map((m) => `• ${m.provider}/${m.id}${m.id === current.model?.id ? " ← 当前" : ""}`)
@@ -494,13 +495,13 @@ export async function handleSlashCommand(
 
       case "/thinking": {
         if (!args) {
-          const state = await rpc.getState();
+          const state = await rpc.requireClient().getState();
           await reply(
             `当前思考级别: ${state.thinkingLevel}\n可用级别: off, minimal, low, medium, high, xhigh, max\n用法: /thinking <level>`
           );
           return true;
         }
-        await rpc.setThinkingLevel(args);
+        await rpc.requireClient().setThinkingLevel(args as Parameters<RpcClient['setThinkingLevel']>[0]);
         await reply(`✅ 思考级别已设为: ${args}`);
         return true;
       }
@@ -508,7 +509,7 @@ export async function handleSlashCommand(
       // --- Session info / export ---------------------------------------------
       case "/session":
       case "/cost": {
-        const stats = await rpc.getSessionStats();
+        const stats = await rpc.requireClient().getSessionStats();
         await reply(
           [
             `📊 会话: ${stats.sessionId}`,
@@ -521,7 +522,7 @@ export async function handleSlashCommand(
       }
 
       case "/status": {
-        const state = await rpc.getState();
+        const state = await rpc.requireClient().getState();
         const modelName = state.model?.name || state.model?.id || "unknown";
         await reply(`⚙️ 模型: ${modelName}\n流式中: ${state.isStreaming ? "是" : "否"}`);
         return true;
@@ -532,13 +533,13 @@ export async function handleSlashCommand(
           await reply("用法: /name <会话名>");
           return true;
         }
-        await rpc.setSessionName(args);
+        await rpc.requireClient().setSessionName(args);
         await reply(`✅ 会话已命名: ${args}`);
         return true;
       }
 
       case "/export": {
-        const result = await rpc.exportHtml(args || undefined);
+        const result = await rpc.requireClient().exportHtml(args || undefined);
         await reply(`✅ 已导出: ${result.path}`);
         return true;
       }
@@ -549,7 +550,7 @@ export async function handleSlashCommand(
           await reply("用法: /bash <shell 命令> — 在 pi 的工作目录执行并写入上下文");
           return true;
         }
-        const result = await rpc.bash(args);
+        const result = await rpc.requireClient().bash(args);
         const output = result.output.length > 3000
           ? result.output.slice(0, 3000) + "\n…(已截断)"
           : result.output;

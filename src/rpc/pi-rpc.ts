@@ -221,11 +221,6 @@ export class PiRpc {
     await this.sendPrompt(text, "followUp");
   }
 
-  /** Resolve once the agent settles ("agent_settled"). Rejects on timeout (ms). */
-  async waitForIdle(timeout?: number): Promise<void> {
-    await this.requireClient().waitForIdle(timeout);
-  }
-
   /** Raw `prompt` command with an explicit streaming behavior, via private send. */
   private async sendPrompt(text: string, streamingBehavior: "steer" | "followUp"): Promise<void> {
     const client = this.requireClient() as unknown as {
@@ -258,88 +253,6 @@ export class PiRpc {
   // RPC command conveniences (used by the slash command map)
   // =========================================================================
 
-  async newSession(): Promise<{ cancelled: boolean }> {
-    return this.requireClient().newSession();
-  }
-
-  async compact(customInstructions?: string): Promise<{ summary: string; tokensBefore: number }> {
-    return this.requireClient().compact(customInstructions);
-  }
-
-  async abort(): Promise<void> {
-    await this.requireClient().abort();
-  }
-
-  async getState(): Promise<RpcSessionState> {
-    return this.requireClient().getState();
-  }
-
-  async getAvailableModels(): Promise<ModelInfo[]> {
-    return this.requireClient().getAvailableModels();
-  }
-
-  async setModel(provider: string, modelId: string): Promise<unknown> {
-    return this.requireClient().setModel(provider, modelId);
-  }
-
-  async setThinkingLevel(level: string): Promise<void> {
-    await this.requireClient().setThinkingLevel(level as never);
-  }
-
-  /** The agent's most recent assistant reply (null before the first turn). */
-  async getLastAssistantText(): Promise<string | null> {
-    return this.requireClient().getLastAssistantText();
-  }
-
-  /** Cycle to the next model in the scoped list (null when nothing to cycle). */
-  async cycleModel(): Promise<{
-    model: { provider: string; id: string };
-    thinkingLevel: string;
-    isScoped: boolean;
-  } | null> {
-    return this.requireClient().cycleModel();
-  }
-
-  /** Cycle to the next thinking level (null when nothing to cycle). */
-  async cycleThinkingLevel(): Promise<{ level: string } | null> {
-    return this.requireClient().cycleThinkingLevel();
-  }
-
-  /** Toggle auto-compaction (persists to pi's global settings — instance-wide). */
-  async setAutoCompaction(enabled: boolean): Promise<void> {
-    await this.requireClient().setAutoCompaction(enabled);
-  }
-
-  /** Toggle auto-retry (persists to pi's global settings — instance-wide). */
-  async setAutoRetry(enabled: boolean): Promise<void> {
-    await this.requireClient().setAutoRetry(enabled);
-  }
-
-  async setSessionName(name: string): Promise<void> {
-    await this.requireClient().setSessionName(name);
-  }
-
-  async getSessionStats(): Promise<{
-    sessionId: string;
-    totalMessages: number;
-    cost: number;
-    tokens: { total: number };
-  }> {
-    return this.requireClient().getSessionStats();
-  }
-
-  async exportHtml(outputPath?: string): Promise<{ path: string }> {
-    return this.requireClient().exportHtml(outputPath);
-  }
-
-  async bash(command: string): Promise<{ output: string; exitCode: number | undefined }> {
-    return this.requireClient().bash(command);
-  }
-
-  async switchSession(sessionPath: string): Promise<{ cancelled: boolean }> {
-    return this.requireClient().switchSession(sessionPath);
-  }
-
   /** Get available commands (extension commands, prompt templates, skills) with a short cache. */
   async getCommands(): Promise<RpcSlashCommandInfo[]> {
     if (this.commandsCache && Date.now() - this.commandsCache.at < 60_000) {
@@ -363,20 +276,58 @@ export class PiRpc {
    * line (LF framing, same as serializeJsonLine upstream).
    */
   async respondExtensionUI(payload: ExtensionUIResponsePayload): Promise<void> {
-    const client = this.requireClient() as unknown as {
-      process?: {
-        stdin?: { write: (chunk: string) => unknown; destroyed: boolean; writable: boolean };
-      } | null;
-    };
-    const stdin = client.process?.stdin;
-    if (!stdin || stdin.destroyed || !stdin.writable) {
-      throw new Error("pi RPC stdin is not writable");
-    }
-    stdin.write(`${JSON.stringify({ type: "extension_ui_response", ...payload })}\n`);
+    upstreamExtensionUIStdinWrite(this.requireClient(), payload);
   }
 
-  private requireClient(): RpcClient {
+  /** The live upstream RpcClient (spec #72 票7/C7):命令族直用上游类型,
+   *  包装不再转发。未连接时抛出 —— 调用方无需判空。 */
+  requireClient(): RpcClient {
     if (!this.client) throw new Error("pi RPC not connected");
     return this.client;
   }
+}
+
+// ── 上游兼容层(spec #72 票7/C7)──────────────────────────────────────
+// 对 pi 上游私有行为的两处依赖集中在这两个命名函数里;上游重构时只查这里。
+
+/**
+ * COMPAT(上游 prompt 语义):公开 RpcClient.prompt() 不暴露 streamingBehavior,
+ * 走私有 send() 发送。上游契约:私有 send 会用自己的 req_N 覆盖命令 id 并等待
+ * 应答 —— 换成公开方法前必须核对上游 rpc-client 的行为。
+ */
+export async function upstreamPromptSend(
+  client: RpcClient,
+  message: string,
+  streamingBehavior: "steer" | "followUp"
+): Promise<void> {
+  const send = client as unknown as {
+    send: (command: {
+      type: "prompt";
+      message: string;
+      streamingBehavior: "steer" | "followUp";
+    }) => Promise<{ success: boolean; error?: string }>;
+  };
+  const response = await send.send({ type: "prompt", message, streamingBehavior });
+  if (!response.success) {
+    throw new Error(response.error ?? "prompt failed");
+  }
+}
+
+/**
+ * COMPAT(上游扩展应答通道):RpcClient 没有公开的 extension_ui_response 方法,
+ * 且其通用 send() 会覆盖命令 id(上游用 req_N)——必须把应答作为一条严格
+ * JSONL 行(LF 帧,与上游 serializeJsonLine 一致)直写子进程 stdin。
+ */
+export function upstreamExtensionUIStdinWrite(
+  client: RpcClient,
+  payload: ExtensionUIResponsePayload
+): void {
+  const process = (client as unknown as {
+    process?: { stdin?: { write: (chunk: string) => unknown; destroyed: boolean; writable: boolean } | null };
+  }).process;
+  const stdin = process?.stdin;
+  if (!stdin || stdin.destroyed || !stdin.writable) {
+    throw new Error("pi RPC stdin is not writable");
+  }
+  stdin.write(`${JSON.stringify({ type: "extension_ui_response", ...payload })}\n`);
 }
