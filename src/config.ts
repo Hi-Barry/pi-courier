@@ -63,6 +63,20 @@ export function loadConfig(): MsgBridgeConfig {
     config.workdir = process.env.PI_WORKDIR;
   }
 
+  // Attachment intake (issue #66): root dir + per-file size cap in MB.
+  if (process.env.PI_ATTACHMENTS_DIR) {
+    config.attachments = {
+      ...(config.attachments ?? {}),
+      directory: process.env.PI_ATTACHMENTS_DIR,
+    };
+  }
+  if (process.env.PI_ATTACHMENTS_MAX_MB) {
+    const mb = Number.parseInt(process.env.PI_ATTACHMENTS_MAX_MB, 10);
+    if (Number.isFinite(mb) && mb > 0) {
+      config.attachments = { ...(config.attachments ?? {}), maxMb: mb };
+    }
+  }
+
   // Log level via env (debug/info/warn/error)
   if (process.env.PI_LOG_LEVEL) {
     config.logLevel = process.env.PI_LOG_LEVEL;

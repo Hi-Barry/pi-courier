@@ -95,6 +95,8 @@ Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https:/
 信任房间 ID(可选,回车跳过;多个逗号分隔,如 !abc:server 或 !abc:server:mentions):   ← for group chats; default mode trusted-only; skip or use /enable later
 启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间也选 y 无妨)
 pi 工作目录 [默认 /home/you/Projects]:                   ← Enter 或输入其他目录
+附件保存目录 [默认 /home/you/.pi/pi-courier-attachments]:  ← where chat images/files land; Enter for default
+单个附件大小上限 MB [默认 10]:                            ← oversize attachments are rejected with a notice
 实例名/机器名 [默认 debian]:                             ← distinguish multiple deployments; shown in the management room name
 启用多工程模式? [y/N]:                                   ← default N = single-project (one bot ↔ one pi); y = multi-project (management + project rooms)
 启用空间组织? [Y/n]:                                     ← only asked with multi-project; fresh configs default Y — all bot-created rooms are grouped into one Element space (see below)
@@ -227,6 +229,21 @@ Gate: admin + management room only (single-project mode: your DM with the bot). 
 ### Replying to an earlier message
 
 Reply (Matrix reply) to an earlier **user** message — e.g. one of your own long prompts — and send the new instruction: a one-line excerpt (≈200 chars) of the referenced text is prepended to the prompt, so "这个" / "the one above" resolve for the agent. The excerpt cache is per-room, in-memory, 50 most recent messages; the bot's own replies are not cached, and quotes that miss (too old, or from before a restart) are silently ignored — the message just goes out without the prefix.
+
+### Sending images and files to the agent
+
+Just **paste or send files** in Element — the bot saves them first, the agent reads them after:
+
+1. Paste an image (or send a file) → the bot replies `📎 附件已保存: <absolute path>` and does **not** wake the agent;
+2. Send a text instruction next → the path is prepended to the prompt automatically, and the agent reads it with its `read` tool (same workflow as pi TUI's `@path`), combining the attachment with your instruction.
+
+Supported: `m.image` / `m.file` / `m.audio` / `m.video` / stickers. Images are handed to the vision model by pi (its `read` pipeline downscales large images before the model call, per pi's own source); audio/video can't be ingested by models directly, but the agent can process them with bash/ffmpeg. Limits and details:
+
+- **10 MB per attachment** (configurable via `attachments.maxMb`, also in the setup wizard); oversize/download failures answer with the reason — never silence
+- Attachments land in `~/.pi/pi-courier-attachments/<room>/` (configurable via `attachments.directory`) — **outside your project workdirs**, so `git status` stays clean
+- Pending attachments are tracked per room+sender: `/pmctl`, `/login` and other commands don't consume the queue; a **restart clears it** (the receipt shows the path — reference it manually if needed)
+- Encrypted rooms (E2EE) are supported — attachments are decrypted automatically
+- Unsupported types (e.g. location) get a polite notice; if the model itself lacks vision, pi will say so — that's the model, not the bridge
 
 **Group chats**: rooms with **more than 2 members** are silent by default — the bot posts a one-time hint when invited, then answers nothing until enabled. **Enable without the room ID**: send `/enable <all|mentions|trusted-only>` right in the group (trusted users only, defaults to `trusted-only`), or in a DM with `/enable <roomId> <mode>` (or add it during `setup`). Two-person rooms (you + the bot) answer automatically. Room IDs look like `!xxx:server`.
 

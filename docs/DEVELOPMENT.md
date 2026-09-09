@@ -207,6 +207,7 @@ pi 0.83.0 就绪。
 
 **`src/rpc/message-router.ts`** —— 核心接线
 - 认证 → bridge 管理命令 → /pmctl 家族 → 登录管理(/login 家族)→ RPC 映射命令 → 应答捕获 → 透传 prompt(命中回复引用时摘录前缀一并下发),七级路由(spec #51 增加后两级)
+- 附件消息在斜杠/挑战码解析之前截住(spec #66):待处理清单按"房间+发送者"记账,下一条真正发给 pi 的对话消息把附件绝对路径注入 prompt(`withAttachmentPrefix`)并清空 —— 唯一消耗点;管理命令/应答捕获天然不消耗;未授权者与文本同等静默
 - agent 事件流(`message_end` / `turn_end` / `agent_start`…)→ 回发到 Matrix;extension_ui 提问/应答、auto_retry 与错误回发、steering/followUp 队列镜像也在事件路径上(spec #51)
 - 回复按 RoomBinding 路由:每个 pi 进程绑定自己的回复目标(项目房间钉住、共享默认进程随最近一次 DM 提示刷新,完整对话轮结束后释放)——不存在进程级单槽
 - typing 指示:`agent_start` / `turn_start` 触发 Matrix 输入中状态
@@ -225,6 +226,7 @@ pi 0.83.0 就绪。
 **`src/transports/matrix.ts`** —— Matrix Transport(只做消息 I/O,spec #22 后不再内嵌其他职责)
 - connect/disconnect、`sendMessage`(markdown → Matrix HTML)、typing、事件分发
 - 群/DM 判定与入群 enable 提示消费 `matrix-utils.ts` 纯函数;成员计数经缓存(不逐条消息打 API)
+- 附件管道(spec #66):媒体事件经分类后走 `AttachmentStore` 下载落盘,转发携带绝对路径的 `ExternalMessage`(不触发 turn);m.sticker 事件类型经 `room.event` 监听接入(E2EE 房间收到的是解密后事件);`mediaSource` 是下载接缝的 Matrix 半边(明文 `downloadContent` v1 鉴权端点 / 加密 `crypto.decryptMedia`)
 - SDK 内部日志经 `logger.ts` 门面(初始同步期用 `suppressLogLines` 窗口滤掉两类已知良性错误)
 
 **`src/transports/matrix-rooms.ts`** —— Matrix RoomOps 适配器(spec #22 从 matrix.ts 拆出)
@@ -233,6 +235,12 @@ pi 0.83.0 就绪。
 
 **`src/transports/matrix-utils.ts`** —— Matrix 纯函数(无 SDK/网络依赖,直测)
 - markdown 渲染(`formatForMatrix`)、事件过滤(`shouldSkipEvent`)、提及解析(`wasBotMentioned`/`stripBotMention`)、群/DM 判定(`isGroupChatRoom`)与入群提示谓词(`shouldPostJoinHint`)
+- 附件分类(spec #66):`classifyMessageContent` 分 text(m.text/m.emote)/ media(带 url 或 file 载荷,加密优先)/ other(礼貌提示路径);`sanitizeMediaFilename` 输出确定性 `<sha256 前12>-<安全化原名>`;过滤器唯一保留的静默是 m.notice(防回环)
+
+**`src/transports/attachments.ts`** —— 附件存储(spec #66)
+- `AttachmentStore.save`:大小上限预检(info.size)+ 下载后真实字节复查、60s 下载超时、mxc 去重(文件被删自动重下)、房间键安全化 + 哈希前缀文件名(防路径穿越/同名不覆盖)
+- `MediaSource` 下载接缝可注入(测试用 fake);部署缺加密半边时回执明确原因;组合根(standalone)以 `matrix.mediaSource` 组装并把 store 交给 provider(`setAttachmentStore`)
+- 目录默认 `~/.pi/pi-courier-attachments/`(与 `~/.pi` 下其他 pi-courier-* 状态文件平齐;spec 文本写的是 `~/.pi/pi-courier/attachments/`,实施时改名并在关票评论披露),上限默认 10 MB —— `attachments.directory` / `attachments.maxMb` 配置 + `PI_ATTACHMENTS_DIR` / `PI_ATTACHMENTS_MAX_MB` 环境变量 + setup 向导两项询问
 
 **`src/logger.ts`** —— 分级日志门面(spec #34 后支持项目标签)
 - 输出 `[ISO时间] [LEVEL] [标签] 消息`;`withLabel()` 派生视图打项目标签(视图动态读父阈值);字符串参数换行净化为 `⏎`,一次调用恒一条物理行(打标行不会被续行破坏)

@@ -12,9 +12,12 @@ import {
 import { logger, suppressLogLines } from "../logger.js";
 import { createQuoteCache, type QuoteCache, toExcerpt } from "../quote-cache.js";
 import type { ExternalMessage } from "../types.js";
+import type { MediaSource } from "./attachments.js";
+import { AttachmentStore } from "./attachments.js";
 import type { Transport } from "./interface.js";
 import { MatrixRoomOps } from "./matrix-rooms.js";
 import {
+  classifyMessageContent,
   extractUsername,
   formatForMatrix,
   isGroupChatRoom,
@@ -22,6 +25,7 @@ import {
   shouldSkipEvent,
   stripBotMention,
   wasBotMentioned,
+  type EncryptedMediaFile,
 } from "./matrix-utils.js";
 
 /**
@@ -44,6 +48,8 @@ export class MatrixProvider implements Transport {
   private connectedAt = 0;
   /** Per-room event_id → excerpt ring cache backing reply quotes (issue #56 票5). */
   private quoteCache: QuoteCache = createQuoteCache();
+  /** Attachment storage (issue #66) — wired by the composition root. */
+  private attachments?: AttachmentStore;
 
   /** Room-capability half of the Matrix integration (see matrix-rooms.ts). */
   readonly roomOps = new MatrixRoomOps({
@@ -62,6 +68,16 @@ export class MatrixProvider implements Transport {
      *  lives in the message-router pipeline). */
     private isRoomEnabled: (chatId: string) => boolean
   ) {}
+
+  /**
+   * Wire the attachment store (issue #66) after construction — the store is
+   * backed by this provider's mediaSource, so the composition root creates
+   * the provider first, then hands it its store. Absent store (tests) = media
+   * events keep the legacy skip-silently behaviour.
+   */
+  setAttachmentStore(store: AttachmentStore): void {
+    this.attachments = store;
+  }
 
   get isConnected(): boolean {
     return this._isConnected;
@@ -152,6 +168,17 @@ export class MatrixProvider implements Transport {
           this.errorHandler(err as Error);
         }
       }
+    });
+
+    // Stickers (issue #66 票3): m.sticker is an EVENT type, not m.room.message,
+    // so room.message never fires for it — the content is image-shaped, the
+    // attachment path handles it like any other media. In E2EE rooms the
+    // sticker arrives here DECRYPTED (the SDK re-emits decrypted events on
+    // room.event); in plaintext rooms it arrives as-is. The outer encrypted
+    // payload (type m.room.encrypted) fails this filter.
+    this.client.on("room.event", (roomId: string, event: any) => {
+      if (event?.type !== "m.sticker") return;
+      void this.handleMessage(roomId, event).catch((err: Error) => this.errorHandler?.(err));
     });
 
     // Route SDK-internal logs through the shared leveled logger — trace/debug
@@ -267,6 +294,27 @@ export class MatrixProvider implements Transport {
     const skipReason = shouldSkipEvent(event, this.botUserId, this.connectedAt, this.joinedRooms, roomId);
     if (skipReason) return;
 
+    // Attachment intake (issue #66): media payloads diverge before the text
+    // pipeline — they download to disk and forward as path references, they
+    // never trigger an agent turn themselves.
+    const classified = classifyMessageContent(event.content);
+    if (classified.kind === "media") {
+      // No store wired (bare transport in tests): legacy skip-silently.
+      if (!this.attachments) return;
+      await this.handleMediaMessage(roomId, event, classified);
+      return;
+    }
+    if (classified.kind === "other") {
+      // 票3:非文本且无媒体载荷(如 m.location)不再静默 — 转发给 router,
+      // 由它过授权门后回执礼貌提示。
+      this.messageHandler?.({
+        ...this.envelope(roomId, event, await this.resolveIsGroupChat(roomId)),
+        content: event.content?.body ?? "",
+        unsupportedType: classified.msgtype,
+      });
+      return;
+    }
+
     const chatId = roomId;
     const userId = event.sender; // e.g. @user:matrix.org
     const username = extractUsername(userId);
@@ -274,18 +322,7 @@ export class MatrixProvider implements Transport {
     const messageId = event.event_id;
 
     // Determine if group chat from cached member count (no API call per message)
-    let memberCount = this.roomMemberCount.get(roomId);
-    if (memberCount === undefined) {
-      // Cache miss — fetch once and cache
-      try {
-        const members = await this.client.getJoinedRoomMembers(roomId);
-        memberCount = members.length;
-        this.roomMemberCount.set(roomId, memberCount);
-      } catch {
-        memberCount = 2; // Default to DM if we can't check
-      }
-    }
-    const isGroupChat = isGroupChatRoom(memberCount);
+    const isGroupChat = await this.resolveIsGroupChat(roomId);
 
     // Check if bot was mentioned (pure utility)
     const wasMentioned = isGroupChat ? wasBotMentioned(messageText, this.botUserId) : false;
@@ -332,6 +369,90 @@ export class MatrixProvider implements Transport {
 
       this.messageHandler(externalMessage);
     }
+  }
+
+  /**
+   * Media intake (issue #66 票1): download → save → forward as an
+   * ExternalMessage carrying the absolute path (or the failure reason).
+   * Receipts and the pending-attachment ledger are ROUTER policy — the
+   * transport stays pure I/O, exactly like the text pipeline above.
+   */
+  private async handleMediaMessage(roomId: string, event: any, media: { mxcUrl?: string; encryptedFile?: EncryptedMediaFile; filename: string; sizeHint?: number }): Promise<void> {
+    if (!this.client || !this.attachments) return;
+    const base = this.envelope(roomId, event, await this.resolveIsGroupChat(roomId));
+
+    try {
+      const saved = await this.attachments.save(base.chatId, {
+        mxcUrl: media.mxcUrl,
+        encryptedFile: media.encryptedFile,
+        body: media.filename,
+        sizeHint: media.sizeHint,
+      });
+      logger.info(`[Matrix] 附件已保存: ${saved.path}(${base.username})`);
+      this.messageHandler?.({ ...base, content: media.filename, attachments: [saved] });
+    } catch (err) {
+      logger.warn(`[Matrix] 附件处理失败(${base.username}): ${(err as Error).message}`);
+      this.messageHandler?.({ ...base, content: media.filename, attachmentError: (err as Error).message });
+    }
+  }
+
+  /** The common ExternalMessage envelope fields shared by the text, media
+   *  and unsupported-type pipelines (no mention stripping on non-text). */
+  private envelope(roomId: string, event: any, isGroupChat: boolean) {
+    return {
+      chatId: roomId,
+      transport: this.type,
+      username: extractUsername(event.sender),
+      userId: event.sender,
+      timestamp: new Date(event.origin_server_ts || Date.now()),
+      messageId: event.event_id,
+      isGroupChat,
+      wasMentioned: false,
+    };
+  }
+
+  /** Cached member-count lookup shared by the text and media pipelines. */
+  private async resolveIsGroupChat(roomId: string): Promise<boolean> {
+    let memberCount = this.roomMemberCount.get(roomId);
+    if (memberCount === undefined) {
+      try {
+        const members = await this.client!.getJoinedRoomMembers(roomId);
+        memberCount = members.length;
+        this.roomMemberCount.set(roomId, memberCount);
+      } catch {
+        memberCount = 2; // Default to DM if we can't check
+      }
+    }
+    return isGroupChatRoom(memberCount);
+  }
+
+  /**
+   * The Matrix half of the attachment download seam (issue #66): plaintext
+   * media via the authenticated v1 endpoint; E2EE rooms via the crypto
+   * client's decryptMedia (download + AES-CTR + SHA-256 in one step).
+   * `crypto` is undefined when the deployment runs without encryption.
+   */
+  get mediaSource(): MediaSource {
+    return {
+      downloadPlaintext: async (mxcUrl) => {
+        const { data } = await this.client!.downloadContent(mxcUrl);
+        return data;
+      },
+      ...(this.config.encryption !== false
+        ? {
+            downloadEncrypted: async (file) => {
+              const crypto = this.client?.crypto;
+              if (!crypto) {
+                throw new Error("E2EE crypto 原生库不可用,无法解密加密附件");
+              }
+              // Our EncryptedMediaFile is a structural subset of the SDK's
+              // EncryptedFile; at runtime this IS the event's original object,
+              // so every field the Rust decrypt needs (kty/key_ops/…) is there.
+              return crypto.decryptMedia(file as Parameters<typeof crypto.decryptMedia>[0]);
+            },
+          }
+        : {}),
+    };
   }
 
 }

@@ -8,6 +8,7 @@
  */
 
 import * as os from "node:os";
+import * as path from "node:path";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline";
 import { defaultProjectsRoot, loadConfig, nativeMxid, saveConfig } from "./config.js";
@@ -276,6 +277,19 @@ export async function runSetup(): Promise<void> {
     const workdirDefault = existing.workdir ?? defaultProjectsRoot();
     const workdir = (await ask(`pi 工作目录 [默认 ${workdirDefault}]: `)).trim() || workdirDefault;
 
+    // ---- 6.2 attachments (issue #66) ------------------------------------------
+    // Where media from the chat lands and how big a single file may be.
+    // Defaults are fine for almost everyone — the questions exist so the
+    // knobs are discoverable, answers merge-preserve existing values.
+    const attDirDefault = existing.attachments?.directory ?? path.join(os.homedir(), ".pi", "pi-courier-attachments");
+    const attachmentsDir = (await ask(`附件保存目录 [默认 ${attDirDefault}]: `)).trim() || attDirDefault;
+    const attMbDefault = existing.attachments?.maxMb ?? 10;
+    const attMbRaw = (await ask(`单个附件大小上限 MB [默认 ${attMbDefault}]: `)).trim();
+    const attMb = attMbRaw === "" ? attMbDefault : Number.parseInt(attMbRaw, 10);
+    if (!Number.isFinite(attMb) || attMb <= 0) {
+      throw new Error("附件大小上限应为正整数(MB)");
+    }
+
     // ---- 6.5 instance name (multi-machine differentiation) -------------------
     const instanceDefault = existing.instanceName ?? os.hostname();
     const instanceName = (await ask(`实例名/机器名(默认 ${instanceDefault};多台部署用来区分,将显示在管理房间名): `)).trim() || instanceDefault;
@@ -321,6 +335,7 @@ export async function runSetup(): Promise<void> {
       workdir,
       instanceName,
       multiProject,
+      attachments: { ...existing.attachments, directory: attachmentsDir, maxMb: attMb },
       // Single-project reruns leave the space fields exactly as they were
       // (no silent enabled flip) — the feature is multi-project-only.
       ...(multiProject ? { space: { ...existing.space, enabled: spaceEnabled } } : {}),
@@ -335,6 +350,7 @@ export async function runSetup(): Promise<void> {
     console.log(`   信任用户: ${adminRaw}`);
     console.log(`   E2EE: ${encryption ? "开启" : "关闭"}`);
     console.log(`   工作目录: ${workdir}`);
+    console.log(`   附件目录: ${attachmentsDir}(上限 ${attMb} MB)`);
     console.log(`   实例名: ${instanceName}(用于多台部署区分,显示在管理房间名)`);
     console.log(`   多工程: ${multiProject ? "开启" : "关闭(单工程)"}`);
     if (multiProject) {

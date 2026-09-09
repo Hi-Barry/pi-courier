@@ -10,6 +10,8 @@
  *   Messenger <── replies <────────── bridge <── agent events (stdout JSONL)
  */
 
+import * as os from "node:os";
+import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
 import { ConfigStore, isSpaceMode } from "./config.js";
@@ -20,6 +22,7 @@ import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
 import { ensureSpaceAndManagementRoom, healRoomIdentities, healTrustedPowerLevels } from "./space.js";
+import { AttachmentStore } from "./transports/attachments.js";
 import type { RoomOps, Transport } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
 import { suppressKnownWarnings } from "./warnings.js";
@@ -107,6 +110,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   if (config.matrix?.homeserverUrl && config.matrix?.accessToken) {
     const matrix = new MatrixProvider(config.matrix, (chatId) => auth.isChannelEnabled(chatId));
+    // Attachment intake (issue #66): the store needs the Matrix client for
+    // downloads, so it is created here and handed to the provider. Both read
+    // config at construction time — changes take effect on restart like every
+    // other config field.
+    const attachments = new AttachmentStore(
+      {
+        rootDir: config.attachments?.directory ?? path.join(os.homedir(), ".pi", "pi-courier-attachments"),
+        maxBytes: Math.max(1, config.attachments?.maxMb ?? 10) * 1024 * 1024,
+      },
+      matrix.mediaSource
+    );
+    matrix.setAttachmentStore(attachments);
     transports.push(matrix);
     roomOps = matrix.roomOps;
   }
