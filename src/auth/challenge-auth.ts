@@ -12,8 +12,6 @@
 
 import { matchesAdmin, matchesTrustedEntry, namespacedId } from "../identity.js";
 
-export { namespacedId };
-
 interface ChallengeData {
   code: string;
   userId: string;

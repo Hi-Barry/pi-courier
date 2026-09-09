@@ -428,6 +428,12 @@ describe("sanitizeMediaFilename", () => {
     expect(sanitizeMediaFilename("..", "mxc://s/abc")).not.toContain("..");
   });
 
+  it("regression: ' ..' (space-led dots) cannot survive as '..' (fast-check 反例固化)", () => {
+    const name = sanitizeMediaFilename(" ..", "mxc://s/abc");
+    expect(name).not.toContain("..");
+    expect(name).not.toMatch(/^\s/);
+  });
+
   it("falls back to 'file' when nothing safe remains", () => {
     expect(sanitizeMediaFilename("", "mxc://s/abc")).toMatch(/^[0-9a-f]{12}-file$/);
     expect(sanitizeMediaFilename(undefined, "mxc://s/abc")).toMatch(/^[0-9a-f]{12}-file$/);

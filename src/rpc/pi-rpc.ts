@@ -208,7 +208,7 @@ export class PiRpc {
    * RpcClient.prompt() does not expose the parameter.
    */
   async prompt(text: string): Promise<void> {
-    await this.sendPrompt(text, "steer");
+    await upstreamPromptSend(this.requireClient(), text, "steer");
   }
 
   /**
@@ -218,25 +218,12 @@ export class PiRpc {
    * state check is needed here).
    */
   async promptQueued(text: string): Promise<void> {
-    await this.sendPrompt(text, "followUp");
+    await upstreamPromptSend(this.requireClient(), text, "followUp");
   }
 
-  /** Raw `prompt` command with an explicit streaming behavior, via private send. */
-  private async sendPrompt(text: string, streamingBehavior: "steer" | "followUp"): Promise<void> {
-    const client = this.requireClient() as unknown as {
-      send: (command: {
-        type: "prompt";
-        message: string;
-        streamingBehavior: "steer" | "followUp";
-      }) => Promise<{ success: boolean; error?: string }>;
-    };
-    const response = await client.send({ type: "prompt", message: text, streamingBehavior });
-    if (!response.success) {
-      throw new Error(response.error ?? "prompt failed");
-    }
-  }
-
-  /** Subscribe to agent events. Safe to call before start(). Returns an unsubscribe function. */
+  /** Get available commands (extension commands, prompt templates, skills) with a short cache. */
+  /** Subscribe to agent events. Safe to call before start(). Returns an
+   *  unsubscribe function. */
   onEvent(listener: RpcEventListener): () => void {
     const index = this.listeners.push(listener) - 1;
     let clientUnsub: (() => void) | undefined;
@@ -249,11 +236,6 @@ export class PiRpc {
     };
   }
 
-  // =========================================================================
-  // RPC command conveniences (used by the slash command map)
-  // =========================================================================
-
-  /** Get available commands (extension commands, prompt templates, skills) with a short cache. */
   async getCommands(): Promise<RpcSlashCommandInfo[]> {
     if (this.commandsCache && Date.now() - this.commandsCache.at < 60_000) {
       return this.commandsCache.list;

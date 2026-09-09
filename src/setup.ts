@@ -7,8 +7,6 @@
  * admin user → E2EE toggle, then writes ~/.pi/pi-courier.json.
  */
 
-import * as os from "node:os";
-import * as path from "node:path";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline";
 import {

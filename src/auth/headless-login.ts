@@ -222,11 +222,10 @@ export interface LoginManagerDeps {
   /** Room reply (the router's sendReply). */
   sendReply: (chatId: string, transport: string, text: string) => Promise<void>;
   /** Every rpc of this instance (default + started project rpcs): the idle
-   *  ones restart after a successful login so the new credential loads. */
+   *  ones restart after a successful login so the new credential loads.
+   *  瞬态状态失效由 rpc 自身的重启生命周期广播接管(spec #72 票6/C5),
+   *  本管理器不再携带失效回调。 */
   allRpcs: () => PiRpc[];
-  /** Router hook: drop per-rpc transient state (queue mirror, pending
-   *  extension questions) for each rpc this manager restarts — the new
-   *  subprocess knows nothing of the old question ids. */
   /** Runtime seam (tests inject a mock; default = real ModelRuntime). */
   runtimeFactory?: (authPath: string) => Promise<LoginRuntime>;
   /** pi credential file (defaults to <agentDir>/auth.json; tests inject a tmp dir). */
