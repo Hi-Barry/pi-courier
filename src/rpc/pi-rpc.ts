@@ -110,6 +110,15 @@ export class PiRpc {
   }
 
   private startPromise: Promise<void> | null = null;
+  /** 重启生命周期订阅(spec #72 票6/C5):瞬态状态经此自清,不再外借扳机。 */
+  private restartListeners = new Set<(rpc: PiRpc) => void>();
+
+  /** Subscribe to subprocess restarts (fired after the new process is up).
+   *  Returns an unsubscribe function. */
+  onRestarted(listener: (rpc: PiRpc) => void): () => void {
+    this.restartListeners.add(listener);
+    return () => this.restartListeners.delete(listener);
+  }
 
   async start(): Promise<void> {
     if (this.client) return;
@@ -174,12 +183,20 @@ export class PiRpc {
    * Restart the pi process. Keeps registered event listeners attached to the
    * new process. The session persists on disk, so the same session is resumed.
    * Useful after installing new extensions/skills or changing provider config.
+   * Fires the restart lifecycle AFTER the new process is up.
    */
   async restart(): Promise<void> {
     const keptListeners = this.listeners;
     await this.stop();
     this.listeners = keptListeners;
     await this.start();
+    for (const listener of this.restartListeners) {
+      try {
+        listener(this);
+      } catch {
+        // 生命周期监听器的失败不影响重启本身
+      }
+    }
   }
 
   /**

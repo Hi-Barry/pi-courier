@@ -28,6 +28,7 @@ import type { ExternalMessage, MessageAttachment, MsgBridgeConfig, ReplyTarget }
 import { handleSlashCommand, type QueueSnapshot } from "./command-map.js";
 import type { ExtensionUIResponsePayload, PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
+import { RpcTransientState, type PendingExtensionQuestion } from "./rpc-transient-state.js";
 import type { ProjectManager } from "./project-manager.js";
 
 export interface MessageRouterDeps {
@@ -159,16 +160,6 @@ export type ExtensionUIRequestView = {
   notifyType?: string;
 };
 
-/** A question asked in a room and still awaiting the answer. FIFO per rpc —
- *  the oldest pending question is answered first. The target is captured at
- *  ask time so the answer/timeout routes back even if the default rpc's
- *  binding moves on to another prompter in between. */
-interface PendingExtensionQuestion {
-  request: ExtensionUIRequestView;
-  target: ReplyTarget;
-  timer: NodeJS.Timeout;
-}
-
 /** Fallback timeout for pending extension UI questions: the config value is
  *  in minutes, default 10 (issue #54). Read at enqueue time. Upstream's own
  *  shorter select/confirm/input timeouts don't conflict — whichever fires
@@ -284,27 +275,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     bindings.set(rpc, { pinned, replyTarget });
   };
 
-  // Live steering/followUp queue mirror per rpc, refreshed by queue_update
-  // events (/queue display and the stop/interrupt warning read it). RPC has no
-  // clear_queue, so the mirror intentionally keeps reflecting the upstream
-  // queues even after abort — that persistence is surfaced to the user.
-  const queueMirrors = new WeakMap<PiRpc, QueueSnapshot>();
-
-  // Pending extension UI questions per rpc, FIFO — the oldest question is
-  // answered by the room's next plain message (issue #54).
-  const pendingQuestions = new WeakMap<PiRpc, PendingExtensionQuestion[]>();
-
-  // A restarted subprocess knows nothing of the questions (or queue) the old
-  // one left behind — keep them from swallowing the room's next message as a
-  // bogus "answer" to a question the new process will never resolve.
-  const clearRpcState = (rpc: PiRpc): void => {
-    queueMirrors.delete(rpc);
-    const queue = pendingQuestions.get(rpc);
-    if (queue) {
-      for (const question of queue) clearTimeout(question.timer);
-      pendingQuestions.delete(rpc);
-    }
-  };
+  // 瞬态状态(spec #72 票6/C5):队列镜像 + 悬置提问,失效时机自治 ——
+  // 状态模块订阅 PiRpc 的重启生命周期,不再有外借的 clearRpcState 扳机。
+  const transient = new RpcTransientState((rpc, handler) => rpc.onRestarted?.(handler));
 
   // 待处理附件清单(issue #66 票1):按 房间+发送者 记账,内存态 — 重启即清
   // (每张回执都带路径,不构成数据丢失)。消耗规则:该发送者在同一条管道里
@@ -320,16 +293,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     new LoginManager({
       sendReply,
       allRpcs: () => projectManager.allRpcs(),
-      onRestarted: clearRpcState,
     });
 
   /** Timeout expiry (issue #54): answer cancelled on the user's behalf, tell
    *  the room, and drop the question. A no-op when it was answered already. */
   const expireQuestion = (rpc: PiRpc, entry: PendingExtensionQuestion, log: LeveledLogger): void => {
-    const queue = pendingQuestions.get(rpc);
-    const index = queue?.indexOf(entry) ?? -1;
+    const queue = transient.questionQueue(rpc);
+    const index = queue.indexOf(entry);
     if (index === -1) return; // answered or cancelled in the meantime
-    queue!.splice(index, 1);
+    queue.splice(index, 1);
     const title = oneLine(entry.request.title ?? "(无标题)", 80);
     log.info(`[extension-ui] 提问超时未答,已代答取消 (id ${entry.request.id})`);
     rpc.respondExtensionUI({ id: entry.request.id, cancelled: true }).catch((err: unknown) => {
@@ -362,9 +334,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         };
         // A pending question must never keep the bridge process alive by itself.
         entry.timer.unref?.();
-        const queue = pendingQuestions.get(rpc) ?? [];
+        const queue = transient.questionQueue(rpc);
         queue.push(entry);
-        pendingQuestions.set(rpc, queue);
         sendReply(target.chatId, target.transport, extensionUIQuestionText(request)).catch(() => {});
         log.debug(`[extension-ui] ${request.method} 提问已发往房间 (id ${request.id})`);
         return;
@@ -737,9 +708,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           const handled = await handleSlashCommand(ctx.text, {
             rpc,
             reply: async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText),
-            queueView: () => queueMirrors.get(rpc),
+            queueView: () => transient.mirror(rpc),
             allRpcs: () => projectManager.allRpcs(),
-            clearRpcState,
           });
           return handled;
         } catch (err) {
@@ -773,8 +743,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       handle: async (ctx) => {
         if (ctx.text.startsWith("/")) return false;
         const rpc = await ctx.roomRpc();
-        const queue = pendingQuestions.get(rpc);
-        const oldest = queue?.[0];
+        const queue = transient.questionQueue(rpc);
+        const oldest = queue[0];
         if (oldest && oldest.target.chatId === ctx.msg.chatId) {
           await captureAnswer(rpc, queue!, oldest, ctx.text, ctx.msg, ctx.log);
           return true;
@@ -894,7 +864,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // Refresh the queue mirror before any routing decisions — /queue and the
       // stop/interrupt queue warning read this snapshot.
       if (event.type === "queue_update") {
-        queueMirrors.set(rpc, {
+        transient.setMirror(rpc, {
           steering: [...(event.steering ?? [])],
           followUp: [...(event.followUp ?? [])],
         });

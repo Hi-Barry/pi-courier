@@ -70,14 +70,21 @@ function makeFixtures(opts: { extensionUiTimeoutMinutes?: number } = {}) {
     replies.push({ chatId, transport, text });
   };
   const extensionResponses: ExtensionUIResponsePayload[] = [];
-  const rpc = {
+  const restartListeners = new Set<(r: unknown) => void>();
+  const rpc: Record<string, unknown> = {
     prompt: vi.fn().mockResolvedValue(undefined),
     promptQueued: vi.fn().mockResolvedValue(undefined),
     respondExtensionUI: vi.fn().mockImplementation(async (payload: ExtensionUIResponsePayload) => {
       extensionResponses.push(payload);
     }),
     getState: vi.fn().mockResolvedValue({ model: { id: "m" }, isStreaming: false, pendingMessageCount: 0 }),
-    restart: vi.fn().mockResolvedValue(undefined),
+    onRestarted: vi.fn((listener: (r: unknown) => void) => {
+      restartListeners.add(listener);
+      return () => restartListeners.delete(listener);
+    }),
+    restart: vi.fn(async () => {
+      for (const listener of restartListeners) listener(rpc);
+    }),
     onEvent: vi.fn(),
   } as unknown as PiRpc;
   const projectManager = {

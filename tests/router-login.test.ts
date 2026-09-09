@@ -37,11 +37,18 @@ function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): 
 
 function makeRpc(label: string | undefined, isStreaming = false, onExtensionResponse?: (payload: ExtensionUIResponsePayload) => void) {
   const prompt = vi.fn().mockResolvedValue(undefined);
-  const rpc = {
+  const restartListeners = new Set<(r: unknown) => void>();
+  const rpc: Record<string, unknown> = {
     label,
     prompt,
     getState: vi.fn().mockResolvedValue({ isStreaming, model: { id: "m" }, pendingMessageCount: 0 }),
-    restart: vi.fn().mockResolvedValue(undefined),
+    onRestarted: vi.fn((listener: (r: unknown) => void) => {
+      restartListeners.add(listener);
+      return () => restartListeners.delete(listener);
+    }),
+    restart: vi.fn(async () => {
+      for (const listener of restartListeners) listener(rpc);
+    }),
     respondExtensionUI: vi.fn().mockImplementation(async (payload: ExtensionUIResponsePayload) => {
       onExtensionResponse?.(payload);
     }),
@@ -274,9 +281,12 @@ describe("/login api_key round-trip in the room (issue #55)", () => {
     await vi.waitFor(() => expect(fx.lastReply()).toContain("登录成功"));
     expect(fx.extensionResponses).toHaveLength(0); // extension_ui still parked
 
-    // …and the extension question answers afterwards, once the login is done.
+    // …and the extension question does NOT survive the login-triggered
+    // restart (spec #72 票6/C5): the restarted subprocess never asked q1, so
+    // the transient state drops it — "y" goes to pi as a fresh prompt.
     await fx.router.handleIncoming(makeMsg({ text: "y", messageId: "m3" }));
-    await vi.waitFor(() => expect(fx.extensionResponses).toEqual([{ id: "q1", confirmed: true }]));
+    await vi.waitFor(() => expect(fx.extensionResponses).toEqual([]));
+    expect(fx.defaultRpc.prompt).toHaveBeenCalledWith("y");
   });
 });
 

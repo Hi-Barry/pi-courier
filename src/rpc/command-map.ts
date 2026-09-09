@@ -41,7 +41,6 @@ export interface SlashCommandContext {
    *  questions) must not survive a restart: the new subprocess knows nothing
    *  of old question ids, and a stale question would swallow the room's next
    *  message as a bogus "answer". */
-  clearRpcState?: (rpc: PiRpc) => void;
 }
 
 /** Collapse a queue entry to one bounded line for chat display. */
@@ -96,8 +95,7 @@ function rpcDisplayName(rpc: PiRpc): string {
  * the fresh file anyway.
  */
 export async function restartIdleRpcs(
-  rpcs: readonly PiRpc[],
-  onRestarted?: (rpc: PiRpc) => void
+  rpcs: readonly PiRpc[]
 ): Promise<ReloadAllResult> {
   const result: ReloadAllResult = { restarted: [], busy: [], skipped: [] };
   for (const rpc of rpcs) {
@@ -108,8 +106,8 @@ export async function restartIdleRpcs(
         result.busy.push(name);
         continue;
       }
+      // 重启生命周期由 PiRpc 自身广播(瞬态状态自清,spec #72 票6)
       await rpc.restart();
-      onRestarted?.(rpc);
       result.restarted.push(name);
     } catch {
       result.skipped.push(name);
@@ -432,14 +430,13 @@ export async function handleSlashCommand(
             return true;
           }
           await reply("🔄 正在逐个重启全部 pi 进程(空闲才重启,忙碌跳过)…");
-          const result = await restartIdleRpcs(ctx.allRpcs(), ctx.clearRpcState);
+          const result = await restartIdleRpcs(ctx.allRpcs());
           await reply(formatReloadAllResult(result));
           return true;
         }
         await reply("🔄 正在重启 pi 进程(扩展/技能/配置将重新加载)…");
         try {
           await rpc.restart();
-          ctx.clearRpcState?.(rpc);
           const state = await rpc.getState();
           await reply(`✅ pi 已重启,模型: ${state.model?.id ?? "unknown"}`);
         } catch (err) {
