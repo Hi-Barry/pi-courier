@@ -19,18 +19,19 @@ import type { ProjectManager } from "../src/rpc/project-manager";
 import type { RoomOps } from "../src/transports/interface";
 import type { ExternalMessage } from "../src/types";
 
-function makeMsg(overrides: Partial<ExternalMessage> = {}): ExternalMessage {
+function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
+  const { text = "hi", ...rest } = overrides;
   return {
     chatId: "!dm:server",
     transport: "matrix",
     userId: "@barry:server",
     username: "barry",
-    content: "hi",
+    payload: { kind: "text", text },
     isGroupChat: false,
     wasMentioned: false,
     messageId: "m1",
     timestamp: new Date(),
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -129,10 +130,10 @@ function makeFixtures(opts: FixtureOptions = {}, runtime?: LoginRuntime) {
 describe("/login gates (issue #55)", () => {
   it("a trusted non-admin is rejected before anything starts", async () => {
     const fx = makeFixtures({ secondTrusted: "matrix:@other:server" });
-    await fx.router.handleIncoming(makeMsg({ userId: "@other:server", username: "other", content: "/login" }));
+    await fx.router.handleIncoming(makeMsg({ userId: "@other:server", username: "other", text: "/login" }));
     expect(fx.lastReply()).toBe("❌ 无权限(仅管理员可管理 provider 登录)");
     await fx.router.handleIncoming(
-      makeMsg({ userId: "@other:server", username: "other", content: "/login anthropic api_key" })
+      makeMsg({ userId: "@other:server", username: "other", text: "/login anthropic api_key" })
     );
     expect(fx.lastReply()).toBe("❌ 无权限(仅管理员可管理 provider 登录)");
   });
@@ -140,16 +141,16 @@ describe("/login gates (issue #55)", () => {
   it("in multi-project mode only the management room may log in", async () => {
     const fx = makeFixtures({ multiProject: true });
     // Not the management room → rejected.
-    await fx.router.handleIncoming(makeMsg({ content: "/login" }));
+    await fx.router.handleIncoming(makeMsg({ text: "/login" }));
     expect(fx.lastReply()).toBe("❌ 登录管理仅可在管理房间使用(单工程模式下与 bot 的私聊即可)");
     // The management room → the listing runs.
-    await fx.router.handleIncoming(makeMsg({ chatId: "!mgmt:server", content: "/login" }));
+    await fx.router.handleIncoming(makeMsg({ chatId: "!mgmt:server", text: "/login" }));
     await vi.waitFor(() => expect(fx.lastReply()).toContain("可登录 provider"));
   });
 
   it("in single-project mode a DM counts as the management room; enabled group chats do not", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "/login" }));
+    await fx.router.handleIncoming(makeMsg({ text: "/login" }));
     await vi.waitFor(() => expect(fx.lastReply()).toContain("可登录 provider"));
 
     const group = makeFixtures();
@@ -158,7 +159,7 @@ describe("/login gates (issue #55)", () => {
     // never through store.update, which would persist to the real config).
     group.auth.enableChannel("!group:server", "trusted-only");
     await group.router.handleIncoming(
-      makeMsg({ isGroupChat: true, chatId: "!group:server", content: "/login" })
+      makeMsg({ isGroupChat: true, chatId: "!group:server", text: "/login" })
     );
     expect(group.lastReply()).toBe("❌ 登录管理仅可在管理房间使用(单工程模式下与 bot 的私聊即可)");
   });
@@ -167,7 +168,7 @@ describe("/login gates (issue #55)", () => {
 describe("/login listing and dispatch (issue #55)", () => {
   it("the bare /login lists providers with capability + credential badges", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "/login" }));
+    await fx.router.handleIncoming(makeMsg({ text: "/login" }));
     await vi.waitFor(() => expect(fx.lastReply()).toContain("可登录 provider"));
     const text = fx.lastReply();
     expect(text).toContain("• anthropic — Anthropic(oauth / api_key) ✅ 已认证(oauth)");
@@ -181,21 +182,21 @@ describe("/login listing and dispatch (issue #55)", () => {
       listCredentials: vi.fn(async () => [{ providerId: "anthropic", type: "oauth" }] as CredentialInfo[]),
     };
     const fx = makeFixtures({}, runtime);
-    await fx.router.handleIncoming(makeMsg({ content: "/logout" }));
+    await fx.router.handleIncoming(makeMsg({ text: "/logout" }));
     expect(fx.lastReply()).toContain("用法: /logout <provider>");
 
-    await fx.router.handleIncoming(makeMsg({ content: "/logout openai" }));
+    await fx.router.handleIncoming(makeMsg({ text: "/logout openai" }));
     expect(fx.lastReply()).toContain("openai 没有已保存的凭据");
     expect(asMock(runtime.logout)).not.toHaveBeenCalled();
 
-    await fx.router.handleIncoming(makeMsg({ content: "/logout anthropic" }));
+    await fx.router.handleIncoming(makeMsg({ text: "/logout anthropic" }));
     expect(asMock(runtime.logout)).toHaveBeenCalledWith("anthropic");
     expect(fx.lastReply()).toContain("✅ 已删除 anthropic 的凭据");
   });
 
   it("/auth lists the stored credentials", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "/auth" }));
+    await fx.router.handleIncoming(makeMsg({ text: "/auth" }));
     await vi.waitFor(() => expect(fx.lastReply()).toContain("• anthropic — oauth"));
   });
 });
@@ -217,7 +218,7 @@ function runtimeWithSecretPrompt(): LoginRuntime {
 }
 
 async function startLogin(fx: ReturnType<typeof makeFixtures>): Promise<void> {
-  await fx.router.handleIncoming(makeMsg({ content: "/login anthropic api_key" }));
+  await fx.router.handleIncoming(makeMsg({ text: "/login anthropic api_key" }));
   await vi.waitFor(() => expect(fx.replies[0]!.text).toContain("已开始 anthropic api_key 登录流程"));
   await vi.waitFor(() => expect(fx.replies.at(-1)!.text).toContain("粘贴你的 Anthropic API key"));
 }
@@ -228,7 +229,7 @@ describe("/login api_key round-trip in the room (issue #55)", () => {
     await startLogin(fx);
     expect(fx.allText()).toContain("房间历史"); // the secret warning is present
 
-    await fx.router.handleIncoming(makeMsg({ content: "sk-ant-secret", messageId: "m2" }));
+    await fx.router.handleIncoming(makeMsg({ text: "sk-ant-secret", messageId: "m2" }));
 
     await vi.waitFor(() => expect(fx.lastReply()).toContain("登录成功"));
     const summary = fx.lastReply();
@@ -244,13 +245,13 @@ describe("/login api_key round-trip in the room (issue #55)", () => {
   it("「取消」 aborts the flow; no restart happens and later messages prompt normally", async () => {
     const fx = makeFixtures({}, runtimeWithSecretPrompt());
     await startLogin(fx);
-    await fx.router.handleIncoming(makeMsg({ content: "取消", messageId: "m2" }));
+    await fx.router.handleIncoming(makeMsg({ text: "取消", messageId: "m2" }));
     await vi.waitFor(() => expect(fx.lastReply()).toContain("🛑 已取消 anthropic 的登录流程"));
     expect(fx.allText()).not.toContain("登录成功");
     expect(fx.defaultRpc.restart).not.toHaveBeenCalled();
 
     // The room is free again — plain messages go to pi.
-    await fx.router.handleIncoming(makeMsg({ content: "hello again", messageId: "m3" }));
+    await fx.router.handleIncoming(makeMsg({ text: "hello again", messageId: "m3" }));
     expect(fx.defaultPrompt).toHaveBeenCalledWith("hello again");
   });
 
@@ -269,12 +270,12 @@ describe("/login api_key round-trip in the room (issue #55)", () => {
     await vi.waitFor(() => expect(fx.allText()).toContain("允许部署?"));
 
     // The next plain message belongs to the LOGIN, not the extension question.
-    await fx.router.handleIncoming(makeMsg({ content: "sk-ant-secret", messageId: "m2" }));
+    await fx.router.handleIncoming(makeMsg({ text: "sk-ant-secret", messageId: "m2" }));
     await vi.waitFor(() => expect(fx.lastReply()).toContain("登录成功"));
     expect(fx.extensionResponses).toHaveLength(0); // extension_ui still parked
 
     // …and the extension question answers afterwards, once the login is done.
-    await fx.router.handleIncoming(makeMsg({ content: "y", messageId: "m3" }));
+    await fx.router.handleIncoming(makeMsg({ text: "y", messageId: "m3" }));
     await vi.waitFor(() => expect(fx.extensionResponses).toEqual([{ id: "q1", confirmed: true }]));
   });
 });
@@ -282,7 +283,7 @@ describe("/login api_key round-trip in the room (issue #55)", () => {
 describe("/reload all (issue #55)", () => {
   it("restarts idle rpcs, skips busy ones, and reports both", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "/reload all" }));
+    await fx.router.handleIncoming(makeMsg({ text: "/reload all" }));
     await vi.waitFor(() => expect(fx.lastReply()).toContain("已重启 1 个空闲进程: 默认"));
     expect(fx.lastReply()).toContain("⚠️ 跳过 1 个忙碌进程: proj-busy(完成后执行 /reload all)");
     expect(fx.defaultRpc.restart).toHaveBeenCalledTimes(1);
@@ -291,7 +292,7 @@ describe("/reload all (issue #55)", () => {
 
   it("plain /reload keeps restarting only the room's own process", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "/reload" }));
+    await fx.router.handleIncoming(makeMsg({ text: "/reload" }));
     await vi.waitFor(() => expect(fx.lastReply()).toContain("pi 已重启"));
     expect(fx.defaultRpc.restart).toHaveBeenCalledTimes(1);
     expect(fx.busyRpc.restart).not.toHaveBeenCalled();

@@ -18,18 +18,19 @@ import type { ProjectManager } from "../src/rpc/project-manager";
 import type { RoomOps } from "../src/transports/interface";
 import type { ExternalMessage, MessageAttachment } from "../src/types";
 
-function makeMsg(overrides: Partial<ExternalMessage> = {}): ExternalMessage {
+function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
+  const { text = "hi", ...rest } = overrides;
   return {
     chatId: "!dm:server",
     transport: "matrix",
     userId: "@barry:server",
     username: "barry",
-    content: "hi",
+    payload: { kind: "text", text },
     isGroupChat: false,
     wasMentioned: false,
     messageId: "m1",
     timestamp: new Date(),
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -74,7 +75,7 @@ function makeFixtures() {
 describe("attachment ledger (issue #66 票1)", () => {
   it("an attachment message is NOT prompted — it parks in the ledger and answers with a receipt", async () => {
     const { router, prompt, lastReply } = makeFixtures();
-    await router.handleIncoming(makeMsg({ content: "photo.png", attachments: [ATT] }));
+    await router.handleIncoming(makeMsg({ payload: { kind: "media", saved: [ATT] } }));
     expect(prompt).not.toHaveBeenCalled();
     expect(lastReply()).toContain(ATT.path);
     expect(lastReply()).toContain("📎");
@@ -82,8 +83,8 @@ describe("attachment ledger (issue #66 票1)", () => {
 
   it("the next conversational message carries the attachment path and clears the ledger", async () => {
     const { router, prompt } = makeFixtures();
-    await router.handleIncoming(makeMsg({ content: "photo.png", attachments: [ATT] }));
-    await router.handleIncoming(makeMsg({ content: "这张图里是什么" }));
+    await router.handleIncoming(makeMsg({ payload: { kind: "media", saved: [ATT] } }));
+    await router.handleIncoming(makeMsg({ text: "这张图里是什么" }));
     expect(prompt).toHaveBeenCalledTimes(1);
     const sent = prompt.mock.calls[0]![0] as string;
     expect(sent).toContain("read 工具查看");
@@ -94,9 +95,9 @@ describe("attachment ledger (issue #66 票1)", () => {
   it("a second attachment message queues; one text message carries BOTH paths in arrival order", async () => {
     const { router, prompt } = makeFixtures();
     const att2 = { ...ATT, path: "/x/second.jpg" };
-    await router.handleIncoming(makeMsg({ messageId: "m1", content: "a.png", attachments: [ATT] }));
-    await router.handleIncoming(makeMsg({ messageId: "m2", content: "b.jpg", attachments: [att2] }));
-    await router.handleIncoming(makeMsg({ messageId: "m3", content: "看看这两张" }));
+    await router.handleIncoming(makeMsg({ messageId: "m1", payload: { kind: "media", saved: [ATT] } }));
+    await router.handleIncoming(makeMsg({ messageId: "m2", payload: { kind: "media", saved: [att2] } }));
+    await router.handleIncoming(makeMsg({ messageId: "m3", text: "看看这两张" }));
     const sent = prompt.mock.calls[0]![0] as string;
     expect(sent.indexOf(ATT.path)).toBeLessThan(sent.indexOf(att2.path));
     expect(prompt).toHaveBeenCalledTimes(1);
@@ -104,18 +105,18 @@ describe("attachment ledger (issue #66 票1)", () => {
 
   it("the ledger consumes exactly once — a following message prompts without the prefix", async () => {
     const { router, prompt } = makeFixtures();
-    await router.handleIncoming(makeMsg({ messageId: "m1", content: "a.png", attachments: [ATT] }));
-    await router.handleIncoming(makeMsg({ messageId: "m2", content: "第一条" }));
-    await router.handleIncoming(makeMsg({ messageId: "m3", content: "第二条" }));
+    await router.handleIncoming(makeMsg({ messageId: "m1", payload: { kind: "media", saved: [ATT] } }));
+    await router.handleIncoming(makeMsg({ messageId: "m2", text: "第一条" }));
+    await router.handleIncoming(makeMsg({ messageId: "m3", text: "第二条" }));
     expect((prompt.mock.calls[0]![0] as string)).toContain(ATT.path);
     expect((prompt.mock.calls[1]![0] as string)).not.toContain(ATT.path);
   });
 
   it("management commands do NOT consume the ledger", async () => {
     const { router, prompt } = makeFixtures();
-    await router.handleIncoming(makeMsg({ messageId: "m1", content: "a.png", attachments: [ATT] }));
-    await router.handleIncoming(makeMsg({ messageId: "m2", content: "/multiproject" }));
-    await router.handleIncoming(makeMsg({ messageId: "m3", content: "现在看" }));
+    await router.handleIncoming(makeMsg({ messageId: "m1", payload: { kind: "media", saved: [ATT] } }));
+    await router.handleIncoming(makeMsg({ messageId: "m2", text: "/multiproject" }));
+    await router.handleIncoming(makeMsg({ messageId: "m3", text: "现在看" }));
     const sent = prompt.mock.calls[0]![0] as string;
     expect(sent).toContain(ATT.path);
   });
@@ -124,42 +125,42 @@ describe("attachment ledger (issue #66 票1)", () => {
     const { router, prompt, replies } = makeFixtures();
     // Group chat that was never /enable'd — authorization fails without
     // side effects (a DM stranger would trigger a challenge flow instead).
-    await router.handleIncoming(makeMsg({ isGroupChat: true, chatId: "!group:server", userId: "@stranger:server", username: "stranger", content: "a.png", attachments: [ATT] }));
-    await router.handleIncoming(makeMsg({ isGroupChat: true, chatId: "!group:server", userId: "@stranger:server", username: "stranger", content: "看" }));
+    await router.handleIncoming(makeMsg({ isGroupChat: true, chatId: "!group:server", userId: "@stranger:server", username: "stranger", payload: { kind: "media", saved: [ATT] } }));
+    await router.handleIncoming(makeMsg({ isGroupChat: true, chatId: "!group:server", userId: "@stranger:server", username: "stranger", text: "看" }));
     expect(replies).toHaveLength(0);
     // barry's own later message must NOT carry the stranger's attachment
-    await router.handleIncoming(makeMsg({ content: "看" }));
+    await router.handleIncoming(makeMsg({ text: "看" }));
     expect((prompt.mock.calls[0]![0] as string)).not.toContain(ATT.path);
   });
 
   it("ledgers are isolated per sender in the same room", async () => {
     const { router, prompt } = makeFixtures();
-    await router.handleIncoming(makeMsg({ messageId: "m1", content: "a.png", attachments: [ATT] }));
-    await router.handleIncoming(makeMsg({ messageId: "m2", userId: "@carol:server", username: "carol", content: "我在说话" }));
+    await router.handleIncoming(makeMsg({ messageId: "m1", payload: { kind: "media", saved: [ATT] } }));
+    await router.handleIncoming(makeMsg({ messageId: "m2", userId: "@carol:server", username: "carol", text: "我在说话" }));
     expect((prompt.mock.calls[0]![0] as string)).not.toContain(ATT.path);
   });
 
   it("attachment failures reach the room verbatim and never enter the ledger", async () => {
     const { router, prompt, lastReply } = makeFixtures();
-    await router.handleIncoming(makeMsg({ messageId: "m1", content: "big.png", attachmentError: "附件过大(11.0 MB > 上限 10.0 MB),未保存" }));
+    await router.handleIncoming(makeMsg({ messageId: "m1", payload: { kind: "mediaError", reason: "附件过大(11.0 MB > 上限 10.0 MB),未保存" } }));
     expect(lastReply()).toContain("❌ 附件过大");
-    await router.handleIncoming(makeMsg({ messageId: "m2", content: "继续" }));
+    await router.handleIncoming(makeMsg({ messageId: "m2", text: "继续" }));
     expect((prompt.mock.calls[0]![0] as string)).not.toContain("附件过大");
   });
 
   it("a FAILED prompt does not consume the ledger — the retry carries the attachments", async () => {
     const { router, prompt } = makeFixtures();
     prompt.mockRejectedValueOnce(new Error("No API key found"));
-    await router.handleIncoming(makeMsg({ messageId: "m1", content: "a.png", attachments: [ATT] }));
-    await router.handleIncoming(makeMsg({ messageId: "m2", content: "第一次(发送失败)" }));
-    await router.handleIncoming(makeMsg({ messageId: "m3", content: "重试" }));
+    await router.handleIncoming(makeMsg({ messageId: "m1", payload: { kind: "media", saved: [ATT] } }));
+    await router.handleIncoming(makeMsg({ messageId: "m2", text: "第一次(发送失败)" }));
+    await router.handleIncoming(makeMsg({ messageId: "m3", text: "重试" }));
     expect((prompt.mock.calls[0]![0] as string)).toContain(ATT.path);
     expect((prompt.mock.calls[1]![0] as string)).toContain(ATT.path);
   });
 
   it("unsupported message types get a polite reply and never prompt (票3)", async () => {
     const { router, prompt, lastReply } = makeFixtures();
-    await router.handleIncoming(makeMsg({ messageId: "m1", content: "", unsupportedType: "m.location" }));
+    await router.handleIncoming(makeMsg({ messageId: "m1", payload: { kind: "unsupported", msgtype: "m.location" } }));
     expect(lastReply()).toContain("暂不支持的消息类型(m.location)");
     expect(prompt).not.toHaveBeenCalled();
   });
@@ -169,7 +170,7 @@ describe("attachment ledger (issue #66 票1)", () => {
     await router.handleIncoming(makeMsg({
       isGroupChat: true, chatId: "!group:server",
       userId: "@stranger:server", username: "stranger",
-      content: "", unsupportedType: "m.location",
+      payload: { kind: "unsupported", msgtype: "m.location" },
     }));
     expect(replies).toHaveLength(0);
   });

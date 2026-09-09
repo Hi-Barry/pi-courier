@@ -20,18 +20,19 @@ function textMessage(text: string): AssistantMessage {
   return { content: [{ type: "text", text }] } as unknown as AssistantMessage;
 }
 
-function makeMsg(overrides: Partial<ExternalMessage> = {}): ExternalMessage {
+function makeMsg(overrides: Partial<ExternalMessage> & { text?: string; quoted?: { username: string; excerpt: string } } = {}): ExternalMessage {
+  const { text = "hi", quoted, ...rest } = overrides;
   return {
     chatId: "!dm:server",
     transport: "matrix",
     userId: "@barry:server",
     username: "barry",
-    content: "hi",
+    payload: { kind: "text", text, ...(quoted && { quoted }) },
     isGroupChat: false,
     wasMentioned: false,
     messageId: "m1",
     timestamp: new Date(),
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -189,7 +190,7 @@ describe("message-router multi-project routing", () => {
 
   it("routes plain DM messages to the room's rpc via projectManager", async () => {
     const router = makeRouter();
-    const msg = makeMsg({ content: "hello pi" });
+    const msg = makeMsg({ text: "hello pi" });
     await router.handleIncoming(msg);
     expect(projectManager.getRpcForRoom).toHaveBeenCalledWith("!dm:server");
     expect(rpc.prompt).toHaveBeenCalledWith("hello pi");
@@ -199,7 +200,7 @@ describe("message-router multi-project routing", () => {
     const projectRpc = { prompt: vi.fn().mockResolvedValue(undefined) } as unknown as PiRpc;
     (projectManager.getRpcForRoom as ReturnType<typeof vi.fn>).mockReturnValue(projectRpc);
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ chatId: "!proj:server", content: "do work" }));
+    await router.handleIncoming(makeMsg({ chatId: "!proj:server", text: "do work" }));
     expect(rpc.prompt).not.toHaveBeenCalled();
     expect(projectRpc.prompt).toHaveBeenCalledWith("do work");
   });
@@ -208,7 +209,7 @@ describe("message-router multi-project routing", () => {
     // Management commands require the management-room flag in config.
     store.update({ managementRooms: ["!dm:server"] });
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/newproject myapp /tmp/myapp" }));
+    await router.handleIncoming(makeMsg({ text: "/newproject myapp /tmp/myapp" }));
     await new Promise((r) => setTimeout(r, 20)); // let fire-and-forget branding settle
     expect(roomOps.createProjectRoom).toHaveBeenCalledWith(expect.stringContaining("myapp("), "@barry:server");
     expect(projectManager.registerProject).toHaveBeenCalledWith("!newproj:server", "/tmp/myapp", "myapp");
@@ -220,7 +221,7 @@ describe("message-router multi-project routing", () => {
   it("resolves a relative path in /pmctl new against the project root", async () => {
     store.update({ managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/newproject myapp myapp" }));
+    await router.handleIncoming(makeMsg({ text: "/newproject myapp myapp" }));
     await new Promise((r) => setTimeout(r, 20));
     expect(projectManager.registerProject).toHaveBeenCalledWith(
       "!newproj:server",
@@ -232,7 +233,7 @@ describe("message-router multi-project routing", () => {
   it("uses an absolute path as-is in /pmctl new", async () => {
     store.update({ managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/newproject myapp /srv/custom/myapp" }));
+    await router.handleIncoming(makeMsg({ text: "/newproject myapp /srv/custom/myapp" }));
     await new Promise((r) => setTimeout(r, 20));
     expect(projectManager.registerProject).toHaveBeenCalledWith(
       "!newproj:server",
@@ -244,7 +245,7 @@ describe("message-router multi-project routing", () => {
   it("defaults the path to <project root>/<name> when omitted", async () => {
     store.update({ managementRooms: ["!dm:server"], workdir: "/home/you/Projects" });
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/pmctl new newapp" }));
+    await router.handleIncoming(makeMsg({ text: "/pmctl new newapp" }));
     await new Promise((r) => setTimeout(r, 20));
     expect(projectManager.registerProject).toHaveBeenCalledWith(
       "!newproj:server",
@@ -257,7 +258,7 @@ describe("message-router multi-project routing", () => {
     // No managementRooms flag in config (first-ever message) — the trusted
     // user's DM must still count as the management room.
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/pmctl new myapp /tmp/myapp" }));
+    await router.handleIncoming(makeMsg({ text: "/pmctl new myapp /tmp/myapp" }));
     await new Promise((r) => setTimeout(r, 20));
     expect(projectManager.registerProject).toHaveBeenCalledWith("!newproj:server", "/tmp/myapp", "myapp");
     expect(replies.at(-1)!.text).toContain("创建完成");
@@ -267,7 +268,7 @@ describe("message-router multi-project routing", () => {
     enableRoom("!projroom:server");
     const router = makeRouter();
     await router.handleIncoming(
-      makeMsg({ chatId: "!projroom:server", isGroupChat: true, content: "/pmctl list" })
+      makeMsg({ chatId: "!projroom:server", isGroupChat: true, text: "/pmctl list" })
     );
     expect(replies.at(-1)!.text).toContain("仅可在管理房间");
   });
@@ -277,14 +278,14 @@ describe("message-router multi-project routing", () => {
     const router = makeRouter();
     // A different private room is not the management room.
     await router.handleIncoming(
-      makeMsg({ chatId: "!alice:server", content: "/pmctl list" })
+      makeMsg({ chatId: "!alice:server", text: "/pmctl list" })
     );
     expect(replies.at(-1)!.text).toContain("仅可在管理房间");
   });
 
   it("brands an unnamed DM room on first message (idempotent)", async () => {
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "hi" }));
+    await router.handleIncoming(makeMsg({ text: "hi" }));
     // maybeInitManagementRoom runs — let it complete
     await new Promise((r) => setTimeout(r, 20));
     expect(roomOps.setRoomName).toHaveBeenCalledWith(
@@ -298,7 +299,7 @@ describe("message-router multi-project routing", () => {
 
   it("space mode: adoption is gated off while the space ensure owns the management room", async () => {
     const fx = makeFixtures({ managementRoomAdoptionAllowed: () => false });
-    await fx.makeRouter().handleIncoming(makeMsg({ content: "hi" }));
+    await fx.makeRouter().handleIncoming(makeMsg({ text: "hi" }));
     await new Promise((r) => setTimeout(r, 20));
     expect(fx.roomOps.setRoomName).not.toHaveBeenCalled();
     expect(fx.store.get().managementRooms).toEqual([]);
@@ -310,12 +311,12 @@ describe("message-router multi-project routing", () => {
     let allowed = false;
     const fx = makeFixtures({ managementRoomAdoptionAllowed: () => allowed });
     const router = fx.makeRouter();
-    await router.handleIncoming(makeMsg({ content: "hi" }));
+    await router.handleIncoming(makeMsg({ text: "hi" }));
     await new Promise((r) => setTimeout(r, 20));
     expect(fx.roomOps.setRoomName).not.toHaveBeenCalled();
     // Space ensure failed this run → the legacy DM adoption takes over.
     allowed = true;
-    await router.handleIncoming(makeMsg({ content: "hello" }));
+    await router.handleIncoming(makeMsg({ text: "hello" }));
     await new Promise((r) => setTimeout(r, 20));
     expect(fx.roomOps.setRoomName).toHaveBeenCalledWith(
       expect.any(String),
@@ -327,7 +328,7 @@ describe("message-router multi-project routing", () => {
   it("does not brand a project room (2-person room with a mapping)", async () => {
     (projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockReturnValue(true);
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ chatId: "!projroom:server", content: "hello" }));
+    await router.handleIncoming(makeMsg({ chatId: "!projroom:server", text: "hello" }));
     await new Promise((r) => setTimeout(r, 20));
     expect(roomOps.setRoomName).not.toHaveBeenCalled();
   });
@@ -335,7 +336,7 @@ describe("message-router multi-project routing", () => {
   it("in single-project mode /pmctl reports it is unavailable", async () => {
     (projectManager as { isMultiProject: boolean }).isMultiProject = false;
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/pmctl list" }));
+    await router.handleIncoming(makeMsg({ text: "/pmctl list" }));
     expect(replies.at(-1)!.text).toContain("单工程模式");
   });
 
@@ -343,7 +344,7 @@ describe("message-router multi-project routing", () => {
     (projectManager as { isMultiProject: boolean }).isMultiProject = false;
     (projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockReturnValue(false);
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "hello" }));
+    await router.handleIncoming(makeMsg({ text: "hello" }));
     await new Promise((r) => setTimeout(r, 20));
     expect(roomOps.setRoomName).not.toHaveBeenCalled();
     expect(rpc.prompt).toHaveBeenCalledWith("hello");
@@ -352,7 +353,7 @@ describe("message-router multi-project routing", () => {
   it("a trusted user can toggle multi-project mode via /multiproject (restart effect)", async () => {
     (projectManager as { isMultiProject: boolean }).isMultiProject = true;
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/multiproject off" }));
+    await router.handleIncoming(makeMsg({ text: "/multiproject off" }));
     expect(store.get().multiProject).toBe(false);
     expect(replies.at(-1)!.text).toContain("重启生效");
   });
@@ -360,7 +361,7 @@ describe("message-router multi-project routing", () => {
   it("agent turn_start triggers a typing indicator for the prompting room", async () => {
     const router = makeRouter();
     // A prompt binds the room to the default rpc; the typing follows that binding.
-    await router.handleIncoming(makeMsg({ content: "hi" }));
+    await router.handleIncoming(makeMsg({ text: "hi" }));
     router.handleEvent({ type: "turn_start" }, rpc);
     await new Promise((r) => setTimeout(r, 0));
     expect(sendTyping).toHaveBeenCalledWith("!dm:server", "matrix");
@@ -377,8 +378,8 @@ describe("message-router multi-project routing", () => {
     const router = makeRouter();
 
     // A prompts in the DM, then B prompts in a project room.
-    await router.handleIncoming(makeMsg({ content: "hi from A" }));
-    await router.handleIncoming(makeMsg({ chatId: "!proj:server", content: "hi from B" }));
+    await router.handleIncoming(makeMsg({ text: "hi from A" }));
+    await router.handleIncoming(makeMsg({ chatId: "!proj:server", text: "hi from B" }));
 
     // A's turn completes — its reply MUST go to A despite B's prompt in between.
     router.handleEvent({ type: "turn_end", message: textMessage("reply to A") }, rpc);
@@ -393,9 +394,9 @@ describe("message-router multi-project routing", () => {
 
   it("a second DM prompt retargets the shared default process (protocol limit, documented)", async () => {
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "hi from A" }));
+    await router.handleIncoming(makeMsg({ text: "hi from A" }));
     await router.handleIncoming(
-      makeMsg({ chatId: "!carol:server", userId: "@carol:server", username: "carol", content: "hi from carol" })
+      makeMsg({ chatId: "!carol:server", userId: "@carol:server", username: "carol", text: "hi from carol" })
     );
     // pi's RPC carries no chat concept: one shared process serves both DMs,
     // so the binding follows the most recent prompter. (Per-DM processes
@@ -414,8 +415,8 @@ describe("message-router multi-project routing", () => {
       (roomId: string) => roomId === "!proj:server"
     );
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "hi" }));
-    await router.handleIncoming(makeMsg({ chatId: "!proj:server", content: "hello" }));
+    await router.handleIncoming(makeMsg({ text: "hi" }));
+    await router.handleIncoming(makeMsg({ chatId: "!proj:server", text: "hello" }));
 
     router.handleEvent({ type: "turn_end", message: textMessage("done") }, rpc);
     await new Promise((r) => setTimeout(r, 0));
@@ -434,7 +435,7 @@ describe("message-router multi-project routing", () => {
 
   it("muting agent logging (log level) does not affect reply routing", async () => {
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "hi" }));
+    await router.handleIncoming(makeMsg({ text: "hi" }));
     logger.setLogLevel("error"); // all [agent] replay logs go silent
     try {
       router.handleEvent({ type: "turn_end", message: textMessage("still routed") }, rpc);
@@ -449,7 +450,7 @@ describe("message-router multi-project routing", () => {
     store.update({ managementRooms: ["!dm:server"] });
     roomOps.createProjectRoom.mockRejectedValue(new Error("Matrix 未连接"));
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/pmctl new myapp" }));
+    await router.handleIncoming(makeMsg({ text: "/pmctl new myapp" }));
     expect(replies.at(-1)!.text).toContain("创建项目失败");
     expect(replies.at(-1)!.text).toContain("Matrix 未连接");
     expect(projectManager.registerProject).not.toHaveBeenCalled();
@@ -461,7 +462,7 @@ describe("message-router multi-project routing", () => {
     store.update({ managementRooms: ["!dm:server"], auth: { trustedUsers: ["matrix:@barry:server"] } });
     roomOps.setUserPowerLevel.mockRejectedValue(new Error("power level too low"));
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/pmctl new myapp" }));
+    await router.handleIncoming(makeMsg({ text: "/pmctl new myapp" }));
     expect(projectManager.registerProject).toHaveBeenCalledWith("!newproj:server", expect.any(String), "myapp");
     expect(replies.some((r) => r.text.includes("创建完成"))).toBe(true);
     expect(replies.some((r) => r.text.includes("补权失败"))).toBe(true);
@@ -474,7 +475,7 @@ describe("message-router multi-project routing", () => {
     ]);
     roomOps.setRoomName.mockRejectedValue(new Error("没有权限"));
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/pmctl rename myapp newname" }));
+    await router.handleIncoming(makeMsg({ text: "/pmctl rename myapp newname" }));
     expect(projectManager.renameProject).toHaveBeenCalledWith("!proj:server", "newname");
     expect(replies.at(-1)!.text).toContain("房间改名失败");
     expect(replies.at(-1)!.text).toContain("没有权限");
@@ -487,7 +488,7 @@ describe("message-router multi-project routing", () => {
     };
     const pmctlNoOps = new PmctlController({ projectManager, store });
     const router = createMessageRouter({ projectManager, auth, sendReply, sendTyping, store, pmctl: pmctlNoOps });
-    await router.handleIncoming(makeMsg({ content: "/pmctl list" }));
+    await router.handleIncoming(makeMsg({ text: "/pmctl list" }));
     expect(replies.at(-1)!.text).toContain("仅 Matrix 部署支持");
   });
 });
@@ -508,33 +509,33 @@ describe("message-router authorization pipeline (real ChallengeAuth)", () => {
     makeRouter = fx.makeRouter;
   });
 
-  const eveMsg = (content: string, overrides: Partial<ExternalMessage> = {}): ExternalMessage =>
-    makeMsg({ userId: "@eve:server", username: "eve", content, ...overrides });
+  const eveMsg = (content: string, overrides: Partial<ExternalMessage> & { text?: string; quoted?: { username: string; excerpt: string } } = {}): ExternalMessage =>
+    makeMsg({ userId: "@eve:server", username: "eve", text: content, ...overrides });
 
   it("group /enable in an unenabled room works end-to-end (trusted user, mentions mode)", async () => {
     const router = makeRouter();
     const room = "!group:server";
     // Before enabling: members' messages are dropped silently (existing behavior).
     await router.handleIncoming(
-      makeMsg({ chatId: room, isGroupChat: true, wasMentioned: true, userId: "@eve:server", username: "eve", content: "@bot hi" })
+      makeMsg({ chatId: room, isGroupChat: true, wasMentioned: true, userId: "@eve:server", username: "eve", text: "@bot hi" })
     );
     expect(rpc.prompt).not.toHaveBeenCalled();
 
     // Trusted user enables the room from inside it — this ran BEFORE the
     // authorization gate, so the room was never authorized until now.
-    await router.handleIncoming(makeMsg({ chatId: room, isGroupChat: true, content: "/enable mentions" }));
+    await router.handleIncoming(makeMsg({ chatId: room, isGroupChat: true, text: "/enable mentions" }));
     expect(replies.at(-1)!.text).toContain("本房间已启用");
     expect(replies.at(-1)!.text).toContain("mentions");
 
     // After enabling (mentions mode): a mentioned member is served...
     await router.handleIncoming(
-      makeMsg({ chatId: room, isGroupChat: true, wasMentioned: true, userId: "@eve:server", username: "eve", content: "@bot what is up" })
+      makeMsg({ chatId: room, isGroupChat: true, wasMentioned: true, userId: "@eve:server", username: "eve", text: "@bot what is up" })
     );
     expect(rpc.prompt).toHaveBeenCalledWith("@bot what is up");
     // ...a non-mention still is not.
     (rpc.prompt as ReturnType<typeof vi.fn>).mockClear();
     await router.handleIncoming(
-      makeMsg({ chatId: room, isGroupChat: true, wasMentioned: false, userId: "@eve:server", username: "eve", content: "no mention" })
+      makeMsg({ chatId: room, isGroupChat: true, wasMentioned: false, userId: "@eve:server", username: "eve", text: "no mention" })
     );
     expect(rpc.prompt).not.toHaveBeenCalled();
   });
@@ -543,17 +544,17 @@ describe("message-router authorization pipeline (real ChallengeAuth)", () => {
     const router = makeRouter();
     const room = "!group:server";
     await router.handleIncoming(
-      makeMsg({ chatId: room, isGroupChat: true, userId: "@carol:server", username: "carol", content: "/enable all" })
+      makeMsg({ chatId: room, isGroupChat: true, userId: "@carol:server", username: "carol", text: "/enable all" })
     );
     expect(replies.at(-1)!.text).toContain("仅管理员");
     expect(auth.isChannelEnabled(room)).toBe(false);
 
-    await router.handleIncoming(makeMsg({ chatId: room, isGroupChat: true, content: "/enable all" }));
+    await router.handleIncoming(makeMsg({ chatId: room, isGroupChat: true, text: "/enable all" }));
     expect(replies.at(-1)!.text).toContain("本房间已启用");
     expect(auth.isChannelEnabled(room)).toBe(true);
     // mode "all": even an untrusted member is now served.
     await router.handleIncoming(
-      makeMsg({ chatId: room, isGroupChat: true, userId: "@eve:server", username: "eve", content: "hello room" })
+      makeMsg({ chatId: room, isGroupChat: true, userId: "@eve:server", username: "eve", text: "hello room" })
     );
     expect(rpc.prompt).toHaveBeenCalledWith("hello room");
   });
@@ -562,7 +563,7 @@ describe("message-router authorization pipeline (real ChallengeAuth)", () => {
     const router = makeRouter();
     const room = "!group:server";
     await router.handleIncoming(
-      makeMsg({ chatId: room, isGroupChat: true, userId: "@eve:server", username: "eve", content: "/enable all" })
+      makeMsg({ chatId: room, isGroupChat: true, userId: "@eve:server", username: "eve", text: "/enable all" })
     );
     expect(auth.isChannelEnabled(room)).toBe(false);
     expect(rpc.prompt).not.toHaveBeenCalled();
@@ -600,10 +601,10 @@ describe("message-router authorization pipeline (real ChallengeAuth)", () => {
 
   it("three wrong challenge codes block the user (silent afterwards)", async () => {
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ userId: "@mallory:server", username: "mallory", content: "hello" }));
+    await router.handleIncoming(makeMsg({ userId: "@mallory:server", username: "mallory", text: "hello" }));
     const code = codeBox.current!;
     const wrongCode = code === "000000" ? "111111" : "000000";
-    const mallory = (content: string) => makeMsg({ userId: "@mallory:server", username: "mallory", content });
+    const mallory = (content: string) => makeMsg({ userId: "@mallory:server", username: "mallory", text: content });
 
     for (let i = 0; i < 3; i++) {
       await router.handleIncoming(mallory(wrongCode));
@@ -619,7 +620,7 @@ describe("message-router authorization pipeline (real ChallengeAuth)", () => {
 
   it("DM /help shows the bridge/pi help (not hijacked by the auth engine)", async () => {
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/help" }));
+    await router.handleIncoming(makeMsg({ text: "/help" }));
     const help = replies.find((r) => r.text.includes("/new"));
     expect(help).toBeDefined();
     expect(help!.text).toContain("Bridge 管理命令");
@@ -637,7 +638,7 @@ describe("message-router authorization pipeline (real ChallengeAuth)", () => {
 
 describe("space invite on trust transition (spec #16 ticket 4)", () => {
   const eveMsg = (content: string): ExternalMessage =>
-    makeMsg({ userId: "@eve:server", username: "eve", content });
+    makeMsg({ userId: "@eve:server", username: "eve", text: content });
 
   async function passChallenge(fx: ReturnType<typeof makeFixtures>): Promise<void> {
     const router = fx.makeRouter();
@@ -703,14 +704,14 @@ describe("multi-project log tagging (spec #34 票3)", () => {
       (roomId: string) => (roomId === "!proj:server" ? "ai-api" : undefined)
     );
     const router = fx.makeRouter();
-    await router.handleIncoming(makeMsg({ chatId: "!proj:server", content: "do work" }));
+    await router.handleIncoming(makeMsg({ chatId: "!proj:server", text: "do work" }));
     const inbound = lines.find((l) => l.includes("📥"));
     expect(inbound).toContain("[INFO] [ai-api]");
   });
 
   it("📥 line for an unmapped room (DM) carries no label", async () => {
     const router = fx.makeRouter();
-    await router.handleIncoming(makeMsg({ content: "hello" }));
+    await router.handleIncoming(makeMsg({ text: "hello" }));
     const inbound = lines.find((l) => l.includes("📥"));
     expect(inbound).toMatch(/\[INFO\] 📥/);
   });
@@ -724,7 +725,7 @@ describe("multi-project log tagging (spec #34 票3)", () => {
       (roomId: string) => roomId === "!proj:server"
     );
     const router = fx.makeRouter();
-    await router.handleIncoming(makeMsg({ chatId: "!proj:server", content: "go" }));
+    await router.handleIncoming(makeMsg({ chatId: "!proj:server", text: "go" }));
     router.handleEvent({ type: "tool_execution_start", toolName: "bash", args: { command: "ls" } }, prj);
     const toolLine = lines.find((l) => l.includes("🔧 工具调用"));
     expect(toolLine).toContain("[INFO] [ai-api]");
@@ -736,7 +737,7 @@ describe("multi-project log tagging (spec #34 票3)", () => {
 
   it("default-rpc events log untagged", async () => {
     const router = fx.makeRouter();
-    await router.handleIncoming(makeMsg({ content: "hi" }));
+    await router.handleIncoming(makeMsg({ text: "hi" }));
     router.handleEvent({ type: "tool_execution_start", toolName: "bash", args: {} }, fx.rpc);
     const toolLine = lines.find((l) => l.includes("🔧 工具调用"));
     expect(toolLine).toMatch(/\[INFO\] \[agent\]/);
@@ -749,7 +750,7 @@ describe("multi-project log tagging (spec #34 票3)", () => {
     );
     fx.auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
     const router = fx.makeRouter();
-    await router.handleIncoming(makeMsg({ chatId: "!proj:server", isGroupChat: true, content: "/enable all" }));
+    await router.handleIncoming(makeMsg({ chatId: "!proj:server", isGroupChat: true, text: "/enable all" }));
     const authLine = lines.find((l) => l.includes("[auth]"));
     expect(authLine).toBeDefined();
     expect(authLine).not.toContain("ai-api");
@@ -791,7 +792,7 @@ describe("management room invite on trust transition (issue #43 票2)", () => {
   });
 
   const eveMsg = (content: string): ExternalMessage =>
-    makeMsg({ userId: "@eve:server", username: "eve", content });
+    makeMsg({ userId: "@eve:server", username: "eve", text: content });
 
   /** Fixtures mirroring makeFixtures, but on the tmp-dir-isolated store class. */
   function makeIsoFixtures(opts: { space?: { enabled?: boolean; roomId?: string; invitedUsers?: string[] } } = {}) {
@@ -948,14 +949,14 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
   };
 
   it("/queue <text> goes to promptQueued (followUp) and never to prompt", async () => {
-    await makeRouter().handleIncoming(makeMsg({ content: "/queue run the tests" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/queue run the tests" }));
     expect(rpc.promptQueued).toHaveBeenCalledWith("run the tests");
     expect(rpc.prompt).not.toHaveBeenCalled();
     expect(replies.at(-1)!.text).toContain("已排队");
   });
 
   it("/queue without args reports an empty queue when nothing was seen", async () => {
-    await makeRouter().handleIncoming(makeMsg({ content: "/queue" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/queue" }));
     expect(rpc.promptQueued).not.toHaveBeenCalled();
     expect(replies.at(-1)!.text).toContain("队列为空");
   });
@@ -963,7 +964,7 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
   it("/queue empty mirror still cross-checks upstream pendingMessageCount (missed events)", async () => {
     // No queue_update ever seen — a bare "队列为空" would hide missed events.
     getState({ isStreaming: false, pendingMessageCount: 2 });
-    await makeRouter().handleIncoming(makeMsg({ content: "/queue" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/queue" }));
     expect(replies.at(-1)!.text).toContain("上游报告仍有 2 条待处理消息");
   });
 
@@ -974,7 +975,7 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
       rpc
     );
     getState({ isStreaming: true, pendingMessageCount: 3 }); // upstream disagrees with the mirror (2)
-    await router.handleIncoming(makeMsg({ content: "/queue" }));
+    await router.handleIncoming(makeMsg({ text: "/queue" }));
     const text = replies.at(-1)!.text;
     expect(text).toContain("steering(1 条");
     expect(text).toContain("followUp(1 条");
@@ -985,7 +986,7 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
 
   it("/interrupt on an idle session degrades to a plain prompt (no abort)", async () => {
     getState({ isStreaming: false, pendingMessageCount: 0 });
-    await makeRouter().handleIncoming(makeMsg({ content: "/interrupt fix the lint" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/interrupt fix the lint" }));
     expect(rpc.abort).not.toHaveBeenCalled();
     expect(rpc.waitForIdle).not.toHaveBeenCalled();
     expect(rpc.prompt).toHaveBeenCalledWith("fix the lint");
@@ -997,7 +998,7 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
     getState({ isStreaming: true, pendingMessageCount: 1 });
     const router = makeRouter();
     router.handleEvent({ type: "queue_update", steering: ["old task"], followUp: [] }, rpc);
-    await router.handleIncoming(makeMsg({ content: "/interrupt new order" }));
+    await router.handleIncoming(makeMsg({ text: "/interrupt new order" }));
     expect(rpc.abort).toHaveBeenCalledTimes(1);
     expect(rpc.waitForIdle).toHaveBeenCalledTimes(1);
     expect(rpc.prompt).toHaveBeenCalledWith("new order");
@@ -1014,7 +1015,7 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
   it("/stop appends the queue warning when the upstream queues survive the abort", async () => {
     const router = makeRouter();
     router.handleEvent({ type: "queue_update", steering: ["queued A"], followUp: ["queued B"] }, rpc);
-    await router.handleIncoming(makeMsg({ content: "/stop" }));
+    await router.handleIncoming(makeMsg({ text: "/stop" }));
     expect(rpc.abort).toHaveBeenCalledTimes(1);
     const text = replies.at(-1)!.text;
     expect(text).toContain("已停止所有任务");
@@ -1024,14 +1025,14 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
   });
 
   it("/stop with an empty queue carries no warning", async () => {
-    await makeRouter().handleIncoming(makeMsg({ content: "/stop" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/stop" }));
     const text = replies.at(-1)!.text;
     expect(text).toContain("已停止所有任务");
     expect(text).not.toContain("⚠️");
   });
 
   it("/help lists the new send-semantics commands", async () => {
-    await makeRouter().handleIncoming(makeMsg({ content: "/help" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/help" }));
     const help = replies.at(-1)!.text;
     expect(help).toContain("/queue");
     expect(help).toContain("/interrupt");
@@ -1070,7 +1071,7 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
   // --- /last -----------------------------------------------------------------
   it("/last replays the agent's most recent reply", async () => {
     (rpc.getLastAssistantText as ReturnType<typeof vi.fn>).mockResolvedValue("the previous answer");
-    await makeRouter().handleIncoming(makeMsg({ content: "/last" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/last" }));
     expect(rpc.getLastAssistantText).toHaveBeenCalledTimes(1);
     expect(replies.at(-1)!.text).toContain("the previous answer");
     expect(rpc.prompt).not.toHaveBeenCalled();
@@ -1078,7 +1079,7 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
 
   it("/last reports when there is no reply yet", async () => {
     (rpc.getLastAssistantText as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    await makeRouter().handleIncoming(makeMsg({ content: "/last" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/last" }));
     expect(replies.at(-1)!.text).toContain("没有可复述");
   });
 
@@ -1089,20 +1090,20 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
       thinkingLevel: "high",
       isScoped: false,
     });
-    await makeRouter().handleIncoming(makeMsg({ content: "/cyclemodel" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/cyclemodel" }));
     expect(rpc.cycleModel).toHaveBeenCalledTimes(1);
     expect(replies.at(-1)!.text).toContain("anthropic/claude-next");
   });
 
   it("/cyclemodel reports when there is nothing to cycle", async () => {
     (rpc.cycleModel as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    await makeRouter().handleIncoming(makeMsg({ content: "/cyclemodel" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/cyclemodel" }));
     expect(replies.at(-1)!.text).toContain("没有可轮换");
   });
 
   it("/cyclethinking reports the new level", async () => {
     (rpc.cycleThinkingLevel as ReturnType<typeof vi.fn>).mockResolvedValue({ level: "medium" });
-    await makeRouter().handleIncoming(makeMsg({ content: "/cyclethinking" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/cyclethinking" }));
     expect(rpc.cycleThinkingLevel).toHaveBeenCalledTimes(1);
     expect(replies.at(-1)!.text).toContain("medium");
   });
@@ -1110,14 +1111,14 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
   // --- /autocompact / /autoretry -----------------------------------------------
   it("/autocompact on|off maps to setAutoCompaction, no-args shows state and usage", async () => {
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/autocompact on" }));
+    await router.handleIncoming(makeMsg({ text: "/autocompact on" }));
     expect(rpc.setAutoCompaction).toHaveBeenCalledWith(true);
-    await router.handleIncoming(makeMsg({ content: "/autocompact off" }));
+    await router.handleIncoming(makeMsg({ text: "/autocompact off" }));
     expect(rpc.setAutoCompaction).toHaveBeenCalledWith(false);
     expect(replies.at(-1)!.text).toContain("已关闭");
 
     getState({ autoCompactionEnabled: false });
-    await router.handleIncoming(makeMsg({ content: "/autocompact" }));
+    await router.handleIncoming(makeMsg({ text: "/autocompact" }));
     expect(rpc.setAutoCompaction).toHaveBeenCalledTimes(2); // unchanged by the query
     expect(replies.at(-1)!.text).toContain("当前自动压缩: 关");
     expect(replies.at(-1)!.text).toContain("实例级生效");
@@ -1125,11 +1126,11 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
 
   it("/autoretry on|off maps to setAutoRetry, no-args gives usage (upstream exposes no query)", async () => {
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/autoretry off" }));
+    await router.handleIncoming(makeMsg({ text: "/autoretry off" }));
     expect(rpc.setAutoRetry).toHaveBeenCalledWith(false);
     expect(replies.at(-1)!.text).toContain("已关闭");
 
-    await router.handleIncoming(makeMsg({ content: "/autoretry" }));
+    await router.handleIncoming(makeMsg({ text: "/autoretry" }));
     expect(rpc.setAutoRetry).toHaveBeenCalledTimes(1); // no-args never toggles
     expect(replies.at(-1)!.text).toContain("/autoretry on|off");
     expect(replies.at(-1)!.text).toContain("实例级生效");
@@ -1158,7 +1159,7 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
   });
 
   it("/sessions lists jsonl files newest-first with the parsed session name", async () => {
-    await makeRouter().handleIncoming(makeMsg({ content: "/sessions" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/sessions" }));
     const text = replies.at(-1)!.text;
     const order = [text.indexOf("new_2222.jsonl"), text.indexOf("mid_3333.jsonl"), text.indexOf("old_1111.jsonl")];
     expect(order.every((i) => i > 0)).toBe(true);
@@ -1170,40 +1171,40 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
 
   it("/sessions reports a missing session directory", async () => {
     (rpc as unknown as { sessionDir?: string }).sessionDir = join(sessionDir, "does-not-exist");
-    await makeRouter().handleIncoming(makeMsg({ content: "/sessions" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/sessions" }));
     expect(replies.at(-1)!.text).toContain("找不到会话目录");
   });
 
   it("/switch rejects while streaming (asked to /stop first)", async () => {
     getState({ isStreaming: true });
-    await makeRouter().handleIncoming(makeMsg({ content: "/switch 1" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/switch 1" }));
     expect(replies.at(-1)!.text).toContain("/stop");
     expect(rpc.switchSession).not.toHaveBeenCalled();
   });
 
   it("/switch <n> switches to the nth newest session file", async () => {
-    await makeRouter().handleIncoming(makeMsg({ content: "/switch 1" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/switch 1" }));
     expect(rpc.switchSession).toHaveBeenCalledWith(join(sessionDir, "new_2222.jsonl"));
     expect(replies.at(-1)!.text).toContain("已切换会话");
 
     (rpc.switchSession as ReturnType<typeof vi.fn>).mockClear();
-    await makeRouter().handleIncoming(makeMsg({ content: "/switch 3" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/switch 3" }));
     expect(rpc.switchSession).toHaveBeenCalledWith(join(sessionDir, "old_1111.jsonl"));
   });
 
   it("/switch without args shows usage; an out-of-range index is rejected", async () => {
     const router = makeRouter();
-    await router.handleIncoming(makeMsg({ content: "/switch" }));
+    await router.handleIncoming(makeMsg({ text: "/switch" }));
     expect(replies.at(-1)!.text).toContain("用法");
     expect(rpc.switchSession).not.toHaveBeenCalled();
 
-    await router.handleIncoming(makeMsg({ content: "/switch 9" }));
+    await router.handleIncoming(makeMsg({ text: "/switch 9" }));
     expect(replies.at(-1)!.text).toContain("超出范围");
   });
 
   // --- /help -------------------------------------------------------------------
   it("/help lists the new commands with the instance-level scope note", async () => {
-    await makeRouter().handleIncoming(makeMsg({ content: "/help" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "/help" }));
     const help = replies.at(-1)!.text;
     for (const cmd of ["/last", "/cyclemodel", "/cyclethinking", "/autocompact", "/autoretry", "/sessions", "/switch"]) {
       expect(help).toContain(cmd);
@@ -1214,13 +1215,13 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
   // --- Reply-quote prefix -----------------------------------------------------
   it("a resolved quote prefixes the prompt sent to pi (raw text stays for commands)", async () => {
     await makeRouter().handleIncoming(
-      makeMsg({ content: "这个是什么意思", quoted: { username: "carol", excerpt: "被引用的旧消息" } })
+      makeMsg({ text: "这个是什么意思", quoted: { username: "carol", excerpt: "被引用的旧消息" } })
     );
     expect(rpc.prompt).toHaveBeenCalledWith("「@carol: 被引用的旧消息」\n这个是什么意思");
   });
 
   it("without a quote the prompt is the raw text, unchanged", async () => {
-    await makeRouter().handleIncoming(makeMsg({ content: "plain prompt" }));
+    await makeRouter().handleIncoming(makeMsg({ text: "plain prompt" }));
     expect(rpc.prompt).toHaveBeenCalledWith("plain prompt");
   });
 });
@@ -1356,7 +1357,7 @@ describe("power demotion on revoke (issue #44 票3)", () => {
       projects: { "!proj:server": { workdir: "/w/p" } },
       powerElevatedUsers: ["matrix:@barry:server", "matrix:@eve:server"],
     });
-    await fx.makeRouter().handleIncoming(makeMsg({ content: "/revoke @eve:server" }));
+    await fx.makeRouter().handleIncoming(makeMsg({ text: "/revoke @eve:server" }));
     for (const roomId of ["!space:server", "!mgmt:server", "!proj:server"]) {
       expect(fx.roomOps.setUserPowerLevel).toHaveBeenCalledWith(roomId, "@eve:server", 0);
     }
@@ -1379,7 +1380,7 @@ describe("power demotion on revoke (issue #44 票3)", () => {
       powerElevatedUsers: ["matrix:@eve:server"],
     });
     (fx.roomOps.setUserPowerLevel as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("M_FORBIDDEN"));
-    await fx.makeRouter().handleIncoming(makeMsg({ content: "/revoke @eve:server" }));
+    await fx.makeRouter().handleIncoming(makeMsg({ text: "/revoke @eve:server" }));
     expect(fx.replies.some((r) => r.text === "🔓 Revoked trust for @eve:server")).toBe(true);
     // Trust revocation persisted even though the demotion failed...
     expect(fx.store.get().auth?.trustedUsers).not.toContain("matrix:@eve:server");

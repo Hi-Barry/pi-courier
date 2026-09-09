@@ -392,10 +392,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
   return {
     async handleIncoming(msg: ExternalMessage): Promise<void> {
-      const text = msg.content.trim();
-      // 空文本本身直接返回 — 但带附件/失败/不支持标记的消息(如 m.location
-      // 没有 body)必须继续走,否则就是又一个静默吞消息的点(issue #66 票3)。
-      if (!text && !msg.attachments?.length && !msg.attachmentError && !msg.unsupportedType) return;
+      const text = msg.payload.kind === "text" ? msg.payload.text.trim() : "";
+      // 空文本本身直接返回 — 非文本载荷(附件/失败/不支持)必须继续走,
+      // 否则就是又一个静默吞消息的点(issue #66 票3)。
+      if (msg.payload.kind === "text" && !text) return;
 
       // Project tagging (spec #34): a mapped room's lines carry its label;
       // everything else (single-project mode, DM, unmapped rooms) resolves to
@@ -403,10 +403,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       const label = projectManager.labelForRoom(msg.chatId);
       const log = logger.withLabel(label);
 
+      const payloadSummary = msg.payload.kind === "text" ? text : `[${msg.payload.kind}]`;
       if (isEnabled("debug")) {
-        log.debug(`📥 [${msg.transport}] @${msg.username}: ${text.slice(0, 500)}${text.length > 500 ? "…" : ""}`);
+        log.debug(`📥 [${msg.transport}] @${msg.username}: ${payloadSummary.slice(0, 500)}${payloadSummary.length > 500 ? "…" : ""}`);
       } else {
-        log.info(`📥 [${msg.transport}] @${msg.username}: ${text.slice(0, 200)}${text.length > 200 ? "…" : ""}`);
+        log.info(`📥 [${msg.transport}] @${msg.username}: ${payloadSummary.slice(0, 200)}${payloadSummary.length > 200 ? "…" : ""}`);
       }
 
       // Authorization (initiates 6-digit challenge for unknown users in DMs)
@@ -420,32 +421,33 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         msg.transport
       );
 
-      // 附件消息分流(issue #66 票1/票3):必须在斜杠/挑战码解析之前截住 —
-      // 文件名可能碰巧以 "/" 或 6 位数字开头。回执是 router 政策:未授权
-      // 用户与文本消息同等对待(静默丢弃,文件已落盘但不入清单)。
-      if (msg.attachments?.length || msg.attachmentError || msg.unsupportedType) {
+      // 非文本载荷分流(spec #72 票1,原 issue #66 票1/票3):必须在斜杠/
+      // 挑战码解析之前截住 — 文件名可能碰巧以 "/" 或 6 位数字开头。回执是
+      // router 政策:未授权用户与文本消息同等对待(静默丢弃,文件已落盘但不入清单)。
+      if (msg.payload.kind !== "text") {
         if (!isAuthorized) return;
-        if (msg.attachmentError) {
-          await sendReply(msg.chatId, msg.transport, attachmentErrorReply(msg.attachmentError));
-          return;
+        switch (msg.payload.kind) {
+          case "mediaError":
+            await sendReply(msg.chatId, msg.transport, attachmentErrorReply(msg.payload.reason));
+            return;
+          case "unsupported":
+            await sendReply(
+              msg.chatId,
+              msg.transport,
+              `🤷 暂不支持的消息类型(${msg.payload.msgtype}),已忽略。文字、图片和文件都可以直接发给我。`
+            );
+            return;
+          case "media": {
+            const key = attachmentLedgerKey(msg.chatId, msg.userId);
+            const ledger = pendingAttachments.get(key) ?? [];
+            for (const attachment of msg.payload.saved) {
+              ledger.push(attachment);
+              await sendReply(msg.chatId, msg.transport, attachmentSavedReply(attachment));
+            }
+            pendingAttachments.set(key, ledger);
+            return;
+          }
         }
-        if (msg.unsupportedType) {
-          await sendReply(
-            msg.chatId,
-            msg.transport,
-            `🤷 暂不支持的消息类型(${msg.unsupportedType}),已忽略。文字、图片和文件都可以直接发给我。`
-          );
-          return;
-        }
-        const key = attachmentLedgerKey(msg.chatId, msg.userId);
-        const ledger = pendingAttachments.get(key) ?? [];
-        const incoming = msg.attachments;
-        for (const attachment of incoming!) {
-          ledger.push(attachment);
-          await sendReply(msg.chatId, msg.transport, attachmentSavedReply(attachment));
-        }
-        pendingAttachments.set(key, ledger);
-        return;
       }
 
       // Bridge admin commands + challenge codes in DMs.
@@ -695,7 +697,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         const key = attachmentLedgerKey(msg.chatId, msg.userId);
         const carried = pendingAttachments.get(key);
         const pending = carried?.length ? carried : undefined;
-        await roomRpc.prompt(withAttachmentPrefix(withQuotePrefix(text, msg.quoted), pending));
+        const quoted = msg.payload.kind === "text" ? msg.payload.quoted : undefined;
+        await roomRpc.prompt(withAttachmentPrefix(withQuotePrefix(text, quoted), pending));
         pendingAttachments.delete(key);
       } catch (err) {
         await sendReply(msg.chatId, msg.transport, `❌ 无法发送给 pi: ${(err as Error).message}`);

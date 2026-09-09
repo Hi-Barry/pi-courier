@@ -309,8 +309,7 @@ export class MatrixProvider implements Transport {
       // 由它过授权门后回执礼貌提示。
       this.messageHandler?.({
         ...this.envelope(roomId, event, await this.resolveIsGroupChat(roomId)),
-        content: event.content?.body ?? "",
-        unsupportedType: classified.msgtype,
+        payload: { kind: "unsupported", msgtype: classified.msgtype },
       });
       return;
     }
@@ -357,14 +356,17 @@ export class MatrixProvider implements Transport {
       const externalMessage: ExternalMessage = {
         chatId,
         transport: this.type,
-        content: cleanContent,
         username,
         userId,
         timestamp: new Date(event.origin_server_ts || Date.now()),
         messageId,
         isGroupChat,
         wasMentioned,
-        ...(quoted && { quoted }),
+        payload: {
+          kind: "text",
+          text: cleanContent,
+          ...(quoted && { quoted }),
+        },
       };
 
       this.messageHandler(externalMessage);
@@ -389,10 +391,10 @@ export class MatrixProvider implements Transport {
         sizeHint: media.sizeHint,
       });
       logger.info(`[Matrix] 附件已保存: ${saved.path}(${base.username})`);
-      this.messageHandler?.({ ...base, content: media.filename, attachments: [saved] });
+      this.messageHandler?.({ ...base, payload: { kind: "media", saved: [saved] } });
     } catch (err) {
       logger.warn(`[Matrix] 附件处理失败(${base.username}): ${(err as Error).message}`);
-      this.messageHandler?.({ ...base, content: media.filename, attachmentError: (err as Error).message });
+      this.messageHandler?.({ ...base, payload: { kind: "mediaError", reason: (err as Error).message } });
     }
   }
 

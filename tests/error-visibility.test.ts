@@ -30,18 +30,19 @@ function assistantMessage(opts: { text?: string; stopReason?: string; errorMessa
   } as unknown as AssistantMessage;
 }
 
-function makeMsg(overrides: Partial<ExternalMessage> = {}): ExternalMessage {
+function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
+  const { text = "hi", ...rest } = overrides;
   return {
     chatId: "!dm:server",
     transport: "matrix",
     userId: "@barry:server",
     username: "barry",
-    content: "hi",
+    payload: { kind: "text", text },
     isGroupChat: false,
     wasMentioned: false,
     messageId: "m1",
     timestamp: new Date(),
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -111,7 +112,7 @@ describe("buildTurnReply error turns (issue #52)", () => {
 describe("error visibility routing (issue #52)", () => {
   it("an error turn with no text notifies the bound room and releases the default binding", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "do work" }));
+    await fx.router.handleIncoming(makeMsg({ text: "do work" }));
 
     fx.router.handleEvent(
       { type: "turn_end", message: assistantMessage({ stopReason: "error", errorMessage: "usage limit reached" }) },
@@ -130,7 +131,7 @@ describe("error visibility routing (issue #52)", () => {
 
   it("an error turn with partial text replies once, content plus failure line", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "do work" }));
+    await fx.router.handleIncoming(makeMsg({ text: "do work" }));
 
     fx.router.handleEvent(
       {
@@ -147,7 +148,7 @@ describe("error visibility routing (issue #52)", () => {
 
   it("an aborted turn never produces an error notification", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "do work" }));
+    await fx.router.handleIncoming(makeMsg({ text: "do work" }));
 
     fx.router.handleEvent(
       { type: "turn_end", message: assistantMessage({ stopReason: "aborted", errorMessage: "user cancelled" }) },
@@ -159,7 +160,7 @@ describe("error visibility routing (issue #52)", () => {
 
   it("auto_retry_start notifies the room with n/N and the failure summary", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "do work" }));
+    await fx.router.handleIncoming(makeMsg({ text: "do work" }));
 
     fx.router.handleEvent(
       { type: "auto_retry_start", attempt: 1, maxAttempts: 3, errorMessage: "429 too many requests" },
@@ -173,7 +174,7 @@ describe("error visibility routing (issue #52)", () => {
 
   it("auto_retry_start truncates a long upstream error", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "do work" }));
+    await fx.router.handleIncoming(makeMsg({ text: "do work" }));
 
     const long = "x".repeat(600);
     fx.router.handleEvent({ type: "auto_retry_start", attempt: 2, maxAttempts: 3, errorMessage: long }, fx.rpc);
@@ -192,7 +193,7 @@ describe("error visibility routing (issue #52)", () => {
 
   it("auto_retry_end failure notifies with the final error", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "do work" }));
+    await fx.router.handleIncoming(makeMsg({ text: "do work" }));
 
     fx.router.handleEvent(
       { type: "auto_retry_end", success: false, finalError: "provider unreachable" },
@@ -205,7 +206,7 @@ describe("error visibility routing (issue #52)", () => {
 
   it("a successful retry notifies nothing", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "do work" }));
+    await fx.router.handleIncoming(makeMsg({ text: "do work" }));
 
     fx.router.handleEvent({ type: "auto_retry_end", success: true }, fx.rpc);
     await flush();
@@ -214,7 +215,7 @@ describe("error visibility routing (issue #52)", () => {
 
   it("retry notifications follow the project room's pinned binding", async () => {
     const fx = makeFixtures({ projectRoom: true });
-    await fx.router.handleIncoming(makeMsg({ chatId: "!proj:server", content: "do work" }));
+    await fx.router.handleIncoming(makeMsg({ chatId: "!proj:server", text: "do work" }));
 
     fx.router.handleEvent({ type: "auto_retry_start", attempt: 3, maxAttempts: 5, errorMessage: "timeout" }, fx.rpc);
     fx.router.handleEvent({ type: "auto_retry_end", success: false, finalError: "gone for good" }, fx.rpc);

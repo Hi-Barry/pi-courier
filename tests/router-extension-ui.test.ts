@@ -29,18 +29,19 @@ import type { ProjectManager } from "../src/rpc/project-manager";
 import type { RoomOps } from "../src/transports/interface";
 import type { ExternalMessage } from "../src/types";
 
-function makeMsg(overrides: Partial<ExternalMessage> = {}): ExternalMessage {
+function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
+  const { text = "hi", ...rest } = overrides;
   return {
     chatId: "!dm:server",
     transport: "matrix",
     userId: "@barry:server",
     username: "barry",
-    content: "hi",
+    payload: { kind: "text", text },
     isGroupChat: false,
     wasMentioned: false,
     messageId: "m1",
     timestamp: new Date(),
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -119,7 +120,7 @@ async function askInDm(
   fx: ReturnType<typeof makeFixtures>,
   request: ExtensionUIRequestView
 ): Promise<void> {
-  await fx.router.handleIncoming(makeMsg({ content: "start a task" }));
+  await fx.router.handleIncoming(makeMsg({ text: "start a task" }));
   (fx.rpc.prompt as ReturnType<typeof vi.fn>).mockClear(); // the binding prompt is not under test
   fx.router.handleEvent(request, fx.rpc);
 }
@@ -200,12 +201,12 @@ describe("extension UI questions in the room (issue #54)", () => {
   it("y answers confirmed:true, n answers confirmed:false, room gets ✅ 已回应", async () => {
     const fx = makeFixtures();
     await askInDm(fx, uiRequest("q1"));
-    await fx.router.handleIncoming(makeMsg({ content: "y", messageId: "m2" }));
+    await fx.router.handleIncoming(makeMsg({ text: "y", messageId: "m2" }));
     expect(fx.extensionResponses).toEqual([{ id: "q1", confirmed: true }]);
     expect(fx.replies.at(-1)!.text).toBe("✅ 已回应");
 
     await fx.router.handleEvent(uiRequest("q2"), fx.rpc);
-    await fx.router.handleIncoming(makeMsg({ content: "N", messageId: "m3" }));
+    await fx.router.handleIncoming(makeMsg({ text: "N", messageId: "m3" }));
     expect(fx.extensionResponses).toEqual([
       { id: "q1", confirmed: true },
       { id: "q2", confirmed: false },
@@ -215,23 +216,23 @@ describe("extension UI questions in the room (issue #54)", () => {
   it("invalid confirm input re-asks and keeps the question pending (nothing written back)", async () => {
     const fx = makeFixtures();
     await askInDm(fx, uiRequest("q1"));
-    await fx.router.handleIncoming(makeMsg({ content: "maybe", messageId: "m2" }));
+    await fx.router.handleIncoming(makeMsg({ text: "maybe", messageId: "m2" }));
     expect(fx.extensionResponses).toHaveLength(0);
     expect(fx.replies.at(-1)!.text).toContain("请回复 y 或 n");
     expect(fx.rpc.prompt).not.toHaveBeenCalled(); // not a prompt either
     // The next message is still the answer.
-    await fx.router.handleIncoming(makeMsg({ content: "y", messageId: "m3" }));
+    await fx.router.handleIncoming(makeMsg({ text: "y", messageId: "m3" }));
     expect(fx.extensionResponses).toEqual([{ id: "q1", confirmed: true }]);
   });
 
   it("「取消」 writes cancelled:true and replies 已取消", async () => {
     const fx = makeFixtures();
     await askInDm(fx, uiRequest("q1"));
-    await fx.router.handleIncoming(makeMsg({ content: "取消", messageId: "m2" }));
+    await fx.router.handleIncoming(makeMsg({ text: "取消", messageId: "m2" }));
     expect(fx.extensionResponses).toEqual([{ id: "q1", cancelled: true }]);
     expect(fx.replies.at(-1)!.text).toBe("已取消");
     // Queue is drained: the next message is a normal prompt again.
-    await fx.router.handleIncoming(makeMsg({ content: "continue", messageId: "m3" }));
+    await fx.router.handleIncoming(makeMsg({ text: "continue", messageId: "m3" }));
     expect(fx.rpc.prompt).toHaveBeenCalledWith("continue");
   });
 
@@ -242,22 +243,22 @@ describe("extension UI questions in the room (issue #54)", () => {
     expect(fx.replies[0].text).toContain("1. dev");
     expect(fx.replies[0].text).toContain("3. prod");
 
-    await fx.router.handleIncoming(makeMsg({ content: "9", messageId: "m2" }));
+    await fx.router.handleIncoming(makeMsg({ text: "9", messageId: "m2" }));
     expect(fx.extensionResponses).toHaveLength(0);
     expect(fx.replies.at(-1)!.text).toContain("请回复 1 到 3 之间的序号");
 
-    await fx.router.handleIncoming(makeMsg({ content: "3", messageId: "m3" }));
+    await fx.router.handleIncoming(makeMsg({ text: "3", messageId: "m3" }));
     expect(fx.extensionResponses).toEqual([{ id: "q1", value: "prod" }]);
   });
 
   it("input and editor take the whole message as the value", async () => {
     const fx = makeFixtures();
     await askInDm(fx, uiRequest("q1", { method: "input", title: "项目名", placeholder: "my-app" }));
-    await fx.router.handleIncoming(makeMsg({ content: "my fancy app", messageId: "m2" }));
+    await fx.router.handleIncoming(makeMsg({ text: "my fancy app", messageId: "m2" }));
     expect(fx.extensionResponses).toEqual([{ id: "q1", value: "my fancy app" }]);
 
     await fx.router.handleEvent(uiRequest("q2", { method: "editor", title: "编辑", prefill: "draft" }), fx.rpc);
-    await fx.router.handleIncoming(makeMsg({ content: "first line\nsecond line", messageId: "m3" }));
+    await fx.router.handleIncoming(makeMsg({ text: "first line\nsecond line", messageId: "m3" }));
     expect(fx.extensionResponses[1]).toEqual({ id: "q2", value: "first line\nsecond line" });
   });
 
@@ -265,9 +266,9 @@ describe("extension UI questions in the room (issue #54)", () => {
     const fx = makeFixtures();
     await askInDm(fx, uiRequest("q-old"));
     fx.router.handleEvent(uiRequest("q-new"), fx.rpc);
-    await fx.router.handleIncoming(makeMsg({ content: "n", messageId: "m2" }));
+    await fx.router.handleIncoming(makeMsg({ text: "n", messageId: "m2" }));
     expect(fx.extensionResponses).toEqual([{ id: "q-old", confirmed: false }]);
-    await fx.router.handleIncoming(makeMsg({ content: "y", messageId: "m3" }));
+    await fx.router.handleIncoming(makeMsg({ text: "y", messageId: "m3" }));
     expect(fx.extensionResponses).toEqual([
       { id: "q-old", confirmed: false },
       { id: "q-new", confirmed: true },
@@ -277,22 +278,22 @@ describe("extension UI questions in the room (issue #54)", () => {
   it("while a question is pending, slash commands still go through the command channel", async () => {
     const fx = makeFixtures();
     await askInDm(fx, uiRequest("q1"));
-    await fx.router.handleIncoming(makeMsg({ content: "/help", messageId: "m2" }));
+    await fx.router.handleIncoming(makeMsg({ text: "/help", messageId: "m2" }));
     expect(fx.extensionResponses).toHaveLength(0); // not eaten as an answer
     expect(fx.replies.at(-1)!.text).toContain("Pi 命令");
     // ...and the question is still pending afterwards.
-    await fx.router.handleIncoming(makeMsg({ content: "y", messageId: "m3" }));
+    await fx.router.handleIncoming(makeMsg({ text: "y", messageId: "m3" }));
     expect(fx.extensionResponses).toEqual([{ id: "q1", confirmed: true }]);
   });
 
   it("a message from a different room is not captured as the answer", async () => {
     const fx = makeFixtures();
     await askInDm(fx, uiRequest("q1"));
-    await fx.router.handleIncoming(makeMsg({ chatId: "!other:server", content: "y", messageId: "m2" }));
+    await fx.router.handleIncoming(makeMsg({ chatId: "!other:server", text: "y", messageId: "m2" }));
     expect(fx.extensionResponses).toHaveLength(0); // other room's message goes to prompt
     expect(fx.rpc.prompt).toHaveBeenCalledWith("y");
     // The question still answers from its own room.
-    await fx.router.handleIncoming(makeMsg({ content: "y", messageId: "m3" }));
+    await fx.router.handleIncoming(makeMsg({ text: "y", messageId: "m3" }));
     expect(fx.extensionResponses).toEqual([{ id: "q1", confirmed: true }]);
   });
 
@@ -307,7 +308,7 @@ describe("extension UI questions in the room (issue #54)", () => {
       expect(fx.extensionResponses).toEqual([{ id: "q1", cancelled: true }]);
       expect(fx.replies.at(-1)!.text).toContain("⌛ 问题「允许部署?」超时未答,已按取消处理");
       // After the timeout the room accepts normal prompts again.
-      await fx.router.handleIncoming(makeMsg({ content: "continue", messageId: "m2" }));
+      await fx.router.handleIncoming(makeMsg({ text: "continue", messageId: "m2" }));
       expect(fx.rpc.prompt).toHaveBeenCalledWith("continue");
     } finally {
       vi.useRealTimers();
@@ -333,7 +334,7 @@ describe("extension UI questions in the room (issue #54)", () => {
     try {
       const fx = makeFixtures({ extensionUiTimeoutMinutes: 0.01 });
       await askInDm(fx, uiRequest("q1"));
-      await fx.router.handleIncoming(makeMsg({ content: "y", messageId: "m2" }));
+      await fx.router.handleIncoming(makeMsg({ text: "y", messageId: "m2" }));
       await vi.advanceTimersByTimeAsync(60_000);
       expect(fx.extensionResponses).toEqual([{ id: "q1", confirmed: true }]); // no cancelled duplicate
     } finally {
@@ -344,11 +345,11 @@ describe("extension UI questions in the room (issue #54)", () => {
   it("/reload drops pending questions: the next plain message prompts instead of answering", async () => {
     const fx = makeFixtures();
     await askInDm(fx, uiRequest("q1"));
-    await fx.router.handleIncoming(makeMsg({ content: "/reload", messageId: "m2" }));
+    await fx.router.handleIncoming(makeMsg({ text: "/reload", messageId: "m2" }));
     expect(fx.rpc.restart).toHaveBeenCalledTimes(1);
     // The new subprocess never sees question q1 — its room message must be a
     // prompt, not a bogus "✅ 已回应" answer to a dead question.
-    await fx.router.handleIncoming(makeMsg({ content: "deploy now", messageId: "m3" }));
+    await fx.router.handleIncoming(makeMsg({ text: "deploy now", messageId: "m3" }));
     expect(fx.rpc.prompt).toHaveBeenCalledWith("deploy now");
     expect(fx.rpc.respondExtensionUI).not.toHaveBeenCalled();
     expect(fx.replies.at(-1)!.text).not.toContain("已回应");
@@ -358,7 +359,7 @@ describe("extension UI questions in the room (issue #54)", () => {
 describe("extension UI fire-and-forget requests (issue #54)", () => {
   it("notify warning and error reach the room; info only logs", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "hi" }));
+    await fx.router.handleIncoming(makeMsg({ text: "hi" }));
 
     fx.router.handleEvent({ type: "extension_ui_request", id: "n1", method: "notify", message: "磁盘快满", notifyType: "warning" }, fx.rpc);
     expect(fx.replies.at(-1)!.text).toContain("⚠️ 扩展通知: 磁盘快满");
@@ -374,7 +375,7 @@ describe("extension UI fire-and-forget requests (issue #54)", () => {
 
   it("TUI-only display methods (setStatus/setWidget/setTitle/set_editor_text) are ignored", async () => {
     const fx = makeFixtures();
-    await fx.router.handleIncoming(makeMsg({ content: "hi" }));
+    await fx.router.handleIncoming(makeMsg({ text: "hi" }));
     const before = fx.replies.length;
     for (const [method, extra] of [
       ["setStatus", { statusKey: "k", statusText: "v" }],
@@ -395,7 +396,7 @@ describe("extension UI fire-and-forget requests (issue #54)", () => {
     expect(fx.extensionResponses).toEqual([{ id: "q1", cancelled: true }]);
     expect(fx.replies).toHaveLength(0);
     // Nothing was parked: the next message is a plain prompt, not an answer.
-    await fx.router.handleIncoming(makeMsg({ content: "y", messageId: "m1" }));
+    await fx.router.handleIncoming(makeMsg({ text: "y", messageId: "m1" }));
     expect(fx.rpc.prompt).toHaveBeenCalledWith("y");
   });
 });
