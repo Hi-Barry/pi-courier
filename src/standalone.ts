@@ -111,7 +111,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   let roomOps: RoomOps | undefined;
 
   if (config.matrix?.homeserverUrl && config.matrix?.accessToken) {
-    const matrix = new MatrixProvider(config.matrix, (chatId) => auth.isChannelEnabled(chatId));
+    // 赋值给外层变量(内层 const 会遮蔽,导致 !matrix 恒真——真机冒烟抓到)
+    matrix = new MatrixProvider(config.matrix, (chatId) => auth.isChannelEnabled(chatId));
     // Attachment intake (issue #66): the store needs the Matrix client for
     // downloads, so it is created here and handed to the provider. Both read
     // config at construction time — changes take effect on restart like every
