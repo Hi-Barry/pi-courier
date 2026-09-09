@@ -75,7 +75,11 @@ export function classifyMessageContent(content: unknown): MessageContentClassifi
     }
     return { kind: "other", msgtype };
   }
-  return { kind: "text" };
+  // 无媒体载荷:m.text / m.emote 走文本管道,其余(如 m.location)是
+  // "other" — 由 router 回执礼貌提示(票3 消灭静默吞消息)。
+  const msgtype = (content as { msgtype?: string } | null)?.msgtype;
+  if (msgtype === "m.text" || msgtype === "m.emote") return { kind: "text" };
+  return { kind: "other", msgtype: msgtype || "(unknown)" };
 }
 
 /**
@@ -114,19 +118,20 @@ export function shouldSkipEvent(
 
   // m.notice stays silent in every branch (issue #66 票3: the ONE deliberate
   // silence — other bots/services' notices must not trigger receipts or the
-  // bot loops). m.emote falls through as text: its body is readable text.
+  // bot loops).
   if (event.content?.msgtype === "m.notice") return "notice";
 
-  // Media events (issue #66) flow through the attachment path; everything
-  // non-text without a media payload stays skipped.
+  // Media events (issue #66) flow through the attachment path. Everything
+  // else with a body flows on too: m.text/m.emote are classified as text,
+  // exotic msgtypes (m.location…) reach the router's polite receipt — the
+  // filter itself no longer silently drops them (票3). Only body-less
+  // messages and edits stay skipped here.
   if (!isMediaEventContent(event.content)) {
-    // Text-ish messages (m.text and m.emote — the emote body is text)
-    const msgtype = event.content?.msgtype;
-    if (msgtype !== "m.text" && msgtype !== "m.emote") return "not_text";
-    if (!event.content?.body) return "not_text";
+    const content = event.content;
+    if (!content?.body) return "not_text";
 
     // Ignore edits (we only process original messages)
-    if (event.content["m.new_content"]) return "edit";
+    if (content["m.new_content"]) return "edit";
   }
 
   // Skip events from rooms we're not in (cached, no API call)

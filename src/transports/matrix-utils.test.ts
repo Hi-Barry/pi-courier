@@ -136,9 +136,9 @@ describe("shouldSkipEvent", () => {
       .toBe("stale");
   });
 
-  it("skips non-text messages", () => {
-    expect(shouldSkipEvent(makeEvent({ content: { msgtype: "m.location", geo_uri: "geo:0,0" } }), botUserId, connectedAt, joinedRooms, "!room1:matrix.org"))
-      .toBe("not_text");
+  it("lets body-carrying exotic msgtypes through (m.location → router's polite receipt, 票3)", () => {
+    expect(shouldSkipEvent(makeEvent({ content: { msgtype: "m.location", geo_uri: "geo:0,0", body: "Location" } }), botUserId, connectedAt, joinedRooms, "!room1:matrix.org"))
+      .toBeNull();
   });
 
   it("lets media events through (m.image with url) — attachment path handles them (#67)", () => {
@@ -169,9 +169,9 @@ describe("shouldSkipEvent", () => {
     )).toBeNull();
   });
 
-  it("still skips m.image without any media payload", () => {
+  it("lets payload-less media msgtypes through too (→ polite receipt path, 票3)", () => {
     expect(shouldSkipEvent(makeEvent({ content: { msgtype: "m.image", body: "photo" } }), botUserId, connectedAt, joinedRooms, "!room1:matrix.org"))
-      .toBe("not_text");
+      .toBeNull();
   });
 
   it("skips messages with no content", () => {
@@ -391,10 +391,10 @@ describe("classifyMessageContent", () => {
     expect(classifyMessageContent({ msgtype: "m.fancy", body: "x", url: "mxc://s/y" })).toEqual({ kind: "other", msgtype: "m.fancy" });
   });
 
-  it("content without a media payload is classified as text (the filter blocks non-text upstream)", () => {
-    // m.location 无 url/file → 不是媒体载荷;shouldSkipEvent 已把它挡在
-    // not_text(票1 行为),分类只对已通过过滤器的内容负责。
-    expect(classifyMessageContent({ msgtype: "m.location", geo_uri: "geo:0,0" })).toEqual({ kind: "text" });
+  it("content without a media payload: m.text/m.emote → text, others → other (票3)", () => {
+    expect(classifyMessageContent({ msgtype: "m.text", body: "hi" })).toEqual({ kind: "text" });
+    expect(classifyMessageContent({ msgtype: "m.emote", body: "waves" })).toEqual({ kind: "text" });
+    expect(classifyMessageContent({ msgtype: "m.location", geo_uri: "geo:0,0", body: "Location" })).toEqual({ kind: "other", msgtype: "m.location" });
   });
 
   it("defaults filename to empty string when body is missing", () => {
