@@ -16,17 +16,14 @@ import type { MediaSource } from "./attachments.js";
 import { AttachmentStore } from "./attachments.js";
 import type { Transport } from "./interface.js";
 import { MatrixRoomOps } from "./matrix-rooms.js";
+import { createEventTranslator } from "./matrix-events.js";
 import {
-  classifyMessageContent,
-  extractUsername,
   formatForMatrix,
   isGroupChatRoom,
   shouldPostJoinHint,
   shouldSkipEvent,
-  stripBotMention,
-  wasBotMentioned,
-  type EncryptedMediaFile,
 } from "./matrix-utils.js";
+import { buildGroupJoinHint } from "../management-room.js";
 
 /**
  * Matrix transport provider using matrix-bot-sdk
@@ -50,6 +47,8 @@ export class MatrixProvider implements Transport {
   private quoteCache: QuoteCache = createQuoteCache();
   /** Attachment storage (issue #66) — wired by the composition root. */
   private attachments?: AttachmentStore;
+  /** Event translator (spec #72 票2/C2) — assembled once botUserId is known. */
+  private translator?: ReturnType<typeof createEventTranslator>;
 
   /** Room-capability half of the Matrix integration (see matrix-rooms.ts). */
   readonly roomOps = new MatrixRoomOps({
@@ -132,6 +131,13 @@ export class MatrixProvider implements Transport {
 
     // Cache bot user ID (never changes)
     this.botUserId = await this.client.getUserId();
+    this.translator = createEventTranslator({
+      transportType: this.type,
+      botUserId: this.botUserId,
+      quoteCache: this.quoteCache,
+      resolveIsGroupChat: (roomId) => this.resolveIsGroupChat(roomId),
+      ...(this.attachments ? { attachments: this.attachments } : {}),
+    });
 
     // Track room membership and member counts
     this.client.on("room.join", (roomId: string) => {
@@ -144,12 +150,7 @@ export class MatrixProvider implements Transport {
           // hint so the inviter knows how to enable it. The room.join event
           // only fires on (re)join, so this is naturally idempotent.
           if (shouldPostJoinHint(members.length, this.isRoomEnabled(roomId))) {
-            this.sendMessage(
-              roomId,
-              `🤖 我已加入这个群聊,但默认不回应群消息。\n\n` +
-                `启用方式:直接在群里发 /enable trusted-only\n` +
-                `(或 all = 回应所有人 / mentions = 只回应 @我;仅信任用户可启用)`
-            ).catch(() => {});
+            this.sendMessage(roomId, buildGroupJoinHint()).catch(() => {});
           }
         })
         .catch(() => {});
@@ -288,129 +289,20 @@ export class MatrixProvider implements Transport {
   }
 
   private async handleMessage(roomId: string, event: any): Promise<void> {
-    if (!this.client || !this.botUserId) return;
+    if (!this.client || !this.botUserId || !this.translator) return;
 
-    // Pure filter — delegates to testable utility
+    // Pure filter — delegates to testable utility (own messages, stale
+    // replay, unjoined rooms, m.notice silence, edits).
     const skipReason = shouldSkipEvent(event, this.botUserId, this.connectedAt, this.joinedRooms, roomId);
     if (skipReason) return;
 
-    // Attachment intake (issue #66): media payloads diverge before the text
-    // pipeline — they download to disk and forward as path references, they
-    // never trigger an agent turn themselves.
-    const classified = classifyMessageContent(event.content);
-    if (classified.kind === "media") {
-      // No store wired (bare transport in tests): legacy skip-silently.
-      if (!this.attachments) return;
-      await this.handleMediaMessage(roomId, event, classified);
-      return;
-    }
-    if (classified.kind === "other") {
-      // 票3:非文本且无媒体载荷(如 m.location)不再静默 — 转发给 router,
-      // 由它过授权门后回执礼貌提示。
-      this.messageHandler?.({
-        ...this.envelope(roomId, event, await this.resolveIsGroupChat(roomId)),
-        payload: { kind: "unsupported", msgtype: classified.msgtype },
-      });
-      return;
-    }
-
-    const chatId = roomId;
-    const userId = event.sender; // e.g. @user:matrix.org
-    const username = extractUsername(userId);
-    const messageText = event.content.body;
-    const messageId = event.event_id;
-
-    // Determine if group chat from cached member count (no API call per message)
-    const isGroupChat = await this.resolveIsGroupChat(roomId);
-
-    // Check if bot was mentioned (pure utility)
-    const wasMentioned = isGroupChat ? wasBotMentioned(messageText, this.botUserId) : false;
-
-    // Transport is pure I/O: EVERY message passing the filter above is
-    // forwarded. Authorization, challenges, admin commands and group /enable
-    // are policy and run in the message-router pipeline — a gate here would
-    // make later pipeline stages (e.g. /enable in an unenabled room)
-    // unreachable dead code.
-
-    // Strip bot mention from message (pure utility)
-    const cleanContent = wasMentioned && this.botUserId
-      ? stripBotMention(messageText, this.botUserId)
-      : messageText;
-
-    // Reply quotes (issue #56 票5): record this message first, then resolve a
-    // m.relates_to reply target against the per-room ring cache. A miss (old
-    // message from before this process started, unknown event) is a silent
-    // downgrade — the message flows on without a quote. E2EE rooms arrive
-    // decrypted, so content is read the same way as body above.
-    this.quoteCache.record(roomId, messageId, {
-      username,
-      excerpt: toExcerpt(cleanContent ?? ""),
-    });
-    const replyTargetEventId: string | undefined = event.content?.["m.relates_to"]?.["m.in_reply_to"]?.event_id;
-    const quoted = replyTargetEventId
-      ? this.quoteCache.lookup(roomId, replyTargetEventId)
-      : undefined;
-
-    // Forward to message handler
-    if (this.messageHandler && cleanContent) {
-      const externalMessage: ExternalMessage = {
-        chatId,
-        transport: this.type,
-        username,
-        userId,
-        timestamp: new Date(event.origin_server_ts || Date.now()),
-        messageId,
-        isGroupChat,
-        wasMentioned,
-        payload: {
-          kind: "text",
-          text: cleanContent,
-          ...(quoted && { quoted }),
-        },
-      };
-
-      this.messageHandler(externalMessage);
-    }
-  }
-
-  /**
-   * Media intake (issue #66 票1): download → save → forward as an
-   * ExternalMessage carrying the absolute path (or the failure reason).
-   * Receipts and the pending-attachment ledger are ROUTER policy — the
-   * transport stays pure I/O, exactly like the text pipeline above.
-   */
-  private async handleMediaMessage(roomId: string, event: any, media: { mxcUrl?: string; encryptedFile?: EncryptedMediaFile; filename: string; sizeHint?: number }): Promise<void> {
-    if (!this.client || !this.attachments) return;
-    const base = this.envelope(roomId, event, await this.resolveIsGroupChat(roomId));
-
-    try {
-      const saved = await this.attachments.save(base.chatId, {
-        mxcUrl: media.mxcUrl,
-        encryptedFile: media.encryptedFile,
-        body: media.filename,
-        sizeHint: media.sizeHint,
-      });
-      logger.info(`[Matrix] 附件已保存: ${saved.path}(${base.username})`);
-      this.messageHandler?.({ ...base, payload: { kind: "media", saved: [saved] } });
-    } catch (err) {
-      logger.warn(`[Matrix] 附件处理失败(${base.username}): ${(err as Error).message}`);
-      this.messageHandler?.({ ...base, payload: { kind: "mediaError", reason: (err as Error).message } });
-    }
-  }
-
-  /** The common ExternalMessage envelope fields shared by the text, media
-   *  and unsupported-type pipelines (no mention stripping on non-text). */
-  private envelope(roomId: string, event: any, isGroupChat: boolean) {
-    return {
-      chatId: roomId,
-      transport: this.type,
-      username: extractUsername(event.sender),
-      userId: event.sender,
-      timestamp: new Date(event.origin_server_ts || Date.now()),
-      messageId: event.event_id,
-      isGroupChat,
-      wasMentioned: false,
-    };
+    // Translation (spec #72 票2/C2): classification, mention stripping, quote
+    // bookkeeping and attachment persistence live in the translator module;
+    // this transport only wires the SDK to it and logs its lines.
+    const outcome = await this.translator.translate(roomId, event);
+    if (outcome.info) logger.info(outcome.info);
+    if (outcome.warn) logger.warn(outcome.warn);
+    if (outcome.message) this.messageHandler?.(outcome.message);
   }
 
   /** Cached member-count lookup shared by the text and media pipelines. */
