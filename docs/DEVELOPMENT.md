@@ -240,7 +240,7 @@ pi 0.83.0 就绪。
 **`src/transports/attachments.ts`** —— 附件存储(spec #66)
 - `AttachmentStore.save`:大小上限预检(info.size)+ 下载后真实字节复查、60s 下载超时、mxc 去重(文件被删自动重下)、房间键安全化 + 哈希前缀文件名(防路径穿越/同名不覆盖)
 - `MediaSource` 下载接缝可注入(测试用 fake);部署缺加密半边时回执明确原因;组合根(standalone)以 `matrix.mediaSource` 组装并把 store 交给 provider(`setAttachmentStore`)
-- 目录默认 `~/.pi/pi-courier/attachments/`,上限默认 10 MB —— `attachments.directory` / `attachments.maxMb` 配置 + `PI_ATTACHMENTS_DIR` / `PI_ATTACHMENTS_MAX_MB` 环境变量 + setup 向导两项询问
+- 目录默认 `~/.pi/pi-courier-attachments/`(与 `~/.pi` 下其他 pi-courier-* 状态文件平齐;spec 文本写的是 `~/.pi/pi-courier/attachments/`,实施时改名并在关票评论披露),上限默认 10 MB —— `attachments.directory` / `attachments.maxMb` 配置 + `PI_ATTACHMENTS_DIR` / `PI_ATTACHMENTS_MAX_MB` 环境变量 + setup 向导两项询问
 
 **`src/logger.ts`** —— 分级日志门面(spec #34 后支持项目标签)
 - 输出 `[ISO时间] [LEVEL] [标签] 消息`;`withLabel()` 派生视图打项目标签(视图动态读父阈值);字符串参数换行净化为 `⏎`,一次调用恒一条物理行(打标行不会被续行破坏)

@@ -145,11 +145,6 @@ export class AttachmentStore {
     this.dedup.set(mxcKey, target);
     return { path: target, filename: path.basename(target), bytes: data.length };
   }
-
-  /** 测试辅助:清空去重表(不影响磁盘)。 */
-  clearDedup(): void {
-    this.dedup.clear();
-  }
 }
 
 /** 同名不覆盖:哈希前缀已使碰撞近乎不可能,仍按 -1/-2 递增兜底(确定性)。 */
@@ -157,10 +152,20 @@ async function uniqueTarget(dir: string, filename: string): Promise<string> {
   let target = path.join(dir, filename);
   const ext = path.extname(filename);
   const stem = filename.slice(0, filename.length - ext.length);
-  for (let i = 1; await statSize(target).then(Boolean).catch(() => false); i++) {
+  // 存在性判定用 stat 成败而非字节数 — 0 字节的同名文件同样不许被覆盖。
+  for (let i = 1; await pathExists(target); i++) {
     target = path.join(dir, `${stem}-${i}${ext}`);
   }
   return target;
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fs.promises.access(p);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function statSize(p: string): Promise<number> {

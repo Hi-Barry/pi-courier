@@ -279,10 +279,10 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 1. 粘贴图片(或发文件)→ bot 回执 `📎 附件已保存: <绝对路径>`,**不会**惊动 agent;
 2. 随后发一条文字说明 → 路径自动拼进 prompt,agent 用 `read` 工具查看(与 pi TUI 的 `@路径` 工作流一致),结合图和说明开始干活。
 
-支持类型:`m.image` / `m.file` / `m.audio` / `m.video` / 贴纸。图片由 pi 自动压缩后交给视觉模型;音频视频模型吃不下,但 agent 可以用 bash/ffmpeg 自行处理。限制与细节:
+支持类型:`m.image` / `m.file` / `m.audio` / `m.video` / 贴纸。图片由 pi 读取后交给视觉模型(其 read 管线自带缩放,发送前压大图,见 pi 源码);音频视频模型吃不下,但 agent 可以用 bash/ffmpeg 自行处理。限制与细节:
 
 - **单个附件上限 10 MB**(可配 `attachments.maxMb`,setup 向导可改);超限/下载失败会回执原因,**不静默**
-- 附件统一存到 `~/.pi/pi-courier/attachments/<房间>/`(可配 `attachments.directory`),**不进项目工作区**,不会弄脏 `git status`
+- 附件统一存到 `~/.pi/pi-courier-attachments/<房间>/`(可配 `attachments.directory`),**不进项目工作区**,不会弄脏 `git status`
 - 待处理附件按"房间+发送者"记账:`/pmctl`、`/login` 等命令不消耗清单;**重启后清单清空**(回执里有路径,可手动引用)
 - 加密房间(E2EE)同样支持,附件自动解密
 - 位置消息等不支持的类型会收到礼貌提示;模型本身不支持视觉时,pi 会告知看不了图 —— 这是模型能力,与桥无关

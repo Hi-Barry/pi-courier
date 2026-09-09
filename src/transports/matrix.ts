@@ -25,6 +25,7 @@ import {
   shouldSkipEvent,
   stripBotMention,
   wasBotMentioned,
+  type EncryptedMediaFile,
 } from "./matrix-utils.js";
 
 /**
@@ -307,15 +308,8 @@ export class MatrixProvider implements Transport {
       // 票3:非文本且无媒体载荷(如 m.location)不再静默 — 转发给 router,
       // 由它过授权门后回执礼貌提示。
       this.messageHandler?.({
-        chatId: roomId,
-        transport: this.type,
+        ...this.envelope(roomId, event, await this.resolveIsGroupChat(roomId)),
         content: event.content?.body ?? "",
-        username: extractUsername(event.sender),
-        userId: event.sender,
-        timestamp: new Date(event.origin_server_ts || Date.now()),
-        messageId: event.event_id,
-        isGroupChat: await this.resolveIsGroupChat(roomId),
-        wasMentioned: false,
         unsupportedType: classified.msgtype,
       });
       return;
@@ -383,43 +377,38 @@ export class MatrixProvider implements Transport {
    * Receipts and the pending-attachment ledger are ROUTER policy — the
    * transport stays pure I/O, exactly like the text pipeline above.
    */
-  private async handleMediaMessage(
-    roomId: string,
-    event: any,
-    media: { mxcUrl?: string; encryptedFile?: { url: string; key: { k: string }; iv: string; hashes: { sha256: string } }; filename: string; sizeHint?: number }
-  ): Promise<void> {
+  private async handleMediaMessage(roomId: string, event: any, media: { mxcUrl?: string; encryptedFile?: EncryptedMediaFile; filename: string; sizeHint?: number }): Promise<void> {
     if (!this.client || !this.attachments) return;
-    const chatId = roomId;
-    const userId = event.sender;
-    const username = extractUsername(userId);
-    const messageId = event.event_id;
-    const isGroupChat = await this.resolveIsGroupChat(roomId);
-
-    const base = {
-      chatId,
-      transport: this.type,
-      content: media.filename,
-      username,
-      userId,
-      timestamp: new Date(event.origin_server_ts || Date.now()),
-      messageId,
-      isGroupChat,
-      wasMentioned: false,
-    };
+    const base = this.envelope(roomId, event, await this.resolveIsGroupChat(roomId));
 
     try {
-      const saved = await this.attachments.save(chatId, {
+      const saved = await this.attachments.save(base.chatId, {
         mxcUrl: media.mxcUrl,
         encryptedFile: media.encryptedFile,
         body: media.filename,
         sizeHint: media.sizeHint,
       });
-      logger.info(`[Matrix] 附件已保存: ${saved.path}(${username})`);
-      this.messageHandler?.({ ...base, attachments: [saved] });
+      logger.info(`[Matrix] 附件已保存: ${saved.path}(${base.username})`);
+      this.messageHandler?.({ ...base, content: media.filename, attachments: [saved] });
     } catch (err) {
-      logger.warn(`[Matrix] 附件处理失败(${username}): ${(err as Error).message}`);
-      this.messageHandler?.({ ...base, attachmentError: (err as Error).message });
+      logger.warn(`[Matrix] 附件处理失败(${base.username}): ${(err as Error).message}`);
+      this.messageHandler?.({ ...base, content: media.filename, attachmentError: (err as Error).message });
     }
+  }
+
+  /** The common ExternalMessage envelope fields shared by the text, media
+   *  and unsupported-type pipelines (no mention stripping on non-text). */
+  private envelope(roomId: string, event: any, isGroupChat: boolean) {
+    return {
+      chatId: roomId,
+      transport: this.type,
+      username: extractUsername(event.sender),
+      userId: event.sender,
+      timestamp: new Date(event.origin_server_ts || Date.now()),
+      messageId: event.event_id,
+      isGroupChat,
+      wasMentioned: false,
+    };
   }
 
   /** Cached member-count lookup shared by the text and media pipelines. */

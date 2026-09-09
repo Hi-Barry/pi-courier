@@ -147,6 +147,16 @@ describe("attachment ledger (issue #66 票1)", () => {
     expect((prompt.mock.calls[0]![0] as string)).not.toContain("附件过大");
   });
 
+  it("a FAILED prompt does not consume the ledger — the retry carries the attachments", async () => {
+    const { router, prompt } = makeFixtures();
+    prompt.mockRejectedValueOnce(new Error("No API key found"));
+    await router.handleIncoming(makeMsg({ messageId: "m1", content: "a.png", attachments: [ATT] }));
+    await router.handleIncoming(makeMsg({ messageId: "m2", content: "第一次(发送失败)" }));
+    await router.handleIncoming(makeMsg({ messageId: "m3", content: "重试" }));
+    expect((prompt.mock.calls[0]![0] as string)).toContain(ATT.path);
+    expect((prompt.mock.calls[1]![0] as string)).toContain(ATT.path);
+  });
+
   it("unsupported message types get a polite reply and never prompt (票3)", async () => {
     const { router, prompt, lastReply } = makeFixtures();
     await router.handleIncoming(makeMsg({ messageId: "m1", content: "", unsupportedType: "m.location" }));

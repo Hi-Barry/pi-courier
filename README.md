@@ -237,10 +237,10 @@ Just **paste or send files** in Element — the bot saves them first, the agent 
 1. Paste an image (or send a file) → the bot replies `📎 附件已保存: <absolute path>` and does **not** wake the agent;
 2. Send a text instruction next → the path is prepended to the prompt automatically, and the agent reads it with its `read` tool (same workflow as pi TUI's `@path`), combining the attachment with your instruction.
 
-Supported: `m.image` / `m.file` / `m.audio` / `m.video` / stickers. Images are auto-compressed by pi and handed to the vision model; audio/video can't be ingested by models directly, but the agent can process them with bash/ffmpeg. Limits and details:
+Supported: `m.image` / `m.file` / `m.audio` / `m.video` / stickers. Images are handed to the vision model by pi (its `read` pipeline downscales large images before the model call, per pi's own source); audio/video can't be ingested by models directly, but the agent can process them with bash/ffmpeg. Limits and details:
 
 - **10 MB per attachment** (configurable via `attachments.maxMb`, also in the setup wizard); oversize/download failures answer with the reason — never silence
-- Attachments land in `~/.pi/pi-courier/attachments/<room>/` (configurable via `attachments.directory`) — **outside your project workdirs**, so `git status` stays clean
+- Attachments land in `~/.pi/pi-courier-attachments/<room>/` (configurable via `attachments.directory`) — **outside your project workdirs**, so `git status` stays clean
 - Pending attachments are tracked per room+sender: `/pmctl`, `/login` and other commands don't consume the queue; a **restart clears it** (the receipt shows the path — reference it manually if needed)
 - Encrypted rooms (E2EE) are supported — attachments are decrypted automatically
 - Unsupported types (e.g. location) get a polite notice; if the model itself lacks vision, pi will say so — that's the model, not the bridge

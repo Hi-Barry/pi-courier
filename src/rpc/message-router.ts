@@ -229,7 +229,7 @@ export function withAttachmentPrefix(
 ): string {
   if (!attachments?.length) return text;
   const lines = attachments.map((a) => `- ${a.path}`);
-  return `用户随消息发来了附件(请用 read 工具查看):\n${lines.join("\n")}\n\n${text}`;
+  return `用户发来附件(请用 read 工具查看):\n${lines.join("\n")}\n\n${text}`;
 }
 
 /** 附件清单的记账键:房间 + 发送者(群聊里甲的图不被乙的消息消耗)。 */
@@ -440,7 +440,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         const key = attachmentLedgerKey(msg.chatId, msg.userId);
         const ledger = pendingAttachments.get(key) ?? [];
         const incoming = msg.attachments;
-        for (const attachment of incoming ?? []) {
+        for (const attachment of incoming!) {
           ledger.push(attachment);
           await sendReply(msg.chatId, msg.transport, attachmentSavedReply(attachment));
         }
@@ -688,13 +688,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // Plain message → prompt (a resolved reply quote is prepended — see
       // withQuotePrefix; command handling above saw the raw text). Pending
       // attachments (issue #66 票1) ride along here and only here: the unique
-      // consumption point for the per-room+sender ledger.
+      // consumption point for the per-room+sender ledger. The ledger is
+      // cleared ONLY after the send succeeded — a failed prompt keeps the
+      // attachments parked so the retry carries them.
       try {
         const key = attachmentLedgerKey(msg.chatId, msg.userId);
         const carried = pendingAttachments.get(key);
         const pending = carried?.length ? carried : undefined;
-        pendingAttachments.delete(key);
         await roomRpc.prompt(withAttachmentPrefix(withQuotePrefix(text, msg.quoted), pending));
+        pendingAttachments.delete(key);
       } catch (err) {
         await sendReply(msg.chatId, msg.transport, `❌ 无法发送给 pi: ${(err as Error).message}`);
       }
