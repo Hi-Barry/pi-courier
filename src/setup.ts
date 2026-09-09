@@ -7,11 +7,18 @@
  * admin user → E2EE toggle, then writes ~/.pi/pi-courier.json.
  */
 
-import * as os from "node:os";
-import * as path from "node:path";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline";
-import { defaultProjectsRoot, loadConfig, nativeMxid, saveConfig } from "./config.js";
+import {
+  attachmentsDirectory,
+  attachmentsMaxMb,
+  defaultProjectsRoot,
+  effectiveInstanceName,
+  effectiveWorkdir,
+  loadConfig,
+  nativeMxid,
+  saveConfig,
+} from "./config.js";
 import type { MsgBridgeConfig } from "./types.js";
 
 /**
@@ -274,16 +281,16 @@ export async function runSetup(): Promise<void> {
     const encryption = encAnswer === "" ? encDefault : encAnswer === "y";
 
     // ---- 6. workdir ----------------------------------------------------------
-    const workdirDefault = existing.workdir ?? defaultProjectsRoot();
+    const workdirDefault = effectiveWorkdir(existing);
     const workdir = (await ask(`pi 工作目录 [默认 ${workdirDefault}]: `)).trim() || workdirDefault;
 
     // ---- 6.2 attachments (issue #66) ------------------------------------------
     // Where media from the chat lands and how big a single file may be.
     // Defaults are fine for almost everyone — the questions exist so the
     // knobs are discoverable, answers merge-preserve existing values.
-    const attDirDefault = existing.attachments?.directory ?? path.join(os.homedir(), ".pi", "pi-courier-attachments");
+    const attDirDefault = attachmentsDirectory(existing);
     const attachmentsDir = (await ask(`附件保存目录 [默认 ${attDirDefault}]: `)).trim() || attDirDefault;
-    const attMbDefault = existing.attachments?.maxMb ?? 10;
+    const attMbDefault = attachmentsMaxMb(existing);
     const attMbRaw = (await ask(`单个附件大小上限 MB [默认 ${attMbDefault}]: `)).trim();
     const attMb = attMbRaw === "" ? attMbDefault : Number.parseInt(attMbRaw, 10);
     if (!Number.isFinite(attMb) || attMb <= 0) {
@@ -291,7 +298,7 @@ export async function runSetup(): Promise<void> {
     }
 
     // ---- 6.5 instance name (multi-machine differentiation) -------------------
-    const instanceDefault = existing.instanceName ?? os.hostname();
+    const instanceDefault = effectiveInstanceName(existing);
     const instanceName = (await ask(`实例名/机器名(默认 ${instanceDefault};多台部署用来区分,将显示在管理房间名): `)).trim() || instanceDefault;
 
     // ---- 6.6 multi-project mode ----------------------------------------------

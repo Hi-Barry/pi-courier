@@ -92,7 +92,8 @@ export function sanitizeMediaFilename(body: string | undefined, mxcUrl: string):
   const cleaned = base
     .replace(/[\x00-\x1f\x7f]/g, "") // 控制字符
     .replace(/\s+/g, " ")
-    .replace(/^\.+/, "") // 防 ".."/"."
+    .trim()
+    .replace(/^\.+/, "") // 防 ".."/"."(必须先 trim —— " .." 形式会绕过前导点剥离,fast-check 反例)
     .trim();
   const safe = cleaned.length > 0 ? cleaned : "file";
   return `${hash}-${safe.slice(0, 150)}`;

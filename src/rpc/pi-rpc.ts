@@ -21,7 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 export interface PiRpcOptions {
-  /** Absolute path to pi's dist/cli.js (default: PI_CLI_PATH env, local node_modules, or `which pi` resolved) */
+  /** Absolute path to pi's dist/cli.js (default: config.cliPath ← PI_CLI_PATH env, then local node_modules, then `which pi`) */
   cliPath?: string;
   /** Working directory for the agent (affects bash tool, project context) */
   cwd?: string;
@@ -78,12 +78,11 @@ export class PiRpc {
     return index >= 0 ? args[index + 1] : undefined;
   }
 
-  /** Locate the pi CLI entry point. */
+  /** Locate the pi CLI entry point. Env override (PI_CLI_PATH) is folded
+   *  into config.cliPath by loadConfig (spec #72 票4/C4) — this chain only
+   *  resolves between the configured path and the two install locations. */
   static async resolveCliPath(): Promise<string> {
-    // 1. Explicit env override
-    if (process.env.PI_CLI_PATH) return process.env.PI_CLI_PATH;
-
-    // 2. System-installed pi (`which pi`, resolve symlink to dist/cli.js).
+    // 1. System-installed pi (`which pi`, resolve symlink to dist/cli.js).
     //    Preferred: pi is installed independently and upgraded on its own.
     try {
       const bin = execFileSync("which", ["pi"], { encoding: "utf-8" }).trim();
@@ -111,6 +110,15 @@ export class PiRpc {
   }
 
   private startPromise: Promise<void> | null = null;
+  /** 重启生命周期订阅(spec #72 票6/C5):瞬态状态经此自清,不再外借扳机。 */
+  private restartListeners = new Set<(rpc: PiRpc) => void>();
+
+  /** Subscribe to subprocess restarts (fired after the new process is up).
+   *  Returns an unsubscribe function. */
+  onRestarted(listener: (rpc: PiRpc) => void): () => void {
+    this.restartListeners.add(listener);
+    return () => this.restartListeners.delete(listener);
+  }
 
   async start(): Promise<void> {
     if (this.client) return;
@@ -175,12 +183,20 @@ export class PiRpc {
    * Restart the pi process. Keeps registered event listeners attached to the
    * new process. The session persists on disk, so the same session is resumed.
    * Useful after installing new extensions/skills or changing provider config.
+   * Fires the restart lifecycle AFTER the new process is up.
    */
   async restart(): Promise<void> {
     const keptListeners = this.listeners;
     await this.stop();
     this.listeners = keptListeners;
     await this.start();
+    for (const listener of this.restartListeners) {
+      try {
+        listener(this);
+      } catch {
+        // 生命周期监听器的失败不影响重启本身
+      }
+    }
   }
 
   /**
@@ -192,7 +208,7 @@ export class PiRpc {
    * RpcClient.prompt() does not expose the parameter.
    */
   async prompt(text: string): Promise<void> {
-    await this.sendPrompt(text, "steer");
+    await upstreamPromptSend(this.requireClient(), text, "steer");
   }
 
   /**
@@ -202,30 +218,12 @@ export class PiRpc {
    * state check is needed here).
    */
   async promptQueued(text: string): Promise<void> {
-    await this.sendPrompt(text, "followUp");
+    await upstreamPromptSend(this.requireClient(), text, "followUp");
   }
 
-  /** Resolve once the agent settles ("agent_settled"). Rejects on timeout (ms). */
-  async waitForIdle(timeout?: number): Promise<void> {
-    await this.requireClient().waitForIdle(timeout);
-  }
-
-  /** Raw `prompt` command with an explicit streaming behavior, via private send. */
-  private async sendPrompt(text: string, streamingBehavior: "steer" | "followUp"): Promise<void> {
-    const client = this.requireClient() as unknown as {
-      send: (command: {
-        type: "prompt";
-        message: string;
-        streamingBehavior: "steer" | "followUp";
-      }) => Promise<{ success: boolean; error?: string }>;
-    };
-    const response = await client.send({ type: "prompt", message: text, streamingBehavior });
-    if (!response.success) {
-      throw new Error(response.error ?? "prompt failed");
-    }
-  }
-
-  /** Subscribe to agent events. Safe to call before start(). Returns an unsubscribe function. */
+  /** Get available commands (extension commands, prompt templates, skills) with a short cache. */
+  /** Subscribe to agent events. Safe to call before start(). Returns an
+   *  unsubscribe function. */
   onEvent(listener: RpcEventListener): () => void {
     const index = this.listeners.push(listener) - 1;
     let clientUnsub: (() => void) | undefined;
@@ -238,93 +236,6 @@ export class PiRpc {
     };
   }
 
-  // =========================================================================
-  // RPC command conveniences (used by the slash command map)
-  // =========================================================================
-
-  async newSession(): Promise<{ cancelled: boolean }> {
-    return this.requireClient().newSession();
-  }
-
-  async compact(customInstructions?: string): Promise<{ summary: string; tokensBefore: number }> {
-    return this.requireClient().compact(customInstructions);
-  }
-
-  async abort(): Promise<void> {
-    await this.requireClient().abort();
-  }
-
-  async getState(): Promise<RpcSessionState> {
-    return this.requireClient().getState();
-  }
-
-  async getAvailableModels(): Promise<ModelInfo[]> {
-    return this.requireClient().getAvailableModels();
-  }
-
-  async setModel(provider: string, modelId: string): Promise<unknown> {
-    return this.requireClient().setModel(provider, modelId);
-  }
-
-  async setThinkingLevel(level: string): Promise<void> {
-    await this.requireClient().setThinkingLevel(level as never);
-  }
-
-  /** The agent's most recent assistant reply (null before the first turn). */
-  async getLastAssistantText(): Promise<string | null> {
-    return this.requireClient().getLastAssistantText();
-  }
-
-  /** Cycle to the next model in the scoped list (null when nothing to cycle). */
-  async cycleModel(): Promise<{
-    model: { provider: string; id: string };
-    thinkingLevel: string;
-    isScoped: boolean;
-  } | null> {
-    return this.requireClient().cycleModel();
-  }
-
-  /** Cycle to the next thinking level (null when nothing to cycle). */
-  async cycleThinkingLevel(): Promise<{ level: string } | null> {
-    return this.requireClient().cycleThinkingLevel();
-  }
-
-  /** Toggle auto-compaction (persists to pi's global settings — instance-wide). */
-  async setAutoCompaction(enabled: boolean): Promise<void> {
-    await this.requireClient().setAutoCompaction(enabled);
-  }
-
-  /** Toggle auto-retry (persists to pi's global settings — instance-wide). */
-  async setAutoRetry(enabled: boolean): Promise<void> {
-    await this.requireClient().setAutoRetry(enabled);
-  }
-
-  async setSessionName(name: string): Promise<void> {
-    await this.requireClient().setSessionName(name);
-  }
-
-  async getSessionStats(): Promise<{
-    sessionId: string;
-    totalMessages: number;
-    cost: number;
-    tokens: { total: number };
-  }> {
-    return this.requireClient().getSessionStats();
-  }
-
-  async exportHtml(outputPath?: string): Promise<{ path: string }> {
-    return this.requireClient().exportHtml(outputPath);
-  }
-
-  async bash(command: string): Promise<{ output: string; exitCode: number | undefined }> {
-    return this.requireClient().bash(command);
-  }
-
-  async switchSession(sessionPath: string): Promise<{ cancelled: boolean }> {
-    return this.requireClient().switchSession(sessionPath);
-  }
-
-  /** Get available commands (extension commands, prompt templates, skills) with a short cache. */
   async getCommands(): Promise<RpcSlashCommandInfo[]> {
     if (this.commandsCache && Date.now() - this.commandsCache.at < 60_000) {
       return this.commandsCache.list;
@@ -347,20 +258,58 @@ export class PiRpc {
    * line (LF framing, same as serializeJsonLine upstream).
    */
   async respondExtensionUI(payload: ExtensionUIResponsePayload): Promise<void> {
-    const client = this.requireClient() as unknown as {
-      process?: {
-        stdin?: { write: (chunk: string) => unknown; destroyed: boolean; writable: boolean };
-      } | null;
-    };
-    const stdin = client.process?.stdin;
-    if (!stdin || stdin.destroyed || !stdin.writable) {
-      throw new Error("pi RPC stdin is not writable");
-    }
-    stdin.write(`${JSON.stringify({ type: "extension_ui_response", ...payload })}\n`);
+    upstreamExtensionUIStdinWrite(this.requireClient(), payload);
   }
 
-  private requireClient(): RpcClient {
+  /** The live upstream RpcClient (spec #72 票7/C7):命令族直用上游类型,
+   *  包装不再转发。未连接时抛出 —— 调用方无需判空。 */
+  requireClient(): RpcClient {
     if (!this.client) throw new Error("pi RPC not connected");
     return this.client;
   }
+}
+
+// ── 上游兼容层(spec #72 票7/C7)──────────────────────────────────────
+// 对 pi 上游私有行为的两处依赖集中在这两个命名函数里;上游重构时只查这里。
+
+/**
+ * COMPAT(上游 prompt 语义):公开 RpcClient.prompt() 不暴露 streamingBehavior,
+ * 走私有 send() 发送。上游契约:私有 send 会用自己的 req_N 覆盖命令 id 并等待
+ * 应答 —— 换成公开方法前必须核对上游 rpc-client 的行为。
+ */
+export async function upstreamPromptSend(
+  client: RpcClient,
+  message: string,
+  streamingBehavior: "steer" | "followUp"
+): Promise<void> {
+  const send = client as unknown as {
+    send: (command: {
+      type: "prompt";
+      message: string;
+      streamingBehavior: "steer" | "followUp";
+    }) => Promise<{ success: boolean; error?: string }>;
+  };
+  const response = await send.send({ type: "prompt", message, streamingBehavior });
+  if (!response.success) {
+    throw new Error(response.error ?? "prompt failed");
+  }
+}
+
+/**
+ * COMPAT(上游扩展应答通道):RpcClient 没有公开的 extension_ui_response 方法,
+ * 且其通用 send() 会覆盖命令 id(上游用 req_N)——必须把应答作为一条严格
+ * JSONL 行(LF 帧,与上游 serializeJsonLine 一致)直写子进程 stdin。
+ */
+export function upstreamExtensionUIStdinWrite(
+  client: RpcClient,
+  payload: ExtensionUIResponsePayload
+): void {
+  const process = (client as unknown as {
+    process?: { stdin?: { write: (chunk: string) => unknown; destroyed: boolean; writable: boolean } | null };
+  }).process;
+  const stdin = process?.stdin;
+  if (!stdin || stdin.destroyed || !stdin.writable) {
+    throw new Error("pi RPC stdin is not writable");
+  }
+  stdin.write(`${JSON.stringify({ type: "extension_ui_response", ...payload })}\n`);
 }

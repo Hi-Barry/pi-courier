@@ -11,6 +11,19 @@ export function managementRoomName(instanceName: string): string {
 }
 
 /**
+ * 群聊入群提示(spec #72 票2/C2):住在管理文案单点而非 transport —— /enable
+ * 的用法知识归 router 侧,transport 只负责发送。房间成员数超过两人且未启用
+ * 时由 transport 的 room.join 钩子调用。
+ */
+export function buildGroupJoinHint(): string {
+  return (
+    `🤖 我已加入这个群聊,但默认不回应群消息。\n\n` +
+    `启用方式:直接在群里发 /enable trusted-only\n` +
+    `(或 all = 回应所有人 / mentions = 只回应 @我;仅信任用户可启用)`
+  );
+}
+
+/**
  * Build the management-room guide, labelled with the instance name, the bot
  * account and the working directory — so when the bridge runs on several
  * machines you can tell which project belongs to which box/account.

@@ -13,6 +13,20 @@ export interface MessageAttachment {
 }
 
 /**
+ * 消息载荷判别联合(spec #72 票1/C3):一份消息只可能是四种之一,互斥由构造
+ * 保证——不再依赖"这些可选字段不能同时出现"的注释约定。
+ */
+export type MessagePayload =
+  /** 普通文本(含引用摘录——只有文本消息才携带对更早消息的回复语境) */
+  | { kind: "text"; text: string; quoted?: { username: string; excerpt: string } }
+  /** 附件已落盘,路径待 router 注入下一条 prompt */
+  | { kind: "media"; saved: MessageAttachment[] }
+  /** 附件处理失败(下载/解密/超限),reason 已是可直接回执的文案 */
+  | { kind: "mediaError"; reason: string }
+  /** 有 body 但不认识的非文本类型(如 m.location),礼貌提示路径 */
+  | { kind: "unsupported"; msgtype: string };
+
+/**
  * External message received from a messenger transport
  */
 export interface ExternalMessage {
@@ -20,8 +34,6 @@ export interface ExternalMessage {
   chatId: string;
   /** Transport type (telegram, whatsapp, etc) */
   transport: string;
-  /** Message content/text */
-  content: string;
   /** Sender username */
   username: string;
   /** Sender user ID */
@@ -34,29 +46,8 @@ export interface ExternalMessage {
   isGroupChat: boolean;
   /** Was the bot mentioned? (for group chats) */
   wasMentioned?: boolean;
-  /**
-   * Quoted-message excerpt (issue #56 票5): when this message is a Matrix
-   * reply to a known historical message, the transport attaches a short
-   * cleaned quote of it. Undefined when there is no reply relation or the
-   * referenced event is not in the per-room cache (silent downgrade).
-   */
-  quoted?: { username: string; excerpt: string };
-  /**
-   * 附件引用(issue #66 票1):transport 已把媒体事件的字节下载落盘后随消息
-   * 传入,router 把路径记入"待处理清单"并在房间里回执。文本消息该字段为空。
-   */
-  attachments?: MessageAttachment[];
-  /**
-   * 附件处理失败原因(issue #66 票1):下载/解密/超限等 I/O 失败时携带,
-   * router 据此回执失败文案(消灭静默吞消息)。与 attachments 互斥。
-   */
-  attachmentError?: string;
-  /**
-   * 不支持的消息类型(issue #66 票3):非文本且无媒体载荷的 msgtype
-   * (如 m.location)由此标记,router 回执礼貌提示 — 静默吞消息就此绝迹
-   * (唯一保留的静默是 m.notice,防机器人回环,在过滤器即被挡下)。
-   */
-  unsupportedType?: string;
+  /** 载荷(spec #72 票1/C3):文本、附件、附件失败或不支持类型,四选一 */
+  payload: MessagePayload;
 }
 
 /**

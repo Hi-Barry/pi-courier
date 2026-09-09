@@ -82,6 +82,11 @@ export function loadConfig(): MsgBridgeConfig {
     config.logLevel = process.env.PI_LOG_LEVEL;
   }
 
+  // pi CLI 路径 via env(与文件配置同字段,env 优先——覆盖链与其余 PI_* 一致)
+  if (process.env.PI_CLI_PATH) {
+    config.cliPath = process.env.PI_CLI_PATH;
+  }
+
   return config;
 }
 
@@ -106,11 +111,37 @@ export function defaultProjectsRoot(): string {
   return path.join(os.homedir(), "Projects");
 }
 
-/** Runtime read side of the config identity boundary: stored identities are
- *  namespaced ("matrix:@user:server" — the write side is setup/env
- *  normalization); Matrix APIs need the native MXID. */
-export function nativeMxid(namespaced: string): string {
-  return namespaced.startsWith("matrix:") ? namespaced.slice("matrix:".length) : namespaced;
+/** Runtime read side of the config identity boundary — the rule lives in
+ *  identity.ts (spec #72 票5/C6); re-exported here so config 消费方不换导入源。 */
+export { nativeMxid } from "./identity.js";
+
+// ── 配置派生函数族(spec #72 票4/C4)────────────────────────────────
+// "读出来之后怎么解释"与 ConfigStore 同界:每条默认值只有一处解释,
+// setup 向导与运行时消费同一函数,永不漂移。样式沿用 activeSpaceRoomId。
+
+/** 实例名:区分多台部署,默认取主机名。 */
+export function effectiveInstanceName(cfg: MsgBridgeConfig): string {
+  return cfg.instanceName ?? os.hostname();
+}
+
+/** 生效工作目录:未配置时回落到用户 Projects 根目录。 */
+export function effectiveWorkdir(cfg: MsgBridgeConfig): string {
+  return cfg.workdir ?? defaultProjectsRoot();
+}
+
+/** 附件保存根目录(spec #66):默认与 ~/.pi 下其他 pi-courier-* 状态文件平齐。 */
+export function attachmentsDirectory(cfg: MsgBridgeConfig): string {
+  return cfg.attachments?.directory ?? path.join(os.homedir(), ".pi", "pi-courier-attachments");
+}
+
+/** 单个附件上限(MB):默认 10。 */
+export function attachmentsMaxMb(cfg: MsgBridgeConfig): number {
+  return cfg.attachments?.maxMb ?? 10;
+}
+
+/** 单个附件上限(字节),供附件存储直接消费;下限钳制为正。 */
+export function attachmentsMaxBytes(cfg: MsgBridgeConfig): number {
+  return Math.max(1, attachmentsMaxMb(cfg)) * 1024 * 1024;
 }
 
 /** Space mode = multi-project deployment with the organizational space

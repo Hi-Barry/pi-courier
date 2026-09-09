@@ -49,12 +49,6 @@ describe("PiRpc send semantics (issue #53 ticket 2)", () => {
     expect(send).toHaveBeenCalledTimes(1); // no second steer() attempt
   });
 
-  it("waitForIdle delegates to the client, forwarding the timeout", async () => {
-    const rpc = withFakeClient(vi.fn().mockResolvedValue({ success: true }));
-    await rpc.waitForIdle(1234);
-    const client = (rpc as unknown as { client: { waitForIdle: SendMock } }).client;
-    expect(client.waitForIdle).toHaveBeenCalledWith(1234);
-  });
 });
 
 /**
