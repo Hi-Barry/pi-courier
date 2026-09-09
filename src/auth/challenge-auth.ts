@@ -10,6 +10,10 @@
  * config store.
  */
 
+import { matchesAdmin, matchesTrustedEntry, namespacedId } from "../identity.js";
+
+export { namespacedId };
+
 interface ChallengeData {
   code: string;
   userId: string;
@@ -32,9 +36,7 @@ export type ChallengeOutcome = "authenticated" | "expired" | "wrong" | "blocked"
  *  boundaries — the matrix env vars and setup — write the transport-prefixed
  *  form directly; display-side splits are the inverse operation.)
  */
-export function namespacedId(userId: string, transport?: string): string {
-  return transport ? `${transport}:${userId}` : userId;
-}
+
 
 export class ChallengeAuth {
   private challenges = new Map<string, ChallengeData>();
@@ -149,11 +151,10 @@ export class ChallengeAuth {
     return this.trustedUsers.has(namespaced);
   }
 
-  /** Whether this user is the admin (namespaced comparison, per transport). */
+  /** Whether this user is the admin (matching rule single-sourced in identity.ts). */
   isAdminUser(userId: string, transport?: string): boolean {
     if (!this.adminUserId) return false;
-    const namespaced = namespacedId(userId, transport);
-    return this.adminUserId === namespaced || this.adminUserId === userId;
+    return matchesAdmin(this.adminUserId, userId, transport);
   }
 
   /** Whether a group chat has been explicitly enabled by the admin. */
@@ -171,17 +172,15 @@ export class ChallengeAuth {
     this.channelAuth.delete(chatId);
   }
 
-  /** Revoke trust. Matching rule: full namespaced IDs (or exact entries)
-   *  match exactly; any other form — bare telegram IDs AND native MXIDs as
-   *  displayed by /trusted — matches the `:<id>` suffix of one entry.
-   *  Returns whether anything was revoked. */
+  /** Revoke trust. Matching rule single-sourced in identity.ts
+   *  (exact first, then legacy bare-form suffix match). */
   revokeUser(revokeId: string): boolean {
     if (this.trustedUsers.has(revokeId)) {
       this.trustedUsers.delete(revokeId);
       return true;
     }
     for (const id of this.trustedUsers) {
-      if (id.endsWith(`:${revokeId}`)) {
+      if (matchesTrustedEntry(revokeId, id)) {
         this.trustedUsers.delete(id);
         return true;
       }

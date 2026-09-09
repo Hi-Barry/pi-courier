@@ -9,7 +9,8 @@
  * injected config store — this module touches no disk and holds no state.
  */
 
-import { type ChallengeAuth, namespacedId } from "./challenge-auth.js";
+import { displayIdentity, namespacedId } from "../identity.js";
+import { type ChallengeAuth } from "./challenge-auth.js";
 
 export type AdminEffect =
   | { kind: "persistAuth" }
@@ -155,12 +156,7 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
 
     case "/trusted": {
       const snapshot = auth.exportConfig();
-      const trusted = snapshot.trustedUsers
-        .map((id) => {
-          const [transport, uid] = id.split(":");
-          return uid ? `${uid} (${transport})` : id;
-        })
-        .join(", ");
+      const trusted = snapshot.trustedUsers.map(displayIdentity).join(", ");
       return handled({
         replies: [`Trusted users (${snapshot.trustedUsers.length}):\n${trusted || "None"}`],
         notifications: [],

@@ -9,7 +9,7 @@
 import * as os from "node:os";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { handleAdminCommand } from "../auth/admin-commands.js";
-import { type ChallengeAuth, namespacedId } from "../auth/challenge-auth.js";
+import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { LoginManager } from "../auth/headless-login.js";
 import { type ConfigStore, effectiveInstanceName, effectiveWorkdir } from "../config.js";
 import {
@@ -18,6 +18,7 @@ import {
   hasToolCalls,
   splitMessage,
 } from "../formatting.js";
+import { namespacedId } from "../identity.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "../management-room.js";
 import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUserToSpaceOnce } from "../space.js";

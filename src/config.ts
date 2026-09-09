@@ -111,12 +111,9 @@ export function defaultProjectsRoot(): string {
   return path.join(os.homedir(), "Projects");
 }
 
-/** Runtime read side of the config identity boundary: stored identities are
- *  namespaced ("matrix:@user:server" — the write side is setup/env
- *  normalization); Matrix APIs need the native MXID. */
-export function nativeMxid(namespaced: string): string {
-  return namespaced.startsWith("matrix:") ? namespaced.slice("matrix:".length) : namespaced;
-}
+/** Runtime read side of the config identity boundary — the rule lives in
+ *  identity.ts (spec #72 票5/C6); re-exported here so config 消费方不换导入源。 */
+export { nativeMxid } from "./identity.js";
 
 // ── 配置派生函数族(spec #72 票4/C4)────────────────────────────────
 // "读出来之后怎么解释"与 ConfigStore 同界:每条默认值只有一处解释,
