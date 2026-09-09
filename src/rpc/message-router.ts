@@ -21,8 +21,9 @@ import {
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "../management-room.js";
 import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUserToSpaceOnce } from "../space.js";
+import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
-import type { ExternalMessage, MsgBridgeConfig, ReplyTarget } from "../types.js";
+import type { ExternalMessage, MessageAttachment, MsgBridgeConfig, ReplyTarget } from "../types.js";
 import { handleSlashCommand, type QueueSnapshot } from "./command-map.js";
 import type { ExtensionUIResponsePayload, PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
@@ -217,6 +218,35 @@ export function withQuotePrefix(
   return `「@${quoted.username}: ${quoted.excerpt}」\n${text}`;
 }
 
+/**
+ * 附件路径注入(issue #66 票1):把待处理清单里的附件以绝对路径列表的形式
+ * 放在用户原文前 — pi 按原生工作流用 read 工具查看文件(与 TUI 的 @路径
+ * 一致)。纯函数,router 测试直接断言其输出。
+ */
+export function withAttachmentPrefix(
+  text: string,
+  attachments?: MessageAttachment[]
+): string {
+  if (!attachments?.length) return text;
+  const lines = attachments.map((a) => `- ${a.path}`);
+  return `用户随消息发来了附件(请用 read 工具查看):\n${lines.join("\n")}\n\n${text}`;
+}
+
+/** 附件清单的记账键:房间 + 发送者(群聊里甲的图不被乙的消息消耗)。 */
+export function attachmentLedgerKey(chatId: string, userId: string): string {
+  return `${chatId}\u0000${userId}`;
+}
+
+/** 保存成功回执(issue #66 票1):路径可见,清单状态不静默。 */
+export function attachmentSavedReply(attachment: MessageAttachment): string {
+  return `📎 附件已保存: ${attachment.path}(${formatBytes(attachment.bytes)})\n下一条消息发送时会自动附上它。`;
+}
+
+/** 附件失败回执:transport 给出的原因原样透传(下载/解密/超限各有文案)。 */
+export function attachmentErrorReply(reason: string): string {
+  return `❌ ${reason}`;
+}
+
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const { projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl, managementRoomAdoptionAllowed } = deps;
   const bindings = new WeakMap<PiRpc, RoomBinding>();
@@ -245,6 +275,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       pendingQuestions.delete(rpc);
     }
   };
+
+  // 待处理附件清单(issue #66 票1):按 房间+发送者 记账,内存态 — 重启即清
+  // (每张回执都带路径,不构成数据丢失)。消耗规则:该发送者在同一条管道里
+  // 真正发给 pi 的下一条对话消息(prompt 唯一注入点)一次性带上全部并清空;
+  // 管理命令、登录/extension-ui 应答捕获都在注入点之前 return,天然不消耗。
+  const pendingAttachments = new Map<string, MessageAttachment[]>();
 
   // Headless login (issue #55): /login /logout /auth + answer capture. The
   // default manager writes credentials straight to pi's auth.json via an
@@ -381,6 +417,26 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         async (cId, replyText) => sendReply(cId, msg.transport, replyText),
         msg.transport
       );
+
+      // 附件消息分流(issue #66 票1):必须在斜杠/挑战码解析之前截住 —
+      // 文件名可能碰巧以 "/" 或 6 位数字开头。回执是 router 政策:未授权
+      // 用户与文本消息同等对待(静默丢弃,文件已落盘但不入清单)。
+      if (msg.attachments?.length || msg.attachmentError) {
+        if (!isAuthorized) return;
+        if (msg.attachmentError) {
+          await sendReply(msg.chatId, msg.transport, attachmentErrorReply(msg.attachmentError));
+          return;
+        }
+        const key = attachmentLedgerKey(msg.chatId, msg.userId);
+        const ledger = pendingAttachments.get(key) ?? [];
+        const incoming = msg.attachments;
+        for (const attachment of incoming ?? []) {
+          ledger.push(attachment);
+          await sendReply(msg.chatId, msg.transport, attachmentSavedReply(attachment));
+        }
+        pendingAttachments.set(key, ledger);
+        return;
+      }
 
       // Bridge admin commands + challenge codes in DMs.
       // /help is reserved for pi (the RPC command help also lists bridge commands).
@@ -620,9 +676,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
 
       // Plain message → prompt (a resolved reply quote is prepended — see
-      // withQuotePrefix; command handling above saw the raw text).
+      // withQuotePrefix; command handling above saw the raw text). Pending
+      // attachments (issue #66 票1) ride along here and only here: the unique
+      // consumption point for the per-room+sender ledger.
       try {
-        await roomRpc.prompt(withQuotePrefix(text, msg.quoted));
+        const key = attachmentLedgerKey(msg.chatId, msg.userId);
+        const carried = pendingAttachments.get(key);
+        const pending = carried?.length ? carried : undefined;
+        pendingAttachments.delete(key);
+        await roomRpc.prompt(withAttachmentPrefix(withQuotePrefix(text, msg.quoted), pending));
       } catch (err) {
         await sendReply(msg.chatId, msg.transport, `❌ 无法发送给 pi: ${(err as Error).message}`);
       }

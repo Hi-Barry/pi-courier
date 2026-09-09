@@ -2,6 +2,7 @@
  * Pure utility functions for Matrix transport.
  * Extracted for testability — no SDK or network dependencies.
  */
+import { createHash } from "node:crypto";
 import MarkdownIt from "markdown-it";
 
 // html:false escapes raw HTML (pi output must never inject tags);
@@ -12,6 +13,82 @@ const md = new MarkdownIt({ html: false, breaks: true, linkify: true });
 /** Convert markdown to Matrix HTML. Returns plain body (fallback) + formatted HTML. */
 export function formatForMatrix(text: string): { body: string; formattedBody?: string } {
   return { body: text, formattedBody: md.render(text).trim() };
+}
+
+// ─── 附件输入(issue #66)────────────────────────────────────────
+
+/** 加密附件块(EncryptedFileInfo)的最小结构视图 — 与 matrix-bot-sdk 的
+ *  MessageEvent.EncryptedFile 结构兼容,避免本模块依赖 SDK。 */
+export interface EncryptedMediaFile {
+  url: string;
+  key: { k: string };
+  iv: string;
+  hashes: { sha256: string };
+  v?: string;
+}
+
+/** 媒体事件内容的分类视图(纯结构,来自 event.content)。 */
+export interface MediaEventContent {
+  /** mxc:// 明文地址(加密附件时可能缺失 — 以 file 为准) */
+  url?: string;
+  /** 加密附件块(E2EE 房间);与 url 并存时优先 */
+  file?: EncryptedMediaFile;
+  /** 原始文件名(Element 粘贴发送时通常是 image.png 之类) */
+  body?: string;
+  /** 事件声明的元信息 — size 仅作超限预检,不作为信任依据 */
+  info?: { size?: number; mimetype?: string; w?: number; h?: number };
+}
+
+/** 当前按媒体处理的 msgtype 白名单(票1 仅 m.image;票3 扩全家) */
+export const MEDIA_MSGTYPES = new Set<string>(["m.image"]);
+
+/** Classification of one room message content (issue #66 票1). */
+export type MessageContentClassification =
+  | { kind: "text" }
+  | { kind: "media"; msgtype: string; mxcUrl?: string; encryptedFile?: EncryptedMediaFile; filename: string; sizeHint?: number }
+  | { kind: "other"; msgtype: string };
+
+/** 判断内容是否携带媒体载荷(url 明文或 file 加密块)。 */
+export function isMediaContent(content: unknown): content is MediaEventContent {
+  if (typeof content !== "object" || content === null) return false;
+  const c = content as Record<string, unknown>;
+  return typeof c.url === "string" || typeof c.file === "object";
+}
+
+/** 对一条房间消息内容做分类:文本 / 媒体(带下载所需信息) / 其他。 */
+export function classifyMessageContent(content: unknown): MessageContentClassification {
+  if (isMediaContent(content)) {
+    const c = content as MediaEventContent & { msgtype?: string };
+    const msgtype = typeof c.msgtype === "string" ? c.msgtype : "";
+    if (MEDIA_MSGTYPES.has(msgtype)) {
+      return {
+        kind: "media",
+        msgtype,
+        // 加密附件与明文 url 并存时以加密版优先(票2 裁决)
+        ...(c.file ? { encryptedFile: c.file } : { mxcUrl: c.url }),
+        filename: c.body ?? "",
+        ...(typeof c.info?.size === "number" ? { sizeHint: c.info.size } : {}),
+      };
+    }
+    return { kind: "other", msgtype: msgtype || "(unknown)" };
+  }
+  return { kind: "text" };
+}
+
+/**
+ * 文件名消毒(issue #66 票1):防路径穿越/分隔符注入,输出确定性的
+ * "<mxc mediaId 哈希前缀>-<安全化原名>"。body 为空时回退 "file"。
+ */
+export function sanitizeMediaFilename(body: string | undefined, mxcUrl: string): string {
+  const hash = createHash("sha256").update(mxcUrl).digest("hex").slice(0, 12);
+  const base = (body ?? "").split(/[/\\]/).pop() ?? "";
+  const cleaned = base
+    .replace(/[\x00-\x1f\x7f]/g, "") // 控制字符
+    .replace(/\s+/g, " ")
+    .replace(/^\.+/, "") // 防 ".."/"."
+    .trim();
+  const safe = cleaned.length > 0 ? cleaned : "file";
+  return `${hash}-${safe.slice(0, 150)}`;
 }
 
 /**
@@ -32,17 +109,27 @@ export function shouldSkipEvent(
   const eventTs = event.origin_server_ts || 0;
   if (eventTs < connectedAt) return "stale";
 
-  // Only process text messages
-  const content = event.content;
-  if (content?.msgtype !== "m.text" || !content?.body) return "not_text";
+  // Media events (issue #66) flow through the attachment path; everything
+  // non-text without a media payload stays skipped.
+  if (!isMediaEventContent(event.content)) {
+    // Only process text messages
+    const content = event.content;
+    if (content?.msgtype !== "m.text" || !content?.body) return "not_text";
 
-  // Ignore edits (we only process original messages)
-  if (content["m.new_content"]) return "edit";
+    // Ignore edits (we only process original messages)
+    if (content["m.new_content"]) return "edit";
+  }
 
   // Skip events from rooms we're not in (cached, no API call)
   if (!joinedRooms.has(roomId)) return "not_joined";
 
   return null;
+}
+
+/** shouldSkipEvent 用的窄判别:内容带媒体载荷即视为媒体事件(不查白名单 —
+ *  白名单归类由 classifyMessageContent 负责,m.file 等在票3 前落入 "other")。 */
+function isMediaEventContent(content: unknown): boolean {
+  return isMediaContent(content) && typeof (content as MediaEventContent & { msgtype?: string }).msgtype === "string";
 }
 
 /** Extract Matrix username (localpart) from a full MXID like @user:matrix.org */

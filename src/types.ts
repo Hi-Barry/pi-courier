@@ -1,4 +1,18 @@
 /**
+ * Saved attachment reference (issue #66 票1): the transport has already
+ * downloaded the bytes to disk before the message enters the router —
+ * the path is absolute and readable by the pi subprocess.
+ */
+export interface MessageAttachment {
+  /** Absolute path of the saved file */
+  path: string;
+  /** Sanitized original filename (hash prefix + safe body) */
+  filename: string;
+  /** Size in bytes */
+  bytes: number;
+}
+
+/**
  * External message received from a messenger transport
  */
 export interface ExternalMessage {
@@ -27,6 +41,16 @@ export interface ExternalMessage {
    * referenced event is not in the per-room cache (silent downgrade).
    */
   quoted?: { username: string; excerpt: string };
+  /**
+   * 附件引用(issue #66 票1):transport 已把媒体事件的字节下载落盘后随消息
+   * 传入,router 把路径记入"待处理清单"并在房间里回执。文本消息该字段为空。
+   */
+  attachments?: MessageAttachment[];
+  /**
+   * 附件处理失败原因(issue #66 票1):下载/解密/超限等 I/O 失败时携带,
+   * router 据此回执失败文案(消灭静默吞消息)。与 attachments 互斥。
+   */
+  attachmentError?: string;
 }
 
 /**
@@ -104,6 +128,16 @@ export interface MsgBridgeConfig {
    * 不冲突);editor 上游无超时,此项是唯一保证。不进 setup 向导。
    */
   extensionUiTimeoutMinutes?: number;
+  /**
+   * Matrix 附件输入(issue #66):媒体事件的下载落盘配置。
+   * directory 缺省 ~/.pi/pi-courier/attachments;maxMb 缺省 10。
+   */
+  attachments?: {
+    /** 附件保存根目录(绝对路径;按房间分子目录) */
+    directory?: string;
+    /** 单个附件大小上限(MB) */
+    maxMb?: number;
+  };
 }
 
 /** @see MsgBridgeConfig.space */

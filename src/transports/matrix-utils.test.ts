@@ -1,9 +1,11 @@
 import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  classifyMessageContent,
   extractUsername,
   formatForMatrix,
   isGroupChatRoom,
+  sanitizeMediaFilename,
   shouldPostJoinHint,
   shouldSkipEvent,
   stripBotMention,
@@ -135,6 +137,25 @@ describe("shouldSkipEvent", () => {
   });
 
   it("skips non-text messages", () => {
+    expect(shouldSkipEvent(makeEvent({ content: { msgtype: "m.location", geo_uri: "geo:0,0" } }), botUserId, connectedAt, joinedRooms, "!room1:matrix.org"))
+      .toBe("not_text");
+  });
+
+  it("lets media events through (m.image with url) — attachment path handles them (#67)", () => {
+    expect(shouldSkipEvent(
+      makeEvent({ content: { msgtype: "m.image", body: "photo.png", url: "mxc://server/abc123" } }),
+      botUserId, connectedAt, joinedRooms, "!room1:matrix.org"
+    )).toBeNull();
+  });
+
+  it("lets encrypted media events through (m.image with file block)", () => {
+    expect(shouldSkipEvent(
+      makeEvent({ content: { msgtype: "m.image", body: "photo.png", file: { url: "mxc://server/enc1", key: { k: "x" }, iv: "y", hashes: { sha256: "z" } } } }),
+      botUserId, connectedAt, joinedRooms, "!room1:matrix.org"
+    )).toBeNull();
+  });
+
+  it("still skips m.image without any media payload", () => {
     expect(shouldSkipEvent(makeEvent({ content: { msgtype: "m.image", body: "photo" } }), botUserId, connectedAt, joinedRooms, "!room1:matrix.org"))
       .toBe("not_text");
   });
@@ -320,3 +341,88 @@ describe("shouldPostJoinHint", () => {
 // - sendMessage()/sendTyping() (thin SDK wrappers)
 // - index.ts wiring (env var reading, command handler plumbing)
 // - Widget abbreviation (mx)
+
+// ─── 附件分类与文件名消毒(issue #66 票1,接缝1)──────────────────
+
+describe("classifyMessageContent", () => {
+  it("classifies plain text as text", () => {
+    expect(classifyMessageContent({ msgtype: "m.text", body: "hi" })).toEqual({ kind: "text" });
+  });
+
+  it("classifies m.image with url as media carrying the mxc url", () => {
+    const c = classifyMessageContent({ msgtype: "m.image", body: "photo.png", url: "mxc://s/abc", info: { size: 123 } });
+    expect(c).toEqual({ kind: "media", msgtype: "m.image", mxcUrl: "mxc://s/abc", filename: "photo.png", sizeHint: 123 });
+  });
+
+  it("prefers the encrypted file block when url and file coexist (票2 裁决)", () => {
+    const file = { url: "mxc://s/enc", key: { k: "k" }, iv: "iv", hashes: { sha256: "h" } };
+    const c = classifyMessageContent({ msgtype: "m.image", body: "p.png", url: "mxc://s/plain", file });
+    expect(c).toMatchObject({ kind: "media", encryptedFile: file });
+    expect(c.kind !== "media" || c.mxcUrl === undefined).toBe(true);
+  });
+
+  it("classifies non-whitelisted media msgtypes as other (票1:m.file 尚未放开)", () => {
+    const c = classifyMessageContent({ msgtype: "m.file", body: "doc.pdf", url: "mxc://s/f" });
+    expect(c).toEqual({ kind: "other", msgtype: "m.file" });
+  });
+
+  it("classifies media-shaped content with unknown msgtype as other", () => {
+    expect(classifyMessageContent({ body: "x", url: "mxc://s/y" })).toEqual({ kind: "other", msgtype: "(unknown)" });
+  });
+
+  it("content without a media payload is classified as text (the filter blocks non-text upstream)", () => {
+    // m.location 无 url/file → 不是媒体载荷;shouldSkipEvent 已把它挡在
+    // not_text(票1 行为),分类只对已通过过滤器的内容负责。
+    expect(classifyMessageContent({ msgtype: "m.location", geo_uri: "geo:0,0" })).toEqual({ kind: "text" });
+  });
+
+  it("defaults filename to empty string when body is missing", () => {
+    const c = classifyMessageContent({ msgtype: "m.image", url: "mxc://s/abc" });
+    expect(c.kind === "media" && c.filename === "").toBe(true);
+  });
+});
+
+describe("sanitizeMediaFilename", () => {
+  it("prefixes a deterministic hash of the mxc url", () => {
+    expect(sanitizeMediaFilename("photo.png", "mxc://s/abc"))
+      .toBe(sanitizeMediaFilename("photo.png", "mxc://s/abc"));
+    expect(sanitizeMediaFilename("a.png", "mxc://s/1")).not.toBe(sanitizeMediaFilename("a.png", "mxc://s/2"));
+  });
+
+  it("strips path traversal components", () => {
+    const name = sanitizeMediaFilename("../../etc/passwd", "mxc://s/abc");
+    expect(name).not.toContain("..");
+    expect(name).not.toContain("/");
+    expect(name.endsWith("passwd")).toBe(true);
+  });
+
+  it("strips windows separators and control characters", () => {
+    const name = sanitizeMediaFilename("..\\..\\x\u0000y\r\n z.png", "mxc://s/abc");
+    expect(name).not.toMatch(/[\\/]/);
+    expect(name).not.toMatch(/[\x00-\x1f\x7f]/);
+  });
+
+  it("never starts with dots (hidden file / relative-path tricks)", () => {
+    expect(sanitizeMediaFilename("..hidden", "mxc://s/abc").endsWith("hidden")).toBe(true);
+    expect(sanitizeMediaFilename("..", "mxc://s/abc")).not.toContain("..");
+  });
+
+  it("falls back to 'file' when nothing safe remains", () => {
+    expect(sanitizeMediaFilename("", "mxc://s/abc")).toMatch(/^[0-9a-f]{12}-file$/);
+    expect(sanitizeMediaFilename(undefined, "mxc://s/abc")).toMatch(/^[0-9a-f]{12}-file$/);
+  });
+
+  it("property: output is safe for any input (no separators, no traversal, non-empty)", () => {
+    const mxc = fc.constant("mxc://server/mediaId");
+    const arbBody = fc.string({ maxLength: 300 });
+    fc.assert(
+      fc.property(arbBody, mxc, (body, url) => {
+        const name = sanitizeMediaFilename(body, url);
+        expect(name.length).toBeGreaterThan(0);
+        expect(name).not.toMatch(/[/\\]/);
+        expect(name).not.toContain("..");
+        expect(name).toMatch(/^[0-9a-f]{12}-/);
+      })
+    );
+  });
+});
