@@ -118,6 +118,37 @@ describe("AttachmentStore.save", () => {
       body: "enc.png",
     })).rejects.toThrow("加密附件需要启用 E2EE");
   });
+
+  it("dedups encrypted media by the ENCRYPTED mxc url (票2)", async () => {
+    let decrypts = 0;
+    const source: MediaSource = {
+      downloadPlaintext: async () => Buffer.from("PLAIN"),
+      downloadEncrypted: async () => {
+        decrypts++;
+        return Buffer.from("DECRYPTED");
+      },
+    };
+    const { store } = makeStore(source);
+    const encFile = { url: "mxc://s/enc1", key: { k: "k" }, iv: "iv", hashes: { sha256: "h" } };
+    const a = await store.save(ROOM, { encryptedFile: encFile, body: "enc.png" });
+    const b = await store.save(ROOM, { encryptedFile: encFile, body: "enc.png" });
+    expect(decrypts).toBe(1); // second save reused the first decryption
+    expect(b.path).toBe(a.path);
+  });
+
+  it("wraps decrypt failures with a user-ready message (票2)", async () => {
+    const source: MediaSource = {
+      downloadPlaintext: async () => Buffer.from("x"),
+      downloadEncrypted: async () => {
+        throw new Error("Decryption failed: unknown message index");
+      },
+    };
+    const { store } = makeStore(source);
+    await expect(store.save(ROOM, {
+      encryptedFile: { url: "mxc://s/enc", key: { k: "k" }, iv: "iv", hashes: { sha256: "h" } },
+      body: "enc.png",
+    })).rejects.toThrow("附件下载失败: Decryption failed");
+  });
 });
 
 describe("sanitizeRoomKey", () => {
