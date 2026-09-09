@@ -169,6 +169,17 @@ export class MatrixProvider implements Transport {
       }
     });
 
+    // Stickers (issue #66 票3): m.sticker is an EVENT type, not m.room.message,
+    // so room.message never fires for it — the content is image-shaped, the
+    // attachment path handles it like any other media. In E2EE rooms the
+    // sticker arrives here DECRYPTED (the SDK re-emits decrypted events on
+    // room.event); in plaintext rooms it arrives as-is. The outer encrypted
+    // payload (type m.room.encrypted) fails this filter.
+    this.client.on("room.event", (roomId: string, event: any) => {
+      if (event?.type !== "m.sticker") return;
+      void this.handleMessage(roomId, event).catch((err: Error) => this.errorHandler?.(err));
+    });
+
     // Route SDK-internal logs through the shared leveled logger — trace/debug
     // land on debug (silent at the default info threshold), info/warn/error
     // keep their level. The [matrix-sdk:*] prefix keeps SDK lines greppable
@@ -292,9 +303,23 @@ export class MatrixProvider implements Transport {
       await this.handleMediaMessage(roomId, event, classified);
       return;
     }
-    // kind "other" (non-text without a media payload) keeps the legacy
-    // skip — ticket 3 adds the polite reply once all media types land.
-    if (classified.kind === "other") return;
+    if (classified.kind === "other") {
+      // 票3:非文本且无媒体载荷(如 m.location)不再静默 — 转发给 router,
+      // 由它过授权门后回执礼貌提示。
+      this.messageHandler?.({
+        chatId: roomId,
+        transport: this.type,
+        content: event.content?.body ?? "",
+        username: extractUsername(event.sender),
+        userId: event.sender,
+        timestamp: new Date(event.origin_server_ts || Date.now()),
+        messageId: event.event_id,
+        isGroupChat: await this.resolveIsGroupChat(roomId),
+        wasMentioned: false,
+        unsupportedType: classified.msgtype,
+      });
+      return;
+    }
 
     const chatId = roomId;
     const userId = event.sender; // e.g. @user:matrix.org

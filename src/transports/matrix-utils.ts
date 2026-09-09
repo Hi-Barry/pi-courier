@@ -39,8 +39,9 @@ export interface MediaEventContent {
   info?: { size?: number; mimetype?: string; w?: number; h?: number };
 }
 
-/** 当前按媒体处理的 msgtype 白名单(票1 仅 m.image;票3 扩全家) */
-export const MEDIA_MSGTYPES = new Set<string>(["m.image"]);
+/** 当前按媒体处理的类型全集(票3):m.image/m.file/m.audio/m.video 四种
+ *  msgtype 内容同构;m.sticker 是事件类型(内容同构但无 msgtype 字段)。 */
+export const MEDIA_MSGTYPES = new Set<string>(["m.image", "m.file", "m.audio", "m.video", "m.sticker"]);
 
 /** Classification of one room message content (issue #66 票1). */
 export type MessageContentClassification =
@@ -59,7 +60,9 @@ export function isMediaContent(content: unknown): content is MediaEventContent {
 export function classifyMessageContent(content: unknown): MessageContentClassification {
   if (isMediaContent(content)) {
     const c = content as MediaEventContent & { msgtype?: string };
-    const msgtype = typeof c.msgtype === "string" ? c.msgtype : "";
+    // m.sticker 事件的内容不带 msgtype(它是事件类型,非 m.room.message);
+    // 带媒体载荷却缺 msgtype 的只会是 sticker(m.room.message 必有 msgtype)。
+    const msgtype = typeof c.msgtype === "string" && c.msgtype ? c.msgtype : "m.sticker";
     if (MEDIA_MSGTYPES.has(msgtype)) {
       return {
         kind: "media",
@@ -70,7 +73,7 @@ export function classifyMessageContent(content: unknown): MessageContentClassifi
         ...(typeof c.info?.size === "number" ? { sizeHint: c.info.size } : {}),
       };
     }
-    return { kind: "other", msgtype: msgtype || "(unknown)" };
+    return { kind: "other", msgtype };
   }
   return { kind: "text" };
 }
@@ -109,15 +112,21 @@ export function shouldSkipEvent(
   const eventTs = event.origin_server_ts || 0;
   if (eventTs < connectedAt) return "stale";
 
+  // m.notice stays silent in every branch (issue #66 票3: the ONE deliberate
+  // silence — other bots/services' notices must not trigger receipts or the
+  // bot loops). m.emote falls through as text: its body is readable text.
+  if (event.content?.msgtype === "m.notice") return "notice";
+
   // Media events (issue #66) flow through the attachment path; everything
   // non-text without a media payload stays skipped.
   if (!isMediaEventContent(event.content)) {
-    // Only process text messages
-    const content = event.content;
-    if (content?.msgtype !== "m.text" || !content?.body) return "not_text";
+    // Text-ish messages (m.text and m.emote — the emote body is text)
+    const msgtype = event.content?.msgtype;
+    if (msgtype !== "m.text" && msgtype !== "m.emote") return "not_text";
+    if (!event.content?.body) return "not_text";
 
     // Ignore edits (we only process original messages)
-    if (content["m.new_content"]) return "edit";
+    if (event.content["m.new_content"]) return "edit";
   }
 
   // Skip events from rooms we're not in (cached, no API call)

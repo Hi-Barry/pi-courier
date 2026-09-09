@@ -155,6 +155,20 @@ describe("shouldSkipEvent", () => {
     )).toBeNull();
   });
 
+  it("skips m.notice silently (the ONE deliberate silence — bot-loop guard)", () => {
+    expect(shouldSkipEvent(
+      makeEvent({ content: { msgtype: "m.notice", body: "* bot does things" } }),
+      botUserId, connectedAt, joinedRooms, "!room1:matrix.org"
+    )).toBe("notice");
+  });
+
+  it("lets m.emote through as text (票3:emote body 是可读文本)", () => {
+    expect(shouldSkipEvent(
+      makeEvent({ content: { msgtype: "m.emote", body: "waves hello" } }),
+      botUserId, connectedAt, joinedRooms, "!room1:matrix.org"
+    )).toBeNull();
+  });
+
   it("still skips m.image without any media payload", () => {
     expect(shouldSkipEvent(makeEvent({ content: { msgtype: "m.image", body: "photo" } }), botUserId, connectedAt, joinedRooms, "!room1:matrix.org"))
       .toBe("not_text");
@@ -361,13 +375,20 @@ describe("classifyMessageContent", () => {
     expect(c.kind !== "media" || c.mxcUrl === undefined).toBe(true);
   });
 
-  it("classifies non-whitelisted media msgtypes as other (票1:m.file 尚未放开)", () => {
-    const c = classifyMessageContent({ msgtype: "m.file", body: "doc.pdf", url: "mxc://s/f" });
-    expect(c).toEqual({ kind: "other", msgtype: "m.file" });
+  it("classifies every media msgtype as media (票3:m.file/m.audio/m.video)", () => {
+    for (const msgtype of ["m.image", "m.file", "m.audio", "m.video"]) {
+      const c = classifyMessageContent({ msgtype, body: "x.bin", url: "mxc://s/m" });
+      expect(c).toMatchObject({ kind: "media", msgtype });
+    }
+  });
+
+  it("treats media-shaped content without msgtype as m.sticker (票3:事件类型非 msgtype)", () => {
+    const c = classifyMessageContent({ body: "sticker.png", url: "mxc://s/st" });
+    expect(c).toMatchObject({ kind: "media", msgtype: "m.sticker" });
   });
 
   it("classifies media-shaped content with unknown msgtype as other", () => {
-    expect(classifyMessageContent({ body: "x", url: "mxc://s/y" })).toEqual({ kind: "other", msgtype: "(unknown)" });
+    expect(classifyMessageContent({ msgtype: "m.fancy", body: "x", url: "mxc://s/y" })).toEqual({ kind: "other", msgtype: "m.fancy" });
   });
 
   it("content without a media payload is classified as text (the filter blocks non-text upstream)", () => {

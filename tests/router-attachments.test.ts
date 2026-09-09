@@ -146,6 +146,23 @@ describe("attachment ledger (issue #66 票1)", () => {
     await router.handleIncoming(makeMsg({ messageId: "m2", content: "继续" }));
     expect((prompt.mock.calls[0]![0] as string)).not.toContain("附件过大");
   });
+
+  it("unsupported message types get a polite reply and never prompt (票3)", async () => {
+    const { router, prompt, lastReply } = makeFixtures();
+    await router.handleIncoming(makeMsg({ messageId: "m1", content: "", unsupportedType: "m.location" }));
+    expect(lastReply()).toContain("暂不支持的消息类型(m.location)");
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it("unsupported-type replies respect authorization (票3)", async () => {
+    const { router, replies } = makeFixtures();
+    await router.handleIncoming(makeMsg({
+      isGroupChat: true, chatId: "!group:server",
+      userId: "@stranger:server", username: "stranger",
+      content: "", unsupportedType: "m.location",
+    }));
+    expect(replies).toHaveLength(0);
+  });
 });
 
 describe("attachment prompt prefix (issue #66 票1)", () => {

@@ -51,6 +51,12 @@ export interface ExternalMessage {
    * router 据此回执失败文案(消灭静默吞消息)。与 attachments 互斥。
    */
   attachmentError?: string;
+  /**
+   * 不支持的消息类型(issue #66 票3):非文本且无媒体载荷的 msgtype
+   * (如 m.location)由此标记,router 回执礼貌提示 — 静默吞消息就此绝迹
+   * (唯一保留的静默是 m.notice,防机器人回环,在过滤器即被挡下)。
+   */
+  unsupportedType?: string;
 }
 
 /**

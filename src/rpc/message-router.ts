@@ -393,7 +393,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   return {
     async handleIncoming(msg: ExternalMessage): Promise<void> {
       const text = msg.content.trim();
-      if (!text) return;
+      // 空文本本身直接返回 — 但带附件/失败/不支持标记的消息(如 m.location
+      // 没有 body)必须继续走,否则就是又一个静默吞消息的点(issue #66 票3)。
+      if (!text && !msg.attachments?.length && !msg.attachmentError && !msg.unsupportedType) return;
 
       // Project tagging (spec #34): a mapped room's lines carry its label;
       // everything else (single-project mode, DM, unmapped rooms) resolves to
@@ -418,13 +420,21 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         msg.transport
       );
 
-      // 附件消息分流(issue #66 票1):必须在斜杠/挑战码解析之前截住 —
+      // 附件消息分流(issue #66 票1/票3):必须在斜杠/挑战码解析之前截住 —
       // 文件名可能碰巧以 "/" 或 6 位数字开头。回执是 router 政策:未授权
       // 用户与文本消息同等对待(静默丢弃,文件已落盘但不入清单)。
-      if (msg.attachments?.length || msg.attachmentError) {
+      if (msg.attachments?.length || msg.attachmentError || msg.unsupportedType) {
         if (!isAuthorized) return;
         if (msg.attachmentError) {
           await sendReply(msg.chatId, msg.transport, attachmentErrorReply(msg.attachmentError));
+          return;
+        }
+        if (msg.unsupportedType) {
+          await sendReply(
+            msg.chatId,
+            msg.transport,
+            `🤷 暂不支持的消息类型(${msg.unsupportedType}),已忽略。文字、图片和文件都可以直接发给我。`
+          );
           return;
         }
         const key = attachmentLedgerKey(msg.chatId, msg.userId);
