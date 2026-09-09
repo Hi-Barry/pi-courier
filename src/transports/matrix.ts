@@ -15,7 +15,6 @@ import { createQuoteCache, type QuoteCache, toExcerpt } from "../quote-cache.js"
 import type { ExternalMessage } from "../types.js";
 import type { MediaSource } from "./attachments.js";
 import { AttachmentStore } from "./attachments.js";
-import type { Transport } from "./interface.js";
 import { createEventTranslator } from "./matrix-events.js";
 import { MatrixRoomOps } from "./matrix-rooms.js";
 import {
@@ -33,7 +32,7 @@ import {
  * composed matrix-rooms adapter; the composition root hands that to the
  * /pmctl path and the startup space ensure.
  */
-export class MatrixProvider implements Transport {
+export class MatrixProvider {
   readonly type = "matrix";
   private client?: MatrixClient;
   private _isConnected = false;

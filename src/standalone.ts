@@ -23,7 +23,7 @@ import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
 import { ensureSpaceAndManagementRoom, healRoomIdentities, healTrustedPowerLevels } from "./space.js";
 import { AttachmentStore } from "./transports/attachments.js";
-import type { RoomOps, Transport } from "./transports/interface.js";
+import type { RoomOps } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
 import { suppressKnownWarnings } from "./warnings.js";
 import { resolveWorkdir } from "./workdir.js";
@@ -104,8 +104,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // A plain registry (no manager class): each configured transport is wired
   // inline below. Matrix additionally carries the RoomOps capability, which
   // is handed to the router separately (only the /pmctl path consumes it).
-  const transports: Transport[] = [];
-  const getTransport = (type: string): Transport | undefined => transports.find((t) => t.type === type);
+  // 单 adapter 直连(spec #72 票8/C8):Transport 字符串注册表是只有一个
+  // 实现的假想 seam —— 按同文件 RoomOps 注释的自我标准降级为组合根内部
+  // 细节。第二个消息 transport 真正出现时,在这里重新立 seam。
+  let matrix: MatrixProvider | undefined;
   let roomOps: RoomOps | undefined;
 
   if (config.matrix?.homeserverUrl && config.matrix?.accessToken) {
@@ -122,11 +124,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       matrix.mediaSource
     );
     matrix.setAttachmentStore(attachments);
-    transports.push(matrix);
     roomOps = matrix.roomOps;
   }
 
-  if (transports.length === 0) {
+  if (!matrix) {
     // No Matrix config yet — do NOT exit. Under systemd/docker restart
     // policies an exit(1) here crash-loops the service and makes
     // `pi-courier setup` unreachable (exec fails while restarting).
@@ -174,7 +175,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // ---- message routing ------------------------------------------------------
   const sendReply = async (chatId: string, transport: string, text: string): Promise<void> => {
     try {
-      const t = getTransport(transport);
+      // transport 参数保留:ExternalMessage/ReplyTarget 的路由元数据与日志
+      // 仍携带它;但查找 adapter 的注册表间接层已退役(C8)。
+      const t = matrix;
       if (!t) throw new Error(`Transport ${transport} not found`);
       if (!t.isConnected) throw new Error(`Transport ${transport} not connected`);
       await t.sendMessage(chatId, text);
@@ -186,10 +189,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   };
   // Silent no-op when the transport is missing/disconnected (typing is best-effort).
   const sendTyping = async (chatId: string, transport: string): Promise<void> => {
-    const t = getTransport(transport);
-    if (t?.isConnected) await t.sendTyping(chatId);
+    if (matrix?.isConnected) await matrix.sendTyping(chatId);
   };
-  const disconnectAll = (): Promise<unknown> => Promise.allSettled(transports.map((t) => t.disconnect()));
+  const disconnectAll = (): Promise<unknown> => (matrix ? matrix.disconnect() : Promise.resolve());
 
   // ---- space (organizational) mode -----------------------------------------
   // With the space enabled (multi-project only), the management room is
@@ -214,16 +216,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     managementRoomAdoptionAllowed: () => managementRoomAdoptionAllowed,
   });
 
-  for (const t of transports) {
-    t.onMessage((msg) => {
-      router.handleIncoming(msg).catch((err) => {
-        logger.error("❌ message handling error:", (err as Error).message);
-      });
+  matrix?.onMessage((msg) => {
+    router.handleIncoming(msg).catch((err) => {
+      logger.error("❌ message handling error:", (err as Error).message);
     });
-    t.onError((err) => {
-      logger.error(`❌ ${t.type} error:`, (err as Error).message);
-    });
-  }
+  });
+  matrix?.onError((err) => {
+    logger.error(`❌ ${matrix.type} error:`, (err as Error).message);
+  });
 
   // ---- agent events → replies ------------------------------------------------
   rpc.onEvent((event) => {
@@ -232,16 +232,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   // ---- startup ----------------------------------------------------------------
   try {
-    await Promise.all(
-      transports.map((t) =>
-        t.connect().catch((err) => {
-          throw new Error(`${t.type} connection failed: ${(err as Error).message}`);
-        })
-      )
-    );
-    logger.info(
-      `✅ transports connected: ${transports.map((t) => `${t.type}=${t.isConnected ? "up" : "down"}`).join(", ")}`
-    );
+    await matrix?.connect().catch((err: unknown) => {
+      throw new Error(`matrix connection failed: ${(err as Error).message}`);
+    });
+    logger.info(`✅ transports connected: matrix=${matrix?.isConnected ? "up" : "down"}`);
   } catch (err) {
     logger.warn("⚠️ some transports failed to connect:", (err as Error).message);
     // Friendly diagnostics for the two common E2EE/device-state failures so
