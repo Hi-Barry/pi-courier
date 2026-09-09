@@ -206,7 +206,8 @@ pi 0.83.0 就绪。
 - 邀请目标由 router 以 transport 原生 MXID 传入(控制器不做前缀剥离)
 
 **`src/rpc/message-router.ts`** —— 核心接线
-- 认证 → bridge 管理命令 → /pmctl 家族 → 登录管理(/login 家族)→ RPC 映射命令 → 应答捕获 → 透传 prompt(命中回复引用时摘录前缀一并下发),七级路由(spec #51 增加后两级)
+- 主管道是**显式的阶段管道**(spec #72 票3/C1):authorization → attachments → adminCommands → groupEnable → authorizationGate → multiproject → managementAdoption → roomBinding → pmctl → login → slashCommands → loginCapture → extensionCapture → prompt,共 14 个阶段;每阶段自述 preAuth(绕过授权门)/consumesLedger(消耗附件待处理清单——全管道唯一是 prompt)/needsRpc(触发 pi 进程懒解析),阶段表经 pipeline() 可直测
+- pi 进程为懒解析(spec #72 票3):只在真正需要的阶段(roomBinding 起)启动,管理命令族零 spawn
 - 附件消息在斜杠/挑战码解析之前截住(spec #66):待处理清单按"房间+发送者"记账,下一条真正发给 pi 的对话消息把附件绝对路径注入 prompt(`withAttachmentPrefix`)并清空 —— 唯一消耗点;管理命令/应答捕获天然不消耗;未授权者与文本同等静默
 - agent 事件流(`message_end` / `turn_end` / `agent_start`…)→ 回发到 Matrix;extension_ui 提问/应答、auto_retry 与错误回发、steering/followUp 队列镜像也在事件路径上(spec #51)
 - 回复按 RoomBinding 路由:每个 pi 进程绑定自己的回复目标(项目房间钉住、共享默认进程随最近一次 DM 提示刷新,完整对话轮结束后释放)——不存在进程级单槽
@@ -226,6 +227,7 @@ pi 0.83.0 就绪。
 **`src/transports/matrix.ts`** —— Matrix Transport(只做消息 I/O,spec #22 后不再内嵌其他职责)
 - connect/disconnect、`sendMessage`(markdown → Matrix HTML)、typing、事件分发
 - 群/DM 判定与入群 enable 提示消费 `matrix-utils.ts` 纯函数;成员计数经缓存(不逐条消息打 API)
+- 消息翻译已抽为独立深模块 `matrix-events.ts`(spec #72 票2/C2):分类/提及剥离/引用摘录/附件编排全部在翻译器内,经注入端口(quoteCache/memberCount/attachments)直测;transport 只留 skip 过滤 + SDK 接线 + 日志;入群提示文案在 management-room.ts(/enable 知识同侧)
 - 附件管道(spec #66):媒体事件经分类后走 `AttachmentStore` 下载落盘,转发携带绝对路径的 `ExternalMessage`(不触发 turn);m.sticker 事件类型经 `room.event` 监听接入(E2EE 房间收到的是解密后事件);`mediaSource` 是下载接缝的 Matrix 半边(明文 `downloadContent` v1 鉴权端点 / 加密 `crypto.decryptMedia`)
 - SDK 内部日志经 `logger.ts` 门面(初始同步期用 `suppressLogLines` 窗口滤掉两类已知良性错误)
 
@@ -246,6 +248,10 @@ pi 0.83.0 就绪。
 - 输出 `[ISO时间] [LEVEL] [标签] 消息`;`withLabel()` 派生视图打项目标签(视图动态读父阈值);字符串参数换行净化为 `⏎`,一次调用恒一条物理行(打标行不会被续行破坏)
 - 无标签行与历史逐字节一致(单工程模式零变化)
 
+**`src/config.ts` 派生函数族**(spec #72 票4/C4):effectiveInstanceName/effectiveWorkdir/attachmentsDirectory/attachmentsMaxMb/attachmentsMaxBytes——每条默认值只有一处解释,setup 向导与运行时同源;PI_CLI_PATH 经 loadConfig 纳入统一 env 覆盖链。
+
+**`src/identity.ts`**(spec #72 票5/C6)—— 用户身份单点:namespacedId(存储形式)/nativeMxid(Matrix 形式)/displayIdentity(/trusted 展示,沿用既有截断怪癖)/matchesTrustedEntry(/revoke 后缀规则)/matchesAdmin(存量双形式兼容,显式命名)。config.ts 的 nativeMxid 为再导出。
+
 **`src/project-labels.ts`** —— 项目标签单点解析与校验(spec #34)
 - `projectLabelOf`:name ?? 工作目录 basename;`validateProjectLabel`:禁方括号/空白、≤30、大小写不敏感查重(日志格式与过滤正确性的地基)
 - 消费方:/pmctl new·rename 校验、日志打标、`logs <项目>` 匹配 —— 三处共用一条规则
@@ -257,6 +263,9 @@ pi 0.83.0 就绪。
 **`src/quote-cache.ts`** —— 回复引用环形缓存(spec #51 票5)
 - 每房间 50 条 FIFO(重见即刷新)、摘录单行 200 字上限,纯内存零 I/O
 - 只记用户消息(bot 自身消息在事件过滤即被跳过),未命中静默无前缀 —— 引用是尽力而为的上下文,不是承诺
+
+**`src/rpc/rpc-transient-state.ts`** —— 每进程瞬态状态(spec #72 票6/C5)
+- 队列镜像 + 悬置提问的集中保管;失效时机自治:订阅 PiRpc 的重启生命周期(onRestarted),重启即作废——不再有外借的 clearRpcState 扳机(command-map 上下文与 LoginManager 依赖均已瘦身)
 
 **`src/auth/headless-login.ts`** —— 无头登录(spec #51 票4)
 - 上游 `AuthInteraction` → 聊天往返翻译(纯函数直测):prompt 变房间提问、notify(auth_url/device_code/progress)变展示行、「取消」= abort signal 中止(prompt reject 即上游的异常退出取消路径)
