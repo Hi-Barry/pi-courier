@@ -56,9 +56,38 @@ export interface MessageRouterDeps {
   login?: LoginManager;
 }
 
+/**
+ * 管道阶段声明(spec #72 票3/C1):顺序约束与消耗语义升格为结构——
+ * 每个阶段自述它与授权门、附件待处理清单、pi 进程懒启动的关系,
+ * 取代"第 N 级 return 是否消耗清单"式的注释守护。
+ */
+export interface PipelineStageView {
+  name: string;
+  /** 在授权门之前运行(自带门禁的命令族)。 */
+  preAuth: boolean;
+  /** 到达本阶段即消耗附件待处理清单——全管道只有 prompt。 */
+  consumesLedger: boolean;
+  /** 需要为当前房间解析 pi 进程(懒启动副作用发生在第一次取用)。 */
+  needsRpc: boolean;
+}
+
+interface StageContext {
+  msg: ExternalMessage;
+  text: string;
+  log: LeveledLogger;
+  isAuthorized: boolean;
+  isManagementRoom: boolean;
+  multiProject: boolean;
+  /** 懒解析 pi 进程:第一次取用才 spawn,失败回执并抛 RPC_ABORT。 */
+  roomRpc: () => Promise<PiRpc>;
+}
+
 export interface MessageRouter {
   /** Handle an incoming messenger message */
   handleIncoming(msg: ExternalMessage): Promise<void>;
+  /** 管道阶段视图(spec #72 票3/C1):顺序即执行顺序,属性即不变量——
+   *  供测试钉住"阶段表",供导航时一眼读出管道形状。 */
+  pipeline(): PipelineStageView[];
   /** Handle an agent event emitted by `rpc` — the reply target comes from
    *  the rpc's binding (see RoomBinding), never from a global slot. */
   handleEvent(rawEvent: unknown, rpc: PiRpc): void;
@@ -390,7 +419,403 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     await sendReply(msg.chatId, msg.transport, answer.kind === "cancel" ? "已取消" : "✅ 已回应");
   };
 
+
+  // ── 管道阶段(spec #72 票3/C1)─────────────────────────────────────
+  // 顺序即执行顺序。每个阶段的 handle 返回 true = 消息已被处理(管道终止)。
+  // 不变量:consumesLedger=true 的阶段有且仅有 prompt(附件待处理清单的
+  // 唯一消耗点);preAuth=true 的阶段自带门禁,在授权门之前运行。
+  const RPC_ABORT = Symbol("rpc-abort");
+
+  const stages: Array<PipelineStageView & { handle: (ctx: StageContext) => Promise<boolean> }> = [
+    {
+      name: "authorization",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // Authorization (initiates 6-digit challenge for unknown users in DMs):
+      // computing it has the side effect of the challenge flow, so it runs for
+      // every message — even for preAuth stages above that ignore the result.
+      handle: async (ctx) => {
+        ctx.isAuthorized = await auth.checkAuthorization(
+          ctx.msg.userId,
+          ctx.msg.chatId,
+          ctx.msg.username,
+          ctx.msg.isGroupChat,
+          ctx.msg.wasMentioned ?? false,
+          async (cId, replyText) => sendReply(cId, ctx.msg.transport, replyText),
+          ctx.msg.transport
+        );
+        return false;
+      },
+    },
+    {
+      name: "attachments",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // 附件/失败/不支持载荷的分流:必须在斜杠/挑战码解析之前截住 — 文件名
+      // 可能碰巧以 "/" 或 6 位数字开头。回执是 router 政策:未授权用户与
+      // 文本消息同等对待(静默丢弃,文件已落盘但不入清单)。
+      handle: async (ctx) => {
+        if (ctx.msg.payload.kind === "text") return false;
+        if (!ctx.isAuthorized) return true;
+        switch (ctx.msg.payload.kind) {
+          case "mediaError":
+            await sendReply(ctx.msg.chatId, ctx.msg.transport, attachmentErrorReply(ctx.msg.payload.reason));
+            return true;
+          case "unsupported":
+            await sendReply(
+              ctx.msg.chatId,
+              ctx.msg.transport,
+              `🤷 暂不支持的消息类型(${ctx.msg.payload.msgtype}),已忽略。文字、图片和文件都可以直接发给我。`
+            );
+            return true;
+          case "media": {
+            const key = attachmentLedgerKey(ctx.msg.chatId, ctx.msg.userId);
+            const ledger = pendingAttachments.get(key) ?? [];
+            for (const attachment of ctx.msg.payload.saved) {
+              ledger.push(attachment);
+              await sendReply(ctx.msg.chatId, ctx.msg.transport, attachmentSavedReply(attachment));
+            }
+            pendingAttachments.set(key, ledger);
+            return true;
+          }
+        }
+      },
+    },
+    {
+      name: "adminCommands",
+      preAuth: true,
+      consumesLedger: false,
+      needsRpc: false,
+      // Bridge admin commands + challenge codes in DMs. /help is reserved
+      // for pi (the RPC command help also lists bridge commands).
+      handle: async (ctx) => {
+        const { msg, text } = ctx;
+        if (msg.isGroupChat || (!text.startsWith("/") && !/^\d{6}$/.test(text))) return false;
+        const cmdName = text.split(/\s+/)[0].toLowerCase();
+        if (text.startsWith("/") && cmdName === "/help") return false;
+        const result = handleAdminCommand(auth, {
+          text,
+          userId: msg.userId,
+          transport: msg.transport,
+          hideToolCalls: store.get().hideToolCalls,
+        });
+        if (!result.handled) return false;
+        for (const replyText of result.replies) {
+          await sendReply(msg.chatId, msg.transport, replyText);
+        }
+        for (const notification of result.notifications) {
+          logger.info(`[auth:${notification.level}] ${notification.message}`);
+        }
+        for (const effect of result.effects) {
+          if (effect.kind === "persistAuth") {
+            store.update({ auth: auth.exportConfig() });
+          } else if (effect.kind === "hideToolCalls") {
+            store.update({ hideToolCalls: effect.value });
+          } else if (effect.kind === "spaceInvite" && roomOps) {
+            // Trust just granted (challenge passed): invite into the
+            // organizational space — fire-once, best-effort (see space.ts).
+            await inviteUserToSpaceOnce(
+              roomOps,
+              store,
+              namespacedId(effect.userId, effect.transport)
+            );
+          } else if (effect.kind === "managementRoomInvite" && roomOps) {
+            // Trust just granted: the management room (/pmctl home) must be
+            // reachable too — fire-once, best-effort, space mode only; the
+            // degraded path's adopted DM is never used to pull people in.
+            await inviteUserToManagementRoomOnce(
+              roomOps,
+              store,
+              namespacedId(effect.userId, effect.transport)
+            );
+          } else if (effect.kind === "powerDemote" && roomOps) {
+            // Trust just revoked (ticket 3): strip the admin power this
+            // instance once granted — every managed room, PL 0. Best-effort
+            // like the invite effects: failures warn and stay in the
+            // powerElevatedUsers bookkeeping for the startup heal to retry;
+            // the revoke itself stands either way.
+            await demoteTrustedUserEverywhere(
+              roomOps,
+              store,
+              namespacedId(effect.userId, effect.transport)
+            );
+          }
+        }
+        return true;
+      },
+    },
+    {
+      name: "groupEnable",
+      preAuth: true,
+      consumesLedger: false,
+      needsRpc: false,
+      // Group chats: a trusted user can enable the current room without
+      // knowing its ID — send "/enable <mode>" right in the room. This must
+      // run BEFORE authorization (unenabled rooms are not authorized).
+      handle: async (ctx) => {
+        const { msg, text } = ctx;
+        if (!msg.isGroupChat || !text.startsWith("/enable")) return false;
+        const isTrusted = auth.isTrustedUser(msg.userId, msg.transport);
+        if (!isTrusted) return false;
+        const parts = text.split(/\s+/);
+        const mode = (parts[1] || "trusted-only") as "all" | "mentions" | "trusted-only";
+        if (mode !== "all" && mode !== "mentions" && mode !== "trusted-only") {
+          await sendReply(msg.chatId, msg.transport, "用法: /enable <all|mentions|trusted-only>(本房间)");
+          return true;
+        }
+        // "all" responds to everyone — admin-only. Trusted users may only
+        // request trusted-only / mentions.
+        if (mode === "all" && !auth.isAdminUser(msg.userId, msg.transport)) {
+          await sendReply(msg.chatId, msg.transport, "❌ all 模式仅管理员可用(可采用 trusted-only 或 mentions)");
+          return true;
+        }
+        auth.enableChannel(msg.chatId, mode);
+        store.update({ auth: auth.exportConfig() });
+        await sendReply(msg.chatId, msg.transport, `✅ 本房间已启用 (mode: ${mode})`);
+        logger.info(`[auth] 房间 ${msg.chatId} 已由 ${msg.username} 启用 (${mode})`);
+        return true;
+      },
+    },
+    {
+      name: "authorizationGate",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // Unauthorized senders stop here, silently — same treatment as text.
+      handle: async (ctx) => !ctx.isAuthorized,
+    },
+    {
+      name: "multiproject",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // /multiproject — switch single/multi project mode. Config read/write;
+      // takes effect on restart. Trusted users may toggle.
+      handle: async (ctx) => {
+        const { msg, text } = ctx;
+        if (!text.startsWith("/multiproject")) return false;
+        const isTrusted = auth.isTrustedUser(msg.userId, msg.transport);
+        if (!isTrusted) {
+          await sendReply(msg.chatId, msg.transport, "❌ 无权限(仅信任用户可切换多工程模式)");
+          return true;
+        }
+        const action = text.split(/\s+/)[1]?.toLowerCase() ?? "";
+        const current = projectManager.isMultiProject ? "多工程模式(开启)" : "单工程模式(关闭)";
+        if (action === "on" || action === "off") {
+          const next = action === "on";
+          if (next === projectManager.isMultiProject) {
+            await sendReply(msg.chatId, msg.transport, `当前已是${current},无需切换。`);
+            return true;
+          }
+          store.update({ multiProject: next });
+          await sendReply(
+            msg.chatId,
+            msg.transport,
+            `✅ 已${next ? "开启" : "关闭"}多工程模式。\n重启生效:运行 \`pi-courier restart\`(${next ? "重启后将启用管理房间/项目房间 /pmctl" : "重启后所有房间直接连默认 pi"})。`
+          );
+        } else {
+          await sendReply(
+            msg.chatId,
+            msg.transport,
+            `当前: ${current}\n\n用法:\n/multiproject on  — 开启多工程(重启生效)\n/multiproject off — 关闭多工程,回到单工程(重启生效)`
+          );
+        }
+        return true;
+      },
+    },
+    {
+      name: "managementAdoption",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // Management room = the FIRST accepted message in a private (≤2 person)
+      // non-project room fixes that room's ID (managementRooms[0]). Works for
+      // BOTH challenge-code pairing and config-driven trusted users. Only in
+      // multi-project mode.
+      handle: async (ctx) => {
+        if (
+          ctx.multiProject &&
+          roomOps &&
+          (managementRoomAdoptionAllowed?.() ?? true) &&
+          !store.get().managementRooms?.[0] &&
+          !ctx.msg.isGroupChat &&
+          !projectManager.isProjectRoom(ctx.msg.chatId)
+        ) {
+          await maybeInitManagementRoom(ctx.msg, sendReply, roomOps, store);
+        }
+        ctx.isManagementRoom = ctx.multiProject && (store.get().managementRooms?.[0] ?? "") === ctx.msg.chatId;
+        return false;
+      },
+    },
+    {
+      name: "roomBinding",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: true,
+      // Resolve + bind the room's pi process (post-gate — old behaviour):
+      // extension_ui questions and agent events route back through the
+      // RoomBinding, so every conversational/management message that reaches
+      // here must leave the room bound. Unmapped rooms resolve to the running
+      // default rpc (no spawn); mapped project rooms start theirs exactly as
+      // they always did.
+      handle: async (ctx) => {
+        await ctx.roomRpc();
+        return false;
+      },
+    },
+    {
+      name: "pmctl",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // /pmctl family: gates + actions live in the controller. The invite
+      // target arrives pre-resolved (transport-native MXID). No pi process
+      // is started for management commands.
+      handle: async (ctx) =>
+        await pmctl.handle(ctx.text, { chatId: ctx.msg.chatId, senderMxid: ctx.msg.userId, isManagementRoom: ctx.isManagementRoom }, async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText)),
+    },
+    {
+      name: "login",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // Headless login (issue #55): /login /logout /auth — admin + management
+      // room only. Single-project mode has no management room: a DM counts as
+      // one (that is where the admin talks to the bot there).
+      handle: async (ctx) => {
+        const { msg, text } = ctx;
+        if (!/^\/(login|logout|auth)(\s|$)/.test(text)) return false;
+        const loginRoomAllowed = ctx.multiProject
+          ? ctx.isManagementRoom
+          : !msg.isGroupChat;
+        if (!auth.isAdminUser(msg.userId, msg.transport)) {
+          await sendReply(msg.chatId, msg.transport, "❌ 无权限(仅管理员可管理 provider 登录)");
+          return true;
+        }
+        if (!loginRoomAllowed) {
+          await sendReply(msg.chatId, msg.transport, "❌ 登录管理仅可在管理房间使用(单工程模式下与 bot 的私聊即可)");
+          return true;
+        }
+        const loginCmd = text.split(/\s+/)[0]!.toLowerCase();
+        const loginArgs = text.slice(loginCmd.length).trim();
+        if (loginCmd === "/login") {
+          if (!loginArgs) {
+            await login.listProviders(msg.chatId, msg.transport);
+          } else {
+            const [providerId, method] = loginArgs.split(/\s+/);
+            await login.startLogin(msg.chatId, msg.transport, providerId!, method);
+          }
+          return true;
+        }
+        if (loginCmd === "/logout") {
+          if (!loginArgs) {
+            await sendReply(msg.chatId, msg.transport, "用法: /logout <provider>");
+            return true;
+          }
+          await login.logout(msg.chatId, msg.transport, loginArgs.split(/\s+/)[0]!);
+          return true;
+        }
+        await login.authStatus(msg.chatId, msg.transport);
+        return true;
+      },
+    },
+    {
+      name: "slashCommands",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: true,
+      // Slash commands → RPC mapping (builtin) or passthrough (extensions/
+      // skills/templates). Unhandled slashes fall through to the prompt —
+      // pi expands its own commands/skills/templates.
+      handle: async (ctx) => {
+        if (!ctx.text.startsWith("/")) return false;
+        const rpc = await ctx.roomRpc();
+        try {
+          const handled = await handleSlashCommand(ctx.text, {
+            rpc,
+            reply: async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText),
+            queueView: () => queueMirrors.get(rpc),
+            allRpcs: () => projectManager.allRpcs(),
+            clearRpcState,
+          });
+          return handled;
+        } catch (err) {
+          await sendReply(ctx.msg.chatId, ctx.msg.transport, `❌ 命令执行失败: ${(err as Error).message}`);
+          return true;
+        }
+      },
+    },
+    {
+      name: "loginCapture",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // Answer capture for plain (non-"/") messages: login flows (issue #55)
+      // capture FIRST — while a login waits in this room its answer wins over
+      // any pending extension_ui question (ticket requirement); 「取消」 aborts
+      // the login at any moment. Messages arriving between prompts (OAuth
+      // polling) are NOT consumed — the room stays usable during long waits.
+      handle: async (ctx) => {
+        if (ctx.text.startsWith("/")) return false;
+        return login.isPending(ctx.msg.chatId) && (await login.deliver(ctx.msg.chatId, ctx.text));
+      },
+    },
+    {
+      name: "extensionCapture",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: true,
+      // Pending extension_ui questions are answered by the room's next plain
+      // message (issue #54).
+      handle: async (ctx) => {
+        if (ctx.text.startsWith("/")) return false;
+        const rpc = await ctx.roomRpc();
+        const queue = pendingQuestions.get(rpc);
+        const oldest = queue?.[0];
+        if (oldest && oldest.target.chatId === ctx.msg.chatId) {
+          await captureAnswer(rpc, queue!, oldest, ctx.text, ctx.msg, ctx.log);
+          return true;
+        }
+        return false;
+      },
+    },
+    {
+      name: "prompt",
+      preAuth: false,
+      consumesLedger: true,
+      needsRpc: true,
+      // Plain message → prompt (a resolved reply quote is prepended — see
+      // withQuotePrefix; command handling above saw the raw text). Pending
+      // attachments (issue #66 票1) ride along here and ONLY here: the unique
+      // consumption point for the per-room+sender ledger. The ledger is
+      // cleared only after the send succeeded — a failed prompt keeps the
+      // attachments parked so the retry carries them.
+      handle: async (ctx) => {
+        const rpc = await ctx.roomRpc();
+        try {
+          const key = attachmentLedgerKey(ctx.msg.chatId, ctx.msg.userId);
+          const carried = pendingAttachments.get(key);
+          const pending = carried?.length ? carried : undefined;
+          const quoted = ctx.msg.payload.kind === "text" ? ctx.msg.payload.quoted : undefined;
+          await rpc.prompt(withAttachmentPrefix(withQuotePrefix(ctx.text, quoted), pending));
+          pendingAttachments.delete(key);
+        } catch (err) {
+          if (err === RPC_ABORT) throw err;
+          await sendReply(ctx.msg.chatId, ctx.msg.transport, `❌ 无法发送给 pi: ${(err as Error).message}`);
+        }
+        return true;
+      },
+    },
+  ];
+
   return {
+    /** 管道阶段表:顺序即执行顺序(导航入口,直测面见 pipeline())。 */
+    pipeline(): PipelineStageView[] {
+      return stages.map(({ name, preAuth, consumesLedger, needsRpc }) => ({ name, preAuth, consumesLedger, needsRpc }));
+    },
+
     async handleIncoming(msg: ExternalMessage): Promise<void> {
       const text = msg.payload.kind === "text" ? msg.payload.text.trim() : "";
       // 空文本本身直接返回 — 非文本载荷(附件/失败/不支持)必须继续走,
@@ -410,298 +835,42 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         log.info(`📥 [${msg.transport}] @${msg.username}: ${payloadSummary.slice(0, 200)}${payloadSummary.length > 200 ? "…" : ""}`);
       }
 
-      // Authorization (initiates 6-digit challenge for unknown users in DMs)
-      const isAuthorized = await auth.checkAuthorization(
-        msg.userId,
-        msg.chatId,
-        msg.username,
-        msg.isGroupChat,
-        msg.wasMentioned ?? false,
-        async (cId, replyText) => sendReply(cId, msg.transport, replyText),
-        msg.transport
-      );
-
-      // 非文本载荷分流(spec #72 票1,原 issue #66 票1/票3):必须在斜杠/
-      // 挑战码解析之前截住 — 文件名可能碰巧以 "/" 或 6 位数字开头。回执是
-      // router 政策:未授权用户与文本消息同等对待(静默丢弃,文件已落盘但不入清单)。
-      if (msg.payload.kind !== "text") {
-        if (!isAuthorized) return;
-        switch (msg.payload.kind) {
-          case "mediaError":
-            await sendReply(msg.chatId, msg.transport, attachmentErrorReply(msg.payload.reason));
-            return;
-          case "unsupported":
-            await sendReply(
-              msg.chatId,
-              msg.transport,
-              `🤷 暂不支持的消息类型(${msg.payload.msgtype}),已忽略。文字、图片和文件都可以直接发给我。`
+      let rpcOnce: Promise<PiRpc> | undefined;
+      const ctx: StageContext = {
+        msg,
+        text,
+        log,
+        isAuthorized: false,
+        isManagementRoom: false,
+        multiProject: projectManager.isMultiProject,
+        roomRpc: () => {
+          // 懒解析(spec #72 票3):pi 进程只为真正需要它的阶段启动——
+          // 命令族(附件/pmux 管理命令/登录)不触发 spawn。失败回执后以
+          // RPC_ABORT 静默终止管道(通用错误由 standalone 兜底)。
+          rpcOnce ??= Promise.resolve(projectManager.getRpcForRoom(msg.chatId)).then((rpc) => {
+            // Per-process binding (see RoomBinding above) — resolution time is
+            // the natural bind point: project rooms pin, the shared default
+            // rpc follows its latest prompter.
+            bindReplyTarget(
+              rpc,
+              { chatId: msg.chatId, transport: msg.transport, username: msg.username },
+              projectManager.isProjectRoom(msg.chatId)
             );
-            return;
-          case "media": {
-            const key = attachmentLedgerKey(msg.chatId, msg.userId);
-            const ledger = pendingAttachments.get(key) ?? [];
-            for (const attachment of msg.payload.saved) {
-              ledger.push(attachment);
-              await sendReply(msg.chatId, msg.transport, attachmentSavedReply(attachment));
-            }
-            pendingAttachments.set(key, ledger);
-            return;
-          }
-        }
-      }
-
-      // Bridge admin commands + challenge codes in DMs.
-      // /help is reserved for pi (the RPC command help also lists bridge commands).
-      if (!msg.isGroupChat && (text.startsWith("/") || /^\d{6}$/.test(text))) {
-        const cmdName = text.split(/\s+/)[0].toLowerCase();
-        if (!text.startsWith("/") || cmdName !== "/help") {
-          const result = handleAdminCommand(auth, {
-            text,
-            userId: msg.userId,
-            transport: msg.transport,
-            hideToolCalls: store.get().hideToolCalls,
+            return rpc;
+          }).catch((err: unknown) => {
+            void sendReply(msg.chatId, msg.transport, `❌ 无法启动 pi 进程: ${(err as Error).message}`);
+            throw RPC_ABORT;
           });
-          if (result.handled) {
-            for (const replyText of result.replies) {
-              await sendReply(msg.chatId, msg.transport, replyText);
-            }
-            for (const notification of result.notifications) {
-              logger.info(`[auth:${notification.level}] ${notification.message}`);
-            }
-            for (const effect of result.effects) {
-              if (effect.kind === "persistAuth") {
-                store.update({ auth: auth.exportConfig() });
-              } else if (effect.kind === "hideToolCalls") {
-                store.update({ hideToolCalls: effect.value });
-              } else if (effect.kind === "spaceInvite" && roomOps) {
-                // Trust just granted (challenge passed): invite into the
-                // organizational space — fire-once, best-effort (see space.ts).
-                await inviteUserToSpaceOnce(
-                  roomOps,
-                  store,
-                  namespacedId(effect.userId, effect.transport)
-                );
-              } else if (effect.kind === "managementRoomInvite" && roomOps) {
-                // Trust just granted: the management room (/pmctl home) must be
-                // reachable too — fire-once, best-effort, space mode only; the
-                // degraded path's adopted DM is never used to pull people in.
-                await inviteUserToManagementRoomOnce(
-                  roomOps,
-                  store,
-                  namespacedId(effect.userId, effect.transport)
-                );
-              } else if (effect.kind === "powerDemote" && roomOps) {
-                // Trust just revoked (ticket 3): strip the admin power this
-                // instance once granted — every managed room, PL 0. Best-effort
-                // like the invite effects: failures warn and stay in the
-                // powerElevatedUsers bookkeeping for the startup heal to retry;
-                // the revoke itself stands either way.
-                await demoteTrustedUserEverywhere(
-                  roomOps,
-                  store,
-                  namespacedId(effect.userId, effect.transport)
-                );
-              }
-            }
-            return;
-          }
-        }
-      }
+          return rpcOnce;
+        },
+      };
 
-      // Group chats: a trusted user can enable the current room without
-      // knowing its ID — send "/enable <mode>" right in the room. This must
-      // run BEFORE authorization (unenabled rooms are not authorized).
-      if (msg.isGroupChat && text.startsWith("/enable")) {
-        const isTrusted = auth.isTrustedUser(msg.userId, msg.transport);
-        if (isTrusted) {
-          const parts = text.split(/\s+/);
-          const mode = (parts[1] || "trusted-only") as "all" | "mentions" | "trusted-only";
-          if (mode !== "all" && mode !== "mentions" && mode !== "trusted-only") {
-            await sendReply(msg.chatId, msg.transport, "用法: /enable <all|mentions|trusted-only>(本房间)");
-            return;
-          }
-          // "all" responds to everyone — admin-only. Trusted users may only
-          // request trusted-only / mentions.
-          if (mode === "all" && !auth.isAdminUser(msg.userId, msg.transport)) {
-            await sendReply(msg.chatId, msg.transport, "❌ all 模式仅管理员可用(可采用 trusted-only 或 mentions)");
-            return;
-          }
-          auth.enableChannel(msg.chatId, mode);
-          store.update({ auth: auth.exportConfig() });
-          await sendReply(msg.chatId, msg.transport, `✅ 本房间已启用 (mode: ${mode})`);
-          logger.info(`[auth] 房间 ${msg.chatId} 已由 ${msg.username} 启用 (${mode})`);
-          return;
-        }
-      }
-
-      if (!isAuthorized) return;
-
-      // /multiproject — switch single/multi project mode. Config read/write;
-      // takes effect on restart. Trusted users may toggle.
-      if (text.startsWith("/multiproject")) {
-        const isTrusted = auth.isTrustedUser(msg.userId, msg.transport);
-        if (!isTrusted) {
-          await sendReply(msg.chatId, msg.transport, "❌ 无权限(仅信任用户可切换多工程模式)");
-          return;
-        }
-        const action = text.split(/\s+/)[1]?.toLowerCase() ?? "";
-        const current = projectManager.isMultiProject ? "多工程模式(开启)" : "单工程模式(关闭)";
-        if (action === "on" || action === "off") {
-          const next = action === "on";
-          if (next === projectManager.isMultiProject) {
-            await sendReply(msg.chatId, msg.transport, `当前已是${current},无需切换。`);
-            return;
-          }
-          store.update({ multiProject: next });
-          await sendReply(
-            msg.chatId,
-            msg.transport,
-            `✅ 已${next ? "开启" : "关闭"}多工程模式。\n重启生效:运行 \`pi-courier restart\`(${next ? "重启后将启用管理房间/项目房间 /pmctl" : "重启后所有房间直接连默认 pi"})。`
-          );
-        } else {
-          await sendReply(
-            msg.chatId,
-            msg.transport,
-            `当前: ${current}\n\n用法:\n/multiproject on  — 开启多工程(重启生效)\n/multiproject off — 关闭多工程,回到单工程(重启生效)`
-          );
-        }
-        return;
-      }
-
-      // Management room = the FIRST accepted message in a private (≤2 person)
-      // non-project room fixes that room's ID (managementRooms[0]). Works for
-      // BOTH challenge-code pairing and config-driven trusted users. Only in
-      // multi-project mode.
-      const multiProject = projectManager.isMultiProject;
-      if (
-        multiProject &&
-        roomOps &&
-        (managementRoomAdoptionAllowed?.() ?? true) &&
-        !store.get().managementRooms?.[0] &&
-        !msg.isGroupChat &&
-        !projectManager.isProjectRoom(msg.chatId)
-      ) {
-        await maybeInitManagementRoom(msg, sendReply, roomOps, store);
-      }
-      const isManagementRoom = multiProject && (store.get().managementRooms?.[0] ?? "") === msg.chatId;
-
-      // Resolve the pi process for this room: project rooms get their own
-      // (lazily started), everything else (DM) uses the shared default Rpc.
-      let roomRpc: PiRpc;
       try {
-        roomRpc = await projectManager.getRpcForRoom(msg.chatId);
+        for (const stage of stages) {
+          if (await stage.handle(ctx)) return;
+        }
       } catch (err) {
-        await sendReply(
-          msg.chatId,
-          msg.transport,
-          `❌ 无法启动 pi 进程: ${(err as Error).message}`
-        );
-        return;
-      }
-
-      // Bind this room to the pi process that will serve it (per-process
-      // binding — see RoomBinding above). Binding unconditionally is safe:
-      // a project-room prompt only ever re-pins the project rpc to its own
-      // room, so the default rpc's DM binding is untouched.
-      bindReplyTarget(
-        roomRpc,
-        { chatId: msg.chatId, transport: msg.transport, username: msg.username },
-        projectManager.isProjectRoom(msg.chatId)
-      );
-
-      // /pmctl family first: gates + actions live in the controller. The
-      // invite target arrives pre-resolved (transport-native MXID).
-      if (await pmctl.handle(text, { chatId: msg.chatId, senderMxid: msg.userId, isManagementRoom }, async (replyText) => sendReply(msg.chatId, msg.transport, replyText))) {
-        return;
-      }
-
-      // Headless login (issue #55): /login /logout /auth — admin + management
-      // room only. Single-project mode has no management room: a DM counts as
-      // one (that is where the admin talks to the bot there).
-      if (/^\/(login|logout|auth)(\s|$)/.test(text)) {
-        const loginRoomAllowed = multiProject
-          ? isManagementRoom
-          : !msg.isGroupChat;
-        if (!auth.isAdminUser(msg.userId, msg.transport)) {
-          await sendReply(msg.chatId, msg.transport, "❌ 无权限(仅管理员可管理 provider 登录)");
-          return;
-        }
-        if (!loginRoomAllowed) {
-          await sendReply(msg.chatId, msg.transport, "❌ 登录管理仅可在管理房间使用(单工程模式下与 bot 的私聊即可)");
-          return;
-        }
-        const loginCmd = text.split(/\s+/)[0]!.toLowerCase();
-        const loginArgs = text.slice(loginCmd.length).trim();
-        if (loginCmd === "/login") {
-          if (!loginArgs) {
-            await login.listProviders(msg.chatId, msg.transport);
-          } else {
-            const [providerId, method] = loginArgs.split(/\s+/);
-            await login.startLogin(msg.chatId, msg.transport, providerId!, method);
-          }
-          return;
-        }
-        if (loginCmd === "/logout") {
-          if (!loginArgs) {
-            await sendReply(msg.chatId, msg.transport, "用法: /logout <provider>");
-            return;
-          }
-          await login.logout(msg.chatId, msg.transport, loginArgs.split(/\s+/)[0]!);
-          return;
-        }
-        await login.authStatus(msg.chatId, msg.transport);
-        return;
-      }
-
-      // Slash commands → RPC mapping (builtin) or passthrough (extensions/skills/templates)
-      if (text.startsWith("/")) {
-        try {
-          const handled = await handleSlashCommand(text, {
-            rpc: roomRpc,
-            reply: async (replyText) => sendReply(msg.chatId, msg.transport, replyText),
-            queueView: () => queueMirrors.get(roomRpc),
-            allRpcs: () => projectManager.allRpcs(),
-            clearRpcState,
-          });
-          if (handled) return;
-        } catch (err) {
-          await sendReply(msg.chatId, msg.transport, `❌ 命令执行失败: ${(err as Error).message}`);
-          return;
-        }
-      }
-
-      // Answer capture for plain (non-"/") messages. Login flows (issue #55)
-      // capture FIRST — while a login waits in this room its answer wins over
-      // any pending extension_ui question (ticket requirement); 「取消」 aborts
-      // the login at any moment. Messages arriving between prompts (OAuth
-      // polling) are NOT consumed — the room stays usable during long waits.
-      if (!text.startsWith("/")) {
-        if (login.isPending(msg.chatId) && (await login.deliver(msg.chatId, text))) {
-          return;
-        }
-        const queue = pendingQuestions.get(roomRpc);
-        const oldest = queue?.[0];
-        if (oldest && oldest.target.chatId === msg.chatId) {
-          await captureAnswer(roomRpc, queue!, oldest, text, msg, log);
-          return;
-        }
-      }
-
-      // Plain message → prompt (a resolved reply quote is prepended — see
-      // withQuotePrefix; command handling above saw the raw text). Pending
-      // attachments (issue #66 票1) ride along here and only here: the unique
-      // consumption point for the per-room+sender ledger. The ledger is
-      // cleared ONLY after the send succeeded — a failed prompt keeps the
-      // attachments parked so the retry carries them.
-      try {
-        const key = attachmentLedgerKey(msg.chatId, msg.userId);
-        const carried = pendingAttachments.get(key);
-        const pending = carried?.length ? carried : undefined;
-        const quoted = msg.payload.kind === "text" ? msg.payload.quoted : undefined;
-        await roomRpc.prompt(withAttachmentPrefix(withQuotePrefix(text, quoted), pending));
-        pendingAttachments.delete(key);
-      } catch (err) {
-        await sendReply(msg.chatId, msg.transport, `❌ 无法发送给 pi: ${(err as Error).message}`);
+        if (err !== RPC_ABORT) throw err;
       }
     },
 
