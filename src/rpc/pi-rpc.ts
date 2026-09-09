@@ -21,7 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 export interface PiRpcOptions {
-  /** Absolute path to pi's dist/cli.js (default: PI_CLI_PATH env, local node_modules, or `which pi` resolved) */
+  /** Absolute path to pi's dist/cli.js (default: config.cliPath ← PI_CLI_PATH env, then local node_modules, then `which pi`) */
   cliPath?: string;
   /** Working directory for the agent (affects bash tool, project context) */
   cwd?: string;
@@ -78,12 +78,11 @@ export class PiRpc {
     return index >= 0 ? args[index + 1] : undefined;
   }
 
-  /** Locate the pi CLI entry point. */
+  /** Locate the pi CLI entry point. Env override (PI_CLI_PATH) is folded
+   *  into config.cliPath by loadConfig (spec #72 票4/C4) — this chain only
+   *  resolves between the configured path and the two install locations. */
   static async resolveCliPath(): Promise<string> {
-    // 1. Explicit env override
-    if (process.env.PI_CLI_PATH) return process.env.PI_CLI_PATH;
-
-    // 2. System-installed pi (`which pi`, resolve symlink to dist/cli.js).
+    // 1. System-installed pi (`which pi`, resolve symlink to dist/cli.js).
     //    Preferred: pi is installed independently and upgraded on its own.
     try {
       const bin = execFileSync("which", ["pi"], { encoding: "utf-8" }).trim();

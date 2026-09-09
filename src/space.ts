@@ -33,7 +33,7 @@
  */
 
 import * as os from "node:os";
-import { activeSpaceRoomId, type ConfigStore, defaultProjectsRoot, isSpaceMode, nativeMxid } from "./config.js";
+import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName, effectiveWorkdir, isSpaceMode, nativeMxid } from "./config.js";
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
 import {
@@ -64,9 +64,9 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
   const cfg = store.get();
   if (!isSpaceMode(cfg)) return "skipped";
 
-  const instanceName = cfg.instanceName ?? os.hostname();
+  const instanceName = effectiveInstanceName(cfg);
   const inviteUserIds = (cfg.auth?.trustedUsers ?? []).map(nativeMxid);
-  const workdir = cfg.workdir ?? defaultProjectsRoot();
+  const workdir = effectiveWorkdir(cfg);
 
   try {
     let spaceId = cfg.space?.roomId;
@@ -189,7 +189,7 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
   const spaceId = activeSpaceRoomId(cfg);
   if (!spaceId) return;
 
-  const instanceName = cfg.instanceName ?? os.hostname();
+  const instanceName = effectiveInstanceName(cfg);
 
   // Legacy name migration (exact old-template match only, see above).
   try {

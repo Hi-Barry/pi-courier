@@ -14,7 +14,7 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
-import { activeSpaceRoomId, type ConfigStore } from "../config.js";
+import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName } from "../config.js";
 import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
 import { elevateTrustedUsersInRoom, ensureRoomAvatar } from "../space.js";
 import { pickPoolAvatarFile } from "../space-identity.js";
@@ -143,7 +143,7 @@ export class PmctlController {
   }
 
   private instanceName(): string {
-    return this.opts.store.get().instanceName ?? os.hostname();
+    return effectiveInstanceName(this.opts.store.get());
   }
 
   /** The organizational space this deployment files rooms under (shared

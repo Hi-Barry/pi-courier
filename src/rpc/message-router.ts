@@ -11,7 +11,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth, namespacedId } from "../auth/challenge-auth.js";
 import { LoginManager } from "../auth/headless-login.js";
-import { type ConfigStore, defaultProjectsRoot } from "../config.js";
+import { type ConfigStore, effectiveInstanceName, effectiveWorkdir } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -1109,9 +1109,9 @@ async function maybeInitManagementRoom(
   if (rooms.includes(msg.chatId)) return; // already the management room
   if (rooms.length > 0) return; // a management room already exists — never brand another
   try {
-    const instanceName = cfg.instanceName ?? os.hostname();
+    const instanceName = effectiveInstanceName(cfg);
     const botAccount = roomOps.getBotUserId() ?? "(未知)";
-    const workdir = cfg.workdir ?? defaultProjectsRoot();
+    const workdir = effectiveWorkdir(cfg);
     const roomName = managementRoomName(instanceName);
     await roomOps.setRoomName(msg.chatId, roomName);
     await sendReply(msg.chatId, msg.transport, buildManagementRoomHelp(instanceName, botAccount, workdir));

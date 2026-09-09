@@ -14,7 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
-import { ConfigStore, isSpaceMode } from "./config.js";
+import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, isSpaceMode } from "./config.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
@@ -116,8 +116,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // other config field.
     const attachments = new AttachmentStore(
       {
-        rootDir: config.attachments?.directory ?? path.join(os.homedir(), ".pi", "pi-courier-attachments"),
-        maxBytes: Math.max(1, config.attachments?.maxMb ?? 10) * 1024 * 1024,
+        rootDir: attachmentsDirectory(config),
+        maxBytes: attachmentsMaxBytes(config),
       },
       matrix.mediaSource
     );

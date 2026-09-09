@@ -10,20 +10,20 @@ import {
   SimpleFsStorageProvider,
 } from "matrix-bot-sdk";
 import { logger, suppressLogLines } from "../logger.js";
+import { buildGroupJoinHint } from "../management-room.js";
 import { createQuoteCache, type QuoteCache, toExcerpt } from "../quote-cache.js";
 import type { ExternalMessage } from "../types.js";
 import type { MediaSource } from "./attachments.js";
 import { AttachmentStore } from "./attachments.js";
 import type { Transport } from "./interface.js";
-import { MatrixRoomOps } from "./matrix-rooms.js";
 import { createEventTranslator } from "./matrix-events.js";
+import { MatrixRoomOps } from "./matrix-rooms.js";
 import {
   formatForMatrix,
   isGroupChatRoom,
   shouldPostJoinHint,
   shouldSkipEvent,
 } from "./matrix-utils.js";
-import { buildGroupJoinHint } from "../management-room.js";
 
 /**
  * Matrix transport provider using matrix-bot-sdk

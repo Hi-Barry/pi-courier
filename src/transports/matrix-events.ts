@@ -10,16 +10,17 @@
  * composition root. No SDK types cross this module — the event is read
  * structurally, so tests drive it without a Matrix connection.
  */
-import type { ExternalMessage } from "../types.js";
+
 import type { QuoteCache } from "../quote-cache.js";
 import { toExcerpt } from "../quote-cache.js";
+import type { ExternalMessage } from "../types.js";
 import type { AttachmentStore } from "./attachments.js";
 import {
   classifyMessageContent,
+  type EncryptedMediaFile,
   extractUsername,
   stripBotMention,
   wasBotMentioned,
-  type EncryptedMediaFile,
 } from "./matrix-utils.js";
 
 export interface EventTranslatorPorts {
