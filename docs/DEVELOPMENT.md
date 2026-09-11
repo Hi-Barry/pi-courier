@@ -217,12 +217,12 @@ pi 0.83.0 就绪。
 - 启动期 ensure:懒创建私有空间 `π <实例名>` + 空间内 bot 自建管理房间,幂等锚点为 config 的 `space.roomId` / `managementRooms[0]`
 - 任何失败降级为无空间行为(警告 + 下次启动重试);空间链接(m.space.child)每次启动幂等重挂
 - `inviteUserToSpaceOnce`:fire-once 邀请(space.invitedUsers 记账,拒绝者含内;失败不记账由自愈重试),router 的 spaceInvite 效应与此处自愈共用
-- `healRoomIdentities`:房间身份自愈(空间模式)——空间名仍精确匹配旧模板 `pi-courier · <实例名>` 才迁移为短名(手动改过名的不动);为空间/管理房间/项目房间补设内置像素头像,只补缺不覆盖(手动设置的头像绝不被替换);单房间失败仅警告、下次启动重试,不影响启动三态
+- `healRoomIdentities`:房间身份自愈(空间模式)——空间名仍精确匹配旧模板 `pi-courier · <实例名>` 才迁移为短名(手动改过名的不动);为空间/管理房间/项目房间补设内置糖果风头像,只补缺不覆盖(手动设置的头像绝不被替换);头像池整体换风格时(config.avatarPoolVersion < AVATAR_POOL_VERSION),bot 自己设过旧头像的房间(m.room.avatar sender=bot)会被一次性刷成新图,全部成功后记账版本号、此后不再主动替换;单房间失败仅警告、下次启动重试(迁移保持 pending),不影响启动三态
 
 **`src/space-identity.ts`** —— 房间身份单点(命名模板 + 头像选图,纯函数)
 - `spaceDisplayName`:`π <实例名>`;`isLegacySpaceName` 严格匹配旧模板,保证迁移绝不覆盖用户起的名字
-- `pickPoolAvatarFile`:djb2 哈希取模 12 从内置像素头像池选图(同名恒定同图);管理房间固定 `management.png`
-- 资产在 `assets/avatars/`(12 张通用 + 1 张管理专用,原创方块像素风),`scripts/generate-avatars.mjs` 生成;换成自己的图只需同名替换 PNG
+- `pickPoolAvatarFile`:djb2 哈希取模 12 从内置糖果风头像池选图(同名恒定同图);管理房间固定 `management.png`
+- 资产在 `assets/avatars/`(12 张通用 + 1 张管理专用,512×512 高清,原创棉花糖糖果风小动物,Seedream AI 生成),`scripts/generate-avatars-candy.mjs` 生成;换成自己的图只需同名替换 PNG
 
 **`src/transports/matrix.ts`** —— Matrix Transport(只做消息 I/O,spec #22 后不再内嵌其他职责)
 - connect/disconnect、`sendMessage`(markdown → Matrix HTML)、typing、事件分发

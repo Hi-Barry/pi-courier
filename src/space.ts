@@ -37,6 +37,7 @@ import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName, effectiveWo
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
 import {
+  AVATAR_POOL_VERSION,
   avatarInfo,
   isLegacySpaceName,
   managementAvatarFile,
@@ -159,30 +160,46 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
   }
 }
 
-/** Set the bundled avatar on ONE room — but only when the room has none:
- *  anything the user set themselves is never replaced. Throws on failure —
- *  callers pick the policy (the startup heal warns + retries next start; the
- *  /pmctl new path surfaces a non-fatal note). Returns true when an avatar
- *  was set, false when the room already had one. Shared by the startup
- *  identity heal and the project-room creation path (a mid-session room
- *  must not wait for the next restart to get its face). */
-export async function ensureRoomAvatar(roomOps: RoomOps, roomId: string, file: string): Promise<boolean> {
-  if (await roomOps.getRoomAvatar(roomId)) return false;
+/** Brand ONE room with the bundled avatar. Default policy is 只补缺: a room
+ *  that already has an avatar keeps it — anything the user set themselves is
+ *  never replaced. With `rebrandIfBotOwned` (the startup heal, while an
+ *  avatar-pool version migration is pending), an existing avatar is replaced
+ *  ONLY when the bot itself set it — the sender check is what separates our
+ *  own outdated branding from user intent. Throws on failure — callers pick
+ *  the policy (the startup heal warns + retries next start; the /pmctl new
+ *  path surfaces a non-fatal note). Returns what happened: "set" (room had
+ *  none), "rebranded" (bot-owned old avatar replaced) or "kept" (user-owned
+ *  or rebrand not requested). Shared by the startup identity heal and the
+ *  project-room creation path (a mid-session room must not wait for the next
+ *  restart to get its face). */
+export async function ensureRoomAvatar(
+  roomOps: RoomOps,
+  roomId: string,
+  file: string,
+  opts: { rebrandIfBotOwned?: boolean } = {},
+): Promise<"set" | "rebranded" | "kept"> {
+  const avatar = await roomOps.getRoomAvatarEvent(roomId);
+  if (avatar?.url) {
+    const botId = roomOps.getBotUserId();
+    const botOwned = !!opts.rebrandIfBotOwned && !!botId && avatar.sender === botId;
+    if (!botOwned) return "kept";
+  }
   const data = readAvatarBundled(file);
   const mxcUrl = await roomOps.uploadMedia(data, "image/png");
   await roomOps.setRoomAvatar(roomId, mxcUrl, avatarInfo(data));
-  return true;
+  return avatar?.url ? "rebranded" : "set";
 }
 
 /** Startup identity self-heal: brand the managed rooms with the short space
- *  name and the bundled pixel avatars (space + management + project rooms).
+ *  name and the bundled candy avatars (space + management + project rooms).
  *  Space mode only — a degraded run's adopted management DM is never touched.
- *  Two safety rules keep user intent sticky: a space is renamed ONLY when its
+ *  Safety rules keep user intent sticky: a space is renamed ONLY when its
  *  name still exactly matches the legacy `pi-courier · <instance>` template,
- *  and an avatar is set ONLY when the room has none — anything the user set
- *  themselves is left alone. Per-room failures warn and retry on the next
- *  start; like healTrustedPowerLevels this never throws and never affects
- *  the startup tri-state. */
+ *  and an avatar is set when the room has none — plus, while an avatar-pool
+ *  version migration is pending, replaced when the bot itself set the old
+ *  one. Anything a user set themselves is left alone. Per-room failures warn
+ *  and retry on the next start; like healTrustedPowerLevels this never throws
+ *  and never affects the startup tri-state. */
 export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): Promise<void> {
   const cfg = store.get();
   if (!isSpaceMode(cfg)) return;
@@ -205,7 +222,12 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
 
   // Avatars: space picks by instance name, the management room has its own
   // dedicated image, project rooms pick by project name (roomId fallback for
-  // legacy records without one) — same name, same image, forever.
+  // legacy records without one) — same name, same image, forever. While the
+  // bundled pool version in config lags behind AVATAR_POOL_VERSION (a full
+  // restyle shipped), bot-set old avatars are re-branded once; user-set ones
+  // are still never touched. The marker is booked only after every room
+  // succeeded — a failed room retries the whole migration next start.
+  const rebrandPending = (cfg.avatarPoolVersion ?? 1) < AVATAR_POOL_VERSION;
   const targets: Array<{ roomId: string; file: string; label: string }> = [
     { roomId: spaceId, file: pickPoolAvatarFile(instanceName), label: "空间" },
   ];
@@ -217,15 +239,22 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
     targets.push({ roomId, file: pickPoolAvatarFile(project.name ?? roomId), label: `项目房间 ${project.name ?? roomId}` });
   }
 
+  let allOk = true;
   for (const target of targets) {
     try {
-      if (await ensureRoomAvatar(roomOps, target.roomId, target.file)) {
-        logger.info(`[identity] ${target.label}头像已设置: ${target.file}`);
-      }
+      const result = await ensureRoomAvatar(roomOps, target.roomId, target.file, {
+        rebrandIfBotOwned: rebrandPending,
+      });
+      if (result === "set") logger.info(`[identity] ${target.label}头像已设置: ${target.file}`);
+      if (result === "rebranded") logger.info(`[identity] ${target.label}头像已升级为新风格: ${target.file}`);
     } catch (err) {
+      allOk = false;
       logger.warn(`[identity] ${target.label}(${target.roomId})头像设置失败(跳过,下次启动自动重试): ${(err as Error).message}`);
     }
   }
+  // Migration done: book the marker so later starts never re-rebrand (a user
+  // who sets a custom avatar afterwards must keep it forever).
+  if (rebrandPending && allOk) store.update({ avatarPoolVersion: AVATAR_POOL_VERSION });
 }
 
 /** Unified idempotent elevation for ONE room (#42): read the room's power
