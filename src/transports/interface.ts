@@ -10,7 +10,7 @@ import type { ExternalMessage } from "../types.js";
  * Failure semantics are uniform for operations: every method THROWS with a
  * meaningful message (callers reply with it). No null returns, no silent
  * no-ops. The exceptions are the QUERY members (getBotUserId,
- * encryptionAvailable, getPowerLevels, getRoomName, getRoomAvatarEvent), which
+ * encryptionAvailable, getPowerLevels, getRoomName, getRoomAvatar), which
  * legitimately report a
  * not-yet-connected or unavailable/not-present capability instead of
  * throwing.
@@ -39,12 +39,9 @@ export interface RoomOps {
    *  has no (visible) name — 404 / M_NOT_FOUND. Query member: reports absence
    *  instead of throwing (same contract as getPowerLevels). */
   getRoomName(roomId: string): Promise<string | null>;
-  /** Read a room's avatar state event: its mxc URL and the mxid that set it,
-   *  or null when the room has none (or the event is not visible) — 404 /
-   *  M_NOT_FOUND. The sender is what lets the identity heal tell "an avatar
-   *  the bot itself branded" (safe to restyle on a pool upgrade) apart from
-   *  "an avatar a human set" (never touched). Query member: same contract. */
-  getRoomAvatarEvent(roomId: string): Promise<{ url: string | null; sender: string | null } | null>;
+  /** Read a room's avatar mxc URL (m.room.avatar content url), or null when
+   *  unset/not visible — 404 / M_NOT_FOUND. Query member: same contract. */
+  getRoomAvatar(roomId: string): Promise<string | null>;
   /** Set a room's avatar (m.room.avatar) from an already-uploaded mxc URL. */
   setRoomAvatar(roomId: string, avatarUrl: string, info?: Record<string, unknown>): Promise<void>;
   /** Upload media to the content repository; returns the mxc:// URL. */

@@ -50,12 +50,18 @@ export function managementAvatarFile(): string {
 
 /**
  * Version marker for the bundled avatar pool. Bump ONLY when the pool ships
- * a full restyle (v2 pixel → v3 candy bumped 1 → 2): rooms whose avatar the
- * bot itself set under an older marker get re-branded once by the startup
- * identity heal (see ensureRoomAvatar). User-set avatars are never touched
- * regardless of markers.
+ * a full restyle (v2 pixel → v3 candy bumped 1 → 2): while config lags behind
+ * this marker, the startup identity heal re-brands every managed room once
+ * (see ensureRoomAvatar), then books the marker and goes back to
+ * fill-only. User-set avatars are kept again on every later start.
+ *
+ * 3 (0.1.48): the 0.1.47 migration under marker 2 shipped with a sender
+ * guard that skipped rooms whose avatar a human had set — the intended
+ * "update re-brands every room" promise silently missed those. The guard is
+ * reverted; bumping the marker re-runs the unconditional rebrand once so
+ * machines that booked 2 converge too (same art, idempotent re-upload).
  */
-export const AVATAR_POOL_VERSION = 2;
+export const AVATAR_POOL_VERSION = 3;
 
 /** Read a bundled avatar PNG. Throws if the asset is missing — callers treat
  *  that like any other identity-heal failure (warn + retry next start). */

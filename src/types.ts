@@ -107,8 +107,8 @@ export interface MsgBridgeConfig {
   managementRooms?: string[];
   /**
    * 内置头像池版本簿记(见 space-identity.ts AVATAR_POOL_VERSION):
-   * 头像池整体换风格时,启动自愈把"bot 自己设的旧版头像"主动刷成新版
-   * (用户手动设置的头像绝不碰)。缺省视为 v1(像素池时代)。
+   * 头像池整体换风格时,启动自愈会把全部托管房间(空间/管理房间/项目房间)
+   * 一次性统一刷成新图(此后恢复"只补缺不覆盖")。缺省视为 v1(像素池时代)。
    */
   avatarPoolVersion?: number;
   /**
