@@ -175,7 +175,7 @@ export async function ensureRoomAvatar(roomOps: RoomOps, roomId: string, file: s
 }
 
 /** Startup identity self-heal: brand the managed rooms with the short space
- *  name and the bundled pixel avatars (space + management + project rooms).
+ *  name and the bundled candy avatars (space + management + project rooms).
  *  Space mode only — a degraded run's adopted management DM is never touched.
  *  Two safety rules keep user intent sticky: a space is renamed ONLY when its
  *  name still exactly matches the legacy `pi-courier · <instance>` template,

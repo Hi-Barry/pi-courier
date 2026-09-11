@@ -143,7 +143,7 @@ describe("PmctlController", () => {
     expect(pm.registerProject).not.toHaveBeenCalled();
   });
 
-  it("brands the brand-new project room with its pixel avatar immediately", async () => {
+  it("brands the brand-new project room with its candy avatar immediately", async () => {
     await handle("/pmctl new myapp");
     // The startup heal only reaches mid-session rooms on the next restart —
     // creation applies the avatar itself (只补缺: no pre-existing avatar here).
@@ -152,7 +152,7 @@ describe("PmctlController", () => {
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith(
       "!newroom:server",
       "mxc://server/avatar",
-      expect.objectContaining({ mimetype: "image/png", width: 128, height: 128 })
+      expect.objectContaining({ mimetype: "image/png", width: 512, height: 512 })
     );
     expect(replies.at(-1)).toContain("创建完成");
     expect(replies.at(-1)).not.toContain("头像设置失败");

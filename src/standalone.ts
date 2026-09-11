@@ -266,7 +266,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // tri-state above.
     await healTrustedPowerLevels(roomOps, store);
 
-    // Room identity (short space name + pixel avatars): space mode only,
+    // Room identity (short space name + candy avatars): space mode only,
     // best-effort per room — never blocks or fails the startup.
     await healRoomIdentities(roomOps, store);
   }

@@ -203,7 +203,7 @@ export class PmctlController {
           spaceNote = `\n⚠️ 挂入空间失败(不影响项目): ${(err as Error).message}`;
         }
       }
-      // Brand the room with its bundled pixel avatar immediately — the
+      // Brand the room with its bundled candy avatar immediately — the
       // startup identity heal would only reach a mid-session room on the
       // next restart. Same 只补缺 rule; a failure is cosmetic and self-heals.
       let avatarNote = "";

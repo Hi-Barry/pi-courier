@@ -434,7 +434,7 @@ describe("space ensure", () => {
     expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(4);
   });
 
-  // ---- room identity self-heal (short space name + pixel avatars) ------------
+  // ---- room identity self-heal (short space name + candy avatars) ------------
   // The space is renamed ONLY when its name still exactly matches the legacy
   // `pi-courier · <instance>` template, and an avatar is set ONLY when the
   // room has none — anything the user set themselves is never clobbered.
@@ -471,7 +471,7 @@ describe("space ensure", () => {
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith(
       "!space:server",
       "mxc://server/avatar",
-      expect.objectContaining({ mimetype: "image/png", width: 128, height: 128 })
+      expect.objectContaining({ mimetype: "image/png", width: 512, height: 512 })
     );
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!mgmt:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
