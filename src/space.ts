@@ -161,43 +161,37 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
 }
 
 /** Brand ONE room with the bundled avatar. Default policy is 只补缺: a room
- *  that already has an avatar keeps it — anything the user set themselves is
- *  never replaced. With `rebrandIfBotOwned` (the startup heal, while an
- *  avatar-pool version migration is pending), an existing avatar is replaced
- *  ONLY when the bot itself set it — the sender check is what separates our
- *  own outdated branding from user intent. Throws on failure — callers pick
+ *  that already has an avatar keeps it. With `rebrand` (the startup heal,
+ *  while an avatar-pool version migration is pending), an existing avatar is
+ *  replaced unconditionally — a full pool restyle re-brands every managed
+ *  room once, whoever set the current image. Throws on failure — callers pick
  *  the policy (the startup heal warns + retries next start; the /pmctl new
  *  path surfaces a non-fatal note). Returns what happened: "set" (room had
- *  none), "rebranded" (bot-owned old avatar replaced) or "kept" (user-owned
- *  or rebrand not requested). Shared by the startup identity heal and the
- *  project-room creation path (a mid-session room must not wait for the next
- *  restart to get its face). */
+ *  none), "rebranded" (old avatar replaced) or "kept". Shared by the startup
+ *  identity heal and the project-room creation path (a mid-session room must
+ *  not wait for the next restart to get its face). */
 export async function ensureRoomAvatar(
   roomOps: RoomOps,
   roomId: string,
   file: string,
-  opts: { rebrandIfBotOwned?: boolean } = {},
+  opts: { rebrand?: boolean } = {},
 ): Promise<"set" | "rebranded" | "kept"> {
-  const avatar = await roomOps.getRoomAvatarEvent(roomId);
-  if (avatar?.url) {
-    const botId = roomOps.getBotUserId();
-    const botOwned = !!opts.rebrandIfBotOwned && !!botId && avatar.sender === botId;
-    if (!botOwned) return "kept";
-  }
+  const had = await roomOps.getRoomAvatar(roomId);
+  if (had && !opts.rebrand) return "kept";
   const data = readAvatarBundled(file);
   const mxcUrl = await roomOps.uploadMedia(data, "image/png");
   await roomOps.setRoomAvatar(roomId, mxcUrl, avatarInfo(data));
-  return avatar?.url ? "rebranded" : "set";
+  return had ? "rebranded" : "set";
 }
 
 /** Startup identity self-heal: brand the managed rooms with the short space
  *  name and the bundled candy avatars (space + management + project rooms).
  *  Space mode only — a degraded run's adopted management DM is never touched.
- *  Safety rules keep user intent sticky: a space is renamed ONLY when its
- *  name still exactly matches the legacy `pi-courier · <instance>` template,
- *  and an avatar is set when the room has none — plus, while an avatar-pool
- *  version migration is pending, replaced when the bot itself set the old
- *  one. Anything a user set themselves is left alone. Per-room failures warn
+ *  Safety rules: a space is renamed ONLY when its name still exactly matches
+ *  the legacy `pi-courier · <instance>` template; an avatar is set when the
+ *  room has none — plus, while an avatar-pool version migration is pending,
+ *  every managed room is re-branded once (a full restyle means the bundled
+ *  art is the single source of truth for that start). Per-room failures warn
  *  and retry on the next start; like healTrustedPowerLevels this never throws
  *  and never affects the startup tri-state. */
 export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): Promise<void> {
@@ -224,9 +218,9 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
   // dedicated image, project rooms pick by project name (roomId fallback for
   // legacy records without one) — same name, same image, forever. While the
   // bundled pool version in config lags behind AVATAR_POOL_VERSION (a full
-  // restyle shipped), bot-set old avatars are re-branded once; user-set ones
-  // are still never touched. The marker is booked only after every room
-  // succeeded — a failed room retries the whole migration next start.
+  // restyle shipped), every managed room is re-branded once; the marker is
+  // booked only after every room succeeded — a failed room retries the whole
+  // migration next start.
   const rebrandPending = (cfg.avatarPoolVersion ?? 1) < AVATAR_POOL_VERSION;
   const targets: Array<{ roomId: string; file: string; label: string }> = [
     { roomId: spaceId, file: pickPoolAvatarFile(instanceName), label: "空间" },
@@ -243,7 +237,7 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
   for (const target of targets) {
     try {
       const result = await ensureRoomAvatar(roomOps, target.roomId, target.file, {
-        rebrandIfBotOwned: rebrandPending,
+        rebrand: rebrandPending,
       });
       if (result === "set") logger.info(`[identity] ${target.label}头像已设置: ${target.file}`);
       if (result === "rebranded") logger.info(`[identity] ${target.label}头像已升级为新风格: ${target.file}`);

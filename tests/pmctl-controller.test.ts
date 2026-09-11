@@ -59,7 +59,7 @@ describe("PmctlController", () => {
       removeRoomFromSpace: vi.fn().mockResolvedValue(undefined),
       setRoomName: vi.fn().mockResolvedValue(undefined),
       getRoomName: vi.fn().mockResolvedValue(null),
-      getRoomAvatarEvent: vi.fn().mockResolvedValue(null),
+      getRoomAvatar: vi.fn().mockResolvedValue(null),
       setRoomAvatar: vi.fn().mockResolvedValue(undefined),
       uploadMedia: vi.fn().mockResolvedValue("mxc://server/avatar"),
       setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
@@ -147,7 +147,7 @@ describe("PmctlController", () => {
     await handle("/pmctl new myapp");
     // The startup heal only reaches mid-session rooms on the next restart —
     // creation applies the avatar itself (只补缺: no pre-existing avatar here).
-    expect(roomOps.getRoomAvatarEvent).toHaveBeenCalledWith("!newroom:server");
+    expect(roomOps.getRoomAvatar).toHaveBeenCalledWith("!newroom:server");
     expect(roomOps.uploadMedia).toHaveBeenCalledWith(expect.any(Buffer), "image/png");
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith(
       "!newroom:server",

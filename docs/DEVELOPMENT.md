@@ -217,7 +217,7 @@ pi 0.83.0 就绪。
 - 启动期 ensure:懒创建私有空间 `π <实例名>` + 空间内 bot 自建管理房间,幂等锚点为 config 的 `space.roomId` / `managementRooms[0]`
 - 任何失败降级为无空间行为(警告 + 下次启动重试);空间链接(m.space.child)每次启动幂等重挂
 - `inviteUserToSpaceOnce`:fire-once 邀请(space.invitedUsers 记账,拒绝者含内;失败不记账由自愈重试),router 的 spaceInvite 效应与此处自愈共用
-- `healRoomIdentities`:房间身份自愈(空间模式)——空间名仍精确匹配旧模板 `pi-courier · <实例名>` 才迁移为短名(手动改过名的不动);为空间/管理房间/项目房间补设内置糖果风头像,只补缺不覆盖(手动设置的头像绝不被替换);头像池整体换风格时(config.avatarPoolVersion < AVATAR_POOL_VERSION),bot 自己设过旧头像的房间(m.room.avatar sender=bot)会被一次性刷成新图,全部成功后记账版本号、此后不再主动替换;单房间失败仅警告、下次启动重试(迁移保持 pending),不影响启动三态
+- `healRoomIdentities`:房间身份自愈(空间模式)——空间名仍精确匹配旧模板 `pi-courier · <实例名>` 才迁移为短名(手动改过名的不动);为空间/管理房间/项目房间补设内置糖果风头像,平时只补缺不覆盖;头像池整体换风格时(config.avatarPoolVersion < AVATAR_POOL_VERSION)一次性统一刷所有托管房间(含用户手动设置的),全部成功后记账版本号、此后恢复只补缺;单房间失败仅警告、下次启动重试(迁移保持 pending),不影响启动三态
 
 **`src/space-identity.ts`** —— 房间身份单点(命名模板 + 头像选图,纯函数)
 - `spaceDisplayName`:`π <实例名>`;`isLegacySpaceName` 严格匹配旧模板,保证迁移绝不覆盖用户起的名字
