@@ -132,14 +132,33 @@ export class MatrixRoomOps implements RoomOps {
     }
   }
 
-  /** Read a room's avatar mxc URL; null when the room has none. */
-  async getRoomAvatar(roomId: string): Promise<string | null> {
+  /** Read a room's avatar state event (mxc URL + who set it); null when the
+   *  room has none. matrix-bot-sdk's getRoomStateEvent resolves to the event
+   *  CONTENT (its own getPublishedAlias reads event['alias'] directly), so
+   *  the sender is NOT on this response — the sender comes from the full
+   *  state list instead. Two requests, but the avatar query is startup-only
+   *  and the room state list is small. */
+  async getRoomAvatarEvent(roomId: string): Promise<{ url: string | null; sender: string | null } | null> {
+    let url: string | null = null;
     try {
-      const event = (await this.client.getRoomStateEvent(roomId, "m.room.avatar", "")) as { url?: string };
-      return event?.url ?? null;
+      const content = (await this.client.getRoomStateEvent(roomId, "m.room.avatar", "")) as { url?: string };
+      url = content?.url ?? null;
     } catch (err) {
       if (isStateNotFound(err)) return null;
       throw err;
+    }
+    if (!url) return { url: null, sender: null };
+    try {
+      const state = (await this.client.getRoomState(roomId)) as Array<{
+        type?: string;
+        state_key?: string;
+        sender?: string;
+      }>;
+      const event = state.find((e) => e?.type === "m.room.avatar" && (e?.state_key ?? "") === "");
+      return { url, sender: event?.sender ?? null };
+    } catch {
+      // Sender unknown: callers must treat the avatar as user-owned (never restyle).
+      return { url, sender: null };
     }
   }
 

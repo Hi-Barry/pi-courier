@@ -48,6 +48,15 @@ export function managementAvatarFile(): string {
   return "management.png";
 }
 
+/**
+ * Version marker for the bundled avatar pool. Bump ONLY when the pool ships
+ * a full restyle (v2 pixel → v3 candy bumped 1 → 2): rooms whose avatar the
+ * bot itself set under an older marker get re-branded once by the startup
+ * identity heal (see ensureRoomAvatar). User-set avatars are never touched
+ * regardless of markers.
+ */
+export const AVATAR_POOL_VERSION = 2;
+
 /** Read a bundled avatar PNG. Throws if the asset is missing — callers treat
  *  that like any other identity-heal failure (warn + retry next start). */
 export function readAvatarBundled(file: string): Buffer {

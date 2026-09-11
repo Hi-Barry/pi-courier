@@ -106,6 +106,12 @@ export interface MsgBridgeConfig {
    */
   managementRooms?: string[];
   /**
+   * 内置头像池版本簿记(见 space-identity.ts AVATAR_POOL_VERSION):
+   * 头像池整体换风格时,启动自愈把"bot 自己设的旧版头像"主动刷成新版
+   * (用户手动设置的头像绝不碰)。缺省视为 v1(像素池时代)。
+   */
+  avatarPoolVersion?: number;
+  /**
    * Element 空间(Space)组织视图——把本实例创建的房间收纳进一个私有空间,
    * 便于在 Element 中管理。空间本身仍是展示层;信任用户的房间权限
    * (自动管理员,见 #42)由统一补权负责,与是否挂入空间无关。
