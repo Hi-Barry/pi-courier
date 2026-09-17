@@ -67,6 +67,7 @@ describe("pipeline stage table (spec #72 票3/C1)", () => {
       "pmctl",
       "login",
       "slashCommands",
+      "bashBang",
       "loginCapture",
       "extensionCapture",
       "prompt",
@@ -91,6 +92,7 @@ describe("pipeline stage table (spec #72 票3/C1)", () => {
     expect(router.pipeline().filter((s) => s.needsRpc).map((s) => s.name)).toEqual([
       "roomBinding",
       "slashCommands",
+      "bashBang",
       "extensionCapture",
       "prompt",
     ]);

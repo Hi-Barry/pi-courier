@@ -20,7 +20,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
-import type { PiRpc } from "./pi-rpc.js";
+import type { BashResultView, PiRpc } from "./pi-rpc.js";
 
 /** Mirror of the upstream steering/followUp queues (router's queue_update view). */
 export interface QueueSnapshot {
@@ -38,10 +38,96 @@ export interface SlashCommandContext {
   /** Every rpc of this instance (default + started project rpcs) — enables
    *  `/reload all` (issue #55). Absent = /reload stays single-process. */
   allRpcs?: () => PiRpc[];
+  /** 在跑 bash 记账(/bashstop 的"列出"数据源)。Absence = /bashstop 只能
+   *  盲停(仍然可用:上游 abortBash 无在跑命令时是无害空操作)。 */
+  bashTracker?: BashTracker;
   /** Router-owned per-rpc transient state (queue mirror, pending extension
    *  questions) must not survive a restart: the new subprocess knows nothing
    *  of old question ids, and a stale question would swallow the room's next
    *  message as a bogus "answer". */
+}
+
+// ── `!`/`!!` bash 快捷执行(≈ pi TUI 的 !/!!)──────────────────────────
+
+/** 解析结果:excluded = `!!` 语义(结果不写入上下文)。 */
+export interface BangCommand {
+  excluded: boolean;
+  command: string;
+}
+
+/**
+ * 触发规则(共识):1~2 个感叹号(全角 ！/半角 !/混用)+ 空白 + 非空命令。
+ * 无空格(`!git`)、光杆 `!`、三个以上感叹号(`!!! 好厉害`)一律返回 null ——
+ * 消息照常走 prompt 当普通文本,聊天里的感叹句永不误触。
+ */
+export function parseBangCommand(text: string): BangCommand | null {
+  const match = /^([!！]{1,2})\s+(\S.*)$/.exec(text);
+  if (!match) return null;
+  return { excluded: match[1]!.length === 2, command: match[2]!.trim() };
+}
+
+/** 在跑 bash 的一笔账:命令文本 + 开始时刻(/bashstop 列表展示用)。 */
+export interface InFlightBash {
+  command: string;
+  startedAt: number;
+}
+
+/**
+ * 在跑 bash 记账。上游 RpcSessionState 不暴露"bash 是否在跑",courier 只能
+ * 自己记自己发出的命令(/bash 与 `!`/`!!` 共用);/bashstop 据此列出后调用
+ * 上游 abortBash 一刀切中止。WeakMap 按 pi 进程记账;销账靠 promise 落定的
+ * finally —— 进程重启后久未落定的残账最多让列表多显示一行,abortBash 对新
+ * 进程是无害空操作。
+ */
+export interface BashTracker {
+  list(rpc: PiRpc): InFlightBash[];
+  /** 记账;返回销账函数(promise 落定的 finally 调用,幂等)。 */
+  track(rpc: PiRpc, command: string): () => void;
+}
+
+export function createBashTracker(): BashTracker {
+  const inflight = new WeakMap<PiRpc, InFlightBash[]>();
+  return {
+    list(rpc) {
+      return (inflight.get(rpc) ?? []).map((entry) => ({ ...entry }));
+    },
+    track(rpc, command) {
+      const entries = inflight.get(rpc) ?? [];
+      const entry: InFlightBash = { command, startedAt: Date.now() };
+      entries.push(entry);
+      inflight.set(rpc, entries);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const current = inflight.get(rpc);
+        const index = current?.indexOf(entry) ?? -1;
+        if (index >= 0) current!.splice(index, 1);
+      };
+    },
+  };
+}
+
+/** 秒级时长的人类可读形式(列表里"已跑多久"):59s / 1m05s / 12m30s。 */
+export function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m${String(seconds).padStart(2, "0")}s`;
+}
+
+/** bash 结果的统一回帖(/bash 与 `!`/`!!` 共用):命令行 + 代码块输出 +
+ *  退出码;被中止时显示已捕获的部分输出,不打退出码。excluded 附注语义。 */
+export function formatBashReply(command: string, result: BashResultView, excluded = false): string {
+  const suffix = excluded ? "(结果未写入上下文)" : "";
+  const output = result.output.length > 3000
+    ? result.output.slice(0, 3000) + "\n…(已截断)"
+    : result.output;
+  if (result.cancelled) {
+    return `⏹ 已中止: ${command}${suffix}\n\`\`\`\n${output || "(无输出)"}\n\`\`\``;
+  }
+  return `$ ${command}${suffix}\n\`\`\`\n${output || "(无输出)"}\n\`\`\`\n退出码: ${result.exitCode}`;
 }
 
 /** Collapse a queue entry to one bounded line for chat display. */
@@ -550,11 +636,27 @@ export async function handleSlashCommand(
           await reply("用法: /bash <shell 命令> — 在 pi 的工作目录执行并写入上下文");
           return true;
         }
-        const result = await rpc.requireClient().bash(args);
-        const output = result.output.length > 3000
-          ? result.output.slice(0, 3000) + "\n…(已截断)"
-          : result.output;
-        await reply(`$ ${args}\n\`\`\`\n${output || "(无输出)"}\n\`\`\`\n退出码: ${result.exitCode}`);
+        const release = ctx.bashTracker?.track(rpc, args);
+        try {
+          const result = await rpc.bash(args);
+          await reply(formatBashReply(args, result));
+          return true;
+        } finally {
+          release?.();
+        }
+      }
+
+      case "/bashstop": {
+        const inflight = ctx.bashTracker?.list(rpc) ?? [];
+        if (inflight.length === 0) {
+          await reply("💤 没有在跑的 bash 命令。");
+          return true;
+        }
+        const lines = inflight.map(
+          (entry) => `- \`${entry.command}\`(已跑 ${formatElapsed(Date.now() - entry.startedAt)})`
+        );
+        await rpc.requireClient().abortBash();
+        await reply(`⏹ 已请求中止 ${inflight.length} 条在跑命令:\n${lines.join("\n")}\n各命令已捕获的输出随后回帖。`);
         return true;
       }
 
@@ -609,6 +711,9 @@ function helpText(): string {
     "• `/name <名字>` — 会话命名",
     "• `/export [路径]` — 导出会话 HTML",
     "• `/bash <命令>` — 执行 shell 命令(写入上下文)",
+    "• `! <命令>` — 快捷执行 shell 命令(≈ TUI 的 `!`,结果写入上下文;感叹号后需空格)",
+    "• `!! <命令>` — 同上,但结果不写入上下文(≈ TUI 的 `!!`)",
+    "• `/bashstop` — 列出并中止在跑的 bash 命令(`!`/`!!`/`/bash` 通用)",
     "• `/queue [文本]` — 无参:查看队列;带文本:排队不打断当前任务(≈ Alt+Enter)",
     "• `/interrupt <新指令>` — 打断当前任务并立即下发新指令(一条消息完成)",
     "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)",

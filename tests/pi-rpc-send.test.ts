@@ -94,3 +94,45 @@ describe("PiRpc respondExtensionUI (issue #54)", () => {
     await expect(new PiRpc().respondExtensionUI({ id: "x", cancelled: true })).rejects.toThrow("pi RPC not connected");
   });
 });
+
+/**
+ * bash(!! 语义,excludeFromContext):公开 bash() 不带该参数,走 COMPAT 私有
+ * send() 附带线路字段(RPC 服务端 bash 分支原生读取)。白盒:client 私有,
+ * fake 记录线路命令与应答剥离。
+ */
+describe("PiRpc bash excludeFromContext (!! semantics)", () => {
+  function withFakeBashClient(send: SendMock, clientBash?: SendMock): PiRpc {
+    const rpc = new PiRpc();
+    (rpc as unknown as { client: unknown }).client = {
+      send,
+      bash: clientBash,
+    };
+    return rpc;
+  }
+
+  it("excludeFromContext=true 走私有 send,线路命令附带该字段,返回 data", async () => {
+    const result = { output: "out", exitCode: 0, cancelled: false, truncated: false };
+    const send = vi.fn().mockResolvedValue({ success: true, data: result });
+    const got = await withFakeBashClient(send).bash("ls", { excludeFromContext: true });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith({ type: "bash", command: "ls", excludeFromContext: true });
+    expect(got).toEqual(result);
+  });
+
+  it("success=false 抛出上游错误信息", async () => {
+    const send = vi.fn().mockResolvedValue({ success: false, error: "not started" });
+    await expect(withFakeBashClient(send).bash("x", { excludeFromContext: true })).rejects.toThrow("not started");
+  });
+
+  it("不带 excludeFromContext 时直用公开 bash(),不碰私有 send", async () => {
+    const send = vi.fn();
+    const clientBash = vi.fn().mockResolvedValue({ output: "", exitCode: 0, cancelled: false, truncated: false });
+    await withFakeBashClient(send, clientBash).bash("ls");
+    expect(clientBash).toHaveBeenCalledWith("ls");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("未连接时抛 not connected", async () => {
+    await expect(new PiRpc().bash("ls")).rejects.toThrow("pi RPC not connected");
+  });
+});

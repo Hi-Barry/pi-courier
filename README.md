@@ -170,6 +170,8 @@ You are now a trusted user (the first trusted user also becomes admin). In multi
 | `/name <name>` | Name the session |
 | `/export [path]` | Export session HTML |
 | `/bash <cmd>` | Run a shell command |
+| `! <cmd>` / `!! <cmd>` | Shell shortcut, like the TUI's `!`/`!!`: `!` writes the output into the context (the model sees it), `!!` keeps it out of the context (for your eyes only). Exclamation mark(s) + space + command — half- or full-width (`！`, `！！`) both work; without the space (`!git`) it stays a normal message |
+| `/bashstop` | List running bash commands (`!`/`!!`/`/bash`) and abort them all; each command then replies with the output captured so far |
 | `/stop` | Stop all tasks immediately (like Esc in the TUI; alias `/abort`; queued messages are not cleared — see below) |
 | `/queue [text]` | Show the queue / queue a message for after the running task (Alt+Enter semantics) |
 | `/interrupt <text>` | Interrupt the running task and send a new instruction — one message does both |
