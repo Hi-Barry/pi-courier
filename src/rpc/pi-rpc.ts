@@ -50,6 +50,21 @@ export type ExtensionUIResponsePayload =
   | { id: string; confirmed: boolean }
   | { id: string; cancelled: true };
 
+/** bash 执行结果的本地结构视图。上游的 BashResult 未从包入口导出,按字段
+ *  结构声明(core/bash-executor.d.ts);上游加字段时这里是收窄的超集,安全。 */
+export interface BashResultView {
+  /** 合并的 stdout+stderr(已清理、可能截断) */
+  output: string;
+  /** 进程退出码(被杀/中止时为 undefined) */
+  exitCode: number | undefined;
+  /** 是否经由信号被中止 */
+  cancelled: boolean;
+  /** 输出是否被上游截断 */
+  truncated: boolean;
+  /** 超限输出的完整临时文件路径 */
+  fullOutputPath?: string;
+}
+
 export class PiRpc {
   private client?: RpcClient;
   private commandsCache?: { at: number; list: RpcSlashCommandInfo[] };
@@ -261,6 +276,19 @@ export class PiRpc {
     upstreamExtensionUIStdinWrite(this.requireClient(), payload);
   }
 
+  /**
+   * 在 pi 的工作目录执行 shell 命令(TUI 的 !/!! 语义)。excludeFromContext
+   * (`!!`:结果不写入上下文)是公开 bash() 不带的参数,走 COMPAT 私有 send;
+   * 普通执行(! 语义)直用公开方法。
+   */
+  async bash(command: string, opts?: { excludeFromContext?: boolean }): Promise<BashResultView> {
+    const client = this.requireClient();
+    if (opts?.excludeFromContext) {
+      return upstreamBashSend(client, command, true);
+    }
+    return (await client.bash(command)) as BashResultView;
+  }
+
   /** The live upstream RpcClient (spec #72 票7/C7):命令族直用上游类型,
    *  包装不再转发。未连接时抛出 —— 调用方无需判空。 */
   requireClient(): RpcClient {
@@ -312,4 +340,29 @@ export function upstreamExtensionUIStdinWrite(
     throw new Error("pi RPC stdin is not writable");
   }
   stdin.write(`${JSON.stringify({ type: "extension_ui_response", ...payload })}\n`);
+}
+
+/**
+ * COMPAT(上游 bash 语义):公开 bash() 不带 excludeFromContext(TUI `!!` 的
+ * "执行但不写入上下文"),而 RPC 服务端的 bash 分支原生读取该线路字段 ——
+ * 走私有 send() 附带即可。应答剥离按上游 getData 的行为内联:success=false
+ * 抛 error,否则返回 data。与 upstreamPromptSend 同一上游依赖面,重构同查。
+ */
+export async function upstreamBashSend(
+  client: RpcClient,
+  command: string,
+  excludeFromContext: boolean
+): Promise<BashResultView> {
+  const send = client as unknown as {
+    send: (cmd: {
+      type: "bash";
+      command: string;
+      excludeFromContext: boolean;
+    }) => Promise<{ success: boolean; error?: string; data?: BashResultView }>;
+  };
+  const response = await send.send({ type: "bash", command, excludeFromContext });
+  if (!response.success) {
+    throw new Error(response.error ?? "bash failed");
+  }
+  return response.data as BashResultView;
 }

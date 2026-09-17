@@ -25,7 +25,14 @@ import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUser
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, MessageAttachment, MsgBridgeConfig, ReplyTarget } from "../types.js";
-import { handleSlashCommand, type QueueSnapshot } from "./command-map.js";
+import {
+  type BashTracker,
+  createBashTracker,
+  formatBashReply,
+  handleSlashCommand,
+  parseBangCommand,
+  type QueueSnapshot,
+} from "./command-map.js";
 import type { ExtensionUIResponsePayload, PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
@@ -284,6 +291,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 真正发给 pi 的下一条对话消息(prompt 唯一注入点)一次性带上全部并清空;
   // 管理命令、登录/extension-ui 应答捕获都在注入点之前 return,天然不消耗。
   const pendingAttachments = new Map<string, MessageAttachment[]>();
+
+  // 在跑 bash 记账(/bashstop 的数据源):/bash 与 `!`/`!!` 共用一份,
+  // 按 pi 进程记账,promise 落定自动销账(见 createBashTracker)。
+  const bashTracker: BashTracker = createBashTracker();
 
   // Headless login (issue #55): /login /logout /auth + answer capture. The
   // default manager writes credentials straight to pi's auth.json via an
@@ -710,12 +721,41 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             reply: async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText),
             queueView: () => transient.mirror(rpc),
             allRpcs: () => projectManager.allRpcs(),
+            bashTracker,
           });
           return handled;
         } catch (err) {
           await sendReply(ctx.msg.chatId, ctx.msg.transport, `❌ 命令执行失败: ${(err as Error).message}`);
           return true;
         }
+      },
+    },
+    {
+      name: "bashBang",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: true,
+      // `!`/`!!` bash 快捷执行(≈ pi TUI 的 !/!!):收到即回执,完成(或被
+      // /bashstop 中止)后回帖结果。不等待完成 —— 长命令不阻塞管道,后续
+      // 消息照常处理;记账进 bashTracker 供 /bashstop 列出/中止。
+      handle: async (ctx) => {
+        const bang = parseBangCommand(ctx.text);
+        if (!bang) return false;
+        const rpc = await ctx.roomRpc();
+        const release = bashTracker.track(rpc, bang.command);
+        void sendReply(
+          ctx.msg.chatId,
+          ctx.msg.transport,
+          `⏳ 正在执行: ${bang.command}${bang.excluded ? "(结果不写入上下文)" : ""} — 完成后回帖,/bashstop 可中止。`
+        ).catch(() => {});
+        rpc.bash(bang.command, { excludeFromContext: bang.excluded })
+          .then((result) => sendReply(ctx.msg.chatId, ctx.msg.transport, formatBashReply(bang.command, result, bang.excluded)))
+          .catch((err: unknown) =>
+            sendReply(ctx.msg.chatId, ctx.msg.transport, `❌ bash 执行失败: ${(err as Error).message}`)
+          )
+          .catch(() => {})
+          .finally(release);
+        return true;
       },
     },
     {
