@@ -217,12 +217,12 @@ pi 0.83.0 就绪。
 - 启动期 ensure:懒创建私有空间 `π <实例名>` + 空间内 bot 自建管理房间,幂等锚点为 config 的 `space.roomId` / `managementRooms[0]`
 - 任何失败降级为无空间行为(警告 + 下次启动重试);空间链接(m.space.child)每次启动幂等重挂
 - `inviteUserToSpaceOnce`:fire-once 邀请(space.invitedUsers 记账,拒绝者含内;失败不记账由自愈重试),router 的 spaceInvite 效应与此处自愈共用
-- `healRoomIdentities`:房间身份自愈(空间模式)——空间名仍精确匹配旧模板 `pi-courier · <实例名>` 才迁移为短名(手动改过名的不动);为空间/管理房间/项目房间补设内置糖果风头像,平时只补缺不覆盖;头像池整体换风格时(config.avatarPoolVersion < AVATAR_POOL_VERSION)一次性统一刷所有托管房间(含用户手动设置的),全部成功后记账版本号、此后恢复只补缺;单房间失败仅警告、下次启动重试(迁移保持 pending),不影响启动三态
+- `healRoomIdentities`:房间身份自愈(空间模式)——空间名仍精确匹配旧模板 `pi-courier · <实例名>` 才迁移为短名(手动改过名的不动);为空间(风景套)/管理房间(小屋套专属金顶城堡)/项目房间(小屋套)补设内置头像,平时只补缺不覆盖;分套记账(spec #84)——某套换风格时(该套 config 字段 < AVATAR_SET_VERSION 对应项)该套管辖房间一次性无条件刷(含用户手动设置的),该套全部成功后记账、此后恢复只补缺;单房间失败仅警告、该套保持 pending 下次启动重试(另一套照常记账),不影响启动三态;`healBotAvatar` 同语义负责 bot 账号 profile 头像(agent 动物套,双模式可用)
 
 **`src/space-identity.ts`** —— 房间身份单点(命名模板 + 头像选图,纯函数)
 - `spaceDisplayName`:`π <实例名>`;`isLegacySpaceName` 严格匹配旧模板,保证迁移绝不覆盖用户起的名字
-- `pickPoolAvatarFile`:djb2 哈希取模 12 从内置糖果风头像池选图(同名恒定同图);管理房间固定 `management.png`
-- 资产在 `assets/avatars/`(12 张通用 + 1 张管理专用,512×512 高清,原创棉花糖糖果风小动物,Seedream AI 生成),`scripts/generate-avatars-candy.mjs` 生成;换成自己的图只需同名替换 PNG
+- `pickPoolAvatarFile(name, set)`:djb2 哈希取模 12 按 agent/space/room 三套选图(同名恒定同图);管理房间固定 `room-management.png`;`AVATAR_SET_VERSION` + `bookedAvatarVersion` 为分套版本记账单点
+- 资产在 `assets/avatars/`(agent/space/room 三套各 12 张 + 1 张管理专属,共 37 张 512×512 真 PNG,原创 AI 生成软糖质感——空间=冷色风景、房间=暖色小屋、bot=动物),`scripts/generate-avatars-v4.mjs` 生成;换成自己的图只需同名替换 PNG
 
 **`src/transports/matrix.ts`** —— Matrix Transport(只做消息 I/O,spec #22 后不再内嵌其他职责)
 - connect/disconnect、`sendMessage`(markdown → Matrix HTML)、typing、事件分发

@@ -436,11 +436,12 @@ describe("space ensure", () => {
     expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(4);
   });
 
-  // ---- room identity self-heal (short space name + candy avatars) ------------
+  // ---- room identity self-heal (short space name + bundled art sets) --------
   // The space is renamed ONLY when its name still exactly matches the legacy
   // `pi-courier · <instance>` template. Avatars: fill-only normally, but a
-  // pending pool-version migration re-brands every managed room once (then
-  // the marker is booked and fill-only resumes).
+  // pending set-version migration re-brands that set's managed rooms once
+  // (then the marker is booked and fill-only resumes) — each of the three
+  // sets (agent/space/room) migrating independently.
 
   async function runIdentityHeal(configOverrides: Record<string, unknown> = {}, roomOpsOverrides: Record<string, unknown> = {}) {
     const { config, space, loggerModule } = await importModules();
