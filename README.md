@@ -257,6 +257,8 @@ Supported: `m.image` / `m.file` / `m.audio` / `m.video` / stickers. Images are h
 - answer `y` to "启用多工程模式?" in setup, or
 - later send `/multiproject on` and `pi-courier restart`
 
+> **Offline backlog note**: messages sent while the bot was down are dropped on restart (never executed retroactively) — resend anything important.
+
 `/multiproject` (trusted users): `on` / `off` (both take effect on restart); no args shows the current mode. The management-room / project-room mechanisms below only exist in multi-project mode.
 
 ### Multi-project rooms (project isolation)

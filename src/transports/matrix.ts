@@ -203,6 +203,13 @@ export class MatrixProvider {
       // noise. The facade's suppression window filters exactly these
       // patterns for the sync only — closing it (even on failure) keeps
       // real errors afterwards visible.
+      // Mark the connection point BEFORE the initial sync: everything the
+      // sync replays (older than this instant) is "stale" for shouldSkipEvent
+      // — a fresh token must not execute rooms' backlogged messages as live
+      // commands (spec #93 ticket 1). The assignment after start() below
+      // re-marks, so anything arriving DURING the multi-second sync is
+      // dropped as backlog too.
+      this.connectedAt = Date.now();
       const closeSyncNoiseWindow = suppressLogLines("Decryption error", "M_NOT_FOUND");
       try {
         await this.client.start();

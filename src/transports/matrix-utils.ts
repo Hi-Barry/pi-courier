@@ -94,6 +94,7 @@ export function sanitizeMediaFilename(body: string | undefined, mxcUrl: string):
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^\.+/, "") // 防 ".."/"."(必须先 trim —— " .." 形式会绕过前导点剥离,fast-check 反例)
+    .replace(/\.{2,}/g, ".") // 折叠连续点:".." 永不出现在文件名里(fast-check 反例 "!..")
     .trim();
   const safe = cleaned.length > 0 ? cleaned : "file";
   return `${hash}-${safe.slice(0, 150)}`;
