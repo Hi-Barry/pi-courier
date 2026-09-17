@@ -482,6 +482,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           text,
           userId: msg.userId,
           transport: msg.transport,
+          chatId: msg.chatId,
           hideToolCalls: store.get().hideToolCalls,
         });
         if (!result.handled) return false;

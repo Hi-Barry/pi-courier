@@ -41,6 +41,8 @@ export class ChallengeAuth {
   private trustedUsers = new Set<string>();
   private channelAuth = new Map<string, ChannelAuth>();
   private blockedUsers = new Map<string, number>(); // userId -> unblock timestamp
+  /** 错房配对提示的每(用户,对话)冷却(60s),防数字消息刷屏(spec #93 票3)。 */
+  private pairingHintCooldowns = new Map<string, number>();
   private adminUserId?: string;
 
   constructor(
@@ -220,6 +222,18 @@ export class ChallengeAuth {
     return "wrong";
   }
 
+  /** True when a "no pending pairing" hint may be shown for this (user, chat)
+   *  pair — a 6-digit message with no challenge in flight most likely means
+   *  the sender missed the pairing flow; the hint fires at most once per
+   *  chat per cooldown window so stray numbers never loop (spec #93 票3). */
+  shouldHintPairing(namespacedUserId: string, chatId: string): boolean {
+    const key = `${namespacedUserId}|${chatId}`;
+    const until = this.pairingHintCooldowns.get(key);
+    if (until && Date.now() < until) return false;
+    this.pairingHintCooldowns.set(key, Date.now() + 60_000);
+    return true;
+  }
+
   /** Attempts left on the active challenge (0 when none/blocked). */
   attemptsLeft(namespacedUserId: string): number {
     const challenge = this.challenges.get(namespacedUserId);
@@ -268,7 +282,7 @@ export class ChallengeAuth {
       try {
         await sendMessage(
           chatId,
-          "🔐 Please enter the 6-digit code provided by the bot admin.\n⏱️ Expires in 2 minutes."
+          "🔐 Please enter the 6-digit code provided by the bot admin — here in this chat.\n⏱️ Expires in 2 minutes."
         );
       } catch (_err) {
         // Ignore send errors

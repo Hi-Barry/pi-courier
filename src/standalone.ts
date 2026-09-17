@@ -16,7 +16,7 @@ import { pathToFileURL } from "node:url";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
 import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, isSpaceMode } from "./config.js";
 import { acquireLock, releaseLock } from "./lock.js";
-import { logger, parseLogLevel, setLogLevel } from "./logger.js";
+import { logger, parseLogLevel, setLogLevel , suppressLogLines } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
@@ -90,8 +90,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const configLevel = typeof config.logLevel === "string" ? parseLogLevel(config.logLevel) : undefined;
   setLogLevel(cliLevel ?? configLevel ?? "info");
 
+  // Pairing-code sink (spec #93 ticket 3): the code is only useful to the
+  // ADMIN, who usually is not tailing the server log — mirror it into the
+  // management room when one exists (degrades to log-only before adoption).
+  // sendReply is declared further down; the callback cannot fire before the
+  // startup wiring completes, so the late read is safe here.
+  let sendPairingNotice: ((text: string) => Promise<void>) | undefined;
   const auth = new ChallengeAuth(
-    (code, username) => logger.info(`🔐 Challenge code for @${username}: ${code}`),
+    (code, username) => {
+      logger.info(`🔐 Challenge code for @${username}: ${code}`);
+      void sendPairingNotice?.(`🔐 配对码 @${username}: ${code}(2 分钟内有效,发给该用户用于配对)`);
+    },
     (message, level) => logger.info(`[auth:${level ?? "info"}] ${message}`)
   );
   // Auth state persistence flows through command effects (admin-commands.ts)
@@ -194,6 +203,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   };
   const disconnectAll = (): Promise<unknown> => (matrix ? matrix.disconnect() : Promise.resolve());
 
+  // Late-bound pairing sink (see the ChallengeAuth callback above): forward
+  // the pairing code into the management room when one is known.
+  sendPairingNotice = (text: string): Promise<void> => {
+    const mgmtRoom = store.get().managementRooms?.[0];
+    return mgmtRoom ? sendReply(mgmtRoom, "matrix", text) : Promise.resolve();
+  };
+
   // ---- space (organizational) mode -----------------------------------------
   // With the space enabled (multi-project only), the management room is
   // bot-created inside the space at startup; adopting the first DM is
@@ -264,15 +280,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // management room and project rooms need it as much as a bot-created
     // one); per-room failures warn inside and never touch the startup
     // tri-state above.
-    await healTrustedPowerLevels(roomOps, store);
+    // Startup-heal window (spec #93 票2): identity reads on fresh rooms hit
+    // expected M_NOT_FOUNDs (no avatar/name state yet — the RoomOps members
+    // turn them into null). The SDK still logs them as ERROR, drowning real
+    // startup errors, so the pattern is silenced for the heal window only.
+    const closeStartup404Window = suppressLogLines("M_NOT_FOUND");
+    try {
+      await healTrustedPowerLevels(roomOps, store);
 
-    // Room identity (short space name + bundled avatars): space mode only,
-    // best-effort per room — never blocks or fails the startup.
-    await healRoomIdentities(roomOps, store);
+      // Room identity (short space name + bundled avatars): space mode only,
+      // best-effort per room — never blocks or fails the startup.
+      await healRoomIdentities(roomOps, store);
 
-    // Bot profile avatar (the agent's face, spec #84 ticket 2): every mode,
-    // best-effort — 只补缺, agent-set migration window rebrands once.
-    await healBotAvatar(roomOps, store);
+      // Bot profile avatar (the agent's face, spec #84 ticket 2): every mode,
+      // best-effort — 只补缺, agent-set migration window rebrands once.
+      await healBotAvatar(roomOps, store);
+    } finally {
+      closeStartup404Window();
+    }
   }
 
   try {
