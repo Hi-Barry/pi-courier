@@ -223,10 +223,10 @@ export class ChallengeAuth {
   }
 
   /** True when a "no pending pairing" hint may be shown for this (user, chat)
-   *  pair — a 6-digit message with no challenge at all most likely means the
-   *  user is answering in the wrong chat; the hint fires at most once per
+   *  pair — a 6-digit message with no challenge in flight most likely means
+   *  the sender missed the pairing flow; the hint fires at most once per
    *  chat per cooldown window so stray numbers never loop (spec #93 票3). */
-  shouldHintPairingRoom(namespacedUserId: string, chatId: string): boolean {
+  shouldHintPairing(namespacedUserId: string, chatId: string): boolean {
     const key = `${namespacedUserId}|${chatId}`;
     const until = this.pairingHintCooldowns.get(key);
     if (until && Date.now() < until) return false;

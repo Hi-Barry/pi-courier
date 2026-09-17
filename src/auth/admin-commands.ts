@@ -110,9 +110,9 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
           // A 6-digit message with no pairing in flight: most likely the user
           // is answering in the wrong chat (or typing a stray number). One
           // gentle pointer per (user, chat), cooldown-backed (spec #93 票3).
-          if (input.chatId && auth.shouldHintPairingRoom(namespacedUserId, input.chatId)) {
+          if (input.chatId && auth.shouldHintPairing(namespacedUserId, input.chatId)) {
             return handled({
-              replies: ["ℹ️ 没有进行中的配对。配对码须在收到挑战提示的那个对话里输入;如需配对,请先私信 bot。"],
+              replies: ["ℹ️ 没有进行中的配对。如需配对,请先私信 bot,收到 6 位配对码后回复即可。"],
               notifications: [],
               effects: [],
             });
