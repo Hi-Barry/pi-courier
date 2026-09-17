@@ -208,7 +208,7 @@ export class PmctlController {
       // next restart. Same 只补缺 rule; a failure is cosmetic and self-heals.
       let avatarNote = "";
       try {
-        await ensureRoomAvatar(roomOps, roomId, pickPoolAvatarFile(pname));
+        await ensureRoomAvatar(roomOps, roomId, pickPoolAvatarFile(pname, "room"));
       } catch (err) {
         avatarNote = `\n⚠️ 头像设置失败(下次启动自动补): ${(err as Error).message}`;
       }

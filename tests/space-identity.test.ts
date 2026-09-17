@@ -35,30 +35,44 @@ describe("space identity", () => {
     expect(nameHash("box1")).toBeLessThanOrEqual(0xffffffff);
   });
 
-  it("picks a stable, in-range pool image per name", () => {
-    for (const name of ["box1", "home-picourier", "工作机", "π"]) {
-      const file = pickPoolAvatarFile(name);
-      expect(file).toBe(pickPoolAvatarFile(name));
-      expect(file).toMatch(/^instance-\d{2}\.png$/);
-      const index = Number.parseInt(file.slice(9, 11), 10);
-      expect(index).toBeGreaterThanOrEqual(1);
-      expect(index).toBeLessThanOrEqual(AVATAR_POOL_SIZE);
+  it("picks a stable, in-range pool image per name for each art set", () => {
+    for (const set of ["agent", "space", "room"] as const) {
+      for (const name of ["box1", "home-picourier", "工作机", "π"]) {
+        const file = pickPoolAvatarFile(name, set);
+        expect(file).toBe(pickPoolAvatarFile(name, set));
+        expect(file).toMatch(new RegExp(`^${set}-\\d{2}\\.png$`));
+        const index = Number.parseInt(file.slice(set.length + 1, set.length + 3), 10);
+        expect(index).toBeGreaterThanOrEqual(1);
+        expect(index).toBeLessThanOrEqual(AVATAR_POOL_SIZE);
+      }
     }
+    // A space and a project room with the same name land on DIFFERENT sets, so
+    // the two room kinds never share a face even when the names collide.
+    expect(pickPoolAvatarFile("box1", "space")).not.toBe(pickPoolAvatarFile("box1", "room"));
   });
 
   it("dedicates a fixed image to the management room", () => {
-    expect(managementAvatarFile()).toBe("management.png");
+    expect(managementAvatarFile()).toBe("room-management.png");
   });
 
-  it("ships a complete, valid avatar pool", () => {
+  it("ships a complete, valid 512×512 avatar pool across all three art sets", () => {
     const files = [
-      ...Array.from({ length: AVATAR_POOL_SIZE }, (_, i) => `instance-${String(i + 1).padStart(2, "0")}.png`),
+      ...(["agent", "space", "room"] as const).flatMap((set) =>
+        Array.from({ length: AVATAR_POOL_SIZE }, (_, i) => `${set}-${String(i + 1).padStart(2, "0")}.png`),
+      ),
       managementAvatarFile(),
     ];
+    expect(files).toHaveLength(37);
+    expect(new Set(files).size).toBe(37);
     for (const file of files) {
       const data = readAvatarBundled(file);
       expect(data.length).toBeGreaterThan(100);
       expect(data.subarray(0, 8).equals(PNG_MAGIC)).toBe(true);
+      // IHDR: width/height as big-endian u32 at bytes 16..24 must both be 512
+      // — the code declares 512×512 in m.room.avatar info, so the assets have
+      // to match or Element shows a stretched avatar.
+      expect(data.readUInt32BE(16)).toBe(512);
+      expect(data.readUInt32BE(20)).toBe(512);
     }
   });
 });

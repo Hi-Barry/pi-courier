@@ -223,14 +223,14 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
   // migration next start.
   const rebrandPending = (cfg.avatarPoolVersion ?? 1) < AVATAR_POOL_VERSION;
   const targets: Array<{ roomId: string; file: string; label: string }> = [
-    { roomId: spaceId, file: pickPoolAvatarFile(instanceName), label: "空间" },
+    { roomId: spaceId, file: pickPoolAvatarFile(instanceName, "space"), label: "空间" },
   ];
   const managementRoomId = (cfg.managementRooms ?? [])[0];
   if (managementRoomId) {
     targets.push({ roomId: managementRoomId, file: managementAvatarFile(), label: "管理房间" });
   }
   for (const [roomId, project] of Object.entries(cfg.projects ?? {})) {
-    targets.push({ roomId, file: pickPoolAvatarFile(project.name ?? roomId), label: `项目房间 ${project.name ?? roomId}` });
+    targets.push({ roomId, file: pickPoolAvatarFile(project.name ?? roomId, "room"), label: `项目房间 ${project.name ?? roomId}` });
   }
 
   let allOk = true;
