@@ -112,6 +112,13 @@ export interface MsgBridgeConfig {
    */
   avatarPoolVersion?: number;
   /**
+   * agent 套(bot 账号 profile 头像)版本簿记(spec #84 分套记账):落后于
+   * space-identity.ts 的 AGENT_AVATAR_VERSION 时,启动自愈无条件设置 bot
+   * 头像(不论当前头像是谁设的),成功后记账,此后恢复"只补缺不覆盖"。
+   * 缺省视为未迁移。
+   */
+  agentAvatarVersion?: number;
+  /**
    * Element 空间(Space)组织视图——把本实例创建的房间收纳进一个私有空间,
    * 便于在 Element 中管理。空间本身仍是展示层;信任用户的房间权限
    * (自动管理员,见 #42)由统一补权负责,与是否挂入空间无关。

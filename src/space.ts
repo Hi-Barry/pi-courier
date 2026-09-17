@@ -37,6 +37,7 @@ import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName, effectiveWo
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
 import {
+  AGENT_AVATAR_VERSION,
   AVATAR_POOL_VERSION,
   avatarInfo,
   isLegacySpaceName,
@@ -249,6 +250,37 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
   // Migration done: book the marker so later starts never re-rebrand (a user
   // who sets a custom avatar afterwards must keep it forever).
   if (rebrandPending && allOk) store.update({ avatarPoolVersion: AVATAR_POOL_VERSION });
+}
+
+/** Startup self-heal for the bot account's own face (spec #84 ticket 2): the
+ *  agent-set avatar picked by instance-name hash, set on the bot's Matrix
+ *  profile — one face for the whole account, shown in every member list and
+ *  next to every message the bot sends. Default policy is 只补缺: a bot that
+ *  already has a profile avatar keeps it (a manually set face is respected,
+ *  same rule as room avatars). While the agent art-set version is pending
+ *  (config.agentAvatarVersion lags AGENT_AVATAR_VERSION — a restyle shipped),
+ *  the profile avatar is set unconditionally and the marker is booked only
+ *  after success; a failure warns and retries next start, never booking.
+ *  Runs in every mode (space or degraded): the bot account exists either way.
+ *  Never throws — purely cosmetic, must not touch the startup tri-state. */
+export async function healBotAvatar(roomOps: RoomOps, store: ConfigStore): Promise<void> {
+  const cfg = store.get();
+  const pending = (cfg.agentAvatarVersion ?? 0) < AGENT_AVATAR_VERSION;
+  try {
+    const had = await roomOps.getProfileAvatarUrl();
+    if (had && !pending) return;
+    const file = pickPoolAvatarFile(effectiveInstanceName(cfg), "agent");
+    const data = readAvatarBundled(file);
+    const mxcUrl = await roomOps.uploadMedia(data, "image/png");
+    await roomOps.setProfileAvatar(mxcUrl);
+    logger.info(`[identity] bot 头像已${had ? "更新" : "设置"}(agent 套): ${file}`);
+  } catch (err) {
+    // Failed set: stay pending so the next start retries the whole agent
+    // migration — the marker is only ever booked on a confirmed success.
+    logger.warn(`[identity] bot 头像设置失败(跳过,下次启动自动重试): ${(err as Error).message}`);
+    return;
+  }
+  if (pending) store.update({ agentAvatarVersion: AGENT_AVATAR_VERSION });
 }
 
 /** Unified idempotent elevation for ONE room (#42): read the room's power
