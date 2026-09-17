@@ -44,6 +44,13 @@ export interface RoomOps {
   getRoomAvatar(roomId: string): Promise<string | null>;
   /** Set a room's avatar (m.room.avatar) from an already-uploaded mxc URL. */
   setRoomAvatar(roomId: string, avatarUrl: string, info?: Record<string, unknown>): Promise<void>;
+  /** Read the bot account's own profile avatar mxc URL, or null when unset —
+   *  account-level profile data, not room state; null follows the same
+   *  query-member contract as the room reads. */
+  getProfileAvatarUrl(): Promise<string | null>;
+  /** Set the bot account's own profile avatar from an already-uploaded mxc
+   *  URL (profile avatar_url — one face for the whole account). */
+  setProfileAvatar(avatarUrl: string): Promise<void>;
   /** Upload media to the content repository; returns the mxc:// URL. */
   uploadMedia(data: Buffer, contentType: string): Promise<string>;
   /** The bot's own user ID (null if not connected). */

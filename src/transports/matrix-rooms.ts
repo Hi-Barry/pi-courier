@@ -151,6 +151,24 @@ export class MatrixRoomOps implements RoomOps {
     });
   }
 
+  /** Read the bot account's own profile avatar mxc URL; null when unset (the
+   *  avatar_url sub-key is optional — a missing profile answers 404
+   *  M_NOT_FOUND, an empty one comes back as a profile without the key). */
+  async getProfileAvatarUrl(): Promise<string | null> {
+    try {
+      const profile = await this.client.getUserProfile(await this.client.getUserId());
+      return (profile as { avatar_url?: string } | undefined)?.avatar_url ?? null;
+    } catch (err) {
+      if (isStateNotFound(err)) return null;
+      throw err;
+    }
+  }
+
+  /** Set the bot account's own profile avatar from an uploaded mxc URL. */
+  async setProfileAvatar(avatarUrl: string): Promise<void> {
+    await this.client.setAvatarUrl(avatarUrl);
+  }
+
   /** Upload media to the homeserver's content repository; returns mxc URL. */
   async uploadMedia(data: Buffer, contentType: string): Promise<string> {
     return this.client.uploadContent(data, contentType);

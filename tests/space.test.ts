@@ -51,6 +51,8 @@ describe("space ensure", () => {
       getRoomName: vi.fn().mockResolvedValue(null),
       getRoomAvatar: vi.fn().mockResolvedValue(null),
       setRoomAvatar: vi.fn().mockResolvedValue(undefined),
+      getProfileAvatarUrl: vi.fn().mockResolvedValue(null),
+      setProfileAvatar: vi.fn().mockResolvedValue(undefined),
       uploadMedia: vi.fn().mockResolvedValue("mxc://server/avatar"),
       setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
       getPowerLevels: vi.fn().mockResolvedValue(null),

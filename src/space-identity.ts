@@ -78,6 +78,17 @@ export function managementAvatarFile(): string {
  */
 export const AVATAR_POOL_VERSION = 3;
 
+/**
+ * Version marker for the agent art set — the bot account's own profile
+ * avatar, the first per-set marker of the #84 multi-set system. While
+ * config.agentAvatarVersion lags behind, the startup heal sets the bot's
+ * profile avatar unconditionally (whoever set the current image), then books
+ * the marker only after success — same rebrand-then-book semantics as the
+ * room avatars, but scoped to this one set. 1 (v4): the animal pool
+ * repurposed as the agent set.
+ */
+export const AGENT_AVATAR_VERSION = 1;
+
 /** Read a bundled avatar PNG. Throws if the asset is missing — callers treat
  *  that like any other identity-heal failure (warn + retry next start). */
 export function readAvatarBundled(file: string): Buffer {

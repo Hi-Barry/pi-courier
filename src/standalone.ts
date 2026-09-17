@@ -21,7 +21,7 @@ import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
-import { ensureSpaceAndManagementRoom, healRoomIdentities, healTrustedPowerLevels } from "./space.js";
+import { ensureSpaceAndManagementRoom, healBotAvatar, healRoomIdentities, healTrustedPowerLevels } from "./space.js";
 import { AttachmentStore } from "./transports/attachments.js";
 import type { RoomOps } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
@@ -266,9 +266,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // tri-state above.
     await healTrustedPowerLevels(roomOps, store);
 
-    // Room identity (short space name + candy avatars): space mode only,
+    // Room identity (short space name + bundled avatars): space mode only,
     // best-effort per room — never blocks or fails the startup.
     await healRoomIdentities(roomOps, store);
+
+    // Bot profile avatar (the agent's face, spec #84 ticket 2): every mode,
+    // best-effort — 只补缺, agent-set migration window rebrands once.
+    await healBotAvatar(roomOps, store);
   }
 
   try {
