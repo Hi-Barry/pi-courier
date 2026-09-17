@@ -41,6 +41,38 @@ describe("ChallengeAuth strategy engine", () => {
     vi.useRealTimers();
   });
 
+  it("6-digit message with no pending pairing gets a one-per-chat hint (spec #93 票3)", async () => {
+    const { auth } = makeEngine();
+    const input = (chatId: string, text: string) =>
+      handleAdminCommand(auth, { text, userId: "@eve:server", transport: "matrix", chatId });
+
+    // No challenge in flight: the first stray 6-digit message hints, the
+    // second one inside the cooldown window falls through silently.
+    const first = input("!dm:server", "123456");
+    expect(first.handled).toBe(true);
+    expect(first.replies[0]).toContain("没有进行中的配对");
+
+    const second = input("!dm:server", "654321");
+    expect(second.handled).toBe(false);
+  });
+
+  it("pairing hints are per-chat: a hint in one chat does not mute another", async () => {
+    const { auth } = makeEngine();
+    const first = handleAdminCommand(auth, { text: "111111", userId: "@eve:server", transport: "matrix", chatId: "!dm1:server" });
+    expect(first.handled).toBe(true);
+    const second = handleAdminCommand(auth, { text: "222222", userId: "@eve:server", transport: "matrix", chatId: "!dm2:server" });
+    expect(second.handled).toBe(true);
+  });
+
+  it("challenge prompt points the user at this chat (spec #93 票3)", async () => {
+    const { auth } = makeEngine();
+    const sent: string[] = [];
+    await auth.checkAuthorization("@eve:server", "!dm:server", "eve", false, false, async (_cid, text) => {
+      sent.push(text);
+    }, "matrix");
+    expect(sent.some((t) => t.includes("here in this chat"))).toBe(true);
+  });
+
   it("challenge codes expire after 2 minutes", async () => {
     const { auth, shown } = makeEngine();
     await initiate(auth, "@eve:server", "!dm:server");

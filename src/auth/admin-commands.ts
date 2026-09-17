@@ -38,6 +38,8 @@ export interface AdminCommandInput {
   text: string;
   userId: string;
   transport?: string;
+  /** The conversation the message arrived in (6-digit pairing hints key on it). */
+  chatId?: string;
   /** Current tool-call visibility (read by the caller before dispatch). */
   hideToolCalls?: boolean;
 }
@@ -59,7 +61,7 @@ function handled(result: Omit<AdminCommandResult, "handled">): AdminCommandResul
 export function adminCommandHelpText(): string {
   return [
     "**Bridge 管理命令**: `/help`(本帮助)、`/trusted`、`/revoke`、`/channels`、`/enable`、`/disable`、`/toggletools`",
-    "**认证**: 首次私聊 bot → bot 终端显示 6 位验证码 → 在聊天里输入验证码即成为信任用户(第一个信任用户 = 管理员)。群聊由信任用户在群里发 `/enable <模式>` 启用。",
+    "**认证**: 首次私聊 bot → bot 终端与管理房间会显示 6 位验证码 → 在收到提示的那个聊天里输入验证码即成为信任用户(第一个信任用户 = 管理员)。群聊由信任用户在群里发 `/enable <模式>` 启用。",
   ].join("\n");
 }
 
@@ -104,6 +106,18 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
             notifications: [],
             effects: [],
           });
+        case "none":
+          // A 6-digit message with no pairing in flight: most likely the user
+          // is answering in the wrong chat (or typing a stray number). One
+          // gentle pointer per (user, chat), cooldown-backed (spec #93 票3).
+          if (input.chatId && auth.shouldHintPairingRoom(namespacedUserId, input.chatId)) {
+            return handled({
+              replies: ["ℹ️ 没有进行中的配对。配对码须在收到挑战提示的那个对话里输入;如需配对,请先私信 bot。"],
+              notifications: [],
+              effects: [],
+            });
+          }
+          return { handled: false, replies: [], notifications: [], effects: [] };
         default:
           return { handled: false, replies: [], notifications: [], effects: [] };
       }
