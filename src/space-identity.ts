@@ -69,10 +69,12 @@ export function managementAvatarFile(): string {
  * reverted; bumping the marker re-runs the unconditional rebrand once so
  * machines that booked 2 converge too (same art, idempotent re-upload).
  *
- * Superseded in the same release that ships the v4 art (spec #84): the single
- * marker is replaced by per-set version bookkeeping (agent/space/room), so
- * each art set can restyle on its own — see the config fields and the heal
- * orchestration. Kept here only until that migration logic lands.
+ * Transition note (spec #84): this single marker is scheduled to be replaced
+ * by per-set version bookkeeping (agent/space/room) in this same release —
+ * the config fields and the heal orchestration land with tickets #86/#87.
+ * Until then this marker behaves exactly as in 0.1.48; existing deployments
+ * that booked 3 keep their current room avatars until the per-set migration
+ * lands.
  */
 export const AVATAR_POOL_VERSION = 3;
 
