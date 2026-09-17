@@ -57,37 +57,39 @@ export function managementAvatarFile(): string {
 }
 
 /**
- * Version marker for the bundled avatar pool. Bump ONLY when the pool ships
- * a full restyle (v2 pixel → v3 candy bumped 1 → 2): while config lags behind
- * this marker, the startup identity heal re-brands every managed room once
- * (see ensureRoomAvatar), then books the marker and goes back to
- * fill-only. User-set avatars are kept again on every later start.
+ * Per-set version markers of the bundled art (the #84 multi-set system):
+ * bump a set's entry ONLY when that set ships a full restyle. While a
+ * deployment's booking for a set (config.`<set>AvatarVersion`, read through
+ * bookedAvatarVersion) lags behind the marker, the startup heal re-brands
+ * that set's scope once — the managed rooms for space/room, the bot's
+ * profile avatar for agent — then books the marker and goes back to
+ * fill-only. Each set migrates independently: one set failing keeps only
+ * that set pending.
  *
- * 3 (0.1.48): the 0.1.47 migration under marker 2 shipped with a sender
- * guard that skipped rooms whose avatar a human had set — the intended
- * "update re-brands every room" promise silently missed those. The guard is
- * reverted; bumping the marker re-runs the unconditional rebrand once so
- * machines that booked 2 converge too (same art, idempotent re-upload).
- *
- * Transition note (spec #84): this single marker is scheduled to be replaced
- * by per-set version bookkeeping (agent/space/room) in this same release —
- * the config fields and the heal orchestration land with tickets #86/#87.
- * Until then this marker behaves exactly as in 0.1.48; existing deployments
- * that booked 3 keep their current room avatars until the per-set migration
- * lands.
+ * 1 (v4): first per-set markers — the landscape set for spaces, the cottage
+ * set for rooms (management included), the animal pool as the agent set.
+ * Replaces the pre-#84 single AVATAR_POOL_VERSION marker (last value 3, the
+ * candy pool): that field is no longer read — a v3 deployment migrates all
+ * three sets exactly once on first v4 start, same art-to-art rebrand as any
+ * restyle.
  */
-export const AVATAR_POOL_VERSION = 3;
+export const AVATAR_SET_VERSION: Record<AvatarSet, number> = { agent: 1, space: 1, room: 1 };
 
-/**
- * Version marker for the agent art set — the bot account's own profile
- * avatar, the first per-set marker of the #84 multi-set system. While
- * config.agentAvatarVersion lags behind, the startup heal sets the bot's
- * profile avatar unconditionally (whoever set the current image), then books
- * the marker only after success — same rebrand-then-book semantics as the
- * room avatars, but scoped to this one set. 1 (v4): the animal pool
- * repurposed as the agent set.
- */
-export const AGENT_AVATAR_VERSION = 1;
+/** A deployment's booked version for an art set; 0 = never migrated (the
+ *  field is absent — see the `<set>AvatarVersion` config fields). */
+export function bookedAvatarVersion(
+  cfg: { agentAvatarVersion?: number; spaceAvatarVersion?: number; roomAvatarVersion?: number },
+  set: AvatarSet,
+): number {
+  switch (set) {
+    case "agent":
+      return cfg.agentAvatarVersion ?? 0;
+    case "space":
+      return cfg.spaceAvatarVersion ?? 0;
+    case "room":
+      return cfg.roomAvatarVersion ?? 0;
+  }
+}
 
 /** Read a bundled avatar PNG. Throws if the asset is missing — callers treat
  *  that like any other identity-heal failure (warn + retry next start). */

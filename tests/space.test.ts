@@ -436,11 +436,12 @@ describe("space ensure", () => {
     expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(4);
   });
 
-  // ---- room identity self-heal (short space name + candy avatars) ------------
+  // ---- room identity self-heal (short space name + bundled art sets) --------
   // The space is renamed ONLY when its name still exactly matches the legacy
   // `pi-courier · <instance>` template. Avatars: fill-only normally, but a
-  // pending pool-version migration re-brands every managed room once (then
-  // the marker is booked and fill-only resumes).
+  // pending set-version migration re-brands that set's managed rooms once
+  // (then the marker is booked and fill-only resumes) — each of the three
+  // sets (agent/space/room) migrating independently.
 
   async function runIdentityHeal(configOverrides: Record<string, unknown> = {}, roomOpsOverrides: Record<string, unknown> = {}) {
     const { config, space, loggerModule } = await importModules();
@@ -480,10 +481,10 @@ describe("space ensure", () => {
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
   });
 
-  it("re-brands every managed room once during a pool version migration, then books the marker", async () => {
-    // Pre-v3 deployments: rooms carry the old pixel-pool avatars (config has
-    // no avatarPoolVersion → treated as v1 → migration pending). A full pool
-    // restyle re-brands ALL managed rooms — whoever set the current image.
+  it("re-brands every managed room once during a set version migration, then books each marker", async () => {
+    // Pre-v4 deployments: rooms carry the old art (config has no per-set
+    // version → that set's migration is pending). A full set restyle
+    // re-brands ALL of its managed rooms — whoever set the current image.
     const { roomOps, store } = await runIdentityHeal(fullRooms, {
       getRoomAvatar: vi.fn().mockResolvedValue("mxc://server/old-pixel"),
     });
@@ -492,7 +493,8 @@ describe("space ensure", () => {
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!space:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!mgmt:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
-    expect(store.get().avatarPoolVersion).toBe(3);
+    expect(store.get().spaceAvatarVersion).toBe(1);
+    expect(store.get().roomAvatarVersion).toBe(1);
   });
 
   it("a user-set avatar is re-branded too while the migration is pending (0.1.47 sender-guard reverted)", async () => {
@@ -505,19 +507,19 @@ describe("space ensure", () => {
     });
     expect(roomOps.uploadMedia).toHaveBeenCalledTimes(3);
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
-    expect(store.get().avatarPoolVersion).toBe(3);
+    expect(store.get().roomAvatarVersion).toBe(1);
   });
 
-  it("after the migration is booked, existing avatars are kept again (fill-only resumes)", async () => {
+  it("after a set's migration is booked, its existing avatars are kept again (fill-only resumes)", async () => {
     const { roomOps } = await runIdentityHeal(
-      { ...fullRooms, avatarPoolVersion: 3 },
+      { ...fullRooms, spaceAvatarVersion: 1, roomAvatarVersion: 1 },
       { getRoomAvatar: vi.fn().mockResolvedValue("mxc://server/candy") }
     );
     expect(roomOps.uploadMedia).not.toHaveBeenCalled();
     expect(roomOps.setRoomAvatar).not.toHaveBeenCalled();
   });
 
-  it("a failed room keeps the migration pending: marker is not booked, other rooms already re-branded", async () => {
+  it("a failed room keeps only its own set pending: the room set's marker is not booked, the space set books normally", async () => {
     const { roomOps, store } = await runIdentityHeal(fullRooms, {
       getRoomAvatar: vi.fn().mockImplementation((roomId: string) =>
         roomId === "!mgmt:server" ? Promise.reject(new Error("M_LIMIT_EXCEEDED")) : Promise.resolve("mxc://server/old")
@@ -525,7 +527,33 @@ describe("space ensure", () => {
     });
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!space:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
-    expect(store.get().avatarPoolVersion).toBeUndefined();
+    expect(store.get().spaceAvatarVersion).toBe(1);
+    expect(store.get().roomAvatarVersion).toBeUndefined();
+  });
+
+  it("sets migrate independently: a booked space set keeps its avatar while the room set is pending", async () => {
+    const { roomOps, store } = await runIdentityHeal(
+      { ...fullRooms, spaceAvatarVersion: 1 },
+      { getRoomAvatar: vi.fn().mockResolvedValue("mxc://server/old") },
+    );
+    // The space room is fill-only now (already booked), the room-set rooms
+    // (management + project) re-brand, and only the room set books.
+    expect(roomOps.uploadMedia).toHaveBeenCalledTimes(2);
+    expect(roomOps.setRoomAvatar).not.toHaveBeenCalledWith("!space:server", "mxc://server/avatar", expect.anything());
+    expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!mgmt:server", "mxc://server/avatar", expect.anything());
+    expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
+    expect(store.get().spaceAvatarVersion).toBe(1);
+    expect(store.get().roomAvatarVersion).toBe(1);
+  });
+
+  it("the retired single avatarPoolVersion marker is ignored: a v3 deployment migrates all sets", async () => {
+    const { roomOps, store } = await runIdentityHeal(
+      { ...fullRooms, avatarPoolVersion: 3 },
+      { getRoomAvatar: vi.fn().mockResolvedValue("mxc://server/candy") },
+    );
+    expect(roomOps.uploadMedia).toHaveBeenCalledTimes(3);
+    expect(store.get().spaceAvatarVersion).toBe(1);
+    expect(store.get().roomAvatarVersion).toBe(1);
   });
 
   it("a single-room avatar failure warns and the other rooms are still branded", async () => {

@@ -37,9 +37,10 @@ import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName, effectiveWo
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
 import {
-  AGENT_AVATAR_VERSION,
-  AVATAR_POOL_VERSION,
+  AVATAR_SET_VERSION,
+  type AvatarSet,
   avatarInfo,
+  bookedAvatarVersion,
   isLegacySpaceName,
   managementAvatarFile,
   pickPoolAvatarFile,
@@ -163,9 +164,9 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
 
 /** Brand ONE room with the bundled avatar. Default policy is 只补缺: a room
  *  that already has an avatar keeps it. With `rebrand` (the startup heal,
- *  while an avatar-pool version migration is pending), an existing avatar is
- *  replaced unconditionally — a full pool restyle re-brands every managed
- *  room once, whoever set the current image. Throws on failure — callers pick
+ *  while the room's art-set version migration is pending), an existing avatar
+ *  is replaced unconditionally — a set restyle re-brands that set's managed
+ *  rooms once, whoever set the current image. Throws on failure — callers pick
  *  the policy (the startup heal warns + retries next start; the /pmctl new
  *  path surfaces a non-fatal note). Returns what happened: "set" (room had
  *  none), "rebranded" (old avatar replaced) or "kept". Shared by the startup
@@ -186,15 +187,16 @@ export async function ensureRoomAvatar(
 }
 
 /** Startup identity self-heal: brand the managed rooms with the short space
- *  name and the bundled candy avatars (space + management + project rooms).
+ *  name and the bundled art sets (space + management + project rooms).
  *  Space mode only — a degraded run's adopted management DM is never touched.
  *  Safety rules: a space is renamed ONLY when its name still exactly matches
  *  the legacy `pi-courier · <instance>` template; an avatar is set when the
- *  room has none — plus, while an avatar-pool version migration is pending,
- *  every managed room is re-branded once (a full restyle means the bundled
- *  art is the single source of truth for that start). Per-room failures warn
- *  and retry on the next start; like healTrustedPowerLevels this never throws
- *  and never affects the startup tri-state. */
+ *  room has none — plus, while a set's version migration is pending, that
+ *  set's managed rooms are re-branded once (a restyle means the bundled art
+ *  is the single source of truth for that start), each of the three sets
+ *  booking and migrating independently. Per-room failures warn and retry on
+ *  the next start; like healTrustedPowerLevels this never throws and never
+ *  affects the startup tri-state. */
 export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): Promise<void> {
   const cfg = store.get();
   if (!isSpaceMode(cfg)) return;
@@ -215,41 +217,50 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
     logger.warn(`[identity] 空间改名检查失败(跳过,下次启动自动重试): ${spaceId}: ${(err as Error).message}`);
   }
 
-  // Avatars: space picks by instance name, the management room has its own
-  // dedicated image, project rooms pick by project name (roomId fallback for
-  // legacy records without one) — same name, same image, forever. While the
-  // bundled pool version in config lags behind AVATAR_POOL_VERSION (a full
-  // restyle shipped), every managed room is re-branded once; the marker is
-  // booked only after every room succeeded — a failed room retries the whole
-  // migration next start.
-  const rebrandPending = (cfg.avatarPoolVersion ?? 1) < AVATAR_POOL_VERSION;
-  const targets: Array<{ roomId: string; file: string; label: string }> = [
-    { roomId: spaceId, file: pickPoolAvatarFile(instanceName, "space"), label: "空间" },
+  // Avatars: three per-set pools (spec #84) — the space picks from the
+  // landscape set by instance name, the management room has the cottage set's
+  // dedicated image, project rooms pick from the cottage set by project name
+  // (roomId fallback for legacy records without one) — same name, same image,
+  // forever. Each set books its own version: while a set's marker in config
+  // lags behind AVATAR_SET_VERSION (a restyle of THAT set shipped), the set's
+  // rooms are re-branded once; the marker is booked only after every one of
+  // the set's rooms succeeded — a failed room retries that set's migration
+  // next start while other sets book normally.
+  const isPending = (set: AvatarSet) => bookedAvatarVersion(cfg, set) < AVATAR_SET_VERSION[set];
+  const targets: Array<{ roomId: string; file: string; label: string; set: AvatarSet }> = [
+    { roomId: spaceId, file: pickPoolAvatarFile(instanceName, "space"), label: "空间", set: "space" },
   ];
   const managementRoomId = (cfg.managementRooms ?? [])[0];
   if (managementRoomId) {
-    targets.push({ roomId: managementRoomId, file: managementAvatarFile(), label: "管理房间" });
+    targets.push({ roomId: managementRoomId, file: managementAvatarFile(), label: "管理房间", set: "room" });
   }
   for (const [roomId, project] of Object.entries(cfg.projects ?? {})) {
-    targets.push({ roomId, file: pickPoolAvatarFile(project.name ?? roomId, "room"), label: `项目房间 ${project.name ?? roomId}` });
+    targets.push({
+      roomId,
+      file: pickPoolAvatarFile(project.name ?? roomId, "room"),
+      label: `项目房间 ${project.name ?? roomId}`,
+      set: "room",
+    });
   }
 
-  let allOk = true;
+  const setAllOk: Record<AvatarSet, boolean> = { agent: true, space: true, room: true }; // agent lives in healBotAvatar; the key exists so room targets can index uniformly
   for (const target of targets) {
     try {
       const result = await ensureRoomAvatar(roomOps, target.roomId, target.file, {
-        rebrand: rebrandPending,
+        rebrand: isPending(target.set),
       });
       if (result === "set") logger.info(`[identity] ${target.label}头像已设置: ${target.file}`);
       if (result === "rebranded") logger.info(`[identity] ${target.label}头像已升级为新风格: ${target.file}`);
     } catch (err) {
-      allOk = false;
+      setAllOk[target.set] = false;
       logger.warn(`[identity] ${target.label}(${target.roomId})头像设置失败(跳过,下次启动自动重试): ${(err as Error).message}`);
     }
   }
-  // Migration done: book the marker so later starts never re-rebrand (a user
-  // who sets a custom avatar afterwards must keep it forever).
-  if (rebrandPending && allOk) store.update({ avatarPoolVersion: AVATAR_POOL_VERSION });
+  // Migration bookkeeping, per set: a set whose rooms all succeeded books its
+  // marker so later starts never re-rebrand it (a user who sets a custom
+  // avatar afterwards must keep it forever). A failed set stays pending.
+  if (isPending("space") && setAllOk.space) store.update({ spaceAvatarVersion: AVATAR_SET_VERSION.space });
+  if (isPending("room") && setAllOk.room) store.update({ roomAvatarVersion: AVATAR_SET_VERSION.room });
 }
 
 /** Startup self-heal for the bot account's own face (spec #84 ticket 2): the
@@ -258,14 +269,14 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
  *  next to every message the bot sends. Default policy is 只补缺: a bot that
  *  already has a profile avatar keeps it (a manually set face is respected,
  *  same rule as room avatars). While the agent art-set version is pending
- *  (config.agentAvatarVersion lags AGENT_AVATAR_VERSION — a restyle shipped),
+ *  (bookedAvatarVersion lags AVATAR_SET_VERSION.agent — a restyle shipped),
  *  the profile avatar is set unconditionally and the marker is booked only
  *  after success; a failure warns and retries next start, never booking.
  *  Runs in every mode (space or degraded): the bot account exists either way.
  *  Never throws — purely cosmetic, must not touch the startup tri-state. */
 export async function healBotAvatar(roomOps: RoomOps, store: ConfigStore): Promise<void> {
   const cfg = store.get();
-  const pending = (cfg.agentAvatarVersion ?? 0) < AGENT_AVATAR_VERSION;
+  const pending = bookedAvatarVersion(cfg, "agent") < AVATAR_SET_VERSION.agent;
   try {
     const had = await roomOps.getProfileAvatarUrl();
     if (had && !pending) return;
@@ -280,7 +291,7 @@ export async function healBotAvatar(roomOps: RoomOps, store: ConfigStore): Promi
     logger.warn(`[identity] bot 头像设置失败(跳过,下次启动自动重试): ${(err as Error).message}`);
     return;
   }
-  if (pending) store.update({ agentAvatarVersion: AGENT_AVATAR_VERSION });
+  if (pending) store.update({ agentAvatarVersion: AVATAR_SET_VERSION.agent });
 }
 
 /** Unified idempotent elevation for ONE room (#42): read the room's power

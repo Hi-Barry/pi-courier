@@ -106,15 +106,21 @@ export interface MsgBridgeConfig {
    */
   managementRooms?: string[];
   /**
-   * 内置头像池版本簿记(见 space-identity.ts AVATAR_POOL_VERSION):
-   * 头像池整体换风格时,启动自愈会把全部托管房间(空间/管理房间/项目房间)
-   * 一次性统一刷成新图(此后恢复"只补缺不覆盖")。缺省视为 v1(像素池时代)。
+   * 空间套(风景)版本簿记(spec #84 分套记账):落后于 space-identity.ts 的
+   * AVATAR_SET_VERSION.space 时,启动自愈把空间套管辖的房间一次性无条件
+   * 刷成新图(此后恢复"只补缺不覆盖")。缺省视为未迁移——含只带旧
+   * avatarPoolVersion 的 0.1.49 及更早部署。
    */
-  avatarPoolVersion?: number;
+  spaceAvatarVersion?: number;
+  /**
+   * 房间套(小屋,含管理房间专属图)版本簿记:语义同 spaceAvatarVersion,
+   * 管辖范围为项目房间与管理房间。
+   */
+  roomAvatarVersion?: number;
   /**
    * agent 套(bot 账号 profile 头像)版本簿记(spec #84 分套记账):落后于
-   * space-identity.ts 的 AGENT_AVATAR_VERSION 时,启动自愈无条件设置 bot
-   * 头像(不论当前头像是谁设的),成功后记账,此后恢复"只补缺不覆盖"。
+   * space-identity.ts 的 AVATAR_SET_VERSION.agent 时,启动自愈无条件设置
+   * bot 头像(不论当前头像是谁设的),成功后记账,此后恢复"只补缺不覆盖"。
    * 缺省视为未迁移。
    */
   agentAvatarVersion?: number;
