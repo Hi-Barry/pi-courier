@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { RoomOps } from "../src/transports/interface";
-import { nameHash, pickPoolAvatarFile, readAvatarBundled } from "../src/space-identity";
+import { AVATAR_POOL_SIZE, pickPoolAvatarFile, readAvatarBundled } from "../src/space-identity";
 
 /**
  * Tests for the bot profile avatar self-heal (spec #84 ticket 2). The Matrix
@@ -131,8 +131,11 @@ describe("bot profile avatar heal", () => {
     expect(store.get().agentAvatarVersion).toBe(1);
   });
 
-  it("picks the same agent face for the same instance name (stable hash)", () => {
-    expect(pickPoolAvatarFile("box1", "agent")).toBe(pickPoolAvatarFile("box1", "agent"));
-    expect((nameHash("box1") % 12) + 1).toBeGreaterThanOrEqual(1);
+  it("never picks outside the agent pool (hash lands within 1..12)", () => {
+    const file = pickPoolAvatarFile("box1", "agent");
+    expect(file).toMatch(/^agent-\d{2}\.png$/);
+    const index = Number.parseInt(file.slice("agent-".length, "agent-".length + 2), 10);
+    expect(index).toBeGreaterThanOrEqual(1);
+    expect(index).toBeLessThanOrEqual(AVATAR_POOL_SIZE);
   });
 });
