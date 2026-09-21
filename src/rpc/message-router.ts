@@ -11,7 +11,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { LoginManager } from "../auth/headless-login.js";
-import { type ConfigStore, effectiveInstanceName, effectiveWorkdir } from "../config.js";
+import { adoptManagementRoom, type ConfigStore, effectiveInstanceName, effectiveWorkdir, managementRoomId } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -623,13 +623,13 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           ctx.multiProject &&
           roomOps &&
           (managementRoomAdoptionAllowed?.() ?? true) &&
-          !store.get().managementRooms?.[0] &&
+          !managementRoomId(store.get()) &&
           !ctx.msg.isGroupChat &&
           !projectManager.isProjectRoom(ctx.msg.chatId)
         ) {
           await maybeInitManagementRoom(ctx.msg, sendReply, roomOps, store);
         }
-        ctx.isManagementRoom = ctx.multiProject && (store.get().managementRooms?.[0] ?? "") === ctx.msg.chatId;
+        ctx.isManagementRoom = ctx.multiProject && managementRoomId(store.get()) === ctx.msg.chatId;
         return false;
       },
     },
@@ -1117,9 +1117,9 @@ async function maybeInitManagementRoom(
   store: ConfigStore
 ): Promise<void> {
   const cfg = store.get();
-  const rooms = cfg.managementRooms ?? [];
-  if (rooms.includes(msg.chatId)) return; // already the management room
-  if (rooms.length > 0) return; // a management room already exists — never brand another
+  const existing = managementRoomId(cfg);
+  if (existing === msg.chatId) return; // already the management room
+  if (existing !== undefined) return; // a management room already exists — never brand another
   try {
     const instanceName = effectiveInstanceName(cfg);
     const botAccount = roomOps.getBotUserId() ?? "(未知)";
@@ -1127,7 +1127,8 @@ async function maybeInitManagementRoom(
     const roomName = managementRoomName(instanceName);
     await roomOps.setRoomName(msg.chatId, roomName);
     await sendReply(msg.chatId, msg.transport, buildManagementRoomHelp(instanceName, botAccount, workdir));
-    store.update({ managementRooms: [...rooms, msg.chatId] });
+    // The guards above mean the list was empty — adopt appends the first entry.
+    store.update(adoptManagementRoom(cfg, msg.chatId));
     logger.info(`[project] 管理房间已初始化: ${msg.chatId} (${roomName})`);
   } catch {
     // Non-matrix transport or transient failure — skip branding, try again later.

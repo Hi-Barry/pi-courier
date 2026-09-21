@@ -255,3 +255,59 @@ describe('ConfigStore', () => {
     expect(store.get().workdir).toBe('/from/disk');
   });
 });
+
+describe('config 派生函数族 — 管理房间(spec #99 票6 / issue #102)', () => {
+  it('managementRoomId: 未配置返回 undefined', async () => {
+    const { managementRoomId } = await import('../src/config');
+    expect(managementRoomId({})).toBeUndefined();
+  });
+
+  it('managementRoomId: 空列表返回 undefined(= 还没有管理房)', async () => {
+    const { managementRoomId } = await import('../src/config');
+    expect(managementRoomId({ managementRooms: [] })).toBeUndefined();
+  });
+
+  it('managementRoomId: 取首个 — 公开语义是单管理房,"取首个"是有意为之', async () => {
+    const { managementRoomId } = await import('../src/config');
+    expect(managementRoomId({ managementRooms: ['!a:server', '!b:server'] })).toBe('!a:server');
+    expect(managementRoomId({ managementRooms: ['!mgmt:server'] })).toBe('!mgmt:server');
+  });
+
+  it('adoptManagementRoom: 未配置时追加为首个条目', async () => {
+    const { adoptManagementRoom } = await import('../src/config');
+    expect(adoptManagementRoom({}, '!dm:server')).toEqual({ managementRooms: ['!dm:server'] });
+  });
+
+  it('adoptManagementRoom: 空列表追加', async () => {
+    const { adoptManagementRoom } = await import('../src/config');
+    expect(adoptManagementRoom({ managementRooms: [] }, '!dm:server')).toEqual({
+      managementRooms: ['!dm:server'],
+    });
+  });
+
+  it('adoptManagementRoom: 追加语义 — 已有条目保持在首位不变', async () => {
+    const { adoptManagementRoom } = await import('../src/config');
+    expect(adoptManagementRoom({ managementRooms: ['!a:server'] }, '!dm:server')).toEqual({
+      managementRooms: ['!a:server', '!dm:server'],
+    });
+  });
+
+  it('adoptManagementRoom: 重复收养同一房间幂等 — 返回空 patch,不产生重复条目', async () => {
+    const { adoptManagementRoom } = await import('../src/config');
+    expect(adoptManagementRoom({ managementRooms: ['!dm:server'] }, '!dm:server')).toEqual({});
+    expect(adoptManagementRoom({ managementRooms: ['!a:server', '!dm:server'] }, '!dm:server')).toEqual({});
+  });
+
+  it('adoptManagementRoom: 返回 patch 形状,可与其它字段展开合并为一次原子 update', async () => {
+    const { adoptManagementRoom } = await import('../src/config');
+    const cfg = { managementRooms: [] as string[], space: { enabled: true } as Record<string, unknown> };
+    const patch = {
+      ...adoptManagementRoom(cfg, '!dm:server'),
+      space: { ...cfg.space, managementInvitedUsers: ['matrix:@u:server'] },
+    };
+    expect(patch).toEqual({
+      managementRooms: ['!dm:server'],
+      space: { enabled: true, managementInvitedUsers: ['matrix:@u:server'] },
+    });
+  });
+});
