@@ -36,7 +36,6 @@
  * management DM gets linked instead of duplicated.
  */
 
-import * as os from "node:os";
 import { activeSpaceRoomId, adoptManagementRoom, type ConfigStore, effectiveInstanceName, effectiveWorkdir, isSpaceMode, managementRoomId, nativeMxid } from "./config.js";
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
@@ -493,20 +492,6 @@ export async function healBotAvatar(roomOps: RoomOps, store: ConfigStore): Promi
       return false;
     }
   });
-}
-
-/** The composition root's entire startup heal sequence, in the fixed order:
- *  trusted-user power sweep (space + degraded modes), then the room identity
- *  heal (space mode only), then the bot profile avatar (every mode). Each
- *  heal is best-effort inside — none throws, none touches the startup
- *  tri-state. Expected 404 misses are silenced inside the RoomOps adapter
- *  (matrix-rooms.ts), so no log-suppression window is needed here.
- *  NOTE (spec #99 票7): this unit is what the composition root calls; the
- *  startup-state-module refactor will relocate it as is. */
-export async function runStartupHeals(roomOps: RoomOps, store: ConfigStore): Promise<void> {
-  await healTrustedPowerLevels(roomOps, store);
-  await healRoomIdentities(roomOps, store);
-  await healBotAvatar(roomOps, store);
 }
 
 /** Unified idempotent elevation for ONE room (#42): read the room's power

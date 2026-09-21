@@ -11,7 +11,7 @@ import { captureConsole } from "./helpers.js";
 
 /**
  * 启动自愈编排测试(spec #99 #105):组合根的整段 heal 序列收进
- * space.ts 的 runStartupHeals(票 7 将把它搬进启动状态模块),经假端口
+ * startup-state.ts 的 runStartupHeals(票 7 自 space.ts 迁入),经假端口
  * 客户端 + 真 MatrixRoomOps 钉住:
  * - 三段 heal 的固定顺序(信任补权 → 房间身份 → bot 头像);
  * - 预期 404 在适配器边界自动安静——编排层不再需要任何抑制窗口;
@@ -40,9 +40,9 @@ describe("runStartupHeals 编排", () => {
       return { ...actual, homedir: () => tmpDir };
     });
     const config = await import("../src/config");
-    const space = await import("../src/space");
+    const startupState = await import("../src/startup-state");
     const loggerModule = await import("../src/logger");
-    return { config, space, loggerModule };
+    return { config, startupState, loggerModule };
   }
 
   function makeOps(client: FakeMatrixClient) {
@@ -79,10 +79,10 @@ describe("runStartupHeals 编排", () => {
   }
 
   it("三段 heal 固定顺序:信任补权 → 房间身份 → bot 头像", async () => {
-    const { config, space } = await importModules();
+    const { config, startupState } = await importModules();
     const store = new config.ConfigStore(baseConfig());
     const client = fakeMatrixClient();
-    await space.runStartupHeals(makeOps(client), store);
+    await startupState.runStartupHeals(makeOps(client), store);
 
     const calls = client.calls;
     const powerRead = indexOfCall(calls, "getRoomStateEvent", (a) => a[1] === "m.room.power_levels");
@@ -106,7 +106,7 @@ describe("runStartupHeals 编排", () => {
 
   it("预期 404 全程安静:profile 404 → null 照常换装记账,无 M_NOT_FOUND 落线", async () => {
     const lines = captureConsole();
-    const { config, space } = await importModules();
+    const { config, startupState } = await importModules();
     const store = new config.ConfigStore(baseConfig());
     const client = fakeMatrixClient({
       getUserProfile: vi.fn(async () => {
@@ -115,7 +115,7 @@ describe("runStartupHeals 编排", () => {
       }),
     });
 
-    await space.runStartupHeals(makeOps(client), store);
+    await startupState.runStartupHeals(makeOps(client), store);
 
     // 404 是查询答案:getProfileAvatarUrl → null → bot 无脸 → 照常设置并记账
     expect(client.setAvatarUrl).toHaveBeenCalledWith("mxc://server/uploaded");
@@ -129,7 +129,7 @@ describe("runStartupHeals 编排", () => {
 
   it("真错误照常可见:M_FORBIDDEN 不被静音,agent 套照常记账", async () => {
     const lines = captureConsole();
-    const { config, space, loggerModule } = await importModules();
+    const { config, startupState, loggerModule } = await importModules();
     const warnSpy = vi.spyOn(loggerModule.logger, "warn");
     const store = new config.ConfigStore(baseConfig());
     const client = fakeMatrixClient({
@@ -139,7 +139,7 @@ describe("runStartupHeals 编排", () => {
       }),
     });
 
-    await space.runStartupHeals(makeOps(client), store);
+    await startupState.runStartupHeals(makeOps(client), store);
 
     // SDK 的 ERROR 行没有被任何窗口吞掉
     expect(lines.join("\n")).toContain("M_FORBIDDEN");

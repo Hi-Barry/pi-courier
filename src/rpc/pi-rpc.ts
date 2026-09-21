@@ -14,10 +14,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  type ModelInfo,
   RpcClient,
   type RpcEventListener,
-  type RpcSessionState,
 } from "@earendil-works/pi-coding-agent";
 
 export interface PiRpcOptions {

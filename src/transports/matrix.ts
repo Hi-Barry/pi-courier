@@ -1,7 +1,7 @@
 import MarkdownIt from "markdown-it";
 import { logger, suppressLogLines } from "../logger.js";
 import { buildGroupJoinHint } from "../management-room.js";
-import { createQuoteCache, type QuoteCache, toExcerpt } from "../quote-cache.js";
+import { createQuoteCache, type QuoteCache } from "../quote-cache.js";
 import type { ExternalMessage } from "../types.js";
 import type { MediaSource } from "./attachments.js";
 import { AttachmentStore } from "./attachments.js";
