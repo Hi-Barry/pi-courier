@@ -43,6 +43,28 @@ describe("createStartupState — 配对码去向(pairing sink)", () => {
     expect(sinkCalls(sink)[0]).toEqual(["!mgmt:server", "matrix", "code-3"]);
   });
 
+  it("发出失败不丢件:失败项置顶保留,下次配对码到达时按序随队重试(评审修复钉点)", async () => {
+    const startup = createStartupState({ store: new ConfigStore(mgmtConfig) });
+    let broken = true;
+    const sink = vi.fn(async () => {
+      if (broken) throw new Error("transport not connected");
+    });
+    await startup.wirePairingSink(sink);
+
+    await startup.sendPairingNotice("code-A"); // 发出失败 —— 置顶保留,不丢
+    expect(sink).toHaveBeenCalledTimes(1);
+
+    broken = false; // transport 恢复
+    await startup.sendPairingNotice("code-B"); // 搭便车重试:code-A 仍在队首
+
+    // 共 3 次调用 = 失败的首次 + 按序重试的 A、B;失败项没有丢、没有乱序。
+    expect(sink).toHaveBeenCalledTimes(3);
+    expect(sinkCalls(sink).slice(1)).toEqual([
+      ["!mgmt:server", "matrix", "code-A"],
+      ["!mgmt:server", "matrix", "code-B"],
+    ]);
+  });
+
   it("无管理房间时不投递(与降级为仅日志的现状一致)", async () => {
     const startup = createStartupState({ store: new ConfigStore({} as MsgBridgeConfig) });
     const sink = vi.fn(async () => {});

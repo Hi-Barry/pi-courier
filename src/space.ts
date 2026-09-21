@@ -541,16 +541,18 @@ export async function elevateTrustedUsersInRoom(
 }
 
 /** Derive every room this instance manages from config: the space, the
- *  management room (managementRoomId — the public semantics is a single
- *  management room; both write paths keep the list at most one element long)
- *  and every project room — deduped, empties dropped.
+ *  management room(s) and every project room — deduped, empties dropped.
+ *  The power sweep covers EVERY managementRooms entry: the public read/write
+ *  semantics is a single management room (`managementRoomId` is the
+ *  authoritative accessor), but a hand-edited legacy config may carry
+ *  residual entries, and elevation/demotion must not silently skip them —
+ *  the sweep keeps master's full-list semantics (spec #99 评审修复).
  *  Shared by the elevation sweep (#42) and the demotion loop (#44) so both
  *  always agree on what "everywhere" means. */
 export function managedRoomIds(cfg: MsgBridgeConfig): string[] {
-  const mgmtRoomId = managementRoomId(cfg);
   return [
     ...new Set(
-      [cfg.space?.roomId, ...(mgmtRoomId ? [mgmtRoomId] : []), ...Object.keys(cfg.projects ?? {})].filter(
+      [cfg.space?.roomId, ...(cfg.managementRooms ?? []), ...Object.keys(cfg.projects ?? {})].filter(
         (id): id is string => Boolean(id)
       )
     ),

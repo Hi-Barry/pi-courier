@@ -7,8 +7,8 @@
  *    过去靠 `let sendPairingNotice | undefined` 加「回调不可能在接线完成
  *    前触发」的注释保证安全 —— 时序知识没有结构支撑(历史教训:同文件的
  *    内层 const 遮蔽曾让接线静默失效,真机冒烟才抓到)。现在模块持槽:
- *    回调从第一天指向已构造的本模块;槽未接线时配对码进缓冲,接线后按
- *    到达顺序补发 —— 接线前到达也不丢。
+ *    回调从第一天指向已构造的本模块;一律入队按序发出,接线前滞留缓冲,
+ *    接线后补发 —— 接线前到达也不丢,发出失败也不丢(置顶保留随队重试)。
  * 2. 收养许可:空间模式(multi-project + space.enabled)下,首个 DM 的
  *    收养默认保留给 bot 自建管理房;空间 ensure 降级的运行里重新开放。
  *    两态旗标从组合根闭包移入本模块,`allowAdoption()` 是唯一翻转口,
@@ -31,8 +31,8 @@ export interface StartupStateDeps {
 }
 
 export interface StartupState {
-  /** 配对码落地(ChallengeAuth 回调从第一天就调这里):槽未接线时缓冲
-   *  (不丢),接线后直发。 */
+  /** 配对码落地(ChallengeAuth 回调从第一天就调这里):一律入缓冲队列按序
+   *  发出;接线前滞留缓冲,发出失败置顶保留待下次随队重试。 */
   sendPairingNotice(text: string): Promise<void>;
   /** 组合根接线:写入落地目标并按到达顺序补发缓冲。首次接线生效,重复
    *  调用幂等忽略;返回的 Promise 在补发完成后 resolve。 */
@@ -46,9 +46,11 @@ export interface StartupState {
 export function createStartupState(deps: StartupStateDeps): StartupState {
   const { store } = deps;
 
-  // 配对码槽:接线前到达的文本先缓冲,接线后按到达顺序补发。这个窗口在
-  // 结构上只存在于进程启动的瞬间(回调不可能更早触发已成为不需要知道的
-  // 事),缓冲是安全网而非常规路径。
+  // 配对码槽:一律先入缓冲队列再按序发出 —— 接线前只是不发出(安全网),
+  // 接线后补发。发出失败(假 sink 抛错;生产 sendReply 自吞错,此路径实际
+  // 不可达)时该条置顶保留、停止本次补发,下一条配对码到达时随队重试 ——
+  // 「不丢、按到达顺序」在任何失败模式下都成立(评审修复:原 while+shift
+  // 在 deliver reject 时丢已 shift 项且余项永久滞留)。
   const pending: string[] = [];
   let sink: PairingSink | undefined;
 
@@ -64,24 +66,35 @@ export function createStartupState(deps: StartupStateDeps): StartupState {
     return mgmtRoom ? via(mgmtRoom, "matrix", text) : Promise.resolve();
   };
 
+  // 按序补发:首条失败即停并置顶保留(保序),不抛 —— 补发失败不改变调用
+  // 方时序,重试搭下一条配对码的便车。
+  const drain = async (): Promise<void> => {
+    while (sink && pending.length > 0) {
+      const text = pending[0]!;
+      try {
+        await deliver(sink, text);
+      } catch (err) {
+        logger.warn(`[startup] 配对码发出失败,保留缓冲待下次尝试: ${(err as Error).message}`);
+        return;
+      }
+      pending.shift();
+    }
+  };
+
   return {
     sendPairingNotice(text: string): Promise<void> {
+      pending.push(text);
       if (!sink) {
-        pending.push(text);
         logger.debug("[startup] 配对码在接线前到达,已缓冲(接线后补发)");
         return Promise.resolve();
       }
-      return deliver(sink, text);
+      return drain();
     },
 
     wirePairingSink(wired: PairingSink): Promise<void> {
       if (sink) return Promise.resolve();
       sink = wired;
-      return (async () => {
-        while (pending.length > 0) {
-          await deliver(sink, pending.shift()!);
-        }
-      })();
+      return drain();
     },
 
     allowAdoption(): void {

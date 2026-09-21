@@ -32,8 +32,12 @@ const MAX_STRING = 2000;
  * THE ONE SILENCE POLICY of this codebase lives in this docblock. Every
  * window must be listed here with its reason, so "why is this line quiet?"
  * always has a single place to look. Real errors must stay visible — only
- * the entries below are ever suppressed, and each window covers exactly the
- * call that expects the noise:
+ * the entries below are ever suppressed. Known limitation (honest about the
+ * mechanism): a window is a process-wide substring filter, not per-call
+ * correlation — while a window is open, any OTHER concurrent line matching
+ * its pattern is silenced too. The windows are scoped tight (one sync, one
+ * awaited call) to keep that collateral surface minimal; suppressed logging
+ * never changes values — errors still throw and callers still handle them:
  *
  * 1. Initial-sync replay noise (window opened in transports/matrix.ts around
  *    client.start()): the SDK's first sync replays history and emits two
@@ -46,9 +50,9 @@ const MAX_STRING = 2000;
  *    helper around each query member's SDK call): a query that answers
  *    404 / M_NOT_FOUND is a "not present" answer, not a failure — the
  *    RoomOps contract turns it into null — but the SDK still logs the raw
- *    HTTP error at ERROR. The per-call window silences exactly that call,
- *    so new query-shaped heals are quiet without any composition-root
- *    wrapping.
+ *    HTTP error at ERROR. The per-call window keeps new query-shaped heals
+ *    quiet without any composition-root wrapping (see the concurrency
+ *    limitation above).
  *
  * The returned closer removes exactly ONE copy of each substring this call
  * added, so nested windows sharing a pattern (sync window open while a
