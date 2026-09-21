@@ -80,13 +80,19 @@ describe("bot profile avatar heal", () => {
     return { store, roomOps };
   }
 
-  it("sets the agent-set avatar for a faceless bot and books the marker", async () => {
-    const { store, roomOps } = await runHeal();
-    const expected = pickPoolAvatarFile("box1", "agent");
-    expect(roomOps.uploadMedia).toHaveBeenCalledWith(readAvatarBundled(expected), "image/png");
-    expect(roomOps.setProfileAvatar).toHaveBeenCalledWith("mxc://server/avatar");
-    expect(store.get().agentAvatarVersion).toBe(1);
-  });
+  it(
+    "sets the agent-set avatar for a faceless bot and books the marker",
+    // 全量并行高负载下,资产读取+Buffer 比对会顶到 vitest 默认 5s 超时
+    // (基线即偶发,票2 收口时在本机复现),放宽到 30s。
+    { timeout: 30_000 },
+    async () => {
+      const { store, roomOps } = await runHeal();
+      const expected = pickPoolAvatarFile("box1", "agent");
+      expect(roomOps.uploadMedia).toHaveBeenCalledWith(readAvatarBundled(expected), "image/png");
+      expect(roomOps.setProfileAvatar).toHaveBeenCalledWith("mxc://server/avatar");
+      expect(store.get().agentAvatarVersion).toBe(1);
+    },
+  );
 
   it("keeps an existing bot avatar once the marker is booked (只补缺)", async () => {
     const { store, roomOps } = await runHeal(
