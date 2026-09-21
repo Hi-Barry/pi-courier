@@ -1,5 +1,3 @@
-import type { ExternalMessage } from "../types.js";
-
 /**
  * Room-management capability (Matrix rooms today). Consumed by the /pmctl
  * path, management-room branding and the startup space ensure; absent in

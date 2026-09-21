@@ -10,18 +10,17 @@
  *   Messenger <── replies <────────── bridge <── agent events (stdout JSONL)
  */
 
-import * as os from "node:os";
-import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
-import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, isSpaceMode, managementRoomId } from "./config.js";
+import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore } from "./config.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
-import { ensureSpaceAndManagementRoom, runStartupHeals } from "./space.js";
+import { ensureSpaceAndManagementRoom } from "./space.js";
+import { createStartupState, runStartupHeals } from "./startup-state.js";
 import { AttachmentStore } from "./transports/attachments.js";
 import type { RoomOps } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
@@ -90,16 +89,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const configLevel = typeof config.logLevel === "string" ? parseLogLevel(config.logLevel) : undefined;
   setLogLevel(cliLevel ?? configLevel ?? "info");
 
-  // Pairing-code sink (spec #93 ticket 3): the code is only useful to the
-  // ADMIN, who usually is not tailing the server log — mirror it into the
-  // management room when one exists (degrades to log-only before adoption).
-  // sendReply is declared further down; the callback cannot fire before the
-  // startup wiring completes, so the late read is safe here.
-  let sendPairingNotice: ((text: string) => Promise<void>) | undefined;
+  // ---- startup state (spec #99 票7 / #106) ----------------------------------
+  // 组合根的三块启动期状态(配对码去向、收养许可、自愈编排)收进可注入
+  // 模块,先于一切使用它的接线构造:ChallengeAuth 的回调从第一天就指向
+  // 已构造的槽 —— 不再有「先声明、约 200 行后才赋值 + 注释保平安」的
+  // 晚绑定;槽未接线时配对码进缓冲,接线后补发。
+  const startup = createStartupState({ store });
   const auth = new ChallengeAuth(
     (code, username) => {
       logger.info(`🔐 Challenge code for @${username}: ${code}`);
-      void sendPairingNotice?.(`🔐 配对码 @${username}: ${code}(2 分钟内有效,发给该用户用于配对)`);
+      void startup.sendPairingNotice(`🔐 配对码 @${username}: ${code}(2 分钟内有效,发给该用户用于配对)`);
     },
     (message, level) => logger.info(`[auth:${level ?? "info"}] ${message}`)
   );
@@ -185,8 +184,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // ---- message routing ------------------------------------------------------
   const sendReply = async (chatId: string, transport: string, text: string): Promise<void> => {
     try {
-      // transport 参数保留:ExternalMessage/ReplyTarget 的路由元数据与日志
-      // 仍携带它;但查找 adapter 的注册表间接层已退役(C8)。
+      // transport 参数仅诊断显示(下方日志与错误文案拼贴),不参与 adapter
+      // 查找 —— C8 退役注册表后,全文已无按 transport 名寻址的消费方
+      // (grep 证实:仅剩字符串插值);签名保留以维持日志口径不变。
+      // ExternalMessage.transport 字段本身是路由元数据,照旧携带。
       const t = matrix;
       if (!t) throw new Error(`Transport ${transport} not found`);
       if (!t.isConnected) throw new Error(`Transport ${transport} not connected`);
@@ -198,17 +199,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
   };
   // Silent no-op when the transport is missing/disconnected (typing is best-effort).
-  const sendTyping = async (chatId: string, transport: string): Promise<void> => {
+  const sendTyping = async (chatId: string, _transport: string): Promise<void> => {
     if (matrix?.isConnected) await matrix.sendTyping(chatId);
   };
   const disconnectAll = (): Promise<unknown> => (matrix ? matrix.disconnect() : Promise.resolve());
 
-  // Late-bound pairing sink (see the ChallengeAuth callback above): forward
-  // the pairing code into the management room when one is known.
-  sendPairingNotice = (text: string): Promise<void> => {
-    const mgmtRoom = managementRoomId(store.get());
-    return mgmtRoom ? sendReply(mgmtRoom, "matrix", text) : Promise.resolve();
-  };
+  // 配对码去向接线(票7,spec #99 #106):落地目标此刻才存在 —— 交给启动
+  // 状态模块持槽;此前到达的配对码已被缓冲,接线即按序补发。不等待:补发
+  // 永不阻塞启动(常规路径缓冲为空,这就是一次纯赋值)。
+  void startup.wirePairingSink(sendReply);
 
   // ---- space (organizational) mode -----------------------------------------
   // With the space enabled (multi-project only), the management room is
@@ -217,9 +216,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // a DM arriving while the ensure is still in flight is served normally
   // but not adopted — same accepted startup-window class as the lazy
   // project-process early events.
-  const spaceEnabled = isSpaceMode(store.get());
-  let managementRoomAdoptionAllowed = !spaceEnabled;
-
+  // 收养许可的两态(初值 !isSpaceMode,降级唯一翻转口 allowAdoption)归
+  // 启动状态模块持有;router 只拿到只读查询。
   const pmctl = new PmctlController({ projectManager, roomOps, store });
 
   const router = createMessageRouter({
@@ -230,7 +228,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     roomOps,
     store,
     pmctl,
-    managementRoomAdoptionAllowed: () => managementRoomAdoptionAllowed,
+    managementRoomAdoptionAllowed: () => startup.managementRoomAdoptionAllowed(),
   });
 
   matrix?.onMessage((msg) => {
@@ -273,7 +271,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // rpc.start so the room wiring is complete before the first prompt lands.
   if (roomOps) {
     const spaceResult = await ensureSpaceAndManagementRoom({ roomOps, store, sendReply });
-    if (spaceResult === "degraded") managementRoomAdoptionAllowed = true;
+    if (spaceResult === "degraded") startup.allowAdoption();
 
     // #42 票1: trusted users are admins in every managed room. Runs
     // unconditionally — space or degraded mode alike (the adopted-DM
@@ -281,7 +279,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // one); per-room failures warn inside and never touch the startup
     // tri-state above.
     // The whole heal sequence (power sweep → room identity → bot avatar)
-    // lives in runStartupHeals (spec #99 #105). Identity reads on fresh
+    // lives in runStartupHeals — 编排自 space.ts 迁入启动状态模块
+    // (spec #99 #105 建立,#106 票7 搬家)。Identity reads on fresh
     // rooms hit expected M_NOT_FOUNDs — silenced per call inside the
     // RoomOps adapter itself (matrix-rooms.ts), so no suppression window
     // is opened here anymore and new query-shaped heals stay quiet for

@@ -12,7 +12,6 @@ import { createInterface } from "node:readline";
 import {
   attachmentsDirectory,
   attachmentsMaxMb,
-  defaultProjectsRoot,
   effectiveInstanceName,
   effectiveWorkdir,
   loadConfig,

@@ -6,7 +6,6 @@
  *   agent events ────────────────> router ──> reply back to the messenger
  */
 
-import * as os from "node:os";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
@@ -30,7 +29,6 @@ import {
   formatBashReply,
   handleSlashCommand,
   parseBangCommand,
-  type QueueSnapshot,
 } from "./command-map.js";
 import { ExtensionQuestions, type ExtensionUIRequestView, extensionUiTimeoutMs } from "./extension-questions.js";
 import type { PiRpc } from "./pi-rpc.js";
