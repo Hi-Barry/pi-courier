@@ -1,21 +1,16 @@
-import * as os from "node:os";
-import * as path from "node:path";
 import MarkdownIt from "markdown-it";
-import type { ILogger } from "matrix-bot-sdk";
-import {
-  AutojoinRoomsMixin,
-  LogService,
-  MatrixClient,
-  RustSdkCryptoStorageProvider,
-  RustSdkCryptoStoreType,
-  SimpleFsStorageProvider,
-} from "matrix-bot-sdk";
 import { logger, suppressLogLines } from "../logger.js";
 import { buildGroupJoinHint } from "../management-room.js";
 import { createQuoteCache, type QuoteCache, toExcerpt } from "../quote-cache.js";
 import type { ExternalMessage } from "../types.js";
 import type { MediaSource } from "./attachments.js";
 import { AttachmentStore } from "./attachments.js";
+import {
+  createMatrixClient,
+  type MatrixClientConfig,
+  type MatrixClientFactory,
+  type MatrixClientPort,
+} from "./matrix-client.js";
 import { createEventTranslator, isMediaContent, type MediaEventContent } from "./matrix-events.js";
 import { MatrixRoomOps } from "./matrix-rooms.js";
 
@@ -26,10 +21,16 @@ import { MatrixRoomOps } from "./matrix-rooms.js";
  * Message I/O only. The room-capability half (RoomOps) lives in the
  * composed matrix-rooms adapter; the composition root hands that to the
  * /pmctl path and the startup space ensure.
+ *
+ * The SDK client is reached only through the MatrixClientPort (built by the
+ * injected factory, default = the production adapter in matrix-client.ts):
+ * storage paths, crypto storage, the auto-join mixin and the SDK log facade
+ * all live in the factory module, so this file holds no concrete SDK
+ * classes and tests inject fakes.
  */
 export class MatrixProvider {
   readonly type = "matrix";
-  private client?: MatrixClient;
+  private client?: MatrixClientPort;
   private _isConnected = false;
   private messageHandler?: (message: ExternalMessage) => void;
   private errorHandler?: (error: Error) => void;
@@ -55,11 +56,13 @@ export class MatrixProvider {
   });
 
   constructor(
-    private config: { homeserverUrl: string; accessToken: string; encryption?: boolean },
+    private config: MatrixClientConfig,
     /** Whether a group room is enabled for the bridge (join-hint UX only;
      *  all policy — authorization, challenges, admin commands, group /enable —
      *  lives in the message-router pipeline). */
-    private isRoomEnabled: (chatId: string) => boolean
+    private isRoomEnabled: (chatId: string) => boolean,
+    /** Client factory seam (tests inject fakes; production uses the default). */
+    private clientFactory: MatrixClientFactory = createMatrixClient
   ) {}
 
   /**
@@ -88,41 +91,10 @@ export class MatrixProvider {
       throw new Error("Matrix homeserver URL and access token required");
     }
 
-    const storagePath = path.join(
-      os.homedir(),
-      ".pi",
-      "pi-courier-matrix-store.json"
-    );
-    const storage = new SimpleFsStorageProvider(storagePath);
-
-    // Set up E2EE crypto storage if encryption is enabled.
-    // Uses @matrix-org/matrix-sdk-crypto-nodejs (native Rust, SQLite on disk).
-    // Crypto state persists across restarts — same device, same keys.
-    // The device must be verified once from another Matrix client (Element, etc).
-    let cryptoProvider: RustSdkCryptoStorageProvider | undefined;
-    if (this.config.encryption !== false) {
-      try {
-        const cryptoStorePath = path.join(
-          os.homedir(),
-          ".pi",
-          "pi-courier-matrix-crypto"
-        );
-        cryptoProvider = new RustSdkCryptoStorageProvider(cryptoStorePath, RustSdkCryptoStoreType.Sqlite);
-        logger.info("[Matrix] E2EE crypto storage enabled (Rust/SQLite)");
-      } catch (err) {
-        logger.warn("[Matrix] E2EE crypto not available, continuing without encryption:", (err as Error).message);
-      }
-    }
-
-    this.client = new MatrixClient(
-      homeserverUrl,
-      accessToken,
-      storage,
-      cryptoProvider
-    );
-
-    // Auto-join rooms the bot is invited to
-    AutojoinRoomsMixin.setupOnClient(this.client);
+    // Storage paths, crypto storage (with graceful degradation), the
+    // auto-join mixin and the SDK log facade live in the factory module —
+    // the provider talks to the client only through the port.
+    this.client = this.clientFactory(this.config);
 
     // Cache bot user ID (never changes)
     this.botUserId = await this.client.getUserId();
@@ -177,19 +149,6 @@ export class MatrixProvider {
       void this.handleMessage(roomId, event).catch((err: Error) => this.errorHandler?.(err));
     });
 
-    // Route SDK-internal logs through the shared leveled logger — trace/debug
-    // land on debug (silent at the default info threshold), info/warn/error
-    // keep their level. The [matrix-sdk:*] prefix keeps SDK lines greppable
-    // apart from the adapter's own [Matrix] state logs.
-    const sdkLogAdapter: ILogger = {
-      trace: (mod, ...args) => logger.debug(`[matrix-sdk:${mod}]`, ...args),
-      debug: (mod, ...args) => logger.debug(`[matrix-sdk:${mod}]`, ...args),
-      info:  (mod, ...args) => logger.info(`[matrix-sdk:${mod}]`, ...args),
-      warn:  (mod, ...args) => logger.warn(`[matrix-sdk:${mod}]`, ...args),
-      error: (mod, ...args) => logger.error(`[matrix-sdk:${mod}]`, ...args),
-    };
-    LogService.setLogger(sdkLogAdapter);
-
     try {
       // During initial sync the SDK replays historical events and tries to
       // decrypt them. For E2EE rooms this produces two known error patterns:
@@ -237,8 +196,10 @@ export class MatrixProvider {
     }));
     this.connectedAt = Date.now();
     this._isConnected = true;
-    this.roomOps.encryptionAvailable = cryptoProvider !== undefined;
-    const cryptoStatus = cryptoProvider ? "E2EE enabled" : "E2EE disabled";
+    // The port carries the crypto verdict: the factory leaves `crypto`
+    // undefined when encryption is off or the Rust stack failed to load.
+    this.roomOps.encryptionAvailable = this.client.crypto !== undefined;
+    const cryptoStatus = this.client.crypto ? "E2EE enabled" : "E2EE disabled";
     logger.info(`✅ Matrix connected as ${this.botUserId} (${rooms.length} rooms, ${cryptoStatus})`);
   }
 
@@ -344,7 +305,7 @@ export class MatrixProvider {
               // Our EncryptedMediaFile is a structural subset of the SDK's
               // EncryptedFile; at runtime this IS the event's original object,
               // so every field the Rust decrypt needs (kty/key_ops/…) is there.
-              return crypto.decryptMedia(file as Parameters<typeof crypto.decryptMedia>[0]);
+              return crypto.decryptMedia(file);
             },
           }
         : {}),

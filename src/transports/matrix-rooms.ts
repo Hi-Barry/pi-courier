@@ -1,5 +1,6 @@
-import { type MatrixClient, MatrixError } from "matrix-bot-sdk";
+import { MatrixError } from "matrix-bot-sdk";
 import type { RoomOps } from "./interface.js";
+import type { MatrixClientPort } from "./matrix-client.js";
 
 /** A missing (or not-visible) state event is a query answer, not a failure —
  *  shared by every getRoomStateEvent-backed query member. */
@@ -26,14 +27,14 @@ export class MatrixRoomOps implements RoomOps {
 
   constructor(
     private deps: {
-      getClient: () => MatrixClient | undefined;
+      getClient: () => MatrixClientPort | undefined;
       getBotUserId: () => string | undefined;
       /** Transport-side cache purge after the bot actively leaves a room. */
       onLeftRoom: (roomId: string) => void;
     }
   ) {}
 
-  private get client(): MatrixClient {
+  private get client(): MatrixClientPort {
     const client = this.deps.getClient();
     if (!client) throw new Error("Matrix 未连接");
     return client;
