@@ -91,6 +91,22 @@ export function bookedAvatarVersion(
   }
 }
 
+/** The write twin of bookedAvatarVersion: the config patch that books a
+ *  set's migration marker once its re-brand pass fully succeeded. Typed per
+ *  set (no string-computed keys) so the store update stays fully checked. */
+export function avatarVersionMarker(
+  set: AvatarSet,
+): { agentAvatarVersion: number } | { spaceAvatarVersion: number } | { roomAvatarVersion: number } {
+  switch (set) {
+    case "agent":
+      return { agentAvatarVersion: AVATAR_SET_VERSION.agent };
+    case "space":
+      return { spaceAvatarVersion: AVATAR_SET_VERSION.space };
+    case "room":
+      return { roomAvatarVersion: AVATAR_SET_VERSION.room };
+  }
+}
+
 /** Read a bundled avatar PNG. Throws if the asset is missing — callers treat
  *  that like any other identity-heal failure (warn + retry next start). */
 export function readAvatarBundled(file: string): Buffer {

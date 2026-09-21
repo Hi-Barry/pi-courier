@@ -1,4 +1,5 @@
 import { MatrixError } from "matrix-bot-sdk";
+import { suppressLogLines } from "../logger.js";
 import type { RoomOps } from "./interface.js";
 import type { MatrixClientPort } from "./matrix-client.js";
 
@@ -6,6 +7,32 @@ import type { MatrixClientPort } from "./matrix-client.js";
  *  shared by every getRoomStateEvent-backed query member. */
 function isStateNotFound(err: unknown): boolean {
   return err instanceof MatrixError && (err.statusCode === 404 || err.errcode === "M_NOT_FOUND");
+}
+
+/**
+ * Expected-miss window: the SDK logs a failed request at ERROR before
+ * rejecting it (lib/http.js, MatrixHttpClient), so a query that is ABOUT to
+ * be answered "not found" first floods the log with an ERROR line. This
+ * helper opens the silence window around exactly one awaited SDK call and
+ * closes it in finally — the window can never leak past the call.
+ *
+ * Why silence at all is a single documented policy: see the suppressLogLines
+ * docblock in src/logger.ts (entry 2, expected-miss queries). The 404 → null
+ * contract itself is unchanged; only the SDK's noise for it disappears, and
+ * never for non-404 errors (their lines carry a different errcode).
+ */
+const EXPECTED_MISS_PATTERN = "M_NOT_FOUND";
+
+async function queryExpectedMiss<T>(read: () => Promise<T>): Promise<T | null> {
+  const closeMissWindow = suppressLogLines(EXPECTED_MISS_PATTERN);
+  try {
+    return await read();
+  } catch (err) {
+    if (isStateNotFound(err)) return null;
+    throw err;
+  } finally {
+    closeMissWindow();
+  }
 }
 
 /**
@@ -19,7 +46,10 @@ function isStateNotFound(err: unknown): boolean {
  * transport concerns. Failure semantics follow the RoomOps doc: every
  * operation throws with a meaningful message, the query members
  * (getBotUserId, encryptionAvailable, getPowerLevels) report not-connected
- * or not-present instead.
+ * or not-present instead. The query members' expected 404 misses are
+ * silenced per call at this boundary (queryExpectedMiss) — callers never
+ * need a log-suppression window to stay quiet; the policy lives in
+ * src/logger.ts.
  */
 export class MatrixRoomOps implements RoomOps {
   /** Set by MatrixProvider after connect, once the crypto stack verdict is in. */
@@ -124,24 +154,18 @@ export class MatrixRoomOps implements RoomOps {
   /** Read a room's display name; null when absent (query-member contract,
    *  same 404 / M_NOT_FOUND handling as getPowerLevels). */
   async getRoomName(roomId: string): Promise<string | null> {
-    try {
-      const event = (await this.client.getRoomStateEvent(roomId, "m.room.name", "")) as { name?: string };
-      return event?.name ?? null;
-    } catch (err) {
-      if (isStateNotFound(err)) return null;
-      throw err;
-    }
+    const event = await queryExpectedMiss(
+      () => this.client.getRoomStateEvent(roomId, "m.room.name", "") as Promise<{ name?: string }>,
+    );
+    return event?.name ?? null;
   }
 
   /** Read a room's avatar mxc URL; null when the room has none. */
   async getRoomAvatar(roomId: string): Promise<string | null> {
-    try {
-      const content = (await this.client.getRoomStateEvent(roomId, "m.room.avatar", "")) as { url?: string };
-      return content?.url ?? null;
-    } catch (err) {
-      if (isStateNotFound(err)) return null;
-      throw err;
-    }
+    const content = await queryExpectedMiss(
+      () => this.client.getRoomStateEvent(roomId, "m.room.avatar", "") as Promise<{ url?: string }>,
+    );
+    return content?.url ?? null;
   }
 
   /** Set a room's avatar from an uploaded mxc URL (m.room.avatar state). */
@@ -156,13 +180,8 @@ export class MatrixRoomOps implements RoomOps {
    *  avatar_url sub-key is optional — a missing profile answers 404
    *  M_NOT_FOUND, an empty one comes back as a profile without the key). */
   async getProfileAvatarUrl(): Promise<string | null> {
-    try {
-      const profile = await this.client.getUserProfile(await this.client.getUserId());
-      return (profile as { avatar_url?: string } | undefined)?.avatar_url ?? null;
-    } catch (err) {
-      if (isStateNotFound(err)) return null;
-      throw err;
-    }
+    const profile = await queryExpectedMiss(async () => this.client.getUserProfile(await this.client.getUserId()));
+    return (profile as { avatar_url?: string } | undefined)?.avatar_url ?? null;
   }
 
   /** Set the bot account's own profile avatar from an uploaded mxc URL. */
@@ -183,15 +202,12 @@ export class MatrixRoomOps implements RoomOps {
   /** Read a room's power-level state (m.room.power_levels); null when the
    *  room reports 404 / M_NOT_FOUND for it (the query-member contract). */
   async getPowerLevels(roomId: string): Promise<Record<string, unknown> | null> {
-    try {
-      return (await this.client.getRoomStateEvent(roomId, "m.room.power_levels", "")) as Record<string, unknown>;
-    } catch (err) {
-      // A room without (visible) power levels is a query result, not a
-      // failure: 404 / M_NOT_FOUND reports null and the unified trusted-user
-      // elevation treats it as an empty users map (writes anyway).
-      if (isStateNotFound(err)) return null;
-      throw err;
-    }
+    // A room without (visible) power levels is a query result, not a failure:
+    // 404 / M_NOT_FOUND reports null and the unified trusted-user elevation
+    // treats it as an empty users map (writes anyway).
+    return queryExpectedMiss(
+      () => this.client.getRoomStateEvent(roomId, "m.room.power_levels", "") as Promise<Record<string, unknown>>,
+    );
   }
 
   /** Have the bot actively leave a room (used by /pmctl rm). */

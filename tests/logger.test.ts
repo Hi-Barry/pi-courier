@@ -153,4 +153,26 @@ describe("suppressLogLines (sync-noise window)", () => {
 
     close();
   });
+
+  it("nested windows with the same pattern each remove only their own copy", () => {
+    // The sync window (matrix.ts) and the per-call expected-miss window
+    // (matrix-rooms.ts) share the "M_NOT_FOUND" pattern; an inner closer must
+    // never tear down the outer window's copy.
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const outer = suppressLogLines("M_NOT_FOUND");
+    const inner = suppressLogLines("M_NOT_FOUND");
+    const log = createLogger("info");
+
+    log.error("M_NOT_FOUND noise while both open");
+    expect(err).not.toHaveBeenCalled();
+
+    inner();
+    log.error("M_NOT_FOUND still silenced by the outer window");
+    expect(err).not.toHaveBeenCalled();
+
+    outer();
+    log.error("M_NOT_FOUND visible again");
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(err.mock.calls[0][0]).toContain("M_NOT_FOUND visible again");
+  });
 });

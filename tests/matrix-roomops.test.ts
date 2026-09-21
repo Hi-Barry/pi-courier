@@ -7,7 +7,9 @@ import { MatrixError } from "matrix-bot-sdk";
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClientPort } from "../src/transports/matrix-client.js";
 import { MatrixRoomOps } from "../src/transports/matrix-rooms.js";
+import { logger } from "../src/logger.js";
 import { fakeMatrixClient, type FakeMatrixClient } from "./matrix-fakes.js";
+import { captureConsole } from "./helpers.js";
 
 function makeOps(opts: { botUserId?: string | null; connected?: boolean } = {}) {
   const client = fakeMatrixClient();
@@ -267,5 +269,59 @@ describe("MatrixRoomOps 未连接", () => {
     const { ops } = makeOps({ connected: false });
     expect(ops.getBotUserId()).toBeNull();
     expect(ops.encryptionAvailable).toBe(false);
+  });
+});
+
+describe("MatrixRoomOps 预期 miss 静默(适配器边界,spec #99 #105)", () => {
+  // SDK 在请求失败时先同步打 ERROR 再 reject(lib/http.js:MatrixHttpClient);
+  // 假客户端在这里复刻同一条链——经共享 logger 门面打出 SDK 形状的错误行,
+  // 再抛 MatrixError——让「静音」成为可观察行为断言而不是实现细节。
+  const sdkErrorLine = (body: string) =>
+    logger.error("[matrix-sdk:MatrixHttpClient]", `(REQ-1) ${body}`);
+
+  it("404 miss → null 且 SDK 的 ERROR 行不落线;窗口只盖这次调用", async () => {
+    const lines = captureConsole();
+    const { ops, client } = makeOps();
+    client.getRoomStateEvent.mockImplementation(async () => {
+      sdkErrorLine('{"errcode":"M_NOT_FOUND","error":"Event not found."}');
+      throw notFound();
+    });
+
+    await expect(ops.getRoomName("!r:s")).resolves.toBeNull();
+    expect(lines.join("\n")).not.toContain("M_NOT_FOUND");
+
+    // 窗口已关:同模式的后续错误照常可见(真错误不被殃及)。
+    sdkErrorLine('{"errcode":"M_NOT_FOUND","error":"later real noise"}');
+    expect(lines.join("\n")).toContain("later real noise");
+  });
+
+  it("getRoomAvatar / getPowerLevels / getProfileAvatarUrl 的 404 miss 同样安静", async () => {
+    const lines = captureConsole();
+    const { ops, client } = makeOps();
+    client.getRoomStateEvent.mockImplementation(async () => {
+      sdkErrorLine('{"errcode":"M_NOT_FOUND","error":"Event not found."}');
+      throw notFound();
+    });
+    client.getUserProfile.mockImplementation(async () => {
+      sdkErrorLine('{"errcode":"M_NOT_FOUND","error":"Profile not found."}');
+      throw notFound();
+    });
+
+    await expect(ops.getRoomAvatar("!r:s")).resolves.toBeNull();
+    await expect(ops.getPowerLevels("!r:s")).resolves.toBeNull();
+    await expect(ops.getProfileAvatarUrl()).resolves.toBeNull();
+    expect(lines.join("\n")).not.toContain("M_NOT_FOUND");
+  });
+
+  it("非 404 照抛且其 ERROR 行不被静音(真错误必须可见)", async () => {
+    const lines = captureConsole();
+    const { ops, client } = makeOps();
+    client.getRoomStateEvent.mockImplementation(async () => {
+      sdkErrorLine('{"errcode":"M_FORBIDDEN","error":"You don' + "'t have permission." + '"}');
+      throw forbidden();
+    });
+
+    await expect(ops.getRoomName("!r:s")).rejects.toThrow(MatrixError);
+    expect(lines.join("\n")).toContain("M_FORBIDDEN");
   });
 });
