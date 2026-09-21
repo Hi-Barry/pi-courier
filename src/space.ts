@@ -33,7 +33,7 @@
  */
 
 import * as os from "node:os";
-import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName, effectiveWorkdir, isSpaceMode, nativeMxid } from "./config.js";
+import { activeSpaceRoomId, adoptManagementRoom, type ConfigStore, effectiveInstanceName, effectiveWorkdir, isSpaceMode, managementRoomId, nativeMxid } from "./config.js";
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
 import {
@@ -91,10 +91,10 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
       logger.info(`[space] 空间已创建: ${spaceId}`);
     }
 
-    let managementRoomId = (cfg.managementRooms ?? [])[0];
-    if (!managementRoomId) {
+    let mgmtRoomId = managementRoomId(cfg);
+    if (!mgmtRoomId) {
       const encrypted = cfg.matrix?.encryption !== false && roomOps.encryptionAvailable;
-      managementRoomId = await roomOps.createRoom({
+      mgmtRoomId = await roomOps.createRoom({
         name: managementRoomName(instanceName),
         inviteUserIds,
         encrypted,
@@ -105,19 +105,21 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
       // management bookkeeping too (mirror of invitedUsers above) so the
       // self-heal never re-invites them (Matrix rejects re-invites).
       store.update({
-        managementRooms: [managementRoomId],
+        // The guard above means the list was empty here — adopting the freshly
+        // created room appends exactly the single-element write this used to be.
+        ...adoptManagementRoom(cfg, mgmtRoomId),
         space: {
           ...(store.get().space ?? {}),
           managementInvitedUsers: cfg.auth?.trustedUsers ?? [],
         },
       });
       logger.info(
-        `[space] 管理房间已创建: ${managementRoomId}${encrypted ? " (E2EE)" : ""}`
+        `[space] 管理房间已创建: ${mgmtRoomId}${encrypted ? " (E2EE)" : ""}`
       );
       try {
         const botAccount = roomOps.getBotUserId() ?? "(未知)";
         await sendReply(
-          managementRoomId,
+          mgmtRoomId,
           "matrix",
           `${buildManagementRoomHelp(instanceName, botAccount, workdir)}\n\n` +
             `🛡️ 信任用户会自动获得房间管理员权限(含新建的项目房间)。`
@@ -131,7 +133,7 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
     // It self-heals a failed link from an earlier start, and a legacy
     // adopted DM (bot not its owner) may reject the child-side parent event.
     try {
-      await roomOps.addRoomToSpace(spaceId, managementRoomId);
+      await roomOps.addRoomToSpace(spaceId, mgmtRoomId);
       logger.debug(`[space] 空间链接就绪: ${managementRoomId} → ${spaceId}`);
     } catch (err) {
       logger.warn(
@@ -230,9 +232,9 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
   const targets: Array<{ roomId: string; file: string; label: string; set: AvatarSet }> = [
     { roomId: spaceId, file: pickPoolAvatarFile(instanceName, "space"), label: "空间", set: "space" },
   ];
-  const managementRoomId = (cfg.managementRooms ?? [])[0];
-  if (managementRoomId) {
-    targets.push({ roomId: managementRoomId, file: managementAvatarFile(), label: "管理房间", set: "room" });
+  const mgmtRoomId = managementRoomId(cfg);
+  if (mgmtRoomId) {
+    targets.push({ roomId: mgmtRoomId, file: managementAvatarFile(), label: "管理房间", set: "room" });
   }
   for (const [roomId, project] of Object.entries(cfg.projects ?? {})) {
     targets.push({
@@ -341,13 +343,16 @@ export async function elevateTrustedUsersInRoom(
 }
 
 /** Derive every room this instance manages from config: the space, the
- *  management room(s) and every project room — deduped, empties dropped.
+ *  management room (managementRoomId — the public semantics is a single
+ *  management room; both write paths keep the list at most one element long)
+ *  and every project room — deduped, empties dropped.
  *  Shared by the elevation sweep (#42) and the demotion loop (#44) so both
  *  always agree on what "everywhere" means. */
 export function managedRoomIds(cfg: MsgBridgeConfig): string[] {
+  const mgmtRoomId = managementRoomId(cfg);
   return [
     ...new Set(
-      [cfg.space?.roomId, ...(cfg.managementRooms ?? []), ...Object.keys(cfg.projects ?? {})].filter(
+      [cfg.space?.roomId, ...(mgmtRoomId ? [mgmtRoomId] : []), ...Object.keys(cfg.projects ?? {})].filter(
         (id): id is string => Boolean(id)
       )
     ),
@@ -475,8 +480,9 @@ export async function inviteUserToSpaceOnce(
  *  twin of inviteUserToSpaceOnce: the management room is where /pmctl lives,
  *  and a space member who was never invited into it could see the room under
  *  the space but never enter it. Guards: space mode must be active with a
- *  created space (activeSpaceRoomId) AND managementRooms[0] must exist — the
- *  degraded path's adopted management DM is never used to pull people in.
+ *  created space (activeSpaceRoomId) AND a management room must exist
+ *  (managementRoomId) — the degraded path's adopted management DM is never
+ *  used to pull people in.
  *  Bookkeeping: space.managementInvitedUsers; a failed invite is NOT
  *  recorded — the startup ensure self-heals it. Returns true when the invite
  *  went out. */
@@ -487,12 +493,12 @@ export async function inviteUserToManagementRoomOnce(
 ): Promise<boolean> {
   const cfg = store.get();
   if (!activeSpaceRoomId(cfg)) return false;
-  const managementRoomId = (cfg.managementRooms ?? [])[0];
-  if (!managementRoomId) return false;
+  const mgmtRoomId = managementRoomId(cfg);
+  if (!mgmtRoomId) return false;
   const invited = cfg.space?.managementInvitedUsers ?? [];
   if (invited.includes(namespacedUser)) return false;
   try {
-    await roomOps.inviteUser(managementRoomId, nativeMxid(namespacedUser));
+    await roomOps.inviteUser(mgmtRoomId, nativeMxid(namespacedUser));
     return recordInvited(store, "managementInvitedUsers", invited, namespacedUser, false, "管理房间");
   } catch (err) {
     if (isAlreadyInRoomError(err)) {

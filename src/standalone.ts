@@ -14,7 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
-import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, isSpaceMode } from "./config.js";
+import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, isSpaceMode, managementRoomId } from "./config.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel , suppressLogLines } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
@@ -206,7 +206,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // Late-bound pairing sink (see the ChallengeAuth callback above): forward
   // the pairing code into the management room when one is known.
   sendPairingNotice = (text: string): Promise<void> => {
-    const mgmtRoom = store.get().managementRooms?.[0];
+    const mgmtRoom = managementRoomId(store.get());
     return mgmtRoom ? sendReply(mgmtRoom, "matrix", text) : Promise.resolve();
   };
 
