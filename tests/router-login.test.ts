@@ -12,7 +12,8 @@ import type { AuthInteraction, Credential, CredentialInfo } from "@earendil-work
 import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { LoginManager, type LoginRuntime } from "../src/auth/headless-login";
 import { ConfigStore } from "../src/config";
-import { createMessageRouter, type ExtensionUIRequestView } from "../src/rpc/message-router";
+import { createMessageRouter } from "../src/rpc/message-router";
+import type { ExtensionUIRequestView } from "../src/rpc/extension-questions";
 import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { ExtensionUIResponsePayload, PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";

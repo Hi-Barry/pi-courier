@@ -5,10 +5,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   AttachmentStore,
   AttachmentTooLargeError,
+  sanitizeMediaFilename,
   sanitizeRoomKey,
   type MediaSource,
 } from "../src/transports/attachments.js";
@@ -160,5 +162,58 @@ describe("sanitizeRoomKey", () => {
 
   it("contains only safe characters", () => {
     expect(sanitizeRoomKey("!abcdef:matrix.purplelin.com")).toMatch(/^[A-Za-z0-9._-]+-[0-9a-f]{8}$/);
+  });
+});
+
+// ─── 文件名消毒(自 matrix-utils.test.ts 随函数迁入,spec #99/#101)───
+
+describe("sanitizeMediaFilename", () => {
+  it("prefixes a deterministic hash of the mxc url", () => {
+    expect(sanitizeMediaFilename("photo.png", "mxc://s/abc"))
+      .toBe(sanitizeMediaFilename("photo.png", "mxc://s/abc"));
+    expect(sanitizeMediaFilename("a.png", "mxc://s/1")).not.toBe(sanitizeMediaFilename("a.png", "mxc://s/2"));
+  });
+
+  it("strips path traversal components", () => {
+    const name = sanitizeMediaFilename("../../etc/passwd", "mxc://s/abc");
+    expect(name).not.toContain("..");
+    expect(name).not.toContain("/");
+    expect(name.endsWith("passwd")).toBe(true);
+  });
+
+  it("strips windows separators and control characters", () => {
+    const name = sanitizeMediaFilename("..\\..\\x\u0000y\r\n z.png", "mxc://s/abc");
+    expect(name).not.toMatch(/[\\/]/);
+    expect(name).not.toMatch(/[\x00-\x1f\x7f]/);
+  });
+
+  it("never starts with dots (hidden file / relative-path tricks)", () => {
+    expect(sanitizeMediaFilename("..hidden", "mxc://s/abc").endsWith("hidden")).toBe(true);
+    expect(sanitizeMediaFilename("..", "mxc://s/abc")).not.toContain("..");
+  });
+
+  it("regression: ' ..' (space-led dots) cannot survive as '..' (fast-check 反例固化)", () => {
+    const name = sanitizeMediaFilename(" ..", "mxc://s/abc");
+    expect(name).not.toContain("..");
+    expect(name).not.toMatch(/^\s/);
+  });
+
+  it("falls back to 'file' when nothing safe remains", () => {
+    expect(sanitizeMediaFilename("", "mxc://s/abc")).toMatch(/^[0-9a-f]{12}-file$/);
+    expect(sanitizeMediaFilename(undefined, "mxc://s/abc")).toMatch(/^[0-9a-f]{12}-file$/);
+  });
+
+  it("property: output is safe for any input (no separators, no traversal, non-empty)", () => {
+    const mxc = fc.constant("mxc://server/mediaId");
+    const arbBody = fc.string({ maxLength: 300 });
+    fc.assert(
+      fc.property(arbBody, mxc, (body, url) => {
+        const name = sanitizeMediaFilename(body, url);
+        expect(name.length).toBeGreaterThan(0);
+        expect(name).not.toMatch(/[/\\]/);
+        expect(name).not.toContain("..");
+        expect(name).toMatch(/^[0-9a-f]{12}-/);
+      })
+    );
   });
 });

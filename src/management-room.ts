@@ -1,8 +1,8 @@
 /**
  * Management-room naming + usage guide — the single assembly point for the
- * management room's user-facing text. Both entry points (DM adoption in the
- * router, bot-created room in the startup space ensure) import from here so
- * the two can never drift.
+ * management room's user-facing text. Both entry points (DM adoption and the
+ * bot-created room in the startup space ensure — both in space.ts) import
+ * from here so the two can never drift.
  */
 
 /** Management-room display name. */

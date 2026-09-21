@@ -357,6 +357,20 @@ describe("space ensure", () => {
     expect(store.get().powerElevatedUsers).toEqual(["matrix:@barry:server", "matrix:@carol:server"]);
   });
 
+  it("sweep covers residual managementRooms entries in a hand-edited legacy config", async () => {
+    // 行为冻结钉点(spec #99 评审修复):公开语义是单管理房,但手编配置可能
+    // 残留多条记录 —— 提权/降权扫描绝不静默跳过多余条目(master 全列表语义)。
+    const legacy = { ...fullRooms, managementRooms: ["!mgmt:server", "!legacy:server"] };
+    const { roomOps } = await runHeal(legacy, {
+      getPowerLevels: vi.fn().mockResolvedValue({ users: { "@barry:server": 0 } }),
+    });
+    for (const roomId of ["!space:server", "!mgmt:server", "!legacy:server", "!proj:server"]) {
+      expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith(roomId, "@barry:server", 100);
+    }
+    // 4 rooms × 2 trusted users (barry + carol, same fixture as above).
+    expect(roomOps.setUserPowerLevel).toHaveBeenCalledTimes(8);
+  });
+
   it("is idempotent: users already at 100 produce no writes and no bookkeeping", async () => {
     const { store, roomOps } = await runHeal(fullRooms, {
       getPowerLevels: vi.fn().mockResolvedValue({ users: { "@barry:server": 100, "@carol:server": 100 } }),

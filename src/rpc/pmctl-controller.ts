@@ -16,8 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName } from "../config.js";
 import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
-import { elevateTrustedUsersInRoom, ensureRoomAvatar } from "../space.js";
-import { pickPoolAvatarFile } from "../space-identity.js";
+import { provisionManagedRoom } from "../space.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
 
@@ -182,42 +181,33 @@ export class PmctlController {
       return;
     }
     try {
-      const roomId = await roomOps.createProjectRoom(`${pname}(${this.instanceName()})`, call.senderMxid);
-      pm.registerProject(roomId, resolvedWorkdir, pname);
+      // 置备深函数(票2,spec #99):建房 → 提权 → 挂链 → 品牌,与启动
+      // ensure 同一条路径 —— 中途建的项目房与自愈后的房间长相/权限一致;
+      // 按套选图规则(项目房=小屋套)也在深函数内部。项目注册走落簿钩子:
+      // 建房成功即落盘,后续可选步骤失败不会丢失映射。
+      const provision = await provisionManagedRoom(roomOps, this.opts.store, {
+        kind: "project",
+        name: `${pname}(${this.instanceName()})`,
+        inviteUserId: call.senderMxid,
+        projectName: pname,
+        onCreated: ({ roomId }) => pm.registerProject(roomId, resolvedWorkdir, pname),
+      });
       // #42: every trusted user gets admin in the new room via the unified
       // elevation — not just the sender. Failure must not fail the (already
-      // created) project.
-      try {
-        await elevateTrustedUsersInRoom(roomOps, this.opts.store, roomId);
-      } catch (err) {
-        await reply(`⚠️ 房间已创建,但信任用户补权失败(可手动设置): ${(err as Error).message}`);
+      // created) project: surface it as its own warning reply.
+      if (provision.elevationError) {
+        await reply(
+          `⚠️ 房间已创建,但信任用户补权失败(可手动设置): ${provision.elevationError.message}`
+        );
       }
-      // File the new room under the organizational space (display layer
-      // only — a link failure never fails the project).
-      let spaceNote = "";
-      const spaceRoomId = this.activeSpaceRoomId();
-      if (spaceRoomId) {
-        try {
-          await roomOps.addRoomToSpace(spaceRoomId, roomId);
-        } catch (err) {
-          spaceNote = `\n⚠️ 挂入空间失败(不影响项目): ${(err as Error).message}`;
-        }
-      }
-      // Brand the room with its bundled candy avatar immediately — the
-      // startup identity heal would only reach a mid-session room on the
-      // next restart. Same 只补缺 rule; a failure is cosmetic and self-heals.
-      let avatarNote = "";
-      try {
-        await ensureRoomAvatar(roomOps, roomId, pickPoolAvatarFile(pname, "room"));
-      } catch (err) {
-        avatarNote = `\n⚠️ 头像设置失败(下次启动自动补): ${(err as Error).message}`;
-      }
+      // 挂链/品牌失败:单点文案附注拼进成功回执(展示层 — 不影响项目)。
+      const notes = provision.notes.map((note) => `\n⚠️ ${note}`).join("");
       await reply(
         `✅ 项目「${pname}」创建完成!\n\n` +
-          `• 房间: ${roomId}\n` +
+          `• 房间: ${provision.roomId}\n` +
           `• 工作目录: ${resolvedWorkdir}\n` +
           `• 已邀请你进入新房间\n\n` +
-          `项目对话请到新房间进行(独立上下文与工作目录)。${spaceNote}${avatarNote}`
+          `项目对话请到新房间进行(独立上下文与工作目录)。${notes}`
       );
     } catch (err) {
       await reply(`❌ 创建项目失败: ${(err as Error).message}`);

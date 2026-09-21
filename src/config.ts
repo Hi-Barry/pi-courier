@@ -158,6 +158,25 @@ export function activeSpaceRoomId(cfg: MsgBridgeConfig): string | undefined {
   return isSpaceMode(cfg) ? cfg.space?.roomId : undefined;
 }
 
+/** 管理房间 ID(spec #99 票6 / issue #102):config 以列表存储,但公开语义
+ *  是单管理房 —— "取首个"是有意为之,收养(router)与自建(space ensure)
+ *  两条写路径都保证列表最多一个元素。未配置或空列表返回 undefined,即
+ *  "还没有管理房";其余所有"管理房是哪个"的读取都走这里,不再手写
+ *  `managementRooms?.[0]`。 */
+export function managementRoomId(cfg: MsgBridgeConfig): string | undefined {
+  return cfg.managementRooms?.[0];
+}
+
+/** 收养写侧(与 managementRoomId 同族):把 chatId 追加到管理房列表尾部 ——
+ *  收养第一个成功授权的 DM(router 收养路径)与空间自建管理房(space ensure,
+ *  进入时列表必为空,追加与单元素写等价)共用这一个写入解释。幂等:重复
+ *  收养同一房间返回空 patch,不产生重复条目。返回 patch 形状,供
+ *  store.update 直接消费,也可展开后与其它字段合并为一次原子 update。 */
+export function adoptManagementRoom(cfg: MsgBridgeConfig, chatId: string): Partial<MsgBridgeConfig> {
+  const rooms = cfg.managementRooms ?? [];
+  return rooms.includes(chatId) ? {} : { managementRooms: [...rooms, chatId] };
+}
+
 /**
  * Runtime config store — loaded once at startup, injected into every module
  * that needs config. The config file is effectively a database (projects,

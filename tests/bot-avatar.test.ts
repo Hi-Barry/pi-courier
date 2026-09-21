@@ -83,7 +83,13 @@ describe("bot profile avatar heal", () => {
   it("sets the agent-set avatar for a faceless bot and books the marker", async () => {
     const { store, roomOps } = await runHeal();
     const expected = pickPoolAvatarFile("box1", "agent");
-    expect(roomOps.uploadMedia).toHaveBeenCalledWith(readAvatarBundled(expected), "image/png");
+    // Buffer.equals (memcmp-fast) instead of toHaveBeenCalledWith's deep
+    // equality: the latter walks ~530KB byte-by-byte (~4s, near the 5s
+    // timeout — flaky under load). Same assertion, same pinned bytes.
+    const upload = roomOps.uploadMedia as ReturnType<typeof vi.fn>;
+    expect(upload.mock.calls[0]?.[1]).toBe("image/png");
+    expect(upload.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
+    expect((upload.mock.calls[0]?.[0] as Buffer).equals(readAvatarBundled(expected))).toBe(true);
     expect(roomOps.setProfileAvatar).toHaveBeenCalledWith("mxc://server/avatar");
     expect(store.get().agentAvatarVersion).toBe(1);
   });
