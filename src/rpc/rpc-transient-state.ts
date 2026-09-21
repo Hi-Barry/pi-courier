@@ -1,31 +1,22 @@
 /**
- * Per-pi-process transient state (spec #72 票6/C5) — queue mirrors and
- * pending extension_ui questions. The state owns its invalidation: it
- * subscribes to each rpc's restart lifecycle once, at first touch, and clears
- * itself when the subprocess comes back fresh. Nobody outside this module
- * needs to remember to clear anything (the old clearRpcState trigger wire is
- * gone from the slash-command context and the login manager).
+ * Per-pi-process transient state (spec #72 票6/C5) — the live steering/
+ * followUp queue mirror. The state owns its invalidation: it subscribes to
+ * each rpc's restart lifecycle once, at first touch, and clears itself when
+ * the subprocess comes back fresh. Nobody outside this module needs to
+ * remember to clear anything (the old clearRpcState trigger wire is gone
+ * from the slash-command context and the login manager).
  *
- * A restarted subprocess knows nothing of the questions (or queue) the old
- * one left behind — without invalidation they would swallow the room's next
- * message as a bogus "answer" to a question the new process will never
- * resolve.
+ * A restarted subprocess knows nothing of the queue the old one left
+ * behind — without invalidation a stale mirror would feed /queue and the
+ * stop/interrupt queue warning phantom entries.
+ *
+ * 悬置 extension_ui 提问(spec #99 票3 / issue #104)不在这里:提问机
+ * (extension-questions.ts)自持 FIFO 队列与超时计时器,经同一个重启生命周期
+ * 订阅接缝自行失效 —— 两个状态都只依赖 rpc.onRestarted,互不纠缠。
  */
 
-import type { ReplyTarget } from "../types.js";
 import type { QueueSnapshot } from "./command-map.js";
-import type { ExtensionUIRequestView } from "./message-router.js";
 import type { PiRpc } from "./pi-rpc.js";
-
-/** A question asked in a room and still awaiting the answer. FIFO per rpc —
- *  the oldest pending question is answered first. The target is captured at
- *  ask time so the answer/timeout routes back even if the default rpc's
- *  binding moves on to another prompter in between. */
-export interface PendingExtensionQuestion {
-  request: ExtensionUIRequestView;
-  target: ReplyTarget;
-  timer: NodeJS.Timeout;
-}
 
 /** How this module learns about restarts: the router wires it to
  *  PiRpc.onRestarted. Injectable so tests can drive invalidation. */
@@ -33,7 +24,6 @@ export type RestartSubscription = (rpc: PiRpc, handler: (rpc: PiRpc) => void) =>
 
 export class RpcTransientState {
   private mirrors = new WeakMap<PiRpc, QueueSnapshot>();
-  private questions = new WeakMap<PiRpc, PendingExtensionQuestion[]>();
   private watched = new WeakSet<PiRpc>();
 
   constructor(private subscribeRestart: RestartSubscription) {}
@@ -44,14 +34,9 @@ export class RpcTransientState {
     this.subscribeRestart(rpc, (r) => this.invalidate(r));
   }
 
-  /** 进程重启:新子进程对旧问题/旧队列一无所知 — 镜像与悬置提问全部作废。 */
+  /** 进程重启:新子进程对旧队列一无所知 — 镜像作废。 */
   private invalidate(rpc: PiRpc): void {
     this.mirrors.delete(rpc);
-    const queue = this.questions.get(rpc);
-    if (queue) {
-      for (const question of queue) clearTimeout(question.timer);
-      this.questions.delete(rpc);
-    }
   }
 
   /** Live steering/followUp queue mirror (refreshed by queue_update events).
@@ -64,13 +49,5 @@ export class RpcTransientState {
   setMirror(rpc: PiRpc, snapshot: QueueSnapshot): void {
     this.watch(rpc);
     this.mirrors.set(rpc, snapshot);
-  }
-
-  /** The FIFO question queue for an rpc (created on demand). */
-  questionQueue(rpc: PiRpc): PendingExtensionQuestion[] {
-    this.watch(rpc);
-    const queue = this.questions.get(rpc) ?? [];
-    this.questions.set(rpc, queue);
-    return queue;
   }
 }

@@ -48,7 +48,7 @@ import {
   spaceDisplayName,
 } from "./space-identity.js";
 import type { RoomOps } from "./transports/interface.js";
-import type { MsgBridgeConfig } from "./types.js";
+import type { ExternalMessage, MsgBridgeConfig } from "./types.js";
 
 export interface SpaceEnsureDeps {
   roomOps: RoomOps;
@@ -161,6 +161,39 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
       `[space] 空间初始化失败,本次以无空间模式运行(下次启动自动重试): ${(err as Error).message}`
     );
     return "degraded";
+  }
+}
+
+/**
+ * First-time branding for the DM adoption path (spec #99 票3 / issue #104:
+ * moved here from the router — 收养是空间侧的管理房语义,router 只调用):
+ * rename the room to "项目管理(<instance>)" and send the usage guide.
+ * Idempotent via config.managementRooms so restarts don't re-trigger (and a
+ * user-renamed room is never overwritten). 管理房判定走 config 的
+ * managementRoomId 派生,收养写走 adoptManagementRoom(收养写侧单点)。
+ */
+export async function maybeInitManagementRoom(
+  msg: ExternalMessage,
+  sendReply: (chatId: string, transport: string, text: string) => Promise<void>,
+  roomOps: RoomOps,
+  store: ConfigStore
+): Promise<void> {
+  const cfg = store.get();
+  const existing = managementRoomId(cfg);
+  if (existing === msg.chatId) return; // already the management room
+  if (existing !== undefined) return; // a management room already exists — never brand another
+  try {
+    const instanceName = effectiveInstanceName(cfg);
+    const botAccount = roomOps.getBotUserId() ?? "(未知)";
+    const workdir = effectiveWorkdir(cfg);
+    const roomName = managementRoomName(instanceName);
+    await roomOps.setRoomName(msg.chatId, roomName);
+    await sendReply(msg.chatId, msg.transport, buildManagementRoomHelp(instanceName, botAccount, workdir));
+    // The guards above mean the list was empty — adopt appends the first entry.
+    store.update(adoptManagementRoom(cfg, msg.chatId));
+    logger.info(`[project] 管理房间已初始化: ${msg.chatId} (${roomName})`);
+  } catch {
+    // Non-matrix transport or transient failure — skip branding, try again later.
   }
 }
 
