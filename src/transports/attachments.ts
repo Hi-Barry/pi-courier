@@ -8,12 +8,44 @@
  * The download seam (MediaSource) is injectable: tests use fakes, the
  * composition root backs it with matrix-bot-sdk downloadContent /
  * crypto.decryptMedia.
+ *
+ * The media-input shape (EncryptedMediaFile) and filename sanitization
+ * (sanitizeMediaFilename) live here too — the module that writes files owns
+ * the filename contract (spec #99/#101: formerly matrix-utils.ts).
  */
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { EncryptedMediaFile } from "./matrix-utils.js";
-import { sanitizeMediaFilename } from "./matrix-utils.js";
+
+// ─── 附件输入(issue #66)────────────────────────────────────────
+
+/** 加密附件块(EncryptedFileInfo)的最小结构视图 — 与 matrix-bot-sdk 的
+ *  MessageEvent.EncryptedFile 结构兼容,避免本模块依赖 SDK。 */
+export interface EncryptedMediaFile {
+  url: string;
+  key: { k: string };
+  iv: string;
+  hashes: { sha256: string };
+  v?: string;
+}
+
+/**
+ * 文件名消毒(issue #66 票1):防路径穿越/分隔符注入,输出确定性的
+ * "<mxc mediaId 哈希前缀>-<安全化原名>"。body 为空时回退 "file"。
+ */
+export function sanitizeMediaFilename(body: string | undefined, mxcUrl: string): string {
+  const hash = createHash("sha256").update(mxcUrl).digest("hex").slice(0, 12);
+  const base = (body ?? "").split(/[/\\]/).pop() ?? "";
+  const cleaned = base
+    .replace(/[\x00-\x1f\x7f]/g, "") // 控制字符
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\.+/, "") // 防 ".."/"."(必须先 trim —— " .." 形式会绕过前导点剥离,fast-check 反例)
+    .replace(/\.{2,}/g, ".") // 折叠连续点:".." 永不出现在文件名里(fast-check 反例 "!..")
+    .trim();
+  const safe = cleaned.length > 0 ? cleaned : "file";
+  return `${hash}-${safe.slice(0, 150)}`;
+}
 
 /** Where bytes come from — the transport-specific half (Matrix client). */
 export interface MediaSource {

@@ -9,19 +9,16 @@
  * resolver and the attachment store are transport state injected by the
  * composition root. No SDK types cross this module — the event is read
  * structurally, so tests drive it without a Matrix connection.
+ *
+ * Content classification and mention parsing are pure functions at the bottom
+ * of this module — their only natural owner is the translator that consumes
+ * them (spec #99/#101: formerly matrix-utils.ts).
  */
 
 import type { QuoteCache } from "../quote-cache.js";
 import { toExcerpt } from "../quote-cache.js";
 import type { ExternalMessage } from "../types.js";
-import type { AttachmentStore } from "./attachments.js";
-import {
-  classifyMessageContent,
-  type EncryptedMediaFile,
-  extractUsername,
-  stripBotMention,
-  wasBotMentioned,
-} from "./matrix-utils.js";
+import { type AttachmentStore, type EncryptedMediaFile } from "./attachments.js";
 
 export interface EventTranslatorPorts {
   /** Transport identity for the ExternalMessage envelope ("matrix"). */
@@ -155,4 +152,93 @@ export function createEventTranslator(ports: EventTranslatorPorts) {
   }
 
   return { translate };
+}
+
+// ─── 内容分类与提及解析(纯函数;spec #99/#101 自 matrix-utils.ts 归位)───
+
+/** 媒体事件内容的分类视图(纯结构,来自 event.content)。 */
+export interface MediaEventContent {
+  /** mxc:// 明文地址(加密附件时可能缺失 — 以 file 为准) */
+  url?: string;
+  /** 加密附件块(E2EE 房间);与 url 并存时优先 */
+  file?: EncryptedMediaFile;
+  /** 原始文件名(Element 粘贴发送时通常是 image.png 之类) */
+  body?: string;
+  /** 事件声明的元信息 — size 仅作超限预检,不作为信任依据 */
+  info?: { size?: number; mimetype?: string; w?: number; h?: number };
+}
+
+/** 当前按媒体处理的类型全集(票3):m.image/m.file/m.audio/m.video 四种
+ *  msgtype 内容同构;m.sticker 是事件类型(内容同构但无 msgtype 字段)。 */
+export const MEDIA_MSGTYPES = new Set<string>(["m.image", "m.file", "m.audio", "m.video", "m.sticker"]);
+
+/** Classification of one room message content (issue #66 票1). */
+export type MessageContentClassification =
+  | { kind: "text" }
+  | { kind: "media"; msgtype: string; mxcUrl?: string; encryptedFile?: EncryptedMediaFile; filename: string; sizeHint?: number }
+  | { kind: "other"; msgtype: string };
+
+/** 判断内容是否携带媒体载荷(url 明文或 file 加密块)。 */
+export function isMediaContent(content: unknown): content is MediaEventContent {
+  if (typeof content !== "object" || content === null) return false;
+  const c = content as Record<string, unknown>;
+  return typeof c.url === "string" || typeof c.file === "object";
+}
+
+/** 对一条房间消息内容做分类:文本 / 媒体(带下载所需信息) / 其他。 */
+export function classifyMessageContent(content: unknown): MessageContentClassification {
+  if (isMediaContent(content)) {
+    const c = content as MediaEventContent & { msgtype?: string };
+    // m.sticker 事件的内容不带 msgtype(它是事件类型,非 m.room.message);
+    // 带媒体载荷却缺 msgtype 的只会是 sticker(m.room.message 必有 msgtype)。
+    const msgtype = typeof c.msgtype === "string" && c.msgtype ? c.msgtype : "m.sticker";
+    if (MEDIA_MSGTYPES.has(msgtype)) {
+      return {
+        kind: "media",
+        msgtype,
+        // 加密附件与明文 url 并存时以加密版优先(票2 裁决)
+        ...(c.file ? { encryptedFile: c.file } : { mxcUrl: c.url }),
+        filename: c.body ?? "",
+        ...(typeof c.info?.size === "number" ? { sizeHint: c.info.size } : {}),
+      };
+    }
+    return { kind: "other", msgtype };
+  }
+  // 无媒体载荷:m.text / m.emote 走文本管道,其余(如 m.location)是
+  // "other" — 由 router 回执礼貌提示(票3 消灭静默吞消息)。
+  const msgtype = (content as { msgtype?: string } | null)?.msgtype;
+  if (msgtype === "m.text" || msgtype === "m.emote") return { kind: "text" };
+  return { kind: "other", msgtype: msgtype || "(unknown)" };
+}
+
+/** Extract Matrix username (localpart) from a full MXID like @user:matrix.org */
+export function extractUsername(userId: string): string {
+  return userId.replace(/^@/, "").replace(/:.*$/, "");
+}
+
+/**
+ * Check if bot was mentioned, matching either:
+ *  - the full MXID `@user:server`
+ *  - `@localpart` as a leading-@ word (avoids false-positives on bare names)
+ */
+export function wasBotMentioned(messageText: string, botUserId: string): boolean {
+  if (messageText.includes(botUserId)) return true;
+  const localpart = extractUsername(botUserId);
+  if (!localpart) return false;
+  const re = new RegExp(`@${escapeRegExp(localpart)}\\b`, "i");
+  return re.test(messageText);
+}
+
+/** Strip bot mention from message text — symmetric with wasBotMentioned */
+export function stripBotMention(text: string, botUserId: string): string {
+  const localpart = extractUsername(botUserId);
+  let out = text.replace(new RegExp(escapeRegExp(botUserId), "g"), "");
+  if (localpart) {
+    out = out.replace(new RegExp(`@${escapeRegExp(localpart)}\\b`, "gi"), "");
+  }
+  return out.trim();
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

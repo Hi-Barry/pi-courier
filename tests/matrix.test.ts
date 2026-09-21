@@ -1,16 +1,17 @@
+/**
+ * Matrix transport pure functions (spec #99/#101): outbound markdown
+ * rendering, the event-skip filter and the group/join-hint predicates —
+ * unit-tested in place, no SDK, no Matrix connection. Moved verbatim from
+ * the retired matrix-utils.test.ts.
+ */
 import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
-  classifyMessageContent,
-  extractUsername,
   formatForMatrix,
   isGroupChatRoom,
-  sanitizeMediaFilename,
   shouldPostJoinHint,
   shouldSkipEvent,
-  stripBotMention,
-  wasBotMentioned,
-} from "./matrix-utils.js";
+} from "../src/transports/matrix.js";
 
 // ─── formatForMatrix ──────────────────────────────────────────
 
@@ -202,83 +203,6 @@ describe("shouldSkipEvent", () => {
   });
 });
 
-// ─── extractUsername ──────────────────────────────────────────
-
-describe("extractUsername", () => {
-  it("extracts localpart from full MXID", () => {
-    expect(extractUsername("@alice:matrix.org")).toBe("alice");
-  });
-
-  it("handles homeserver with port", () => {
-    expect(extractUsername("@bob:localhost:8448")).toBe("bob");
-  });
-
-  it("handles already plain username", () => {
-    expect(extractUsername("charlie")).toBe("charlie");
-  });
-
-  it("handles MXID without @ prefix", () => {
-    expect(extractUsername("dave:matrix.org")).toBe("dave");
-  });
-});
-
-// ─── wasBotMentioned ─────────────────────────────────────────
-
-describe("wasBotMentioned", () => {
-  const botUserId = "@pibot:matrix.org";
-
-  it("detects full MXID mention", () => {
-    expect(wasBotMentioned("hey @pibot:matrix.org do this", botUserId)).toBe(true);
-  });
-
-  it("detects @localpart mention (case-insensitive)", () => {
-    expect(wasBotMentioned("hey @Pibot do this", botUserId)).toBe(true);
-  });
-
-  it("detects lowercase @localpart", () => {
-    expect(wasBotMentioned("@pibot help", botUserId)).toBe(true);
-  });
-
-  it("returns false when not mentioned", () => {
-    expect(wasBotMentioned("hello world", botUserId)).toBe(false);
-  });
-
-  it("returns false for bare localpart without @ (avoids false positives on names)", () => {
-    // "pibot" appearing in casual chat without @ shouldn't be a mention
-    expect(wasBotMentioned("pibot help", botUserId)).toBe(false);
-  });
-
-  it("returns false for partial match that isn't the localpart", () => {
-    expect(wasBotMentioned("pi is great", botUserId)).toBe(false);
-  });
-});
-
-// ─── stripBotMention ─────────────────────────────────────────
-
-describe("stripBotMention", () => {
-  const botUserId = "@pibot:matrix.org";
-
-  it("strips full MXID mention", () => {
-    expect(stripBotMention("@pibot:matrix.org help me", botUserId)).toBe("help me");
-  });
-
-  it("strips multiple mentions", () => {
-    expect(stripBotMention("@pibot:matrix.org hey @pibot:matrix.org", botUserId)).toBe("hey");
-  });
-
-  it("returns original text when no mention present", () => {
-    expect(stripBotMention("hello world", botUserId)).toBe("hello world");
-  });
-
-  it("handles mention at end of message", () => {
-    expect(stripBotMention("help @pibot:matrix.org", botUserId)).toBe("help");
-  });
-
-  it("handles message that is only the mention", () => {
-    expect(stripBotMention("@pibot:matrix.org", botUserId)).toBe("");
-  });
-});
-
 // ─── Property tests ───────────────────────────────────────────
 
 describe("formatForMatrix properties", () => {
@@ -296,23 +220,6 @@ describe("formatForMatrix properties", () => {
       fc.property(fc.string(), (text) => {
         const result = formatForMatrix(text);
         expect(result.formattedBody?.toLowerCase()).not.toContain("<script");
-      })
-    );
-  });
-});
-
-describe("stripBotMention properties", () => {
-  it("result never contains the bot MXID (verification)", () => {
-    // Generate valid-ish MXIDs: @localpart:server
-    const localpart = fc.string({ minLength: 1, maxLength: 10 }).filter((s) => !/[@: ]/.test(s) && s.length > 0);
-    const server = fc.string({ minLength: 1, maxLength: 10 }).filter((s) => !/[@: ]/.test(s) && s.length > 0);
-    const mxid = fc.tuple(localpart, server).map(([user, host]) => `@${user}:${host}`);
-
-    fc.assert(
-      fc.property(mxid, fc.string(), (botId, prefix) => {
-        const text = `${prefix} ${botId} some text`;
-        const result = stripBotMention(text, botId);
-        expect(result).not.toContain(botId);
       })
     );
   });
@@ -347,109 +254,5 @@ describe("shouldPostJoinHint", () => {
   });
   it("does not post the hint for a lone bot room (1 member)", () => {
     expect(shouldPostJoinHint(1, false)).toBe(false);
-  });
-});
-
-// Excluded from testing (design decisions / integration-only, verified by inspection):
-// - connect()/disconnect() lifecycle (requires real MatrixClient)
-// - sendMessage()/sendTyping() (thin SDK wrappers)
-// - index.ts wiring (env var reading, command handler plumbing)
-// - Widget abbreviation (mx)
-
-// ─── 附件分类与文件名消毒(issue #66 票1,接缝1)──────────────────
-
-describe("classifyMessageContent", () => {
-  it("classifies plain text as text", () => {
-    expect(classifyMessageContent({ msgtype: "m.text", body: "hi" })).toEqual({ kind: "text" });
-  });
-
-  it("classifies m.image with url as media carrying the mxc url", () => {
-    const c = classifyMessageContent({ msgtype: "m.image", body: "photo.png", url: "mxc://s/abc", info: { size: 123 } });
-    expect(c).toEqual({ kind: "media", msgtype: "m.image", mxcUrl: "mxc://s/abc", filename: "photo.png", sizeHint: 123 });
-  });
-
-  it("prefers the encrypted file block when url and file coexist (票2 裁决)", () => {
-    const file = { url: "mxc://s/enc", key: { k: "k" }, iv: "iv", hashes: { sha256: "h" } };
-    const c = classifyMessageContent({ msgtype: "m.image", body: "p.png", url: "mxc://s/plain", file });
-    expect(c).toMatchObject({ kind: "media", encryptedFile: file });
-    expect(c.kind !== "media" || c.mxcUrl === undefined).toBe(true);
-  });
-
-  it("classifies every media msgtype as media (票3:m.file/m.audio/m.video)", () => {
-    for (const msgtype of ["m.image", "m.file", "m.audio", "m.video"]) {
-      const c = classifyMessageContent({ msgtype, body: "x.bin", url: "mxc://s/m" });
-      expect(c).toMatchObject({ kind: "media", msgtype });
-    }
-  });
-
-  it("treats media-shaped content without msgtype as m.sticker (票3:事件类型非 msgtype)", () => {
-    const c = classifyMessageContent({ body: "sticker.png", url: "mxc://s/st" });
-    expect(c).toMatchObject({ kind: "media", msgtype: "m.sticker" });
-  });
-
-  it("classifies media-shaped content with unknown msgtype as other", () => {
-    expect(classifyMessageContent({ msgtype: "m.fancy", body: "x", url: "mxc://s/y" })).toEqual({ kind: "other", msgtype: "m.fancy" });
-  });
-
-  it("content without a media payload: m.text/m.emote → text, others → other (票3)", () => {
-    expect(classifyMessageContent({ msgtype: "m.text", body: "hi" })).toEqual({ kind: "text" });
-    expect(classifyMessageContent({ msgtype: "m.emote", body: "waves" })).toEqual({ kind: "text" });
-    expect(classifyMessageContent({ msgtype: "m.location", geo_uri: "geo:0,0", body: "Location" })).toEqual({ kind: "other", msgtype: "m.location" });
-  });
-
-  it("defaults filename to empty string when body is missing", () => {
-    const c = classifyMessageContent({ msgtype: "m.image", url: "mxc://s/abc" });
-    expect(c.kind === "media" && c.filename === "").toBe(true);
-  });
-});
-
-describe("sanitizeMediaFilename", () => {
-  it("prefixes a deterministic hash of the mxc url", () => {
-    expect(sanitizeMediaFilename("photo.png", "mxc://s/abc"))
-      .toBe(sanitizeMediaFilename("photo.png", "mxc://s/abc"));
-    expect(sanitizeMediaFilename("a.png", "mxc://s/1")).not.toBe(sanitizeMediaFilename("a.png", "mxc://s/2"));
-  });
-
-  it("strips path traversal components", () => {
-    const name = sanitizeMediaFilename("../../etc/passwd", "mxc://s/abc");
-    expect(name).not.toContain("..");
-    expect(name).not.toContain("/");
-    expect(name.endsWith("passwd")).toBe(true);
-  });
-
-  it("strips windows separators and control characters", () => {
-    const name = sanitizeMediaFilename("..\\..\\x\u0000y\r\n z.png", "mxc://s/abc");
-    expect(name).not.toMatch(/[\\/]/);
-    expect(name).not.toMatch(/[\x00-\x1f\x7f]/);
-  });
-
-  it("never starts with dots (hidden file / relative-path tricks)", () => {
-    expect(sanitizeMediaFilename("..hidden", "mxc://s/abc").endsWith("hidden")).toBe(true);
-    expect(sanitizeMediaFilename("..", "mxc://s/abc")).not.toContain("..");
-  });
-
-  it("regression: ' ..' (space-led dots) cannot survive as '..' (fast-check 反例固化)", () => {
-    const name = sanitizeMediaFilename(" ..", "mxc://s/abc");
-    expect(name).not.toContain("..");
-    expect(name).not.toMatch(/^\s/);
-  });
-
-  it("falls back to 'file' when nothing safe remains", () => {
-    expect(sanitizeMediaFilename("", "mxc://s/abc")).toMatch(/^[0-9a-f]{12}-file$/);
-    expect(sanitizeMediaFilename(undefined, "mxc://s/abc")).toMatch(/^[0-9a-f]{12}-file$/);
-  });
-
-  it("property: output is safe for any input (no separators, no traversal, non-empty)", () => {
-    const mxc = fc.constant("mxc://server/mediaId");
-    const arbBody = fc.string({ maxLength: 300 });
-    fc.assert(
-      fc.property(arbBody, mxc, (body, url) => {
-        const name = sanitizeMediaFilename(body, url);
-        expect(name.length).toBeGreaterThan(0);
-        expect(name).not.toMatch(/[/\\]/);
-        expect(name).not.toContain("..");
-        expect(name).toMatch(/^[0-9a-f]{12}-/);
-      })
-    );
   });
 });
