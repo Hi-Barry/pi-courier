@@ -1,5 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
+import MarkdownIt from "markdown-it";
 import type { ILogger } from "matrix-bot-sdk";
 import {
   AutojoinRoomsMixin,
@@ -15,14 +16,8 @@ import { createQuoteCache, type QuoteCache, toExcerpt } from "../quote-cache.js"
 import type { ExternalMessage } from "../types.js";
 import type { MediaSource } from "./attachments.js";
 import { AttachmentStore } from "./attachments.js";
-import { createEventTranslator } from "./matrix-events.js";
+import { createEventTranslator, isMediaContent, type MediaEventContent } from "./matrix-events.js";
 import { MatrixRoomOps } from "./matrix-rooms.js";
-import {
-  formatForMatrix,
-  isGroupChatRoom,
-  shouldPostJoinHint,
-  shouldSkipEvent,
-} from "./matrix-utils.js";
 
 /**
  * Matrix transport provider using matrix-bot-sdk
@@ -81,7 +76,8 @@ export class MatrixProvider {
     return this._isConnected;
   }
 
-  // Formatting delegated to matrix-utils.ts (pure, testable)
+  // Outbound formatting, event filtering and group predicates are pure
+  // functions at the bottom of this module (spec #99/#101).
 
   async connect(): Promise<void> {
     if (this._isConnected) return;
@@ -297,7 +293,7 @@ export class MatrixProvider {
   private async handleMessage(roomId: string, event: any): Promise<void> {
     if (!this.client || !this.botUserId || !this.translator) return;
 
-    // Pure filter — delegates to testable utility (own messages, stale
+    // Pure filter — module-bottom pure function (own messages, stale
     // replay, unjoined rooms, m.notice silence, edits).
     const skipReason = shouldSkipEvent(event, this.botUserId, this.connectedAt, this.joinedRooms, roomId);
     if (skipReason) return;
@@ -355,4 +351,75 @@ export class MatrixProvider {
     };
   }
 
+}
+
+// ─── 纯函数区(spec #99/#101:自 matrix-utils.ts 归位到唯一属主 transport)───
+// 出站渲染、事件过滤、群聊判定——无 SDK/网络依赖,可直测。
+
+// html:false escapes raw HTML (pi output must never inject tags);
+// breaks:true keeps chat-style single newlines as <br>;
+// linkify turns bare URLs into links.
+const md = new MarkdownIt({ html: false, breaks: true, linkify: true });
+
+/** Convert markdown to Matrix HTML. Returns plain body (fallback) + formatted HTML. */
+export function formatForMatrix(text: string): { body: string; formattedBody?: string } {
+  return { body: text, formattedBody: md.render(text).trim() };
+}
+
+/**
+ * Determine whether to skip a Matrix room event before processing.
+ * Returns a reason string if the event should be skipped, or null if it should be processed.
+ */
+export function shouldSkipEvent(
+  event: { sender?: string; origin_server_ts?: number; content?: any },
+  botUserId: string,
+  connectedAt: number,
+  joinedRooms: Set<string>,
+  roomId: string
+): string | null {
+  // Ignore own messages
+  if (event.sender === botUserId) return "own_message";
+
+  // Skip events from before this connection (stale replay from initial sync)
+  const eventTs = event.origin_server_ts || 0;
+  if (eventTs < connectedAt) return "stale";
+
+  // m.notice stays silent in every branch (issue #66 票3: the ONE deliberate
+  // silence — other bots/services' notices must not trigger receipts or the
+  // bot loops).
+  if (event.content?.msgtype === "m.notice") return "notice";
+
+  // Media events (issue #66) flow through the attachment path. Everything
+  // else with a body flows on too: m.text/m.emote are classified as text,
+  // exotic msgtypes (m.location…) reach the router's polite receipt — the
+  // filter itself no longer silently drops them (票3). Only body-less
+  // messages and edits stay skipped here.
+  if (!isMediaEventContent(event.content)) {
+    const content = event.content;
+    if (!content?.body) return "not_text";
+
+    // Ignore edits (we only process original messages)
+    if (content["m.new_content"]) return "edit";
+  }
+
+  // Skip events from rooms we're not in (cached, no API call)
+  if (!joinedRooms.has(roomId)) return "not_joined";
+
+  return null;
+}
+
+/** shouldSkipEvent 用的窄判别:内容带媒体载荷即视为媒体事件(不查白名单 —
+ *  白名单归类由 classifyMessageContent 负责,m.file 等在票3 前落入 "other")。 */
+function isMediaEventContent(content: unknown): boolean {
+  return isMediaContent(content) && typeof (content as MediaEventContent & { msgtype?: string }).msgtype === "string";
+}
+
+/** A room is a group chat when it holds more than two members (bot + one other = DM). */
+export function isGroupChatRoom(memberCount: number): boolean {
+  return memberCount > 2;
+}
+
+/** Whether to post the one-time join hint: a multi-user room that is not yet enabled. */
+export function shouldPostJoinHint(memberCount: number, isEnabled: boolean): boolean {
+  return isGroupChatRoom(memberCount) && !isEnabled;
 }

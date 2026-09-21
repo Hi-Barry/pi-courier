@@ -224,9 +224,9 @@ pi 0.83.0 就绪。
 - `pickPoolAvatarFile(name, set)`:djb2 哈希取模 12 按 agent/space/room 三套选图(同名恒定同图);管理房间固定 `room-management.png`;`AVATAR_SET_VERSION` + `bookedAvatarVersion` 为分套版本记账单点
 - 资产在 `assets/avatars/`(agent/space/room 三套各 12 张 + 1 张管理专属,共 37 张 512×512 真 PNG,原创 AI 生成软糖质感——空间=冷色风景、房间=暖色小屋、bot=动物),`scripts/generate-avatars-v4.mjs` 生成;换成自己的图只需同名替换 PNG
 
-**`src/transports/matrix.ts`** —— Matrix Transport(只做消息 I/O,spec #22 后不再内嵌其他职责)
+**`src/transports/matrix.ts`** —— Matrix Transport(只做消息 I/O,spec #22 后不再内嵌其他职责;spec #99/#101 起兼任自己那份纯函数)
 - connect/disconnect、`sendMessage`(markdown → Matrix HTML)、typing、事件分发
-- 群/DM 判定与入群 enable 提示消费 `matrix-utils.ts` 纯函数;成员计数经缓存(不逐条消息打 API)
+- 模块底部纯函数区:`formatForMatrix`(出站渲染)、`shouldSkipEvent`(事件过滤)、`isGroupChatRoom`/`shouldPostJoinHint`(群/DM 判定与入群 enable 提示谓词);成员计数经缓存(不逐条消息打 API)
 - 消息翻译已抽为独立深模块 `matrix-events.ts`(spec #72 票2/C2):分类/提及剥离/引用摘录/附件编排全部在翻译器内,经注入端口(quoteCache/memberCount/attachments)直测;transport 只留 skip 过滤 + SDK 接线 + 日志;入群提示文案在 management-room.ts(/enable 知识同侧)
 - 附件管道(spec #66):媒体事件经分类后走 `AttachmentStore` 下载落盘,转发携带绝对路径的 `ExternalMessage`(不触发 turn);m.sticker 事件类型经 `room.event` 监听接入(E2EE 房间收到的是解密后事件);`mediaSource` 是下载接缝的 Matrix 半边(明文 `downloadContent` v1 鉴权端点 / 加密 `crypto.decryptMedia`)
 - SDK 内部日志经 `logger.ts` 门面(初始同步期用 `suppressLogLines` 窗口滤掉两类已知良性错误)
@@ -235,12 +235,12 @@ pi 0.83.0 就绪。
 - `MatrixRoomOps implements RoomOps`:createRoom/createSpace、空间挂链/摘链(m.space.child + m.room.parent)、邀请/改名/权力等级/退房、`encryptionAvailable`
 - 经注入访问器(getClient/getBotUserId/onLeftRoom)触达 live client,不反向持有 transport;组合根(standalone)把 `matrix.roomOps` 交给 /pmctl 与 space ensure
 
-**`src/transports/matrix-utils.ts`** —— Matrix 纯函数(无 SDK/网络依赖,直测)
-- markdown 渲染(`formatForMatrix`)、事件过滤(`shouldSkipEvent`)、提及解析(`wasBotMentioned`/`stripBotMention`)、群/DM 判定(`isGroupChatRoom`)与入群提示谓词(`shouldPostJoinHint`)
-- 附件分类(spec #66):`classifyMessageContent` 分 text(m.text/m.emote)/ media(带 url 或 file 载荷,加密优先)/ other(礼貌提示路径);`sanitizeMediaFilename` 输出确定性 `<sha256 前12>-<安全化原名>`;过滤器唯一保留的静默是 m.notice(防回环)
+**`src/transports/matrix-events.ts`** —— Matrix 事件翻译深模块(spec #72 票2/C2;spec #99/#101 起兼任内容分类与提及解析纯函数)
+- 翻译器把解密后的房间事件转成 transport 无关的 `ExternalMessage` 及其副作用(附件落盘编排),端口注入直测
+- 模块底部纯函数:内容分类(`isMediaContent`/`classifyMessageContent`,spec #66:分 text(m.text/m.emote)/ media(带 url 或 file 载荷,加密优先)/ other(礼貌提示路径))与提及解析(`extractUsername`/`wasBotMentioned`/`stripBotMention`)
 
 **`src/transports/attachments.ts`** —— 附件存储(spec #66)
-- `AttachmentStore.save`:大小上限预检(info.size)+ 下载后真实字节复查、60s 下载超时、mxc 去重(文件被删自动重下)、房间键安全化 + 哈希前缀文件名(防路径穿越/同名不覆盖)
+- `AttachmentStore.save`:大小上限预检(info.size)+ 下载后真实字节复查、60s 下载超时、mxc 去重(文件被删自动重下)、房间键安全化 + 哈希前缀文件名(防路径穿越/同名不覆盖);`sanitizeMediaFilename` 与 `EncryptedMediaFile` 同址——谁落盘谁拥有文件名契约(spec #99/#101 自 matrix-utils 归位)
 - `MediaSource` 下载接缝可注入(测试用 fake);部署缺加密半边时回执明确原因;组合根(standalone)以 `matrix.mediaSource` 组装并把 store 交给 provider(`setAttachmentStore`)
 - 目录默认 `~/.pi/pi-courier-attachments/`(与 `~/.pi` 下其他 pi-courier-* 状态文件平齐;spec 文本写的是 `~/.pi/pi-courier/attachments/`,实施时改名并在关票评论披露),上限默认 10 MB —— `attachments.directory` / `attachments.maxMb` 配置 + `PI_ATTACHMENTS_DIR` / `PI_ATTACHMENTS_MAX_MB` 环境变量 + setup 向导两项询问
 
