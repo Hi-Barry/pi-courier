@@ -26,18 +26,43 @@ const MAX_STRING = 2000;
  * lines whose message contains one of the substrings are dropped at every
  * level, from any module. Matching runs on the UNtruncated rendering — a
  * >2000-char noise line must not escape by having its pattern past the
- * truncation point. The one consumer is the Matrix adapter, which opens the
- * window around the SDK's initial sync (it replays history and emits two
- * known-benign error patterns — see matrix.ts). Process-wide state is
- * honest here: the SDK's LogService is itself process-wide. The returned
- * closer removes exactly the substrings this call added.
+ * truncation point. Process-wide state is honest here: the SDK's LogService
+ * is itself process-wide.
+ *
+ * THE ONE SILENCE POLICY of this codebase lives in this docblock. Every
+ * window must be listed here with its reason, so "why is this line quiet?"
+ * always has a single place to look. Real errors must stay visible — only
+ * the entries below are ever suppressed, and each window covers exactly the
+ * call that expects the noise:
+ *
+ * 1. Initial-sync replay noise (window opened in transports/matrix.ts around
+ *    client.start()): the SDK's first sync replays history and emits two
+ *    known-benign error patterns — "Decryption error" for messages we lack
+ *    keys for, "M_NOT_FOUND" for purged events behind a stale sync token.
+ *    The connectedAt filter drops those events anyway, so the errors are
+ *    noise; the window closes as soon as the sync resolves (even on failure).
+ *
+ * 2. Expected-miss queries (transports/matrix-rooms.ts, the expected-miss
+ *    helper around each query member's SDK call): a query that answers
+ *    404 / M_NOT_FOUND is a "not present" answer, not a failure — the
+ *    RoomOps contract turns it into null — but the SDK still logs the raw
+ *    HTTP error at ERROR. The per-call window silences exactly that call,
+ *    so new query-shaped heals are quiet without any composition-root
+ *    wrapping.
+ *
+ * The returned closer removes exactly ONE copy of each substring this call
+ * added, so nested windows sharing a pattern (sync window open while a
+ * per-call miss window closes) tear down only their own copy.
  */
 let suppressionPatterns: string[] = [];
 
 export function suppressLogLines(...substrings: string[]): () => void {
   suppressionPatterns.push(...substrings);
   return () => {
-    suppressionPatterns = suppressionPatterns.filter(p => !substrings.includes(p));
+    for (const p of substrings) {
+      const i = suppressionPatterns.indexOf(p);
+      if (i !== -1) suppressionPatterns.splice(i, 1);
+    }
   };
 }
 
@@ -65,8 +90,8 @@ export interface LeveledLogger {
  * Create an isolated leveled logger. The write threshold lives in the
  * instance, so tests never share that piece of module state; the one
  * deliberately shared piece is the suppression window below, which models
- * a process-wide event (the SDK sync whose noise it hides) rather than
- * logger configuration.
+ * process-wide events (the SDK sync replay and per-call expected misses —
+ * see the policy docblock above) rather than logger configuration.
  */
 export function createLogger(initial: LogLevel = "info"): LeveledLogger {
   let threshold: LogLevel = initial;

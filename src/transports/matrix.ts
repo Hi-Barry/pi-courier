@@ -150,14 +150,15 @@ export class MatrixProvider {
     });
 
     try {
-      // During initial sync the SDK replays historical events and tries to
-      // decrypt them. For E2EE rooms this produces two known error patterns:
-      //   1. "Decryption error" — old messages we don't have keys for
-      //   2. "M_NOT_FOUND"     — stale sync token references a purged event
-      // Our connectedAt filter skips these events anyway, so the errors are
-      // noise. The facade's suppression window filters exactly these
-      // patterns for the sync only — closing it (even on failure) keeps
-      // real errors afterwards visible.
+      // Initial-sync replay noise (silence policy entry 1, src/logger.ts):
+      // the SDK's first sync replays history and emits two known-benign
+      // error patterns ("Decryption error" for messages we lack keys for,
+      // "M_NOT_FOUND" for purged events behind a stale sync token). Our
+      // connectedAt filter skips these events anyway, so the errors are
+      // noise. The window covers the sync only — closing it (even on
+      // failure) keeps real errors afterwards visible. The per-call
+      // expected-miss silence for RoomOps queries lives at the adapter
+      // boundary (matrix-rooms.ts); this window is the only other one.
       // Mark the connection point BEFORE the initial sync: everything the
       // sync replays (older than this instant) is "stale" for shouldSkipEvent
       // — a fresh token must not execute rooms' backlogged messages as live

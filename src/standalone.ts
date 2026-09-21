@@ -16,12 +16,12 @@ import { pathToFileURL } from "node:url";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
 import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, isSpaceMode, managementRoomId } from "./config.js";
 import { acquireLock, releaseLock } from "./lock.js";
-import { logger, parseLogLevel, setLogLevel , suppressLogLines } from "./logger.js";
+import { logger, parseLogLevel, setLogLevel } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
-import { ensureSpaceAndManagementRoom, healBotAvatar, healRoomIdentities, healTrustedPowerLevels } from "./space.js";
+import { ensureSpaceAndManagementRoom, runStartupHeals } from "./space.js";
 import { AttachmentStore } from "./transports/attachments.js";
 import type { RoomOps } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
@@ -280,24 +280,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // management room and project rooms need it as much as a bot-created
     // one); per-room failures warn inside and never touch the startup
     // tri-state above.
-    // Startup-heal window (spec #93 票2): identity reads on fresh rooms hit
-    // expected M_NOT_FOUNDs (no avatar/name state yet — the RoomOps members
-    // turn them into null). The SDK still logs them as ERROR, drowning real
-    // startup errors, so the pattern is silenced for the heal window only.
-    const closeStartup404Window = suppressLogLines("M_NOT_FOUND");
-    try {
-      await healTrustedPowerLevels(roomOps, store);
-
-      // Room identity (short space name + bundled avatars): space mode only,
-      // best-effort per room — never blocks or fails the startup.
-      await healRoomIdentities(roomOps, store);
-
-      // Bot profile avatar (the agent's face, spec #84 ticket 2): every mode,
-      // best-effort — 只补缺, agent-set migration window rebrands once.
-      await healBotAvatar(roomOps, store);
-    } finally {
-      closeStartup404Window();
-    }
+    // The whole heal sequence (power sweep → room identity → bot avatar)
+    // lives in runStartupHeals (spec #99 #105). Identity reads on fresh
+    // rooms hit expected M_NOT_FOUNDs — silenced per call inside the
+    // RoomOps adapter itself (matrix-rooms.ts), so no suppression window
+    // is opened here anymore and new query-shaped heals stay quiet for
+    // free.
+    await runStartupHeals(roomOps, store);
   }
 
   try {
