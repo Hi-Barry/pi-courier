@@ -205,35 +205,43 @@ pi 0.83.0 就绪。
 - 门禁顺序:单工程开关 → 管理房间校验 → Matrix 能力
 - 邀请目标由 router 以 transport 原生 MXID 传入(控制器不做前缀剥离)
 
-**`src/rpc/message-router.ts`** —— 核心接线
+**`src/rpc/message-router.ts`** —— 核心接线(编排层;spec #99 票3/#104 起只做编排,提问机与管理房收养外迁)
 - 主管道是**显式的阶段管道**(spec #72 票3/C1):authorization → attachments → adminCommands → groupEnable → authorizationGate → multiproject → managementAdoption → roomBinding → pmctl → login → slashCommands → loginCapture → extensionCapture → prompt,共 14 个阶段;每阶段自述 preAuth(绕过授权门)/consumesLedger(消耗附件待处理清单——全管道唯一是 prompt)/needsRpc(触发 pi 进程懒解析),阶段表经 pipeline() 可直测
 - pi 进程为懒解析(spec #72 票3):只在真正需要的阶段(roomBinding 起)启动,管理命令族零 spawn
 - 附件消息在斜杠/挑战码解析之前截住(spec #66):待处理清单按"房间+发送者"记账,下一条真正发给 pi 的对话消息把附件绝对路径注入 prompt(`withAttachmentPrefix`)并清空 —— 唯一消耗点;管理命令/应答捕获天然不消耗;未授权者与文本同等静默
-- agent 事件流(`message_end` / `turn_end` / `agent_start`…)→ 回发到 Matrix;extension_ui 提问/应答、auto_retry 与错误回发、steering/followUp 队列镜像也在事件路径上(spec #51)
+- agent 事件流(`message_end` / `turn_end` / `agent_start`…)→ 回发到 Matrix;extension_ui 提问/应答经 `extension-questions.ts` 模块(注入 sendReply/应答写入口),auto_retry 与错误回发、steering/followUp 队列镜像也在事件路径上(spec #51;#54)
 - 回复按 RoomBinding 路由:每个 pi 进程绑定自己的回复目标(项目房间钉住、共享默认进程随最近一次 DM 提示刷新,完整对话轮结束后释放)——不存在进程级单槽
-- typing 指示:`agent_start` / `turn_start` 触发 Matrix 输入中状态
+- typing 指示:`agent_start` / `turn_start` 触发 Matrix 输入中状态;管理房判定走 config 的 `managementRoomId` 派生、收养写走 `adoptManagementRoom`(spec #99/#102),收养品牌逻辑在 space.ts
 
-**`src/space.ts`** —— Element 空间组织视图(纯展示层)
-- 启动期 ensure:懒创建私有空间 `π <实例名>` + 空间内 bot 自建管理房间,幂等锚点为 config 的 `space.roomId` / `managementRooms[0]`
+**`src/space.ts`** —— Element 空间组织视图(纯展示层)+ 托管房间置备/身份自愈
+- 启动期 ensure:懒创建私有空间 `π <实例名>` + 空间内 bot 自建管理房间,幂等锚点为 config 的 `space.roomId` / `managementRoomId` 派生(spec #99/#102)
 - 任何失败降级为无空间行为(警告 + 下次启动重试);空间链接(m.space.child)每次启动幂等重挂
+- `provisionManagedRoom`(spec #99 票2/#103):托管房间置备深函数——建房 → 信任用户提权(既有幂等路径)→ 挂入空间(best-effort)→ 按套品牌(best-effort);/pmctl new 与启动 ensure 共用,「中途房 ≡ 自愈房」不变量由此持有;按套选图规则(项目房=小屋套按项目名、管理房=管理专属图)收在模块内部,失败附注文案单点(`spaceLinkNote`/`avatarNote`)
+- `maybeInitManagementRoom`(spec #99 票3/#104 自 router 迁入):DM 收养路径的首次品牌(改名 + 发使用指南),幂等 via config,收养写走 `adoptManagementRoom`
 - `inviteUserToSpaceOnce`:fire-once 邀请(space.invitedUsers 记账,拒绝者含内;失败不记账由自愈重试),router 的 spaceInvite 效应与此处自愈共用
-- `healRoomIdentities`:房间身份自愈(空间模式)——空间名仍精确匹配旧模板 `pi-courier · <实例名>` 才迁移为短名(手动改过名的不动);为空间(风景套)/管理房间(小屋套专属金顶城堡)/项目房间(小屋套)补设内置头像,平时只补缺不覆盖;分套记账(spec #84)——某套换风格时(该套 config 字段 < AVATAR_SET_VERSION 对应项)该套管辖房间一次性无条件刷(含用户手动设置的),该套全部成功后记账、此后恢复只补缺;单房间失败仅警告、该套保持 pending 下次启动重试(另一套照常记账),不影响启动三态;`healBotAvatar` 同语义负责 bot 账号 profile 头像(agent 动物套,双模式可用)
+- `healRoomIdentities`:房间身份自愈(空间模式)——空间名仍精确匹配旧模板 `pi-courier · <实例名>` 才迁移为短名(手动改过名的不动);为空间(风景套)/管理房间(小屋套专属金顶城堡)/项目房间(小屋套)补设内置头像,平时只补缺不覆盖;分套记账(spec #84)——某套换风格时(该套 config 字段 < AVATAR_SET_VERSION 对应项)该套管辖房间一次性无条件刷(含用户手动设置的),该套全部成功后记账、此后恢复只补缺;单房间失败仅警告、该套保持 pending 下次启动重试(另一套照常记账),不影响启动三态;`healBotAvatar` 同语义负责 bot 账号 profile 头像(agent 动物套,双模式可用);两套 heal 共用 `migrateAvatarSet` 迁移驱动单点(spec #99 票4/#105)。启动期三段编排(补权→房间身份→bot 头像)在 `startup-state.ts` 的 `runStartupHeals`(spec #99 票7/#106 迁入)
 
 **`src/space-identity.ts`** —— 房间身份单点(命名模板 + 头像选图,纯函数)
 - `spaceDisplayName`:`π <实例名>`;`isLegacySpaceName` 严格匹配旧模板,保证迁移绝不覆盖用户起的名字
-- `pickPoolAvatarFile(name, set)`:djb2 哈希取模 12 按 agent/space/room 三套选图(同名恒定同图);管理房间固定 `room-management.png`;`AVATAR_SET_VERSION` + `bookedAvatarVersion` 为分套版本记账单点
+- `pickPoolAvatarFile(name, set)`:djb2 哈希取模 12 按 agent/space/room 三套选图(同名恒定同图);管理房间固定 `room-management.png`;`AVATAR_SET_VERSION` + `bookedAvatarVersion` 为分套版本记账单点(`avatarVersionMarker(set)` 为写侧孪生,spec #99 票4/#105)
 - 资产在 `assets/avatars/`(agent/space/room 三套各 12 张 + 1 张管理专属,共 37 张 512×512 真 PNG,原创 AI 生成软糖质感——空间=冷色风景、房间=暖色小屋、bot=动物),`scripts/generate-avatars-v4.mjs` 生成;换成自己的图只需同名替换 PNG
 
-**`src/transports/matrix.ts`** —— Matrix Transport(只做消息 I/O,spec #22 后不再内嵌其他职责;spec #99/#101 起兼任自己那份纯函数)
+**`src/transports/matrix.ts`** —— Matrix Transport(只做消息 I/O;客户端经注入端口触达,spec #22 后不再内嵌其他职责;spec #99/#101 起兼任自己那份纯函数)
 - connect/disconnect、`sendMessage`(markdown → Matrix HTML)、typing、事件分发
-- 模块底部纯函数区:`formatForMatrix`(出站渲染)、`shouldSkipEvent`(事件过滤)、`isGroupChatRoom`/`shouldPostJoinHint`(群/DM 判定与入群 enable 提示谓词);成员计数经缓存(不逐条消息打 API)
-- 消息翻译已抽为独立深模块 `matrix-events.ts`(spec #72 票2/C2):分类/提及剥离/引用摘录/附件编排全部在翻译器内,经注入端口(quoteCache/memberCount/attachments)直测;transport 只留 skip 过滤 + SDK 接线 + 日志;入群提示文案在 management-room.ts(/enable 知识同侧)
+- **客户端经 `MatrixClientPort` 端口触达**(spec #99 票1/#100):构造函数注入 client 工厂(缺省 = 生产工厂,镜像 rpcFactory 先例),connect() 不含任何 SDK 具体类——回放隔离(connectedAt 双标记)、失败清理可重试、成员缓存播种、事件接线全部可经假客户端直测
+- 模块底部纯函数区:`formatForMatrix`(出站渲染)、`shouldSkipEvent`(事件过滤,含 connectedAt 回放隔离)、`isGroupChatRoom`/`shouldPostJoinHint`(群/DM 判定与入群 enable 提示谓词);成员计数经缓存(不逐条消息打 API)
+- 消息翻译已抽为独立深模块 `matrix-events.ts`(spec #72 票2/C2):分类/提及剥离/引用摘录/附件编排全部在翻译器内,经注入端口(quoteCache/memberCount/attachments)直测;transport 只留 skip 过滤 + 端口接线 + 日志;入群提示文案在 management-room.ts(/enable 知识同侧)
 - 附件管道(spec #66):媒体事件经分类后走 `AttachmentStore` 下载落盘,转发携带绝对路径的 `ExternalMessage`(不触发 turn);m.sticker 事件类型经 `room.event` 监听接入(E2EE 房间收到的是解密后事件);`mediaSource` 是下载接缝的 Matrix 半边(明文 `downloadContent` v1 鉴权端点 / 加密 `crypto.decryptMedia`)
-- SDK 内部日志经 `logger.ts` 门面(初始同步期用 `suppressLogLines` 窗口滤掉两类已知良性错误)
+- SDK 内部日志经 `logger.ts` 门面(初次同步期窗口滤掉两类已知良性错误,时点语义见 logger 条目)
+
+**`src/transports/matrix-client.ts`** —— Matrix client 端口 + 生产适配器(spec #99 票1/#100)
+- `MatrixClientPort`:两个适配器(消息 I/O + RoomOps)实际用到的 SDK 表面全集(连接生命周期/事件注册/读取/出站/媒体/房间能力六组),同时是「用了 matrix-bot-sdk 哪些表面」的依赖足迹文档
+- `createMatrixClient(config)` 生产工厂:封装 `~/.pi` 下两个存储路径(SimpleFsStorageProvider + Rust crypto SQLite,构造失败降级仅警告)、真实客户端构造、AutojoinRoomsMixin、SDK 日志门面接入;真实 MatrixClient 结构化满足端口,测试注入内存假客户端(matrix-fakes.ts 共享 fixture)
 
 **`src/transports/matrix-rooms.ts`** —— Matrix RoomOps 适配器(spec #22 从 matrix.ts 拆出)
 - `MatrixRoomOps implements RoomOps`:createRoom/createSpace、空间挂链/摘链(m.space.child + m.room.parent)、邀请/改名/权力等级/退房、`encryptionAvailable`
-- 经注入访问器(getClient/getBotUserId/onLeftRoom)触达 live client,不反向持有 transport;组合根(standalone)把 `matrix.roomOps` 交给 /pmctl 与 space ensure
+- 经注入访问器(getClient/getBotUserId/onLeftRoom)触达 live client(类型为 MatrixClientPort),不反向持有 transport;组合根(standalone)把 `matrix.roomOps` 交给 /pmctl 与 space ensure
+- 查询成员(getRoomName/getRoomAvatar/getPowerLevels/getProfileAvatarUrl)经 `queryExpectedMiss` 助手:「预期缺失(404/M_NOT_FOUND)归 null 不吵」在适配器边界自动生效——调用方无需懂 SDK 日志行为、无需开窗(spec #99 票4/#105);非 404 错误照抛可见
 
 **`src/transports/matrix-events.ts`** —— Matrix 事件翻译深模块(spec #72 票2/C2;spec #99/#101 起兼任内容分类与提及解析纯函数)
 - 翻译器把解密后的房间事件转成 transport 无关的 `ExternalMessage` 及其副作用(附件落盘编排),端口注入直测
@@ -244,11 +252,12 @@ pi 0.83.0 就绪。
 - `MediaSource` 下载接缝可注入(测试用 fake);部署缺加密半边时回执明确原因;组合根(standalone)以 `matrix.mediaSource` 组装并把 store 交给 provider(`setAttachmentStore`)
 - 目录默认 `~/.pi/pi-courier-attachments/`(与 `~/.pi` 下其他 pi-courier-* 状态文件平齐;spec 文本写的是 `~/.pi/pi-courier/attachments/`,实施时改名并在关票评论披露),上限默认 10 MB —— `attachments.directory` / `attachments.maxMb` 配置 + `PI_ATTACHMENTS_DIR` / `PI_ATTACHMENTS_MAX_MB` 环境变量 + setup 向导两项询问
 
-**`src/logger.ts`** —— 分级日志门面(spec #34 后支持项目标签)
+**`src/logger.ts`** —— 分级日志门面(spec #34 后支持项目标签;spec #99 票4/#105 起静音策略单点)
 - 输出 `[ISO时间] [LEVEL] [标签] 消息`;`withLabel()` 派生视图打项目标签(视图动态读父阈值);字符串参数换行净化为 `⏎`,一次调用恒一条物理行(打标行不会被续行破坏)
 - 无标签行与历史逐字节一致(单工程模式零变化)
+- `suppressLogLines`:本文件 docblock 是「为什么静音」策略唯一清单——①初次同步回放窗口(matrix.ts,盖 client.start() 时段的两类良性错误);②预期 miss 查询(matrix-rooms.ts `queryExpectedMiss`,窗口只盖单次调用);实现为引用计数式移除,同模式嵌套窗口各移除自己一份,内层关窗不误拆外层
 
-**`src/config.ts` 派生函数族**(spec #72 票4/C4):effectiveInstanceName/effectiveWorkdir/attachmentsDirectory/attachmentsMaxMb/attachmentsMaxBytes——每条默认值只有一处解释,setup 向导与运行时同源;PI_CLI_PATH 经 loadConfig 纳入统一 env 覆盖链。
+**`src/config.ts` 派生函数族**(spec #72 票4/C4;spec #99 票6/#102 补管理房间):effectiveInstanceName/effectiveWorkdir/attachmentsDirectory/attachmentsMaxMb/attachmentsMaxBytes/`managementRoomId`(哪一个是管理房间——公开语义单管理房,"取首个"是有意为之)/`adoptManagementRoom`(收养写侧,追加语义、幂等空 patch,可与其他字段合并为一次原子 update)——每条默认值只有一处解释,setup 向导与运行时同源;PI_CLI_PATH 经 loadConfig 纳入统一 env 覆盖链。
 
 **`src/identity.ts`**(spec #72 票5/C6)—— 用户身份单点:namespacedId(存储形式)/nativeMxid(Matrix 形式)/displayIdentity(/trusted 展示,沿用既有截断怪癖)/matchesTrustedEntry(/revoke 后缀规则)/matchesAdmin(存量双形式兼容,显式命名)。config.ts 的 nativeMxid 为再导出。
 
@@ -264,8 +273,17 @@ pi 0.83.0 就绪。
 - 每房间 50 条 FIFO(重见即刷新)、摘录单行 200 字上限,纯内存零 I/O
 - 只记用户消息(bot 自身消息在事件过滤即被跳过),未命中静默无前缀 —— 引用是尽力而为的上下文,不是承诺
 
-**`src/rpc/rpc-transient-state.ts`** —— 每进程瞬态状态(spec #72 票6/C5)
-- 队列镜像 + 悬置提问的集中保管;失效时机自治:订阅 PiRpc 的重启生命周期(onRestarted),重启即作废——不再有外借的 clearRpcState 扳机(command-map 上下文与 LoginManager 依赖均已瘦身)
+**`src/rpc/rpc-transient-state.ts`** —— 每进程瞬态状态(spec #72 票6/C5;spec #99 票3/#104 起只管队列镜像)
+- 队列镜像的集中保管;失效时机自治:订阅 PiRpc 的重启生命周期(onRestarted),重启即作废——不再有外借的 clearRpcState 扳机(command-map 上下文与 LoginManager 依赖均已瘦身);悬置提问的队列所有权在 `extension-questions.ts`
+
+**`src/rpc/extension-questions.ts`** —— extension-UI 提问机状态机(spec #99 票3/#104 自 router 迁出)
+- 自带状态:每进程 FIFO 队列 + 超时计时器;构造注入 sendReply/应答写入口/超时来源/重启订阅,router 阶段只调 handle/deliver/clear
+- 不变量即 interface 契约:FIFO 最老优先、超时代答取消、invalid 重问不出队、无绑定代答取消、`/` 开头仍走命令通道、登录捕获优先于悬置提问(spec #51 票3/#54)
+
+**`src/startup-state.ts`** —— 启动状态可注入模块(spec #99 票7/#106)
+- `sendPairingNotice` 配对码落地槽:先构造后接线,接线前到达的配对码进缓冲、`wirePairingSink` 后按序补发——晚绑定从"注释保证不发生"变"结构保证不丢"
+- 收养许可:初始 = 非空间模式;空间 ensure 降级时 `allowAdoption()` 翻转,router 的 managementAdoption 阶段只读查询——「降级→DM 收养重新开放」可单测
+- `runStartupHeals`:启动自愈三段编排单点(补权 → 房间身份 → bot 头像,自 space.ts 迁入)
 
 **`src/auth/headless-login.ts`** —— 无头登录(spec #51 票4)
 - 上游 `AuthInteraction` → 聊天往返翻译(纯函数直测):prompt 变房间提问、notify(auth_url/device_code/progress)变展示行、「取消」= abort signal 中止(prompt reject 即上游的异常退出取消路径)
@@ -273,10 +291,10 @@ pi 0.83.0 就绪。
 
 **`src/management-room.ts`** —— 管理房间文案单点组装(房间名 + 使用指南),DM 采纳与空间自建两条入口共用,杜绝文案漂移
 
-**`src/standalone.ts`** —— 独立入口
+**`src/standalone.ts`** —— 独立入口(组合根只接线,spec #99 票7/#106)
 - 单实例锁(lock.ts)
 - 信号优雅关闭(SIGTERM/SIGINT)
-- 初始化 transports → 空间 ensure(幂等/降级)→ 启动 RPC → 挂接事件
+- 初始化顺序:构造启动状态(最早,配对码槽就位)→ transports → 空间 ensure(幂等/降级,降级翻转收养许可)→ `runStartupHeals` 自愈编排 → 启动 RPC → 接线(pairing sink、事件、router)——时序不变量由"先构造后接线"的结构承载,不再靠注释
 
 ### 5.2 适配 0.83.0 的坑
 
