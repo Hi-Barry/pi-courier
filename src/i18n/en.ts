@@ -302,6 +302,120 @@ const en: Record<MessageKey, string> = {
   "cli.arg.deprecatedDebug": "⚠️  Deprecated flag; set debug: true in ~/.pi/pi-courier.json instead",
   "cli.arg.unknown": "⚠️  Ignoring unknown argument: {arg} (deprecated flags removed; use config or subcommands)",
 
+  // ── setup ─────────────────────────────────────────────────────────────
+  "setup.header": "Writes ~/.pi/pi-courier.json (mode 600; an existing config prefills the defaults — press Enter to keep them)\n",
+  "setup.homeserver.default": "Matrix homeserver URL [default {def}]: ",
+  "setup.homeserver.plain": "Matrix homeserver URL (e.g. https://matrix.example.com): ",
+  "setup.homeserver.empty": "homeserver URL must not be empty",
+  "setup.token.mode": "How to get the token [1=password login, 2=paste an existing token] (1): ",
+  "setup.token.paste": "Paste the access token (syt_...): ",
+  "setup.token.empty": "token must not be empty",
+  "setup.token.valid": "✅ Token valid, account: {user}",
+  "setup.token.username": "bot username (e.g. test2): ",
+  "setup.token.password": "bot password: ",
+  "setup.token.credsEmpty": "username/password must not be empty",
+  "setup.token.loggingIn": "Logging in…",
+  "setup.token.loginOk": "✅ Login succeeded, account: {user}{device}",
+  "setup.token.loginDevice": " (device {id})",
+  "setup.token.loginFailed": "Login failed (HTTP {status}): {body}",
+  "setup.token.missingAccessToken": "login response has no access_token",
+  "setup.token.whoamiFailed": "token verification failed (HTTP {status})",
+  "setup.token.keep": "Keep the existing token? [Y/n]: ",
+  "setup.token.kept": "✅ Keeping the existing token, account: {user}",
+  "setup.token.hsChanged": "ℹ️  homeserver changed — the token must be re-acquired",
+  "setup.admin.prompt": "Trusted user (admin) MXID [default {def}]: ",
+  "setup.admin.badMxid": "the MXID must start with @, e.g. @barry:matrix.example.com",
+  "setup.rooms.prompt":
+    "Trusted room IDs (optional, Enter to skip; comma-separated, e.g. !abc:server or !abc:server:trusted-only): ",
+  "setup.rooms.invalid": "   ⚠️ Skipping invalid room ID: {room} (must start with !)",
+  "setup.e2ee.defaultYes": "Enable E2EE encryption? [Y/n] [default yes]: ",
+  "setup.e2ee.plain": "Enable E2EE encryption? [y/N]: ",
+  "setup.workdir.prompt": "pi workdir [default {def}]: ",
+  "setup.attach.dirPrompt": "Attachment save directory [default {def}]: ",
+  "setup.attach.mbPrompt": "Per-attachment size limit in MB [default {def}]: ",
+  "setup.attach.mbInvalid": "the attachment size limit must be a positive integer (MB)",
+  "setup.instance.prompt":
+    "Instance/machine name (default {def}; tells multi-machine deployments apart, shown in the management room name): ",
+  "setup.multiProject.prompt":
+    "Enable multi-project mode? [y/N] (multi-project = management room + isolated project rooms with /pmctl; default N = single-project, one bot to one pi): ",
+  "setup.space.promptYes":
+    "Enable the organizational space? [Y/n] (groups the management/project rooms in an Element space; created on restart): ",
+  "setup.space.promptNo":
+    "Enable the organizational space? [y/N] (groups the management/project rooms in an Element space; created on restart): ",
+  "setup.space.stateOn": "on (the space will be created on restart, grouping the management/project rooms)",
+  "setup.done.title": "\n✅ Config written to ~/.pi/pi-courier.json",
+  "setup.done.account": "   account: {user}",
+  "setup.done.trusted": "   trusted user: {user}",
+  "setup.done.e2ee": "   E2EE: {state}",
+  "setup.done.workdir": "   workdir: {workdir}",
+  "setup.done.attachments": "   attachment dir: {dir} (limit {max} MB)",
+  "setup.done.instance": "   instance name: {name} (differentiates multi-machine deployments; shown in the management room name)",
+  "setup.done.multiProject": "   multi-project: {state}",
+  "setup.done.multiProjectOff": "off (single-project)",
+  "setup.done.space": "   space: {state}",
+  "setup.done.deviceId": "   device ID: {id} (fixed; reused when you re-run setup — delete this field to get a new device)",
+  "setup.done.rooms": "   trusted rooms: {rooms}",
+  "setup.done.noRooms": "none (groups are ignored by default; add them later with /enable)",
+  "setup.next": "\nNext: pi-courier enable (auto-start on boot) or pi-courier run (foreground)",
+  "setup.failed": "\n❌ Setup failed: {message}",
+
+  // ── cli / systemd bus hint ────────────────────────────────────────────
+  "cli.usage": `pi-courier — run the pi coding agent from your messenger
+
+Usage:
+  pi-courier setup     first-run configuration wizard (Matrix account, trusted user, workdir)
+  pi-courier run       run in the foreground (--workdir overrides the configured workdir)
+  pi-courier enable    install a user-level systemd service (auto-start) and start it
+  pi-courier start      start the service
+  pi-courier stop       stop the service
+  pi-courier restart    restart the service
+  pi-courier status     show service status + recent logs (optional project filter)
+  pi-courier logs      tail the service logs (Ctrl+C to exit); with multi-project, filter by project:
+                       pi-courier logs <project> [project...] [--level debug|info|warn|error]
+  pi-courier disable   uninstall the service (stop + remove from autostart + delete the unit file)
+  pi-courier update    update this project (git pull + install deps + rebuild)
+  pi-courier -v        show the installed version (--version / version also work)
+
+Note: pi itself is installed and upgraded independently on the system
+(npm i -g @earendil-works/pi-coding-agent); this project only ever updates itself.`,
+  "cli.unknownCommand": "\n❌ Unknown command: {cmd}",
+  "cli.enable.nodeTooOld":
+    "⚠️  Node is v{version}; pi's undici needs Node >= 21. Install v24 via nvm and re-run this command.",
+  "cli.enable.unitWritten": "📝 Wrote {path}",
+  "cli.enable.failed": "❌ The service could not be enabled (the unit file was written, but the systemd operations failed: {steps}).",
+  "cli.enable.ok": "✅ Service enabled and started (auto-start on boot).",
+  "cli.enable.logsHint": "   logs: journalctl --user -u {unit} -f",
+  "cli.systemctl.failed": "❌ systemctl {args} failed (exit code {status})",
+  "cli.service.notInstalled": "❌ Service not installed. Run `pi-courier enable` first.",
+  "cli.service.statusFailed":
+    "⚠️ The status query failed (exit code {status}) — the journald output below is HISTORY and does not mean the service is running.",
+  "cli.service.singleProjectNoFilter":
+    "❌ Single-project mode: logs are not tagged per project (project tags exist only in multi-project mode).",
+  "cli.disable.notInstalled": "❌ Service not installed (the unit file does not exist).",
+  "cli.disable.keptUnit":
+    "ℹ️ The unit file was kept; after fixing the environment, re-run `pi-courier disable` or just `pi-courier enable`.",
+  "cli.disable.ok": "✅ Service stopped and uninstalled. To restore later: `pi-courier enable` (your config is untouched).",
+  "cli.update.stopping": "🛑 Stopping the service…",
+  "cli.update.npmUpgrade": "🔄 Upgrading pi-courier via npm …",
+  "cli.update.nativeSkipped": "   (the E2EE native library already exists; skipping the 21MB download)",
+  "cli.update.npmFailed": "❌ npm upgrade failed (exit code {status})",
+  "cli.update.gitUpgrade": "🔄 Updating pi-courier (git) …",
+  "cli.update.cmdFailed": "❌ {cmd} failed (exit code {status})",
+  "cli.update.restarting": "🔄 Restarting the service…",
+  "cli.update.restarted": "✅ Service restarted.",
+  "cli.update.wasInactive": "\nℹ️  The service was not running before the update; it was not started.",
+  "cli.update.startHint": "   To start it: pi-courier start",
+  "cli.update.done": "\n✅ Update complete.",
+  "hint.bus.ownerMismatch":
+    "💡 XDG_RUNTIME_DIR={dir} (owned by uid {owner}) points at another user's session bus, while the current user is uid {euid}.",
+  "hint.bus.connectFailed": "💡 Could not connect to the current user's systemd session bus (XDG_RUNTIME_DIR={dir}).",
+  "hint.bus.unset": "unset",
+  "hint.bus.unsetWithParens": "(unset)",
+  "hint.bus.tail1":
+    "   Common cause: switching users with `su <user>` (without -) inherited the original user's environment, or this shell lacks a full login session.",
+  "hint.bus.tail2": "   Fix: export XDG_RUNTIME_DIR=/run/user/$(id -u) and retry, or switch again with `su - <user>`;",
+  "hint.bus.tail3": "   if /run/user/$(id -u) does not exist, log in as that user once, or run loginctl enable-linger <user> as root.",
+
   // ── startup ───────────────────────────────────────────────────────────
   "startup.language.system":
     "language: {locale} (detected from the system locale; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",

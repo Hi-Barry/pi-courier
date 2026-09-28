@@ -22,6 +22,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
+import { effectiveLanguage } from "./config.js";
+import { setLocale, t } from "./i18n/index.js";
 import { buildLogFilterArgs } from "./log-filter.js";
 import { projectLabelOf } from "./project-labels.js";
 import { busFailureHint, dirOwnerUid } from "./systemd-hint.js";
@@ -65,24 +67,7 @@ function e2eNativeBinaryExists(): boolean {
 }
 
 function usage(): void {
-  console.log(`pi-courier — run the pi coding agent from your messenger
-
-用法:
-  pi-courier setup     首次运行配置向导(Matrix 账号、信任用户、工作目录)
-  pi-courier run       前台运行(--workdir 可覆盖配置里的工作目录)
-  pi-courier enable    安装用户级 systemd 服务并开机自启、立即启动
-  pi-courier start      启动服务
-  pi-courier stop       停止服务
-  pi-courier restart    重启服务
-  pi-courier status     查看服务状态与最近日志(可带项目名过滤)
-  pi-courier logs      跟踪服务日志(Ctrl+C 退出);多工程下可加项目名过滤:
-                       pi-courier logs <项目> [项目...] [--level debug|info|warn|error]
-  pi-courier disable   卸载服务(停止 + 取消自启 + 删除 unit 文件)
-  pi-courier update    更新本项目(git pull + 安装依赖 + 重新构建)
-  pi-courier -v        显示版本号(--version / version 亦可)
-
-说明:pi 由系统独立安装与升级(npm i -g @earendil-works/pi-coding-agent),
-本项目只更新自身。`);
+  console.log(t("cli.usage"));
 }
 
 // ===========================================================================
@@ -144,7 +129,7 @@ WantedBy=default.target
 function cmdEnable(): void {
   const major = Number(process.versions.node.split(".")[0]);
   if (major < 21) {
-    console.warn(`⚠️  当前 Node 版本为 v${process.versions.node},pi 的 undici 需要 Node >= 21。建议用 nvm 安装 v24 后重新执行本命令。`);
+    console.warn(t("cli.enable.nodeTooOld", { version: process.versions.node }));
   }
 
   // Early read: surfaces config-permission warnings before installing the service.
@@ -155,7 +140,7 @@ function cmdEnable(): void {
   const unitPath = userUnitPath();
   fs.mkdirSync(path.dirname(unitPath), { recursive: true });
   fs.writeFileSync(unitPath, unit);
-  console.log(`📝 已写入 ${unitPath}`);
+  console.log(t("cli.enable.unitWritten", { path: unitPath }));
 
   // Issue #60: daemon-reload and enable --now are independent steps — failing
   // one must not hide whether the other ran, and the user must never be left
@@ -164,11 +149,11 @@ function cmdEnable(): void {
   if (systemctlUser(["daemon-reload"]) !== 0) failed.push("daemon-reload");
   if (systemctlUser(["enable", "--now", SERVICE_NAME]) !== 0) failed.push(`enable --now ${SERVICE_NAME}`);
   if (failed.length > 0) {
-    console.error(`❌ 服务未能启用(unit 文件已写入,但 systemd 操作失败: ${failed.join(", ")})。`);
+    console.error(t("cli.enable.failed", { steps: failed.join(", ") }));
     process.exit(1);
   }
-  console.log("✅ 服务已启用并启动(开机自启)。");
-  console.log(`   日志: journalctl --user -u ${SERVICE_NAME} -f`);
+  console.log(t("cli.enable.ok"));
+  console.log(t("cli.enable.logsHint", { unit: SERVICE_NAME }));
 }
 
 /** Issue #59: append the targeted `su`-trap hint when a systemctl failure
@@ -198,7 +183,7 @@ function spawnSystemctlUser(args: string[]): { status: number; stderr: string } 
 function systemctlUser(args: string[]): number {
   const { status, stderr } = spawnSystemctlUser(args);
   if (status !== 0) {
-    console.error(`❌ systemctl ${args.join(" ")} 失败(退出码 ${status})`);
+    console.error(t("cli.systemctl.failed", { args: args.join(" "), status }));
     printBusHint(stderr);
   }
   return status;
@@ -220,7 +205,7 @@ function projectLabels(): { labels: string[]; multiProject: boolean } {
 function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", args: string[] = []): void {
   const unitPath = userUnitPath();
   if (!fs.existsSync(unitPath)) {
-    console.error(`❌ 服务未安装。先运行 \`pi-courier enable\` 安装。`);
+    console.error(t("cli.service.notInstalled"));
     process.exit(1);
   }
   if (action === "logs" || action === "status") {
@@ -230,7 +215,7 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
       if (st.status !== 0) {
         // Issue #61: the journal window below shows HISTORY — without this
         // line a dead service's old logs read like "the service is running".
-        console.error(`⚠️ 服务状态查询失败(退出码 ${st.status})——以下为 journald 历史日志,不代表服务当前在运行。`);
+        console.error(t("cli.service.statusFailed", { status: st.status }));
         printBusHint(st.stderr);
       }
     }
@@ -245,7 +230,7 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
     // Single-project mode tags nothing, so a project filter can never match —
     // say so instead of silently presenting an empty view (spec #34).
     if (positional.length > 0 && !multiProject) {
-      console.error("❌ 当前为单工程模式,日志不区分项目(多工程模式才打项目标签)。");
+      console.error(t("cli.service.singleProjectNoFilter"));
       process.exit(1);
     }
     const filter = buildLogFilterArgs({
@@ -280,18 +265,18 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
 function cmdDisable(): void {
   const unitPath = userUnitPath();
   if (!fs.existsSync(unitPath)) {
-    console.error("❌ 服务未安装(unit 文件不存在)。");
+    console.error(t("cli.disable.notInstalled"));
     process.exit(1);
   }
   // Stop + remove from autostart, then delete the unit file (full uninstall).
   if (systemctlUser(["disable", "--now", SERVICE_NAME]) !== 0) {
     // Issue #60: the failure path must not delete the unit — say so explicitly.
-    console.error("ℹ️ unit 文件已保留,修复环境后可再次 `pi-courier disable` 或直接 `pi-courier enable`。");
+    console.error(t("cli.disable.keptUnit"));
     process.exit(1);
   }
   fs.rmSync(unitPath, { force: true });
   runSystemctl(["daemon-reload"]);
-  console.log("✅ 服务已停止并卸载。以后要恢复:`pi-courier enable`(配置不受影响)。");
+  console.log(t("cli.disable.ok"));
 }
 
 // ===========================================================================
@@ -307,7 +292,7 @@ function cmdUpdate(): void {
   const active = spawnSync("systemctl", ["--user", "is-active", SERVICE_NAME], { encoding: "utf-8" });
   const wasActive = active.stdout?.trim() === "active";
   if (wasActive) {
-    console.log("🛑 停止服务…");
+    console.log(t("cli.update.stopping"));
     runSystemctl(["stop", SERVICE_NAME]);
   }
 
@@ -317,26 +302,26 @@ function cmdUpdate(): void {
     // --foreground-scripts: postinstall output (e.g. the E2EE native lib
     // download progress from matrix-sdk-crypto-nodejs) streams to the
     // terminal in real time instead of being buffered by npm until the end.
-    console.log("🔄 通过 npm 升级 pi-courier …");
+    console.log(t("cli.update.npmUpgrade"));
     const npmArgs = ["install", "-g", "pi-courier@latest", "--foreground-scripts"];
     // The E2EE native lib (21MB from GitHub Releases) is re-downloaded on
     // every npm install because the upstream postinstall uses override:true.
     // When the binary already exists, skip lifecycle scripts — the lib is
     // kept as-is and the update finishes in seconds instead of minutes.
     if (e2eNativeBinaryExists()) {
-      console.log("   (E2EE 原生库已存在,跳过 21MB 下载)");
+      console.log(t("cli.update.nativeSkipped"));
       npmArgs.push("--ignore-scripts");
     }
     const res = spawnSync("npm", npmArgs, {
       stdio: "inherit",
     });
     if (res.status !== 0) {
-      console.error(`❌ npm 升级失败(退出码 ${res.status})`);
+      console.error(t("cli.update.npmFailed", { status: res.status }));
       process.exit(res.status ?? 1);
     }
   } else {
     // Installed from a git clone → pull + install + build.
-    console.log("🔄 更新 pi-courier(git)…");
+    console.log(t("cli.update.gitUpgrade"));
     for (const [cmd, args] of [
       ["git", ["pull"]],
       ["npm", ["install"]],
@@ -345,7 +330,7 @@ function cmdUpdate(): void {
       console.log(`\n$ ${cmd} ${args.join(" ")}`);
       const res = spawnSync(cmd, args, { cwd: projDir, stdio: "inherit" });
       if (res.status !== 0) {
-        console.error(`❌ ${cmd} 失败(退出码 ${res.status})`);
+        console.error(t("cli.update.cmdFailed", { cmd, status: res.status }));
         process.exit(res.status ?? 1);
       }
     }
@@ -356,14 +341,14 @@ function cmdUpdate(): void {
   //    update was interrupted), tell the user — never silently leave it dead,
   //    and never override an intentional stop.
   if (wasActive) {
-    console.log("🔄 重新启动服务…");
+    console.log(t("cli.update.restarting"));
     runSystemctl(["start", SERVICE_NAME]);
-    console.log("✅ 服务已重新启动。");
+    console.log(t("cli.update.restarted"));
   } else {
-    console.log("\nℹ️  更新前服务未运行,已跳过启动。");
-    console.log("   如需启动服务: pi-courier start");
+    console.log(t("cli.update.wasInactive"));
+    console.log(t("cli.update.startHint"));
   }
-  console.log("\n✅ 更新完成。");
+  console.log(t("cli.update.done"));
 }
 
 // ===========================================================================
@@ -372,6 +357,12 @@ function cmdUpdate(): void {
 
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
+  // Language wiring (issue #83): every subcommand except `setup` localizes
+  // from the full chain (PI_LANGUAGE > config > system locale > en). `setup`
+  // asks the language itself as its first question.
+  if (cmd !== "setup") {
+    setLocale(effectiveLanguage(loadConfig()));
+  }
   switch (cmd) {
     case "setup":
       await cmdSetup();
@@ -409,7 +400,7 @@ async function main(): Promise<void> {
       break;
     default:
       usage();
-      if (cmd) console.error(`\n❌ 未知命令: ${cmd}`);
+      if (cmd) console.error(t("cli.unknownCommand", { cmd }));
       process.exitCode = 1;
   }
 }

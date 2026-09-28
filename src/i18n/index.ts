@@ -27,9 +27,10 @@ export function getLocale(): Locale {
   return current;
 }
 
-/** `undefined` is allowed and renders as "undefined" — identical to what a
- *  plain template string printed before the i18n migration (e.g. exitCode). */
-export type MsgParams = Record<string, string | number | undefined>;
+/** `undefined`/`null` are allowed and render as "undefined"/"null" — identical
+ *  to what a plain template string printed before the i18n migration
+ *  (spawnSync's exit code is `number | null`, e.g.). */
+export type MsgParams = Record<string, string | number | null | undefined>;
 
 /**
  * Look up a message in the active locale's table. `{name}` placeholders are

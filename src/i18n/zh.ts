@@ -285,6 +285,109 @@ const zh = {
   "cli.arg.deprecatedDebug": "⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 debug: true",
   "cli.arg.unknown": "⚠️  忽略未知参数: {arg}(旧参数已废弃,请用配置或子命令)",
 
+  // ── setup(首跑向导;语言首问之后,以下全部跟随所选语言)───────────────
+  "setup.header": "将写入 ~/.pi/pi-courier.json(权限 600;已有配置作为默认值,直接回车沿用)\n",
+  "setup.homeserver.default": "Matrix homeserver URL [默认 {def}]: ",
+  "setup.homeserver.plain": "Matrix homeserver URL (如 https://matrix.example.com): ",
+  "setup.homeserver.empty": "homeserver URL 不能为空",
+  "setup.token.mode": "获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1): ",
+  "setup.token.paste": "粘贴 access token (syt_...): ",
+  "setup.token.empty": "token 不能为空",
+  "setup.token.valid": "✅ token 有效,账号: {user}",
+  "setup.token.username": "bot 用户名 (如 test2): ",
+  "setup.token.password": "bot 密码: ",
+  "setup.token.credsEmpty": "用户名/密码不能为空",
+  "setup.token.loggingIn": "登录中…",
+  "setup.token.loginOk": "✅ 登录成功,账号: {user}{device}",
+  "setup.token.loginDevice": "(设备 {id})",
+  "setup.token.loginFailed": "登录失败 (HTTP {status}): {body}",
+  "setup.token.missingAccessToken": "登录响应缺少 access_token",
+  "setup.token.whoamiFailed": "token 验证失败 (HTTP {status})",
+  "setup.token.keep": "保留现有 token? [Y/n]: ",
+  "setup.token.kept": "✅ 沿用现有 token,账号: {user}",
+  "setup.token.hsChanged": "ℹ️  homeserver 已变更,需要重新获取 token",
+  "setup.admin.prompt": "信任用户(管理员)MXID [默认 {def}]: ",
+  "setup.admin.badMxid": "MXID 应以 @ 开头,如 @barry:matrix.example.com",
+  "setup.rooms.prompt": "信任房间 ID(可选,回车跳过;多个逗号分隔,如 !abc:server 或 !abc:server:trusted-only): ",
+  "setup.rooms.invalid": "   ⚠️ 跳过无效房间 ID: {room}(应以 ! 开头)",
+  "setup.e2ee.defaultYes": "启用 E2EE 加密? [Y/n] [默认 是]: ",
+  "setup.e2ee.plain": "启用 E2EE 加密? [y/N]: ",
+  "setup.workdir.prompt": "pi 工作目录 [默认 {def}]: ",
+  "setup.attach.dirPrompt": "附件保存目录 [默认 {def}]: ",
+  "setup.attach.mbPrompt": "单个附件大小上限 MB [默认 {def}]: ",
+  "setup.attach.mbInvalid": "附件大小上限应为正整数(MB)",
+  "setup.instance.prompt": "实例名/机器名(默认 {def};多台部署用来区分,将显示在管理房间名): ",
+  "setup.multiProject.prompt": "启用多工程模式? [y/N](多工程=管理房间+项目房间隔离,可用 /pmctl;默认 N=单工程,一个 bot 对应一个 pi): ",
+  "setup.space.promptYes": "启用空间组织? [Y/n](Element 空间收纳管理/项目房间,重启后自动创建): ",
+  "setup.space.promptNo": "启用空间组织? [y/N](Element 空间收纳管理/项目房间,重启后自动创建): ",
+  "setup.space.stateOn": "开启(重启后创建空间并收纳管理/项目房间)",
+  "setup.done.title": "\n✅ 配置已写入 ~/.pi/pi-courier.json",
+  "setup.done.account": "   账号: {user}",
+  "setup.done.trusted": "   信任用户: {user}",
+  "setup.done.e2ee": "   E2EE: {state}",
+  "setup.done.workdir": "   工作目录: {workdir}",
+  "setup.done.attachments": "   附件目录: {dir}(上限 {max} MB)",
+  "setup.done.instance": "   实例名: {name}(用于多台部署区分,显示在管理房间名)",
+  "setup.done.multiProject": "   多工程: {state}",
+  "setup.done.multiProjectOff": "关闭(单工程)",
+  "setup.done.space": "   空间组织: {state}",
+  "setup.done.deviceId": "   设备 ID: {id}(固定,重跑 setup 复用;想换设备就删掉此字段)",
+  "setup.done.rooms": "   信任房间: {rooms}",
+  "setup.done.noRooms": "无(群聊默认不回应;可后续用 /enable 添加)",
+  "setup.next": "\n下一步: pi-courier enable(开机自启)或 pi-courier run(前台运行)",
+  "setup.failed": "\n❌ 配置失败: {message}",
+
+  // ── cli(子命令输出)与 systemd 总线提示 ──────────────────────────────
+  "cli.usage": `pi-courier — run the pi coding agent from your messenger
+
+用法:
+  pi-courier setup     首次运行配置向导(Matrix 账号、信任用户、工作目录)
+  pi-courier run       前台运行(--workdir 可覆盖配置里的工作目录)
+  pi-courier enable    安装用户级 systemd 服务并开机自启、立即启动
+  pi-courier start      启动服务
+  pi-courier stop       停止服务
+  pi-courier restart    重启服务
+  pi-courier status     查看服务状态与最近日志(可带项目名过滤)
+  pi-courier logs      跟踪服务日志(Ctrl+C 退出);多工程下可加项目名过滤:
+                       pi-courier logs <项目> [项目...] [--level debug|info|warn|error]
+  pi-courier disable   卸载服务(停止 + 取消自启 + 删除 unit 文件)
+  pi-courier update    更新本项目(git pull + 安装依赖 + 重新构建)
+  pi-courier -v        显示版本号(--version / version 亦可)
+
+说明:pi 由系统独立安装与升级(npm i -g @earendil-works/pi-coding-agent),
+本项目只更新自身。`,
+  "cli.unknownCommand": "\n❌ 未知命令: {cmd}",
+  "cli.enable.nodeTooOld": "⚠️  当前 Node 版本为 v{version},pi 的 undici 需要 Node >= 21。建议用 nvm 安装 v24 后重新执行本命令。",
+  "cli.enable.unitWritten": "📝 已写入 {path}",
+  "cli.enable.failed": "❌ 服务未能启用(unit 文件已写入,但 systemd 操作失败: {steps})。",
+  "cli.enable.ok": "✅ 服务已启用并启动(开机自启)。",
+  "cli.enable.logsHint": "   日志: journalctl --user -u {unit} -f",
+  "cli.systemctl.failed": "❌ systemctl {args} 失败(退出码 {status})",
+  "cli.service.notInstalled": "❌ 服务未安装。先运行 `pi-courier enable` 安装。",
+  "cli.service.statusFailed": "⚠️ 服务状态查询失败(退出码 {status})——以下为 journald 历史日志,不代表服务当前在运行。",
+  "cli.service.singleProjectNoFilter": "❌ 当前为单工程模式,日志不区分项目(多工程模式才打项目标签)。",
+  "cli.disable.notInstalled": "❌ 服务未安装(unit 文件不存在)。",
+  "cli.disable.keptUnit": "ℹ️ unit 文件已保留,修复环境后可再次 `pi-courier disable` 或直接 `pi-courier enable`。",
+  "cli.disable.ok": "✅ 服务已停止并卸载。以后要恢复:`pi-courier enable`(配置不受影响)。",
+  "cli.update.stopping": "🛑 停止服务…",
+  "cli.update.npmUpgrade": "🔄 通过 npm 升级 pi-courier …",
+  "cli.update.nativeSkipped": "   (E2EE 原生库已存在,跳过 21MB 下载)",
+  "cli.update.npmFailed": "❌ npm 升级失败(退出码 {status})",
+  "cli.update.gitUpgrade": "🔄 更新 pi-courier(git)…",
+  "cli.update.cmdFailed": "❌ {cmd} 失败(退出码 {status})",
+  "cli.update.restarting": "🔄 重新启动服务…",
+  "cli.update.restarted": "✅ 服务已重新启动。",
+  "cli.update.wasInactive": "\nℹ️  更新前服务未运行,已跳过启动。",
+  "cli.update.startHint": "   如需启动服务: pi-courier start",
+  "cli.update.done": "\n✅ 更新完成。",
+  "hint.bus.ownerMismatch": "💡 检测到 XDG_RUNTIME_DIR={dir}(属主 uid {owner})指向其他用户的会话总线,而当前用户是 uid {euid}。",
+  "hint.bus.connectFailed": "💡 未能连接到当前用户的 systemd 会话总线(XDG_RUNTIME_DIR={dir})。",
+  "hint.bus.unset": "未设置",
+  "hint.bus.unsetWithParens": "(未设置)",
+  "hint.bus.tail1": "   常见原因:用 `su <用户>`(不带 -)切换用户时继承了原用户的环境,或当前 shell 缺少完整登录会话。",
+  "hint.bus.tail2": "   解决:export XDG_RUNTIME_DIR=/run/user/$(id -u) 后重试,或改用 `su - <用户>` 重新切换;",
+  "hint.bus.tail3": "   若 /run/user/$(id -u) 不存在,请以该用户登录一次,或由 root 执行 loginctl enable-linger <用户>。",
+
   // ── startup(语言配置可见性;语言功能自身的一部分,破例双语)─────────
   "startup.language.system":
     "language: {locale}(检测自系统 locale;如需固定,请在 ~/.pi/pi-courier.json 配置 \"language\" 或设 PI_LANGUAGE)",

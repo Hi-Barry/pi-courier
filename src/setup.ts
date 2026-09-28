@@ -18,6 +18,9 @@ import {
   nativeMxid,
   saveConfig,
 } from "./config.js";
+import { detectSystemLanguage } from "./i18n/detect.js";
+import { setLocale, t } from "./i18n/index.js";
+import type { Locale } from "./i18n/index.js";
 import type { MsgBridgeConfig } from "./types.js";
 
 /**
@@ -134,17 +137,17 @@ async function matrixLogin(
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`登录失败 (HTTP ${res.status}): ${body.slice(0, 300)}`);
+    throw new Error(t("setup.token.loginFailed", { status: res.status, body: body.slice(0, 300) }));
   }
   const data = (await res.json()) as { access_token?: string; user_id?: string };
-  if (!data.access_token) throw new Error("登录响应缺少 access_token");
+  if (!data.access_token) throw new Error(t("setup.token.missingAccessToken"));
   return { accessToken: data.access_token, userId: data.user_id ?? "" };
 }
 
 async function matrixWhoami(homeserver: string, accessToken: string): Promise<string> {
   const url = `${homeserver.replace(/\/$/, "")}/_matrix/client/v3/account/whoami`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-  if (!res.ok) throw new Error(`token 验证失败 (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(t("setup.token.whoamiFailed", { status: res.status }));
   const data = (await res.json()) as { user_id?: string };
   return data.user_id ?? "unknown";
 }
@@ -167,43 +170,59 @@ async function acquireToken(
   homeserver: string,
   deviceId?: string
 ): Promise<{ accessToken: string; botUserId: string }> {
-  const authMode = ((await ask("获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1): ")).trim() || "1");
+  const authMode = ((await ask(t("setup.token.mode"))).trim() || "1");
 
   if (authMode === "2") {
-    const accessToken = (await ask("粘贴 access token (syt_...): ")).trim();
-    if (!accessToken) throw new Error("token 不能为空");
+    const accessToken = (await ask(t("setup.token.paste"))).trim();
+    if (!accessToken) throw new Error(t("setup.token.empty"));
     const botUserId = await matrixWhoami(homeserver, accessToken);
-    console.log(`✅ token 有效,账号: ${botUserId}`);
+    console.log(t("setup.token.valid", { user: botUserId }));
     return { accessToken, botUserId };
   }
 
-  const username = (await ask("bot 用户名 (如 test2): ")).trim();
+  const username = (await ask(t("setup.token.username"))).trim();
   // 密码不回显(终端模式);普通模式会显示,注意遮挡
-  const password = await ask("bot 密码: ", { silent: true });
-  if (!username || !password) throw new Error("用户名/密码不能为空");
-  console.log("登录中…");
+  const password = await ask(t("setup.token.password"), { silent: true });
+  if (!username || !password) throw new Error(t("setup.token.credsEmpty"));
+  console.log(t("setup.token.loggingIn"));
   const login = await matrixLogin(homeserver, username, password, deviceId);
-  console.log(`✅ 登录成功,账号: ${login.userId}${deviceId ? `(设备 ${deviceId})` : ""}`);
+  console.log(
+    t("setup.token.loginOk", {
+      user: login.userId,
+      device: deviceId ? t("setup.token.loginDevice", { id: deviceId }) : "",
+    })
+  );
   return { accessToken: login.accessToken, botUserId: login.userId };
 }
 
 export async function runSetup(): Promise<void> {
   const { ask, close } = createPrompter();
   console.log("");
-  console.log("=== pi-courier 配置向导 ===");
-  console.log("将写入 ~/.pi/pi-courier.json(权限 600;已有配置作为默认值,直接回车沿用)\n");
+  // 标题双语固定:此刻语言还未确定;首问确定后,后续全部文案跟随所选语言。
+  console.log("=== pi-courier setup wizard / 配置向导 ===");
 
   try {
     // Existing config → prefill defaults on repeated runs.
     const existing = loadConfig();
 
+    // ---- 0. language (issue #83) ------------------------------------------
+    // The very first question, asked in a fixed bilingual line (no locale to
+    // render it in yet). Default = config, else the system locale, else en;
+    // Enter accepts the default and the choice is persisted with the config,
+    // so the running service never depends on terminal-side locale again.
+    const langDefault: Locale = existing.language ?? detectSystemLanguage() ?? "en";
+    const langRaw = (await ask(`Language / 语言? [${langDefault}] (en/zh): `)).trim().toLowerCase();
+    const lang: Locale = langRaw === "zh" || langRaw === "en" ? langRaw : langDefault;
+    setLocale(lang);
+    console.log(t("setup.header"));
+
     // ---- 1. homeserver ----------------------------------------------------
     const hsDefault = existing.matrix?.homeserverUrl ?? "";
     const hsPrompt = hsDefault
-      ? `Matrix homeserver URL [默认 ${hsDefault}]: `
-      : "Matrix homeserver URL (如 https://matrix.example.com): ";
+      ? t("setup.homeserver.default", { def: hsDefault })
+      : t("setup.homeserver.plain");
     const homeserver = (await ask(hsPrompt)).trim() || hsDefault;
-    if (!homeserver) throw new Error("homeserver URL 不能为空");
+    if (!homeserver) throw new Error(t("setup.homeserver.empty"));
 
     // ---- 2.5 fixed device id ------------------------------------------------
     // Same bot account re-running setup reuses the same device (identity is
@@ -223,16 +242,16 @@ export async function runSetup(): Promise<void> {
     let accessToken: string;
     let botUserId: string;
     if (existingToken && !hsChanged) {
-      const keep = ((await ask("保留现有 token? [Y/n]: ")).trim() || "y").toLowerCase();
+      const keep = ((await ask(t("setup.token.keep"))).trim() || "y").toLowerCase();
       if (keep === "y") {
         accessToken = existingToken;
         botUserId = await matrixWhoami(homeserver, accessToken).catch(() => "unknown");
-        console.log(`✅ 沿用现有 token,账号: ${botUserId}`);
+        console.log(t("setup.token.kept", { user: botUserId }));
       } else {
         ({ accessToken, botUserId } = await acquireToken(ask, homeserver, deviceId));
       }
     } else {
-      if (hsChanged) console.log("ℹ️  homeserver 已变更,需要重新获取 token");
+      if (hsChanged) console.log(t("setup.token.hsChanged"));
       ({ accessToken, botUserId } = await acquireToken(ask, homeserver, deviceId));
     }
 
@@ -240,17 +259,15 @@ export async function runSetup(): Promise<void> {
     const trustedDefault = existing.auth?.trustedUsers?.[0] !== undefined
       ? nativeMxid(existing.auth.trustedUsers[0])
       : botUserId;
-    const adminRaw = (await ask(`信任用户(管理员)MXID [默认 ${trustedDefault}]: `)).trim() || trustedDefault;
-    if (!adminRaw.startsWith("@")) throw new Error("MXID 应以 @ 开头,如 @barry:matrix.example.com");
+    const adminRaw = (await ask(t("setup.admin.prompt", { def: trustedDefault }))).trim() || trustedDefault;
+    if (!adminRaw.startsWith("@")) throw new Error(t("setup.admin.badMxid"));
 
     // ---- 4.5 trusted rooms (optional) ---------------------------------------
     // Group chats need explicit channel authorization: trusted users in a
     // group are ignored unless the room is enabled. Format per room:
     //   !room:server            (mode defaults to trusted-only)
     //   !room:server:all|mentions|trusted-only
-    const roomsRaw = (
-      await ask("信任房间 ID(可选,回车跳过;多个逗号分隔,如 !abc:server 或 !abc:server:trusted-only): ")
-    ).trim();
+    const roomsRaw = (await ask(t("setup.rooms.prompt"))).trim();
     const rooms: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }> = {};
     if (roomsRaw) {
       for (const part of roomsRaw.split(",")) {
@@ -264,7 +281,7 @@ export async function runSetup(): Promise<void> {
           mode = last;
         }
         if (!room.startsWith("!")) {
-          console.log(`   ⚠️ 跳过无效房间 ID: ${p}(应以 ! 开头)`);
+          console.log(t("setup.rooms.invalid", { room: p }));
           continue;
         }
         rooms[room] = { enabled: true, mode };
@@ -273,36 +290,34 @@ export async function runSetup(): Promise<void> {
 
     // ---- 5. E2EE ------------------------------------------------------------
     const encDefault = existing.matrix?.encryption === true;
-    const encPrompt = encDefault
-      ? "启用 E2EE 加密? [Y/n] [默认 是]: "
-      : "启用 E2EE 加密? [y/N]: ";
+    const encPrompt = encDefault ? t("setup.e2ee.defaultYes") : t("setup.e2ee.plain");
     const encAnswer = (await ask(encPrompt)).trim().toLowerCase();
     const encryption = encAnswer === "" ? encDefault : encAnswer === "y";
 
     // ---- 6. workdir ----------------------------------------------------------
     const workdirDefault = effectiveWorkdir(existing);
-    const workdir = (await ask(`pi 工作目录 [默认 ${workdirDefault}]: `)).trim() || workdirDefault;
+    const workdir = (await ask(t("setup.workdir.prompt", { def: workdirDefault }))).trim() || workdirDefault;
 
     // ---- 6.2 attachments (issue #66) ------------------------------------------
     // Where media from the chat lands and how big a single file may be.
     // Defaults are fine for almost everyone — the questions exist so the
     // knobs are discoverable, answers merge-preserve existing values.
     const attDirDefault = attachmentsDirectory(existing);
-    const attachmentsDir = (await ask(`附件保存目录 [默认 ${attDirDefault}]: `)).trim() || attDirDefault;
+    const attachmentsDir = (await ask(t("setup.attach.dirPrompt", { def: attDirDefault }))).trim() || attDirDefault;
     const attMbDefault = attachmentsMaxMb(existing);
-    const attMbRaw = (await ask(`单个附件大小上限 MB [默认 ${attMbDefault}]: `)).trim();
+    const attMbRaw = (await ask(t("setup.attach.mbPrompt", { def: attMbDefault }))).trim();
     const attMb = attMbRaw === "" ? attMbDefault : Number.parseInt(attMbRaw, 10);
     if (!Number.isFinite(attMb) || attMb <= 0) {
-      throw new Error("附件大小上限应为正整数(MB)");
+      throw new Error(t("setup.attach.mbInvalid"));
     }
 
     // ---- 6.5 instance name (multi-machine differentiation) -------------------
     const instanceDefault = effectiveInstanceName(existing);
-    const instanceName = (await ask(`实例名/机器名(默认 ${instanceDefault};多台部署用来区分,将显示在管理房间名): `)).trim() || instanceDefault;
+    const instanceName = (await ask(t("setup.instance.prompt", { def: instanceDefault }))).trim() || instanceDefault;
 
     // ---- 6.6 multi-project mode ----------------------------------------------
     const mpDefault = existing.multiProject === true;
-    const mpRaw = (await ask(`启用多工程模式? [y/N](多工程=管理房间+项目房间隔离,可用 /pmctl;默认 N=单工程,一个 bot 对应一个 pi): `)).trim().toLowerCase();
+    const mpRaw = (await ask(t("setup.multiProject.prompt"))).trim().toLowerCase();
     const multiProject = mpRaw === "y" || mpRaw === "yes" || (mpRaw === "" && mpDefault);
 
     // ---- 6.7 space (organizational, multi-project only) ----------------------
@@ -319,9 +334,7 @@ export async function runSetup(): Promise<void> {
     const spaceDefault = hasExistingConfig ? existing.space?.enabled === true : true;
     let spaceEnabled = false;
     if (multiProject) {
-      const spPrompt = spaceDefault
-        ? "启用空间组织? [Y/n](Element 空间收纳管理/项目房间,重启后自动创建): "
-        : "启用空间组织? [y/N](Element 空间收纳管理/项目房间,重启后自动创建): ";
+      const spPrompt = spaceDefault ? t("setup.space.promptYes") : t("setup.space.promptNo");
       const spRaw = (await ask(spPrompt)).trim().toLowerCase();
       spaceEnabled = spRaw === "" ? spaceDefault : spRaw === "y" || spRaw === "yes";
     }
@@ -331,6 +344,7 @@ export async function runSetup(): Promise<void> {
     // from the existing config instead of overwriting the whole file.
     const merged: MsgBridgeConfig = {
       ...existing,
+      language: lang,
       matrix: { homeserverUrl: homeserver, accessToken, encryption },
       auth: {
         ...existing.auth,
@@ -351,23 +365,25 @@ export async function runSetup(): Promise<void> {
     };
     saveConfig(merged);
 
-    console.log("\n✅ 配置已写入 ~/.pi/pi-courier.json");
-    console.log(`   账号: ${botUserId}`);
-    console.log(`   信任用户: ${adminRaw}`);
-    console.log(`   E2EE: ${encryption ? "开启" : "关闭"}`);
-    console.log(`   工作目录: ${workdir}`);
-    console.log(`   附件目录: ${attachmentsDir}(上限 ${attMb} MB)`);
-    console.log(`   实例名: ${instanceName}(用于多台部署区分,显示在管理房间名)`);
-    console.log(`   多工程: ${multiProject ? "开启" : "关闭(单工程)"}`);
+    console.log(t("setup.done.title"));
+    console.log(t("setup.done.account", { user: botUserId }));
+    console.log(t("setup.done.trusted", { user: adminRaw }));
+    console.log(t("setup.done.e2ee", { state: encryption ? t("common.enabled") : t("common.disabled") }));
+    console.log(t("setup.done.workdir", { workdir }));
+    console.log(t("setup.done.attachments", { dir: attachmentsDir, max: attMb }));
+    console.log(t("setup.done.instance", { name: instanceName }));
+    console.log(
+      t("setup.done.multiProject", { state: multiProject ? t("common.enabled") : t("setup.done.multiProjectOff") })
+    );
     if (multiProject) {
-      console.log(`   空间组织: ${spaceEnabled ? "开启(重启后创建空间并收纳管理/项目房间)" : "关闭"}`);
+      console.log(t("setup.done.space", { state: spaceEnabled ? t("setup.space.stateOn") : t("common.disabled") }));
     }
-    console.log(`   设备 ID: ${deviceId}(固定,重跑 setup 复用;想换设备就删掉此字段)`);
+    console.log(t("setup.done.deviceId", { id: deviceId }));
     const roomList = Object.entries(rooms).map(([id, c]) => `${id} (${c.mode})`).join(", ");
-    console.log(`   信任房间: ${roomList || "无(群聊默认不回应;可后续用 /enable 添加)"}`);
-    console.log("\n下一步: pi-courier enable(开机自启)或 pi-courier run(前台运行)");
+    console.log(t("setup.done.rooms", { rooms: roomList || t("setup.done.noRooms") }));
+    console.log(t("setup.next"));
   } catch (err) {
-    console.error(`\n❌ 配置失败: ${(err as Error).message}`);
+    console.error(t("setup.failed", { message: (err as Error).message }));
     process.exitCode = 1;
   } finally {
     close(); // release stdin listeners so the process exits naturally
