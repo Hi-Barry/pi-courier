@@ -12,7 +12,8 @@
 
 import { pathToFileURL } from "node:url";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
-import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore } from "./config.js";
+import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, resolveLanguage } from "./config.js";
+import { setLocale, t } from "./i18n/index.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
@@ -81,6 +82,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     logger.info(`工作目录: ${wd}(已保存到 ~/.pi/pi-courier.json,改配置后重启即生效)`)
   );
   const config = store.get();
+
+  // 语言解析(issue #83):PI_LANGUAGE > config "language" > 系统 locale > en。
+  // 非显式配置时打一行 info —— "语言从哪来"可观测,排查话术语言问题先看这。
+  const language = resolveLanguage(config);
+  setLocale(language.locale);
+  if (language.source === "system" || language.source === "default") {
+    logger.info(
+      t(
+        language.source === "system" ? "startup.language.system" : "startup.language.default",
+        { locale: language.locale }
+      )
+    );
+  }
   const sessionDir = config.sessionDir;
   const cliPath = config.cliPath;
 
@@ -188,10 +202,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // 查找 —— C8 退役注册表后,全文已无按 transport 名寻址的消费方
       // (grep 证实:仅剩字符串插值);签名保留以维持日志口径不变。
       // ExternalMessage.transport 字段本身是路由元数据,照旧携带。
-      const t = matrix;
-      if (!t) throw new Error(`Transport ${transport} not found`);
-      if (!t.isConnected) throw new Error(`Transport ${transport} not connected`);
-      await t.sendMessage(chatId, text);
+      const provider = matrix;
+      if (!provider) throw new Error(`Transport ${transport} not found`);
+      if (!provider.isConnected) throw new Error(`Transport ${transport} not connected`);
+      await provider.sendMessage(chatId, text);
       const short = text.replace(/\s+/g, " ").trim();
       logger.withLabel(projectManager.labelForRoom(chatId)).debug(`📤 [${transport}] ${short.slice(0, 500)}${short.length > 500 ? "…" : ""}`);
     } catch (err) {
