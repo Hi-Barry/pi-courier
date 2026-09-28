@@ -199,6 +199,39 @@ const zh = {
   "login.deviceCodeOpen": "请在浏览器打开 {uri} 并输入上述设备码。",
   "login.expiresMinutes": "(有效期约 {minutes} 分钟)",
 
+  // ── mgmt / space(管理房与空间,management-room.ts / space.ts)─────────
+  "common.unknownAccount": "(未知)",
+  "mgmt.name": "项目管理（{name}）",
+  "mgmt.groupJoinHint":
+    "🤖 我已加入这个群聊,但默认不回应群消息。\n\n" +
+    "启用方式:直接在群里发 /enable trusted-only\n" +
+    "(或 all = 回应所有人 / mentions = 只回应 @我;仅信任用户可启用)",
+  "mgmt.help":
+    "🏗️ **项目管理房间**（{instanceName}）\n\n" +
+    "• bot 账号: `{botAccount}`\n" +
+    "• 默认工作目录: `{workdir}`\n\n" +
+    "这里是本实例的管理台。直接发消息 = 在默认项目({workdir})里与 pi 对话。\n\n" +
+    "📁 **项目管理**(仅本房间可用)\n" +
+    "• `/pmctl new <名称> [路径]` — 创建项目(自动建私有房间并拉你进入)\n" +
+    "• `/pmctl list` — 项目列表\n" +
+    "• `/pmctl show|rm|mv|rename` — 项目详情/删除/迁移/重命名\n\n" +
+    "⚡ **常用命令**\n" +
+    "• `/stop` — 停止当前任务\n" +
+    "• `/reload` — 重启 pi 进程\n" +
+    "• `/help` — 完整帮助",
+  "mgmt.adminPowerNote": "🛡️ 信任用户会自动获得房间管理员权限(含新建的项目房间)。",
+  "space.linkFailedMgmt": "管理房间挂入空间失败(下次启动自动重试,房间仍可用): {message}",
+  "space.linkFailed": "挂入空间失败(不影响项目): {message}",
+  "space.avatarFailed": "头像设置失败(下次启动自动补): {message}",
+  "space.badAvatarFile": "非法的头像文件名: {file}",
+
+  // ── label(项目标签校验,project-labels.ts)───────────────────────────
+  "label.empty": "项目名不能为空",
+  "label.noBrackets": "项目名不能包含方括号 [ ](会破坏日志格式)",
+  "label.noWhitespace": "项目名不能包含空白字符",
+  "label.tooLong": "项目名最长 {max} 字符(当前 {length})",
+  "label.caseClash": "项目名「{name}」与现有项目「{clash}」仅大小写不同(日志过滤按名字匹配,会混淆)",
+
   // ── startup(语言配置可见性;语言功能自身的一部分,破例双语)─────────
   "startup.language.system":
     "language: {locale}(检测自系统 locale;如需固定,请在 ~/.pi/pi-courier.json 配置 \"language\" 或设 PI_LANGUAGE)",

@@ -2,12 +2,16 @@
  * Management-room naming + usage guide — the single assembly point for the
  * management room's user-facing text. Both entry points (DM adoption and the
  * bot-created room in the startup space ensure — both in space.ts) import
- * from here so the two can never drift.
+ * from here so the two can never drift. All copy comes from the i18n tables
+ * (issue #83) — the locale is fixed at startup; already-created rooms keep
+ * their original name/guide (no retroactive rebranding).
  */
+
+import { t } from "./i18n/index.js";
 
 /** Management-room display name. */
 export function managementRoomName(instanceName: string): string {
-  return `项目管理（${instanceName}）`;
+  return t("mgmt.name", { name: instanceName });
 }
 
 /**
@@ -16,11 +20,7 @@ export function managementRoomName(instanceName: string): string {
  * 时由 transport 的 room.join 钩子调用。
  */
 export function buildGroupJoinHint(): string {
-  return (
-    `🤖 我已加入这个群聊,但默认不回应群消息。\n\n` +
-    `启用方式:直接在群里发 /enable trusted-only\n` +
-    `(或 all = 回应所有人 / mentions = 只回应 @我;仅信任用户可启用)`
-  );
+  return t("mgmt.groupJoinHint");
 }
 
 /**
@@ -33,18 +33,5 @@ export function buildManagementRoomHelp(
   botAccount: string,
   workdir: string
 ): string {
-  return (
-    `🏗️ **项目管理房间**（${instanceName}）\n\n` +
-    `• bot 账号: \`${botAccount}\`\n` +
-    `• 默认工作目录: \`${workdir}\`\n\n` +
-    `这里是本实例的管理台。直接发消息 = 在默认项目(${workdir})里与 pi 对话。\n\n` +
-    `📁 **项目管理**(仅本房间可用)\n` +
-    `• \`/pmctl new <名称> [路径]\` — 创建项目(自动建私有房间并拉你进入)\n` +
-    `• \`/pmctl list\` — 项目列表\n` +
-    `• \`/pmctl show|rm|mv|rename\` — 项目详情/删除/迁移/重命名\n\n` +
-    `⚡ **常用命令**\n` +
-    `• \`/stop\` — 停止当前任务\n` +
-    `• \`/reload\` — 重启 pi 进程\n` +
-    `• \`/help\` — 完整帮助`
-  );
+  return t("mgmt.help", { instanceName, botAccount, workdir });
 }

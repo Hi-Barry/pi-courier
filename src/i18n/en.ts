@@ -207,6 +207,40 @@ const en: Record<MessageKey, string> = {
   "login.deviceCodeOpen": "Open {uri} in your browser and enter the device code above.",
   "login.expiresMinutes": "(valid for about {minutes} minutes)",
 
+  // ── mgmt / space ──────────────────────────────────────────────────────
+  "common.unknownAccount": "(unknown)",
+  "mgmt.name": "Project Management ({name})",
+  "mgmt.groupJoinHint":
+    "🤖 I've joined this group but don't respond to messages by default.\n\n" +
+    "To enable me: send /enable trusted-only in the group\n" +
+    "(or all = respond to everyone / mentions = only respond when @mentioned; trusted users only)",
+  "mgmt.help":
+    "🏗️ **Project management room** ({instanceName})\n\n" +
+    "• bot account: `{botAccount}`\n" +
+    "• default workdir: `{workdir}`\n\n" +
+    "This is the management console of this instance. Sending a message here = talking to pi in the default project ({workdir}).\n\n" +
+    "📁 **Project management** (this room only)\n" +
+    "• `/pmctl new <name> [path]` — create a project (creates a private room and invites you)\n" +
+    "• `/pmctl list` — project list\n" +
+    "• `/pmctl show|rm|mv|rename` — project details / delete / move / rename\n\n" +
+    "⚡ **Common commands**\n" +
+    "• `/stop` — stop the current task\n" +
+    "• `/reload` — restart the pi process\n" +
+    "• `/help` — full help",
+  "mgmt.adminPowerNote": "🛡️ Trusted users automatically get room admin permissions (including new project rooms).",
+  "space.linkFailedMgmt": "Failed to link the management room into the space (auto-retried next start; the room stays usable): {message}",
+  "space.linkFailed": "Failed to link into the space (the project is unaffected): {message}",
+  "space.avatarFailed": "Failed to set the avatar (auto-retried next start): {message}",
+  "space.badAvatarFile": "Invalid avatar file name: {file}",
+
+  // ── label ─────────────────────────────────────────────────────────────
+  "label.empty": "Project name must not be empty",
+  "label.noBrackets": "Project name must not contain square brackets [ ] (they would break the log format)",
+  "label.noWhitespace": "Project name must not contain whitespace",
+  "label.tooLong": "Project name is limited to {max} characters (got {length})",
+  "label.caseClash":
+    "Project name \"{name}\" differs from existing project \"{clash}\" only by letter case (log filtering matches by name and would be ambiguous)",
+
   // ── startup ───────────────────────────────────────────────────────────
   "startup.language.system":
     "language: {locale} (detected from the system locale; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",

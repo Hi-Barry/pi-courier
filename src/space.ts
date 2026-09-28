@@ -37,6 +37,7 @@
  */
 
 import { activeSpaceRoomId, adoptManagementRoom, type ConfigStore, effectiveInstanceName, effectiveWorkdir, isSpaceMode, managementRoomId, nativeMxid } from "./config.js";
+import { t } from "./i18n/index.js";
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
 import {
@@ -130,12 +131,12 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
       // —— 紧随启动的 healTrustedPowerLevels 扫描以既有文案警告并下次重试。
       for (const note of provisioned.notes) logger.warn(`[space] ${note}`);
       try {
-        const botAccount = roomOps.getBotUserId() ?? "(未知)";
+        const botAccount = roomOps.getBotUserId() ?? t("common.unknownAccount");
         await sendReply(
           mgmtRoomId,
           "matrix",
           `${buildManagementRoomHelp(instanceName, botAccount, workdir)}\n\n` +
-            `🛡️ 信任用户会自动获得房间管理员权限(含新建的项目房间)。`
+            `${t("mgmt.adminPowerNote")}`
         );
       } catch {
         // The usage guide is nice-to-have; room setup must not depend on it.
@@ -199,7 +200,7 @@ export async function maybeInitManagementRoom(
   if (existing !== undefined) return; // a management room already exists — never brand another
   try {
     const instanceName = effectiveInstanceName(cfg);
-    const botAccount = roomOps.getBotUserId() ?? "(未知)";
+    const botAccount = roomOps.getBotUserId() ?? t("common.unknownAccount");
     const workdir = effectiveWorkdir(cfg);
     const roomName = managementRoomName(instanceName);
     await roomOps.setRoomName(msg.chatId, roomName);
@@ -220,12 +221,12 @@ export async function maybeInitManagementRoom(
 function spaceLinkNote(kind: "project" | "management", err: unknown): string {
   const msg = (err as Error).message;
   return kind === "management"
-    ? `管理房间挂入空间失败(下次启动自动重试,房间仍可用): ${msg}`
-    : `挂入空间失败(不影响项目): ${msg}`;
+    ? t("space.linkFailedMgmt", { message: msg })
+    : t("space.linkFailed", { message: msg });
 }
 
 function avatarNote(err: unknown): string {
-  return `头像设置失败(下次启动自动补): ${(err as Error).message}`;
+  return t("space.avatarFailed", { message: (err as Error).message });
 }
 
 /** 建房成功后、可选步骤之前的落簿钩子(崩溃安全):两条路径各自的持久化
