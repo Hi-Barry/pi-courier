@@ -111,7 +111,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const auth = new ChallengeAuth(
     (code, username) => {
       logger.info(`🔐 Challenge code for @${username}: ${code}`);
-      void startup.sendPairingNotice(`🔐 配对码 @${username}: ${code}(2 分钟内有效,发给该用户用于配对)`);
+      void startup.sendPairingNotice(
+        t("startup.pairingNotice", { username, code })
+      );
     },
     (message, level) => logger.info(`[auth:${level ?? "info"}] ${message}`)
   );

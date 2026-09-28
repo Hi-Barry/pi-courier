@@ -153,6 +153,7 @@ const zh = {
   "router.rpc.startFailed": "❌ 无法启动 pi 进程: {message}",
   "router.retry.inProgress": "⚠️ 调用失败,正在重试 {attempt}/{max}: {error}",
   "router.retry.exhausted": "❌ 自动重试耗尽: {error}",
+  "router.extensionError": "⚠️ 扩展错误 ({path}): {error}",
 
   // ── xq(扩展 UI 提问机,extension-questions.ts)───────────────────────
   "xq.untitled": "(无标题)",
@@ -393,6 +394,7 @@ const zh = {
     "language: {locale}(检测自系统 locale;如需固定,请在 ~/.pi/pi-courier.json 配置 \"language\" 或设 PI_LANGUAGE)",
   "startup.language.default":
     "language: {locale}(默认值;如需固定,请在 ~/.pi/pi-courier.json 配置 \"language\" 或设 PI_LANGUAGE)",
+  "startup.pairingNotice": "🔐 配对码 @{username}: {code}(2 分钟内有效,发给该用户用于配对)",
 } as const;
 
 export type MessageKey = keyof typeof zh;

@@ -821,7 +821,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           sendReply(
             target.chatId,
             target.transport,
-            `⚠️ 扩展错误 (${event.extensionPath ?? "unknown"}): ${event.error ?? "unknown"}`
+            t("router.extensionError", { path: event.extensionPath ?? "unknown", error: event.error ?? "unknown" })
           ).catch(() => {});
         }
       }

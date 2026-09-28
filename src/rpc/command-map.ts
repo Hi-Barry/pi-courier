@@ -368,7 +368,7 @@ export async function handleSlashCommand(
       case "/new":
       case "/clear": {
         const { cancelled } = await rpc.requireClient().newSession();
-        await reply(cancelled ? "⚠️ 新会话被扩展取消" : "✅ 已开始新会话");
+        await reply(cancelled ? t("cmd.new.cancelled") : t("cmd.new.ok"));
         return true;
       }
 

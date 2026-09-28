@@ -157,6 +157,7 @@ const en: Record<MessageKey, string> = {
   "router.rpc.startFailed": "❌ Could not start the pi process: {message}",
   "router.retry.inProgress": "⚠️ Call failed, retrying {attempt}/{max}: {error}",
   "router.retry.exhausted": "❌ Auto-retry exhausted: {error}",
+  "router.extensionError": "⚠️ Extension error ({path}): {error}",
 
   // ── xq ────────────────────────────────────────────────────────────────
   "xq.untitled": "(untitled)",
@@ -421,6 +422,7 @@ Note: pi itself is installed and upgraded independently on the system
     "language: {locale} (detected from the system locale; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",
   "startup.language.default":
     "language: {locale} (default; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",
+  "startup.pairingNotice": "🔐 Pairing code for @{username}: {code} (valid for 2 minutes; send it to that user to pair)",
 };
 
 export default en;
