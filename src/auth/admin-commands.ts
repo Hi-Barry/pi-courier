@@ -9,8 +9,8 @@
  * injected config store — this module touches no disk and holds no state.
  */
 
-import { displayIdentity, namespacedId } from "../identity.js";
 import { t } from "../i18n/index.js";
+import { displayIdentity, namespacedId } from "../identity.js";
 import { type ChallengeAuth } from "./challenge-auth.js";
 
 export type AdminEffect =

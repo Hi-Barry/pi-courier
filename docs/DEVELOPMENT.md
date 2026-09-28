@@ -835,9 +835,9 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 
 全部用户可见文案(房间回执 + 终端交互)支持中英双语,`src/i18n/` 四件套:
 
-- `zh.ts` —— 基准表,`as const` 定义 `MessageKey`;**逐字保留 0.2.x 历史文案**,存量中文断言以它为锚
+- `zh.ts` —— 基准表,`as const` 定义 `MessageKey`;**0.2.x 历史中文文案逐字入表**(两处有意例外:配对码提示 0.2.x 是英文孤例、现随 locale 走;setup 向导标题固定双语),存量中文断言以它为锚
 - `en.ts` —— `Record<MessageKey, string>`,缺 key/多 key 都是编译错误,两表永不漂移
-- `index.ts` —— 全局 `setLocale`/`t()`(与 logger 同风格的单例);`{name}` 占位符插值;未知 key 运行时回落 en 表再回落 key 本身(fail-visible)
+- `index.ts` —— 全局 `setLocale`/`t()`(与 logger 同风格的单例);`{name}` 占位符插值;key 为 `MessageKey` 强类型,坏 key 在 typecheck 阶段即失败,无运行时回落路径
 - `detect.ts` / `parse.ts` —— 系统 locale 检测(`LC_ALL` > `LC_MESSAGES` > `LANG`,C/POSIX/空跳过)与取消关键词(`isCancelInput`:取消/cancel 双词永远都认)
 
 语言解析链:`PI_LANGUAGE` 环境变量 > config `"language"` > 系统 locale > `"en"`;`config.ts` 的 `resolveLanguage` 是单点解释,非显式配置时启动日志打一行来源。接线点三处:standalone(启动早期)、cli(非 setup 子命令)、setup 向导(首问语言,检测值作默认并持久化)。

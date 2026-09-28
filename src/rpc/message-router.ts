@@ -17,8 +17,8 @@ import {
   hasToolCalls,
   splitMessage,
 } from "../formatting.js";
-import { namespacedId } from "../identity.js";
 import { t } from "../i18n/index.js";
+import { namespacedId } from "../identity.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
 import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUserToSpaceOnce, maybeInitManagementRoom } from "../space.js";
 import { formatBytes } from "../transports/attachments.js";

@@ -35,8 +35,9 @@ export type MsgParams = Record<string, string | number | null | undefined>;
 /**
  * Look up a message in the active locale's table. `{name}` placeholders are
  * replaced from `params`; a missing param leaves the placeholder as-is
- * (fail-visible beats silently empty). Unknown keys degrade to the en table,
- * then to the raw key — a bad key must be visible, never an empty bubble.
+ * (fail-visible beats silently empty). Keys are compile-time checked
+ * (`MessageKey`): a typo'd key fails typecheck, so there is no unknown-key
+ * runtime fallback path by design.
  */
 export function t(key: MessageKey, params?: MsgParams): string {
   const template: string = current === "zh" ? (zh[key] as string) : en[key];

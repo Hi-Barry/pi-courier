@@ -10,8 +10,8 @@
  * config store.
  */
 
-import { matchesAdmin, matchesTrustedEntry, namespacedId } from "../identity.js";
 import { t } from "../i18n/index.js";
+import { matchesAdmin, matchesTrustedEntry, namespacedId } from "../identity.js";
 
 interface ChallengeData {
   code: string;

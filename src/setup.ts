@@ -19,8 +19,8 @@ import {
   saveConfig,
 } from "./config.js";
 import { detectSystemLanguage } from "./i18n/detect.js";
-import { setLocale, t } from "./i18n/index.js";
 import type { Locale } from "./i18n/index.js";
+import { setLocale, t } from "./i18n/index.js";
 import type { MsgBridgeConfig } from "./types.js";
 
 /**
