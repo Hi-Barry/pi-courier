@@ -13,11 +13,118 @@ const zh = {
   "common.cancel": "取消",
   "common.on": "开",
   "common.off": "关",
+  "common.enabled": "开启",
+  "common.disabled": "关闭",
+  "common.yes": "是",
+  "common.no": "否",
+  "common.truncated": "…(已截断)",
+  "common.noOutput": "(无输出)",
+  "common.exitCode": "退出码: {code}",
+  "common.listSep": "、",
 
-  // ── cmd(/命令回复,command-map.ts)── 样板;票2 全量迁移 ─────────────
+  // ── cmd(/命令回复,command-map.ts)───────────────────────────────────
   "cmd.new.ok": "✅ 已开始新会话",
   "cmd.new.cancelled": "⚠️ 新会话被扩展取消",
   "cmd.generic.error": "❌ 命令执行失败: {message}",
+  "cmd.bash.notWritten": "(结果未写入上下文)",
+  "cmd.bash.aborted": "⏹ 已中止: {command}{suffix}",
+  "cmd.queue.warning": "⚠️ 队列中仍有 {count} 条消息将在下一轮生效:\n{lines}",
+  "cmd.rpc.defaultName": "默认",
+  "cmd.reloadAll.restarted": "✅ 已重启 {count} 个空闲进程: {names}",
+  "cmd.reloadAll.none": "💤 没有需要重启的空闲进程",
+  "cmd.reloadAll.skippedBusy": "⚠️ 跳过 {count} 个忙碌进程: {names}(完成后执行 /reload all)",
+  "cmd.reloadAll.unreachable": "⏭️ 未启动/不可达(下次启动自动读取新配置): {names}",
+  "cmd.queue.localEmptyUpstreamHas": "📋 本地队列为空,但上游报告仍有 {count} 条待处理消息(以实际执行为准)。",
+  "cmd.queue.empty": "📋 队列为空:没有排队中的 steering / followUp 消息。",
+  "cmd.queue.header": "📋 当前消息队列:",
+  "cmd.queue.steering": "steering({count} 条,注入当前运行):",
+  "cmd.queue.followUp": "followUp({count} 条,后续轮次执行):",
+  "cmd.queue.mismatch": "ℹ️ 上游报告待处理 {upstream} 条(本地镜像 {mirror} 条),以实际执行为准。",
+  "cmd.sessions.emptyDir": "会话目录为空",
+  "cmd.sessions.noDir": "找不到会话目录",
+  "cmd.sessions.empty": "📭 {reason}: {dir}",
+  "cmd.sessions.list": "📚 会话(最近修改优先):\n{lines}\n\n用 /switch <序号> 切换。",
+  "cmd.compact.ok": "✅ 已压缩",
+  "cmd.compact.tokens": "  tokens: {before} → 压缩后(见摘要)",
+  "cmd.compact.summary": "\n摘要: {summary}",
+  "cmd.stop.ok": "🛑 已停止所有任务,等待下一步指示。",
+  "cmd.queue.enqueued": "📥 已排队:不打断当前任务,将在空闲后自动执行。",
+  "cmd.interrupt.usage": "用法: /interrupt <新指令> — 打断当前任务并立即下发新指令。",
+  "cmd.interrupt.idle": "▶️ 当前没有运行中的任务,已直接下发新指令。",
+  "cmd.interrupt.done": "🛑 已打断,新指令已发出。",
+  "cmd.last.none": "💤 没有可复述的回复(本会话还没有 assistant 输出)。",
+  "cmd.cyclemodel.none": "❌ 没有可轮换的模型(启动未限定模型列表?)。用 /model <provider/id> 直接指定。",
+  "cmd.cyclemodel.ok": "✅ 已切换模型: {model}(思考: {thinking})",
+  "cmd.cyclethinking.none": "❌ 没有可轮换的思考级别。",
+  "cmd.cyclethinking.ok": "✅ 思考级别已轮换为: {level}",
+  "cmd.autocompact.usage":
+    "当前自动压缩: {state}\n用法: /autocompact on|off(实例级生效:写入 pi 全局设置,一个项目房间切换影响全部项目)",
+  "cmd.autocompact.ok": "✅ 自动压缩已{state}(实例级生效)。",
+  "cmd.autoretry.usage":
+    "用法: /autoretry on|off\n(上游未暴露当前状态查询;实例级生效:写入 pi 全局设置,一个项目房间切换影响全部项目)",
+  "cmd.autoretry.ok": "✅ 自动重试已{state}(实例级生效)。",
+  "cmd.switch.streaming": "⚠️ 当前任务流式进行中,请先 /stop 再切换会话。",
+  "cmd.switch.usage": "用法: /switch <序号> — 切换到 /sessions 列表中的会话。",
+  "cmd.switch.outOfRange": "❌ 序号超出范围: {index}(用 /sessions 查看当前列表)。",
+  "cmd.switch.cancelled": "⚠️ 切换会话被扩展取消",
+  "cmd.switch.ok": "✅ 已切换会话: {file}",
+  "cmd.reload.allUnavailable": "❌ /reload all 不可用(当前部署未启用多进程枚举)。",
+  "cmd.reload.allInProgress": "🔄 正在逐个重启全部 pi 进程(空闲才重启,忙碌跳过)…",
+  "cmd.reload.inProgress": "🔄 正在重启 pi 进程(扩展/技能/配置将重新加载)…",
+  "cmd.reload.ok": "✅ pi 已重启,模型: {model}",
+  "cmd.reload.failed": "❌ 重启失败: {message}",
+  "cmd.model.none": "没有可用模型(未配置 provider?)",
+  "cmd.model.currentMarker": " ← 当前",
+  "cmd.model.list": "可用模型:\n{list}\n\n用法: /model <provider/model-id>",
+  "cmd.model.notFound": "❌ 找不到模型 \"{id}\"。用 /models 查看可用列表。",
+  "cmd.model.ok": "✅ 已切换模型: {model}",
+  "cmd.thinking.usage": "当前思考级别: {level}\n可用级别: off, minimal, low, medium, high, xhigh, max\n用法: /thinking <level>",
+  "cmd.thinking.ok": "✅ 思考级别已设为: {level}",
+  "cmd.session.sessionId": "📊 会话: {id}",
+  "cmd.session.messages": "消息数: {count}",
+  "cmd.session.tokens": "tokens: {count}",
+  "cmd.session.cost": "费用: {cost}",
+  "cmd.status.ok": "⚙️ 模型: {model}\n流式中: {streaming}",
+  "cmd.name.usage": "用法: /name <会话名>",
+  "cmd.name.ok": "✅ 会话已命名: {name}",
+  "cmd.export.ok": "✅ 已导出: {path}",
+  "cmd.bash.usage": "用法: /bash <shell 命令> — 在 pi 的工作目录执行并写入上下文",
+  "cmd.bashstop.none": "💤 没有在跑的 bash 命令。",
+  "cmd.bashstop.running": "(已跑 {elapsed})",
+  "cmd.bashstop.ok": "⏹ 已请求中止 {count} 条在跑命令:\n{lines}\n各命令已捕获的输出随后回帖。",
+  "cmd.help.piCommands":
+    "**Pi 命令**(通过 RPC 执行):\n" +
+    "• `/new` — 新会话\n" +
+    "• `/compact [说明]` — 压缩上下文\n" +
+    "• `/model` / `/model <provider/id>` — 查看/切换模型\n" +
+    "• `/models` — 列出可用模型\n" +
+    "• `/thinking [level]` — 查看/设置思考级别\n" +
+    "• `/cyclemodel` / `/cyclethinking` — 轮换到下一个模型 / 思考级别\n" +
+    "• `/autocompact on|off` — 自动压缩开关(实例级生效:写入 pi 全局设置,一个项目房间切换影响全部项目)\n" +
+    "• `/autoretry on|off` — 自动重试开关(实例级生效,同上)\n" +
+    "• `/sessions` — 列出最近会话(按修改时间)\n" +
+    "• `/switch <序号>` — 切换到 /sessions 列出的会话(流式中需先 /stop)\n" +
+    "• `/last` — 复述 agent 最近一次回复\n" +
+    "• `/session` — 会话统计与费用\n" +
+    "• `/status` — 当前模型与状态\n" +
+    "• `/name <名字>` — 会话命名\n" +
+    "• `/export [路径]` — 导出会话 HTML\n" +
+    "• `/bash <命令>` — 执行 shell 命令(写入上下文)\n" +
+    "• `! <命令>` — 快捷执行 shell 命令(≈ TUI 的 `!`,结果写入上下文;感叹号后需空格)\n" +
+    "• `!! <命令>` — 同上,但结果不写入上下文(≈ TUI 的 `!!`)\n" +
+    "• `/bashstop` — 列出并中止在跑的 bash 命令(`!`/`!!`/`/bash` 通用)\n" +
+    "• `/queue [文本]` — 无参:查看队列;带文本:排队不打断当前任务(≈ Alt+Enter)\n" +
+    "• `/interrupt <新指令>` — 打断当前任务并立即下发新指令(一条消息完成)\n" +
+    "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)\n" +
+    "• `/reload` — 重启 pi 进程(装插件/改配置后使用);`/reload all` — 重启本实例全部进程(空闲才重启,忙碌跳过)\n" +
+    "• `/login [provider [oauth|api_key]]` — 无参:可登录 provider 列表;带参:无头登录(仅管理员 + 管理房间)\n" +
+    "• `/logout <provider>` — 删除 provider 凭据(仅管理员 + 管理房间)\n" +
+    "• `/auth` — 查看已保存的 provider 凭据(仅管理员 + 管理房间)\n" +
+    "• `/pmctl new <名称> <路径>` — 创建项目(管理房间)\n" +
+    "• `/pmctl list` — 项目列表\n" +
+    "• `/pmctl show|rm|mv|rename` — 项目详情/删除/迁移/重命名(管理房间;\n" +
+    "  rm 需二次确认,确认后停止进程并退出房间)",
+  "cmd.help.passthrough": "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。",
 
   // ── startup(语言配置可见性;语言功能自身的一部分,破例双语)─────────
   "startup.language.system":

@@ -27,7 +27,9 @@ export function getLocale(): Locale {
   return current;
 }
 
-export type MsgParams = Record<string, string | number>;
+/** `undefined` is allowed and renders as "undefined" — identical to what a
+ *  plain template string printed before the i18n migration (e.g. exitCode). */
+export type MsgParams = Record<string, string | number | undefined>;
 
 /**
  * Look up a message in the active locale's table. `{name}` placeholders are

@@ -20,6 +20,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
+import { t } from "../i18n/index.js";
 import type { BashResultView, PiRpc } from "./pi-rpc.js";
 
 /** Mirror of the upstream steering/followUp queues (router's queue_update view). */
@@ -120,14 +121,14 @@ export function formatElapsed(ms: number): string {
 /** bash 结果的统一回帖(/bash 与 `!`/`!!` 共用):命令行 + 代码块输出 +
  *  退出码;被中止时显示已捕获的部分输出,不打退出码。excluded 附注语义。 */
 export function formatBashReply(command: string, result: BashResultView, excluded = false): string {
-  const suffix = excluded ? "(结果未写入上下文)" : "";
+  const suffix = excluded ? t("cmd.bash.notWritten") : "";
   const output = result.output.length > 3000
-    ? result.output.slice(0, 3000) + "\n…(已截断)"
+    ? result.output.slice(0, 3000) + `\n${t("common.truncated")}`
     : result.output;
   if (result.cancelled) {
-    return `⏹ 已中止: ${command}${suffix}\n\`\`\`\n${output || "(无输出)"}\n\`\`\``;
+    return `${t("cmd.bash.aborted", { command, suffix })}\n\`\`\`\n${output || t("common.noOutput")}\n\`\`\``;
   }
-  return `$ ${command}${suffix}\n\`\`\`\n${output || "(无输出)"}\n\`\`\`\n退出码: ${result.exitCode}`;
+  return `$ ${command}${suffix}\n\`\`\`\n${output || t("common.noOutput")}\n\`\`\`\n${t("common.exitCode", { code: result.exitCode })}`;
 }
 
 /** Collapse a queue entry to one bounded line for chat display. */
@@ -147,7 +148,7 @@ export function queueWarning(snapshot: QueueSnapshot | undefined): string | null
   const total = steering.length + followUp.length;
   if (total === 0) return null;
   const lines = [...steering, ...followUp].map((m) => `- ${truncateLine(m)}`);
-  return `⚠️ 队列中仍有 ${total} 条消息将在下一轮生效:\n${lines.join("\n")}`;
+  return t("cmd.queue.warning", { count: total, lines: lines.join("\n") });
 }
 
 /** Append the queue warning (if any) to a reply line. */
@@ -170,7 +171,7 @@ export interface ReloadAllResult {
 
 /** The display name of an rpc in reload summaries (project label or 默认). */
 function rpcDisplayName(rpc: PiRpc): string {
-  return rpc.label ?? "默认";
+  return rpc.label ?? t("cmd.rpc.defaultName");
 }
 
 /**
@@ -205,17 +206,18 @@ export async function restartIdleRpcs(
 
 /** Render a reload summary for the room. Pure — directly testable. */
 export function formatReloadAllResult(result: ReloadAllResult): string {
+  const sep = t("common.listSep");
   const parts: string[] = [];
   parts.push(
     result.restarted.length > 0
-      ? `✅ 已重启 ${result.restarted.length} 个空闲进程: ${result.restarted.join("、")}`
-      : "💤 没有需要重启的空闲进程"
+      ? t("cmd.reloadAll.restarted", { count: result.restarted.length, names: result.restarted.join(sep) })
+      : t("cmd.reloadAll.none")
   );
   if (result.busy.length > 0) {
-    parts.push(`⚠️ 跳过 ${result.busy.length} 个忙碌进程: ${result.busy.join("、")}(完成后执行 /reload all)`);
+    parts.push(t("cmd.reloadAll.skippedBusy", { count: result.busy.length, names: result.busy.join(sep) }));
   }
   if (result.skipped.length > 0) {
-    parts.push(`⏭️ 未启动/不可达(下次启动自动读取新配置): ${result.skipped.join("、")}`);
+    parts.push(t("cmd.reloadAll.unreachable", { names: result.skipped.join(sep) }));
   }
   return parts.join("\n");
 }
@@ -237,25 +239,25 @@ async function replyQueueView(rpc: PiRpc, snapshot: QueueSnapshot | undefined, r
   const mirrored = steering.length + followUp.length;
   if (mirrored === 0) {
     if (typeof upstream === "number" && upstream > 0) {
-      await reply(`📋 本地队列为空,但上游报告仍有 ${upstream} 条待处理消息(以实际执行为准)。`);
+      await reply(t("cmd.queue.localEmptyUpstreamHas", { count: upstream }));
       return;
     }
-    await reply("📋 队列为空:没有排队中的 steering / followUp 消息。");
+    await reply(t("cmd.queue.empty"));
     return;
   }
-  const lines: string[] = ["📋 当前消息队列:"];
+  const lines: string[] = [t("cmd.queue.header")];
   if (steering.length > 0) {
-    lines.push(`steering(${steering.length} 条,注入当前运行):`);
+    lines.push(t("cmd.queue.steering", { count: steering.length }));
     for (const m of steering) lines.push(`- ${truncateLine(m)}`);
   }
   if (followUp.length > 0) {
-    lines.push(`followUp(${followUp.length} 条,后续轮次执行):`);
+    lines.push(t("cmd.queue.followUp", { count: followUp.length }));
     for (const m of followUp) lines.push(`- ${truncateLine(m)}`);
   }
   // Cross-check the in-memory mirror against upstream's pendingMessageCount —
   // a mismatch means the mirror is stale (e.g. events were missed); upstream wins.
   if (typeof upstream === "number" && upstream !== mirrored) {
-    lines.push(`ℹ️ 上游报告待处理 ${upstream} 条(本地镜像 ${mirrored} 条),以实际执行为准。`);
+    lines.push(t("cmd.queue.mismatch", { upstream, mirror: mirrored }));
   }
   await reply(lines.join("\n"));
 }
@@ -336,15 +338,15 @@ async function replySessionList(rpc: PiRpc, reply: (text: string) => Promise<voi
   const dir = resolveSessionDir(rpc);
   const sessions = listSessions(dir).slice(0, 10);
   if (sessions.length === 0) {
-    const reason = fs.existsSync(dir) ? "会话目录为空" : "找不到会话目录";
-    await reply(`📭 ${reason}: ${dir}`);
+    const reason = fs.existsSync(dir) ? t("cmd.sessions.emptyDir") : t("cmd.sessions.noDir");
+    await reply(t("cmd.sessions.empty", { reason, dir }));
     return;
   }
   const lines = sessions.map((s, i) => {
     const name = readSessionName(s.path);
     return `${i + 1}. ${s.file}  ${formatMtime(s.mtimeMs)}${name ? `  ${name}` : ""}`;
   });
-  await reply(`📚 会话(最近修改优先):\n${lines.join("\n")}\n\n用 /switch <序号> 切换。`);
+  await reply(t("cmd.sessions.list", { lines: lines.join("\n") }));
 }
 
 /** Returns true if the command was handled (something was done / replied). */
@@ -373,9 +375,9 @@ export async function handleSlashCommand(
       case "/compact": {
         const result = await rpc.requireClient().compact(args || undefined);
         const line = [
-          "✅ 已压缩",
-          `  tokens: ${result.tokensBefore} → 压缩后(见摘要)`,
-          `\n摘要: ${result.summary.slice(0, 500)}`,
+          t("cmd.compact.ok"),
+          t("cmd.compact.tokens", { before: result.tokensBefore }),
+          t("cmd.compact.summary", { summary: result.summary.slice(0, 500) }),
         ].join("");
         await reply(line);
         return true;
@@ -386,7 +388,7 @@ export async function handleSlashCommand(
         await rpc.requireClient().abort();
         // abort preserves the upstream queues (RPC has no clear_queue) — the
         // warning makes that limitation explicit instead of surprising the user.
-        await reply(withQueueWarning("🛑 已停止所有任务,等待下一步指示。", queueView?.()));
+        await reply(withQueueWarning(t("cmd.stop.ok"), queueView?.()));
         return true;
       }
 
@@ -399,25 +401,25 @@ export async function handleSlashCommand(
         // Alt+Enter semantics: followUp queue while streaming; an idle session
         // degenerates to a plain prompt upstream (deliberately no state check).
         await rpc.promptQueued(args);
-        await reply("📥 已排队:不打断当前任务,将在空闲后自动执行。");
+        await reply(t("cmd.queue.enqueued"));
         return true;
       }
 
       case "/interrupt": {
         if (!args) {
-          await reply("用法: /interrupt <新指令> — 打断当前任务并立即下发新指令。");
+          await reply(t("cmd.interrupt.usage"));
           return true;
         }
         const state = await rpc.requireClient().getState();
         if (!state.isStreaming) {
           await rpc.prompt(args);
-          await reply("▶️ 当前没有运行中的任务,已直接下发新指令。");
+          await reply(t("cmd.interrupt.idle"));
           return true;
         }
         await rpc.requireClient().abort();
         await rpc.requireClient().waitForIdle();
         await rpc.prompt(args);
-        await reply(withQueueWarning("🛑 已打断,新指令已发出。", queueView?.()));
+        await reply(withQueueWarning(t("cmd.interrupt.done"), queueView?.()));
         return true;
       }
 
@@ -426,30 +428,30 @@ export async function handleSlashCommand(
         const last = await rpc.requireClient().getLastAssistantText();
         const text = last?.trim();
         if (!text) {
-          await reply("💤 没有可复述的回复(本会话还没有 assistant 输出)。");
+          await reply(t("cmd.last.none"));
           return true;
         }
-        await reply(text.length > 3000 ? `${text.slice(0, 3000)}\n…(已截断)` : text);
+        await reply(text.length > 3000 ? `${text.slice(0, 3000)}\n${t("common.truncated")}` : text);
         return true;
       }
 
       case "/cyclemodel": {
         const result = await rpc.requireClient().cycleModel();
         if (!result) {
-          await reply("❌ 没有可轮换的模型(启动未限定模型列表?)。用 /model <provider/id> 直接指定。");
+          await reply(t("cmd.cyclemodel.none"));
           return true;
         }
-        await reply(`✅ 已切换模型: ${result.model.provider}/${result.model.id}(思考: ${result.thinkingLevel})`);
+        await reply(t("cmd.cyclemodel.ok", { model: `${result.model.provider}/${result.model.id}`, thinking: result.thinkingLevel }));
         return true;
       }
 
       case "/cyclethinking": {
         const result = await rpc.requireClient().cycleThinkingLevel();
         if (!result) {
-          await reply("❌ 没有可轮换的思考级别。");
+          await reply(t("cmd.cyclethinking.none"));
           return true;
         }
-        await reply(`✅ 思考级别已轮换为: ${result.level}`);
+        await reply(t("cmd.cyclethinking.ok", { level: result.level }));
         return true;
       }
 
@@ -458,13 +460,12 @@ export async function handleSlashCommand(
         if (arg !== "on" && arg !== "off") {
           const state = await rpc.requireClient().getState();
           await reply(
-            `当前自动压缩: ${state.autoCompactionEnabled ? "开" : "关"}\n` +
-              "用法: /autocompact on|off(实例级生效:写入 pi 全局设置,一个项目房间切换影响全部项目)"
+            t("cmd.autocompact.usage", { state: state.autoCompactionEnabled ? t("common.on") : t("common.off") })
           );
           return true;
         }
         await rpc.requireClient().setAutoCompaction(arg === "on");
-        await reply(`✅ 自动压缩已${arg === "on" ? "开启" : "关闭"}(实例级生效)。`);
+        await reply(t("cmd.autocompact.ok", { state: arg === "on" ? t("common.enabled") : t("common.disabled") }));
         return true;
       }
 
@@ -472,13 +473,11 @@ export async function handleSlashCommand(
         const arg = args.toLowerCase();
         if (arg !== "on" && arg !== "off") {
           // RpcSessionState exposes no autoRetry query field — usage only.
-          await reply(
-            "用法: /autoretry on|off\n(上游未暴露当前状态查询;实例级生效:写入 pi 全局设置,一个项目房间切换影响全部项目)"
-          );
+          await reply(t("cmd.autoretry.usage"));
           return true;
         }
         await rpc.requireClient().setAutoRetry(arg === "on");
-        await reply(`✅ 自动重试已${arg === "on" ? "开启" : "关闭"}(实例级生效)。`);
+        await reply(t("cmd.autoretry.ok", { state: arg === "on" ? t("common.enabled") : t("common.disabled") }));
         return true;
       }
 
@@ -490,22 +489,22 @@ export async function handleSlashCommand(
       case "/switch": {
         const state = await rpc.requireClient().getState();
         if (state.isStreaming) {
-          await reply("⚠️ 当前任务流式进行中,请先 /stop 再切换会话。");
+          await reply(t("cmd.switch.streaming"));
           return true;
         }
         const index = Number.parseInt(args, 10);
         if (!args || Number.isNaN(index) || index < 1) {
-          await reply("用法: /switch <序号> — 切换到 /sessions 列表中的会话。");
+          await reply(t("cmd.switch.usage"));
           return true;
         }
         const sessions = listSessions(resolveSessionDir(rpc)).slice(0, 10);
         const target = sessions[index - 1];
         if (!target) {
-          await reply(`❌ 序号超出范围: ${index}(用 /sessions 查看当前列表)。`);
+          await reply(t("cmd.switch.outOfRange", { index }));
           return true;
         }
         const result = await rpc.requireClient().switchSession(target.path);
-        await reply(result.cancelled ? "⚠️ 切换会话被扩展取消" : `✅ 已切换会话: ${target.file}`);
+        await reply(result.cancelled ? t("cmd.switch.cancelled") : t("cmd.switch.ok", { file: target.file }));
         return true;
       }
 
@@ -513,21 +512,21 @@ export async function handleSlashCommand(
         // /reload all (issue #55): every rpc of the instance, idle ones only.
         if (args === "all") {
           if (!ctx.allRpcs) {
-            await reply("❌ /reload all 不可用(当前部署未启用多进程枚举)。");
+            await reply(t("cmd.reload.allUnavailable"));
             return true;
           }
-          await reply("🔄 正在逐个重启全部 pi 进程(空闲才重启,忙碌跳过)…");
+          await reply(t("cmd.reload.allInProgress"));
           const result = await restartIdleRpcs(ctx.allRpcs());
           await reply(formatReloadAllResult(result));
           return true;
         }
-        await reply("🔄 正在重启 pi 进程(扩展/技能/配置将重新加载)…");
+        await reply(t("cmd.reload.inProgress"));
         try {
           await rpc.restart();
           const state = await rpc.requireClient().getState();
-          await reply(`✅ pi 已重启,模型: ${state.model?.id ?? "unknown"}`);
+          await reply(t("cmd.reload.ok", { model: state.model?.id ?? "unknown" }));
         } catch (err) {
-          await reply(`❌ 重启失败: ${(err as Error).message}`);
+          await reply(t("cmd.reload.failed", { message: (err as Error).message }));
         }
         return true;
       }
@@ -537,14 +536,14 @@ export async function handleSlashCommand(
         if (!args) {
           const models = await rpc.requireClient().getAvailableModels();
           if (models.length === 0) {
-            await reply("没有可用模型(未配置 provider?)");
+            await reply(t("cmd.model.none"));
             return true;
           }
           const current = await rpc.requireClient().getState();
           const list = models
-            .map((m) => `• ${m.provider}/${m.id}${m.id === current.model?.id ? " ← 当前" : ""}`)
+            .map((m) => `• ${m.provider}/${m.id}${m.id === current.model?.id ? t("cmd.model.currentMarker") : ""}`)
             .join("\n");
-          await reply(`可用模型:\n${list}\n\n用法: /model <provider/model-id>`);
+          await reply(t("cmd.model.list", { list }));
           return true;
         }
         const parsed = parseModelArg(args);
@@ -553,27 +552,27 @@ export async function handleSlashCommand(
           const models = await rpc.requireClient().getAvailableModels();
           const match = models.find((m) => m.id.includes(parsed.modelId));
           if (!match) {
-            await reply(`❌ 找不到模型 "${parsed.modelId}"。用 /models 查看可用列表。`);
+            await reply(t("cmd.model.notFound", { id: parsed.modelId }));
             return true;
           }
           parsed.provider = match.provider;
           parsed.modelId = match.id;
         }
         const result = (await rpc.requireClient().setModel(parsed.provider, parsed.modelId)) as { id?: string };
-        await reply(`✅ 已切换模型: ${result.id ?? `${parsed.provider}/${parsed.modelId}`}`);
+        await reply(t("cmd.model.ok", { model: result.id ?? `${parsed.provider}/${parsed.modelId}` }));
         return true;
       }
 
       case "/models": {
         const models = await rpc.requireClient().getAvailableModels();
         if (models.length === 0) {
-          await reply("没有可用模型(未配置 provider?)");
+          await reply(t("cmd.model.none"));
           return true;
         }
         const current = await rpc.requireClient().getState();
         await reply(
           models
-            .map((m) => `• ${m.provider}/${m.id}${m.id === current.model?.id ? " ← 当前" : ""}`)
+            .map((m) => `• ${m.provider}/${m.id}${m.id === current.model?.id ? t("cmd.model.currentMarker") : ""}`)
             .join("\n")
         );
         return true;
@@ -582,13 +581,11 @@ export async function handleSlashCommand(
       case "/thinking": {
         if (!args) {
           const state = await rpc.requireClient().getState();
-          await reply(
-            `当前思考级别: ${state.thinkingLevel}\n可用级别: off, minimal, low, medium, high, xhigh, max\n用法: /thinking <level>`
-          );
+          await reply(t("cmd.thinking.usage", { level: state.thinkingLevel }));
           return true;
         }
         await rpc.requireClient().setThinkingLevel(args as Parameters<RpcClient['setThinkingLevel']>[0]);
-        await reply(`✅ 思考级别已设为: ${args}`);
+        await reply(t("cmd.thinking.ok", { level: args }));
         return true;
       }
 
@@ -598,10 +595,10 @@ export async function handleSlashCommand(
         const stats = await rpc.requireClient().getSessionStats();
         await reply(
           [
-            `📊 会话: ${stats.sessionId}`,
-            `消息数: ${stats.totalMessages}`,
-            `tokens: ${stats.tokens.total}`,
-            `费用: $${stats.cost.toFixed(4)}`,
+            t("cmd.session.sessionId", { id: stats.sessionId }),
+            t("cmd.session.messages", { count: stats.totalMessages }),
+            t("cmd.session.tokens", { count: stats.tokens.total }),
+            t("cmd.session.cost", { cost: `$${stats.cost.toFixed(4)}` }),
           ].join("\n")
         );
         return true;
@@ -610,30 +607,30 @@ export async function handleSlashCommand(
       case "/status": {
         const state = await rpc.requireClient().getState();
         const modelName = state.model?.name || state.model?.id || "unknown";
-        await reply(`⚙️ 模型: ${modelName}\n流式中: ${state.isStreaming ? "是" : "否"}`);
+        await reply(t("cmd.status.ok", { model: modelName, streaming: state.isStreaming ? t("common.yes") : t("common.no") }));
         return true;
       }
 
       case "/name": {
         if (!args) {
-          await reply("用法: /name <会话名>");
+          await reply(t("cmd.name.usage"));
           return true;
         }
         await rpc.requireClient().setSessionName(args);
-        await reply(`✅ 会话已命名: ${args}`);
+        await reply(t("cmd.name.ok", { name: args }));
         return true;
       }
 
       case "/export": {
         const result = await rpc.requireClient().exportHtml(args || undefined);
-        await reply(`✅ 已导出: ${result.path}`);
+        await reply(t("cmd.export.ok", { path: result.path }));
         return true;
       }
 
       // --- Bash ----------------------------------------------------------------
       case "/bash": {
         if (!args) {
-          await reply("用法: /bash <shell 命令> — 在 pi 的工作目录执行并写入上下文");
+          await reply(t("cmd.bash.usage"));
           return true;
         }
         const release = ctx.bashTracker?.track(rpc, args);
@@ -649,14 +646,14 @@ export async function handleSlashCommand(
       case "/bashstop": {
         const inflight = ctx.bashTracker?.list(rpc) ?? [];
         if (inflight.length === 0) {
-          await reply("💤 没有在跑的 bash 命令。");
+          await reply(t("cmd.bashstop.none"));
           return true;
         }
         const lines = inflight.map(
-          (entry) => `- \`${entry.command}\`(已跑 ${formatElapsed(Date.now() - entry.startedAt)})`
+          (entry) => `- \`${entry.command}\`${t("cmd.bashstop.running", { elapsed: formatElapsed(Date.now() - entry.startedAt) })}`
         );
         await rpc.requireClient().abortBash();
-        await reply(`⏹ 已请求中止 ${inflight.length} 条在跑命令:\n${lines.join("\n")}\n各命令已捕获的输出随后回帖。`);
+        await reply(t("cmd.bashstop.ok", { count: inflight.length, lines: lines.join("\n") }));
         return true;
       }
 
@@ -676,7 +673,7 @@ export async function handleSlashCommand(
       }
     }
   } catch (err) {
-    await reply(`❌ 命令执行失败: ${(err as Error).message}`);
+    await reply(t("cmd.generic.error", { message: (err as Error).message }));
     return true;
   }
 }
@@ -694,39 +691,9 @@ function parseModelArg(arg: string): { provider: string; modelId: string } {
 /** Project list text: name, status, workdir, room id. */
 function helpText(): string {
   return [
-    "**Pi 命令**(通过 RPC 执行):",
-    "• `/new` — 新会话",
-    "• `/compact [说明]` — 压缩上下文",
-    "• `/model` / `/model <provider/id>` — 查看/切换模型",
-    "• `/models` — 列出可用模型",
-    "• `/thinking [level]` — 查看/设置思考级别",
-    "• `/cyclemodel` / `/cyclethinking` — 轮换到下一个模型 / 思考级别",
-    "• `/autocompact on|off` — 自动压缩开关(实例级生效:写入 pi 全局设置,一个项目房间切换影响全部项目)",
-    "• `/autoretry on|off` — 自动重试开关(实例级生效,同上)",
-    "• `/sessions` — 列出最近会话(按修改时间)",
-    "• `/switch <序号>` — 切换到 /sessions 列出的会话(流式中需先 /stop)",
-    "• `/last` — 复述 agent 最近一次回复",
-    "• `/session` — 会话统计与费用",
-    "• `/status` — 当前模型与状态",
-    "• `/name <名字>` — 会话命名",
-    "• `/export [路径]` — 导出会话 HTML",
-    "• `/bash <命令>` — 执行 shell 命令(写入上下文)",
-    "• `! <命令>` — 快捷执行 shell 命令(≈ TUI 的 `!`,结果写入上下文;感叹号后需空格)",
-    "• `!! <命令>` — 同上,但结果不写入上下文(≈ TUI 的 `!!`)",
-    "• `/bashstop` — 列出并中止在跑的 bash 命令(`!`/`!!`/`/bash` 通用)",
-    "• `/queue [文本]` — 无参:查看队列;带文本:排队不打断当前任务(≈ Alt+Enter)",
-    "• `/interrupt <新指令>` — 打断当前任务并立即下发新指令(一条消息完成)",
-    "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)",
-    "• `/reload` — 重启 pi 进程(装插件/改配置后使用);`/reload all` — 重启本实例全部进程(空闲才重启,忙碌跳过)",
-    "• `/login [provider [oauth|api_key]]` — 无参:可登录 provider 列表;带参:无头登录(仅管理员 + 管理房间)",
-    "• `/logout <provider>` — 删除 provider 凭据(仅管理员 + 管理房间)",
-    "• `/auth` — 查看已保存的 provider 凭据(仅管理员 + 管理房间)",
-    "• `/pmctl new <名称> <路径>` — 创建项目(管理房间)",
-    "• `/pmctl list` — 项目列表",
-    "• `/pmctl show|rm|mv|rename` — 项目详情/删除/迁移/重命名(管理房间;",
-    "  rm 需二次确认,确认后停止进程并退出房间)",
+    t("cmd.help.piCommands"),
     "",
-    "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。",
+    t("cmd.help.passthrough"),
     adminCommandHelpText(),
   ].join("\n");
 }
