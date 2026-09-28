@@ -241,6 +241,46 @@ const en: Record<MessageKey, string> = {
   "label.caseClash":
     "Project name \"{name}\" differs from existing project \"{clash}\" only by letter case (log filtering matches by name and would be ambiguous)",
 
+  // ── pmctl ─────────────────────────────────────────────────────────────
+  "pmctl.singleProjectMode":
+    "❌ This is single-project mode; project management is off.\nTo go multi-project: send `/multiproject on` and restart (pi-courier restart).",
+  "pmctl.managementRoomOnly": "❌ /pmctl is only available in the management room (a DM with the bot)",
+  "pmctl.matrixOnly": "❌ /pmctl unavailable (Matrix deployments only)",
+  "pmctl.unknownOp": "❌ Unknown operation: {op}\nAvailable: new / list / show / rm / mv / rename",
+  "pmctl.new.usage":
+    "Usage: /pmctl new <project name> [path]\nPath is optional: defaults to a same-named directory under the project root (e.g. newapp → ~/Projects/newapp); relative and absolute paths work too.",
+  "pmctl.noInviteTarget": "❌ No invite target (no trusted users configured)",
+  "pmctl.new.elevationFailed": "⚠️ Room created, but granting admin to trusted users failed (set it manually): {message}",
+  "pmctl.new.ok":
+    "✅ Project \"{name}\" created!\n\n• room: {room}\n• workdir: {workdir}\n• you've been invited into the new room\n\nTalk to the project in its new room (isolated context and workdir).{notes}",
+  "pmctl.new.failed": "❌ Failed to create the project: {message}",
+  "pmctl.empty": "No projects yet (create one with /pmctl new <name> <path>)",
+  "pmctl.statusRunning": "✅ running",
+  "pmctl.statusStopped": "⏸️ not started",
+  "pmctl.statusLazy": "⏸️ not started (lazy)",
+  "pmctl.list": "**Project list** ({count}):\n{lines}",
+  "pmctl.show.usage": "Usage: /pmctl show <project name|room ID>",
+  "pmctl.notFound": "❌ Project not found: {target} (use /pmctl list)",
+  "pmctl.show.ok":
+    "📁 Project: {name}\n• room: {room}\n• workdir: {workdir}\n• status: {status}\n• session: {session}",
+  "pmctl.rm.usage": "Usage: /pmctl rm <project name|room ID>",
+  "pmctl.rm.cancelled": "✅ Delete cancelled",
+  "pmctl.rm.nothingPending": "No pending delete confirmation",
+  "pmctl.rm.expired": "⏳ The previous confirmation expired (60 s); please confirm again.",
+  "pmctl.rm.done":
+    "🗑️ Project \"{name}\" deleted\n• mapping removed and process stopped\n• workdir kept: {workdir} (delete it yourself if you want)\n• leaving the room now…",
+  "pmctl.rm.unlinkFailed": "⚠️ Failed to remove from the space (a stale entry may remain; remove it manually): {message}",
+  "pmctl.rm.leaveFailed": "⚠️ Failed to leave the room (you can remove the bot manually): {message}",
+  "pmctl.leaveReason": "project deleted",
+  "pmctl.rm.confirm":
+    "⚠️ Delete project \"{name}\"?\n\nSend `/pmctl rm {name}` again to confirm.\nOnce confirmed, I stop the process and leave that room.\n(send `/pmctl rm cancel` to cancel)",
+  "pmctl.mv.usage": "Usage: /pmctl mv <project name|room ID> <new path> (relative paths resolve against the project root)",
+  "pmctl.mv.done":
+    "🚚 Project \"{name}\" moved\n• new workdir: {workdir}\n• the session restarts (the old session stays in the old directory's .pi-session)",
+  "pmctl.rename.usage": "Usage: /pmctl rename <project name|room ID> <new name>",
+  "pmctl.rename.ok": "✏️ Project renamed to \"{name}\"",
+  "pmctl.rename.roomFailed": " (room rename failed: {message})",
+
   // ── startup ───────────────────────────────────────────────────────────
   "startup.language.system":
     "language: {locale} (detected from the system locale; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",
