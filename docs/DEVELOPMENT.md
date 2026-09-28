@@ -831,6 +831,19 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 - `/reload` 重启 pi 进程,会话无损(文件在磁盘)
 - 多工程模式下,每个工程房间绑定一个独立 pi 进程(懒启动),会话按各工程 workdir 隔离,互不影响
 
+### 13.5 文案国际化(0.3.0,issue #83)
+
+全部用户可见文案(房间回执 + 终端交互)支持中英双语,`src/i18n/` 四件套:
+
+- `zh.ts` —— 基准表,`as const` 定义 `MessageKey`;**逐字保留 0.2.x 历史文案**,存量中文断言以它为锚
+- `en.ts` —— `Record<MessageKey, string>`,缺 key/多 key 都是编译错误,两表永不漂移
+- `index.ts` —— 全局 `setLocale`/`t()`(与 logger 同风格的单例);`{name}` 占位符插值;未知 key 运行时回落 en 表再回落 key 本身(fail-visible)
+- `detect.ts` / `parse.ts` —— 系统 locale 检测(`LC_ALL` > `LC_MESSAGES` > `LANG`,C/POSIX/空跳过)与取消关键词(`isCancelInput`:取消/cancel 双词永远都认)
+
+语言解析链:`PI_LANGUAGE` 环境变量 > config `"language"` > 系统 locale > `"en"`;`config.ts` 的 `resolveLanguage` 是单点解释,非显式配置时启动日志打一行来源。接线点三处:standalone(启动早期)、cli(非 setup 子命令)、setup 向导(首问语言,检测值作默认并持久化)。
+
+红线:i18n 模块不 import src/ 其他文件(零循环依赖)、零第三方运行时依赖;logger 日志与代码注释**不翻译**;语言运行中不热切换(重启生效)。tests/setup.ts 全局 `setLocale("zh")` —— 存量测试的中文断言零改动;注意 `vi.resetModules()` 会重建 i18n 模块图,此类测试须在动态 import 后重新 `setLocale("zh")`。
+
 ---
 
 ## 14. 关键设计决策

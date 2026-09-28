@@ -85,6 +85,7 @@ pi-courier setup
 === pi-courier 首次配置向导 ===
 将生成 ~/.pi/pi-courier.json(权限 600)
 
+Language / 语言? [zh] (en/zh):                           ← 机器人消息语言;回车沿用检测结果(同时写入配置,运行时不依赖终端 locale)
 Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https://matrix.example.com
 获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1):  ← 1 或 2(回车默认 1)
   [方式 1] bot 用户名 (如 test2):                        ← bot 账号名,如 test3
@@ -247,7 +248,7 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 扩展经 RPC 发起 confirm / select / input / editor 交互时,bot 会把问题发成一条聊天消息 —— 你的下一条普通回复就是答案:
 
 - confirm → 回复 `y` / `n`(`yes` / `no` 也可以);select → 回复序号;input / editor → 直接打字
-- 发送「取消」(精确匹配)即可放弃
+- 发送「取消」或 `cancel` 即可放弃 —— 两种写法在任何语言下都认
 - 多个问题悬置时最老的先答;`/` 开头的消息仍走命令通道
 - 扩展通知按级别分档:warning / error 进房间,info 只留日志
 
@@ -256,6 +257,28 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 ```json
 { "extensionUiTimeoutMinutes": 10 }
 ```
+
+### 机器人语言:中英双语(issue #83)
+
+全部机器人消息 —— 命令回复、配对提示、扩展提问、管理房使用说明 —— 从 0.3.0 起默认英文,中文一个配置切换:
+
+```json
+{ "language": "zh" }
+```
+
+语言解析链(命中即停):
+
+1. 环境变量 `PI_LANGUAGE=en|zh` —— 容器/极简部署里最稳
+2. `~/.pi/pi-courier.json` 的 `"language": "zh" | "en"`(setup 向导首问并写入)
+3. 服务的系统 locale(`LC_ALL` > `LC_MESSAGES` > `LANG`;`zh*` → 中文)—— 启动日志会打一行说明语言从哪来
+4. 最终回落英文
+
+注意:
+
+- 语言修改重启生效(与 `multiProject` 同语义)
+- **从 0.2.x 升级、想保持中文?** 配置里加一次 `"language": "zh"`(或重跑 `pi-courier setup`)即可;系统 locale 为 `zh_CN` 的 0.2.x 部署升级后零操作保持中文;无论哪种语言,取消关键词永远双语(`取消` 和 `cancel` 都认)
+- 中文表是简体;`zh_TW` / `zh_HK` locale 同样给简体
+- 已建好的房间保持原有名称与使用说明 —— 切语言不会追溯改名
 
 ### 模型调用失败时
 
@@ -266,7 +289,7 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 不用开终端也能(重新)登录 provider:
 
 - `/login` — 列出可登录的 provider(标注 oauth / api_key 能力,已认证的带 ✅ 标记)
-- `/login <provider> [oauth|api_key]` — 在房间里交互式登录,任意时刻发送「取消」可中止。**OAuth**:点开链接在任意浏览器完成授权,把重定向 URL 粘贴回房间。**API key**:直接粘贴。⚠️ 粘贴的内容会留在房间历史 —— 在意的话事后删除该消息。
+- `/login <provider> [oauth|api_key]` — 在房间里交互式登录,任意时刻发送「取消」或 `cancel` 可中止。**OAuth**:点开链接在任意浏览器完成授权,把重定向 URL 粘贴回房间。**API key**:直接粘贴。⚠️ 粘贴的内容会留在房间历史 —— 在意的话事后删除该消息。
 - `/logout <provider>` — 删除已存凭据(运行中的 pi 进程仍持有内存里的旧凭据;空闲后执行 `/reload all` 生效)
 - `/auth` — 查看已认证的 provider
 

@@ -85,6 +85,7 @@ It walks you through, prompting for each value (defaults in brackets; press Ente
 === pi-courier 首次配置向导 ===
 将生成 ~/.pi/pi-courier.json(权限 600)
 
+Language / 语言? [en] (en/zh):                           ← bot message language; Enter keeps the detected default (also written to the config, so the running service ignores terminal locale)
 Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https://matrix.example.com
 获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1):  ← 1 或 2(Enter 默认 1)
   [方式 1] bot 用户名 (如 test2):                        ← bot 账号名,如 test3
@@ -203,7 +204,7 @@ Since 0.1.39 sending mirrors pi's TUI. A plain text message always rides with st
 When an extension asks you something (confirm / select / input / editor dialogs over RPC), the bot posts the question as a chat message — your next plain reply IS the answer:
 
 - confirm → reply `y` / `n` (`yes` / `no` work too); select → reply the number; input / editor → just type the content
-- send 「取消」 (exactly) to back out
+- send `cancel` (or `取消`) to back out — both spellings work in every language
 - several questions pending: the oldest is answered first; messages starting with `/` still go through the command channel
 - extension notifications are filtered by level: warning / error reach the room, info stays in the log
 
@@ -213,9 +214,31 @@ Pending questions auto-cancel after `extensionUiTimeoutMinutes` (default 10) —
 { "extensionUiTimeoutMinutes": 10 }
 ```
 
+### Bot language: bilingual messages (zh / en)
+
+All bot messages — command replies, pairing prompts, extension questions, management-room guides — speak English by default (0.3.0+). Chinese is one setting away:
+
+```json
+{ "language": "zh" }
+```
+
+How the language is picked (first match wins):
+
+1. `PI_LANGUAGE=en|zh` environment variable — the most reliable option in containers/minimal deployments
+2. `"language": "zh" | "en"` in `~/.pi/pi-courier.json` (the setup wizard asks and writes it)
+3. The system locale of the service (`LC_ALL` > `LC_MESSAGES` > `LANG`; `zh*` → Chinese) — at startup the log prints one line explaining where the language came from
+4. English as the final fallback
+
+Notes:
+
+- Language changes take effect on restart (same as `multiProject`)
+- **Upgrading from 0.2.x and prefer Chinese?** Set `"language": "zh"` once (or re-run `pi-courier setup`) — 0.2.x deployments detected `zh_CN` locale keep Chinese with zero action; the cancel keyword stays bilingual either way (`取消` and `cancel` are both accepted in every language)
+- The zh table is Simplified Chinese; `zh_TW` / `zh_HK` locales also get Simplified
+- Already-created rooms keep their original names and guides — no retroactive rebranding on language change
+
 ### When a model call fails
 
-A failed turn (usage exhausted, auth expired, provider unreachable…) tells the room: `❌ 本轮失败: <原因>`. Auto-retries are visible too — `⚠️ 调用失败,正在重试 n/N` per attempt, and the final error once retries are exhausted. A manual `/stop` never produces error notices.
+A failed turn (usage exhausted, auth expired, provider unreachable…) tells the room: `❌ Turn failed: <reason>`. Auto-retries are visible too — `⚠️ Call failed, retrying n/N` per attempt, and the final error once retries are exhausted. A manual `/stop` never produces error notices.
 
 ### Provider login from chat: `/login`
 
