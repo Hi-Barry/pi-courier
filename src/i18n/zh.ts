@@ -167,6 +167,38 @@ const zh = {
   "xq.answer.cancelled": "已取消",
   "xq.answer.ok": "✅ 已回应",
 
+  // ── auth(配对/管理命令/无头登录)────────────────────────────────────
+  "auth.help.admin":
+    "**Bridge 管理命令**: `/help`(本帮助)、`/trusted`、`/revoke`、`/channels`、`/enable`、`/disable`、`/toggletools`\n" +
+    "**认证**: 首次私聊 bot → bot 终端与管理房间会显示 6 位验证码 → 在收到提示的那个聊天里输入验证码即成为信任用户(第一个信任用户 = 管理员)。群聊由信任用户在群里发 `/enable <模式>` 启用。",
+  "auth.pairing.noPendingHint": "ℹ️ 没有进行中的配对。如需配对,请先私信 bot,收到 6 位配对码后回复即可。",
+  "auth.challenge.prompt": "🔐 请输入 bot 管理员提供的 6 位配对码 —— 就在本聊天里发送。\n⏱️ 2 分钟内有效。",
+  "login.noProviders": "没有可登录的 provider。",
+  "login.authenticated": "✅ 已认证({types})",
+  "login.providersList": "🔐 可登录 provider({count}):\n{lines}\n\n用 /login <provider> <oauth|api_key> 开始登录。",
+  "login.noCredentials": "💤 暂无已保存凭据(用 /login <provider> <oauth|api_key> 登录)。",
+  "login.credentialsList": "🔐 已保存凭据 ({count}):\n{lines}",
+  "login.secret.line2": "直接回复密钥内容。",
+  "login.secret.line3": "⚠️ 密钥将留在房间历史,建议用后删除该消息(发送「取消」放弃)",
+  "login.manualCode.how": "把浏览器授权后最终跳转到的完整 URL 直接粘贴回来(发送「取消」放弃)",
+  "login.pendingInRoom": "⚠️ 本房间已有登录流程进行中(发送「取消」中止后再试)。",
+  "login.unknownProvider": "❌ 未知 provider: {id}(用 /login 查看可登录列表)",
+  "login.usage": "用法: /login <provider> <oauth|api_key>",
+  "login.chooseMethod": "⚠️ {id} 支持多种登录方式({methods}),请指定:\n/login {id} oauth\n/login {id} api_key",
+  "login.unsupportedMethod": "❌ {id} 不支持 {method} 登录(支持: {methods})",
+  "login.started": "🔑 已开始 {id} {method} 登录流程,请按提示操作(任意时刻发送「取消」中止)。",
+  "login.cancelled": "🛑 已取消 {id} 的登录流程",
+  "login.noStoredCred": "❌ {id} 没有已保存的凭据(用 /auth 查看)",
+  "login.logoutOk": "✅ 已删除 {id} 的凭据。运行中的 pi 进程仍持有旧凭据,空闲后执行 /reload all 使登出生效。",
+  "login.logoutFailed": "❌ 登出失败: {message}",
+  "login.readFailed": "❌ 读取凭据失败: {message}",
+  "login.success": "✅ {id} 登录成功,凭据已写入 {path}",
+  "login.failed": "❌ {id} 登录失败: {message}",
+  "login.authUrl": "🌐 请在浏览器打开以下链接完成授权:\n{url}",
+  "login.deviceCode": "🔑 设备码: {code}",
+  "login.deviceCodeOpen": "请在浏览器打开 {uri} 并输入上述设备码。",
+  "login.expiresMinutes": "(有效期约 {minutes} 分钟)",
+
   // ── startup(语言配置可见性;语言功能自身的一部分,破例双语)─────────
   "startup.language.system":
     "language: {locale}(检测自系统 locale;如需固定,请在 ~/.pi/pi-courier.json 配置 \"language\" 或设 PI_LANGUAGE)",

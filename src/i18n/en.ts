@@ -171,6 +171,42 @@ const en: Record<MessageKey, string> = {
   "xq.answer.cancelled": "Cancelled",
   "xq.answer.ok": "✅ Answer delivered",
 
+  // ── auth ──────────────────────────────────────────────────────────────
+  "auth.help.admin":
+    "**Bridge admin commands**: `/help` (this help), `/trusted`, `/revoke`, `/channels`, `/enable`, `/disable`, `/toggletools`\n" +
+    "**Pairing**: DM the bot for the first time → a 6-digit code appears in the bot's terminal and the management room → enter it in the chat where you received the prompt to become a trusted user (the first trusted user = admin). Group chats are enabled by a trusted user sending `/enable <mode>` in the group.",
+  "auth.pairing.noPendingHint":
+    "ℹ️ No pairing in progress. To pair, DM the bot first; you will receive a 6-digit code — reply with it here.",
+  "auth.challenge.prompt":
+    "🔐 Please enter the 6-digit code provided by the bot admin — here in this chat.\n⏱️ Expires in 2 minutes.",
+  "login.noProviders": "No login-able providers.",
+  "login.authenticated": "✅ authenticated ({types})",
+  "login.providersList": "🔐 Login-able providers ({count}):\n{lines}\n\nRun /login <provider> <oauth|api_key> to start a login.",
+  "login.noCredentials": "💤 No saved credentials yet (log in with /login <provider> <oauth|api_key>).",
+  "login.credentialsList": "🔐 Saved credentials ({count}):\n{lines}",
+  "login.secret.line2": "Reply directly with the secret.",
+  "login.secret.line3": "⚠️ The secret stays in the room history; consider deleting the message afterwards (send \"cancel\" to back out)",
+  "login.manualCode.how":
+    "Paste back the full URL the browser finally redirects to after authorizing (send \"cancel\" to back out)",
+  "login.pendingInRoom": "⚠️ A login flow is already running in this room (send \"cancel\" to abort it first).",
+  "login.unknownProvider": "❌ Unknown provider: {id} (use /login to see the login-able list)",
+  "login.usage": "Usage: /login <provider> <oauth|api_key>",
+  "login.chooseMethod": "⚠️ {id} supports multiple login methods ({methods}); pick one:\n/login {id} oauth\n/login {id} api_key",
+  "login.unsupportedMethod": "❌ {id} does not support {method} login (supported: {methods})",
+  "login.started": "🔑 Started the {id} {method} login flow; follow the prompts (send \"cancel\" at any time to abort).",
+  "login.cancelled": "🛑 Cancelled the {id} login flow",
+  "login.noStoredCred": "❌ {id} has no saved credential (use /auth to check)",
+  "login.logoutOk":
+    "✅ Deleted the {id} credential. Running pi processes keep the old one in memory until restarted — run /reload all once idle to apply the logout.",
+  "login.logoutFailed": "❌ Logout failed: {message}",
+  "login.readFailed": "❌ Failed to read credentials: {message}",
+  "login.success": "✅ {id} login succeeded; credential written to {path}",
+  "login.failed": "❌ {id} login failed: {message}",
+  "login.authUrl": "🌐 Open the following link in your browser to authorize:\n{url}",
+  "login.deviceCode": "🔑 Device code: {code}",
+  "login.deviceCodeOpen": "Open {uri} in your browser and enter the device code above.",
+  "login.expiresMinutes": "(valid for about {minutes} minutes)",
+
   // ── startup ───────────────────────────────────────────────────────────
   "startup.language.system":
     "language: {locale} (detected from the system locale; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",

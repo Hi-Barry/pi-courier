@@ -37,6 +37,8 @@ import type {
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { t } from "../i18n/index.js";
+import { isCancelInput } from "../i18n/parse.js";
 import { formatReloadAllResult, restartIdleRpcs } from "../rpc/command-map.js";
 import type { PiRpc } from "../rpc/pi-rpc.js";
 
@@ -78,7 +80,7 @@ export function formatLoginProviders(
   providers: readonly LoginProviderInfo[],
   credentials: readonly CredentialInfo[] = []
 ): string {
-  if (providers.length === 0) return "没有可登录的 provider。";
+  if (providers.length === 0) return t("login.noProviders");
   const byProvider = new Map<string, CredentialInfo[]>();
   for (const c of credentials) {
     const list = byProvider.get(c.providerId) ?? [];
@@ -91,20 +93,20 @@ export function formatLoginProviders(
       .join(" / ");
     const creds = byProvider.get(p.id);
     const badge = creds?.length
-      ? ` ✅ 已认证(${creds.map((c) => c.type).join(" + ")})`
+      ? ` ${t("login.authenticated", { types: creds.map((c) => c.type).join(" + ") })}`
       : "";
     return `• ${p.id} — ${p.name}(${methods})${badge}`;
   });
-  return `🔐 可登录 provider(${providers.length}):\n${lines.join("\n")}\n\n用 /login <provider> <oauth|api_key> 开始登录。`;
+  return t("login.providersList", { count: providers.length, lines: lines.join("\n") });
 }
 
 /** /auth — the stored credentials, one line each (no secrets, metadata only). */
 export function formatCredentials(credentials: readonly CredentialInfo[]): string {
   if (credentials.length === 0) {
-    return "💤 暂无已保存凭据(用 /login <provider> <oauth|api_key> 登录)。";
+    return t("login.noCredentials");
   }
   const lines = credentials.map((c) => `• ${c.providerId} — ${c.type}`);
-  return `🔐 已保存凭据 (${credentials.length}):\n${lines.join("\n")}`;
+  return t("login.credentialsList", { count: credentials.length, lines: lines.join("\n") });
 }
 
 // ===========================================================================
@@ -112,7 +114,8 @@ export function formatCredentials(credentials: readonly CredentialInfo[]): strin
 // ===========================================================================
 
 /** The room message for an upstream login prompt (issue #55). Secret prompts
- *  must warn that the key stays in the room history. */
+ *  must warn that the key stays in the room history. The select/text how-to
+ *  lines reuse the extension-question phrasings — same protocol, same wording. */
 export function translateAuthPrompt(prompt: AuthPrompt): string {
   switch (prompt.type) {
     case "select": {
@@ -120,18 +123,18 @@ export function translateAuthPrompt(prompt: AuthPrompt): string {
         const desc = o.description ? ` — ${o.description}` : "";
         return `${i + 1}. ${o.label}${desc}`;
       });
-      return `❓ ${prompt.message}\n${lines.join("\n")}\n回复序号选择(发送「取消」放弃)`;
+      return `❓ ${prompt.message}\n${lines.join("\n")}\n${t("xq.select.how")}`;
     }
     case "secret":
       return [
         `❓ ${prompt.message}`,
-        "直接回复密钥内容。",
-        "⚠️ 密钥将留在房间历史,建议用后删除该消息(发送「取消」放弃)",
+        t("login.secret.line2"),
+        t("login.secret.line3"),
       ].join("\n");
     case "manual_code":
-      return `❓ ${prompt.message}\n把浏览器授权后最终跳转到的完整 URL 直接粘贴回来(发送「取消」放弃)`;
+      return `❓ ${prompt.message}\n${t("login.manualCode.how")}`;
     default: // text
-      return `❓ ${prompt.message}\n直接回复内容作为答案(发送「取消」放弃)`;
+      return `❓ ${prompt.message}\n${t("xq.input.how")}`;
   }
 }
 
@@ -140,17 +143,17 @@ export function translateAuthPrompt(prompt: AuthPrompt): string {
 export function translateAuthEvent(event: AuthEvent): string {
   switch (event.type) {
     case "auth_url": {
-      const lines = [`🌐 请在浏览器打开以下链接完成授权:\n${event.url}`];
+      const lines = [t("login.authUrl", { url: event.url })];
       if (event.instructions) lines.push(event.instructions);
       return lines.join("\n");
     }
     case "device_code": {
       const lines = [
-        `🔑 设备码: ${event.userCode}`,
-        `请在浏览器打开 ${event.verificationUri} 并输入上述设备码。`,
+        t("login.deviceCode", { code: event.userCode }),
+        t("login.deviceCodeOpen", { uri: event.verificationUri }),
       ];
       if (event.expiresInSeconds) {
-        lines.push(`(有效期约 ${Math.max(1, Math.round(event.expiresInSeconds / 60))} 分钟)`);
+        lines.push(t("login.expiresMinutes", { minutes: Math.max(1, Math.round(event.expiresInSeconds / 60)) }));
       }
       return lines.join("\n");
     }
@@ -170,17 +173,18 @@ export type LoginAnswer =
   | { kind: "invalid"; hint: string };
 
 /** Map a room message onto a login prompt's answer (issue #55). Pure.
- *  「取消」 is exact; select maps the 1-based index onto the option ID
- *  (out of range re-asks); every other prompt type takes the whole message. */
+ *  The cancel word (取消/cancel, any case, trimmed); select maps the 1-based
+ *  index onto the option ID (out of range re-asks); every other prompt type
+ *  takes the whole message. */
 export function parseLoginAnswer(prompt: AuthPrompt, text: string): LoginAnswer {
-  if (text === "取消") return { kind: "cancel" };
+  if (isCancelInput(text)) return { kind: "cancel" };
   if (prompt.type === "select") {
     const count = prompt.options.length;
     const index = /^\d+$/.test(text) ? Number.parseInt(text, 10) : 0;
     if (index >= 1 && index <= count) {
       return { kind: "value", value: prompt.options[index - 1]!.id };
     }
-    return { kind: "invalid", hint: `⚠️ 请回复 1 到 ${count} 之间的序号(发送「取消」放弃)` };
+    return { kind: "invalid", hint: t("xq.select.invalid", { max: count }) };
   }
   return { kind: "value", value: text };
 }
@@ -275,12 +279,12 @@ export class LoginManager {
    *  management room) are the router's job; this validates the target. */
   async startLogin(chatId: string, transport: string, providerId: string, method?: string): Promise<void> {
     if (this.pending.has(chatId)) {
-      await this.deps.sendReply(chatId, transport, "⚠️ 本房间已有登录流程进行中(发送「取消」中止后再试)。");
+      await this.deps.sendReply(chatId, transport, t("login.pendingInRoom"));
       return;
     }
     const provider = listLoginProviders().find((p) => p.id === providerId);
     if (!provider) {
-      await this.deps.sendReply(chatId, transport, `❌ 未知 provider: ${providerId}(用 /login 查看可登录列表)`);
+      await this.deps.sendReply(chatId, transport, t("login.unknownProvider", { id: providerId }));
       return;
     }
     const supported: Array<"oauth" | "api_key"> = [];
@@ -292,21 +296,16 @@ export class LoginManager {
     if (requested === "oauth" || requested === "api_key") {
       chosen = requested;
     } else if (requested) {
-      await this.deps.sendReply(chatId, transport, "用法: /login <provider> <oauth|api_key>");
+      await this.deps.sendReply(chatId, transport, t("login.usage"));
       return;
     } else if (supported.length === 1) {
       chosen = supported[0]!; // unambiguous — pick the only way
     } else {
-      await this.deps.sendReply(
-        chatId,
-        transport,
-        `⚠️ ${providerId} 支持多种登录方式(${supported.join(" / ")}),请指定:\n` +
-          `/login ${providerId} oauth\n/login ${providerId} api_key`
-      );
+      await this.deps.sendReply(chatId, transport, t("login.chooseMethod", { id: providerId, methods: supported.join(" / ") }));
       return;
     }
     if (!supported.includes(chosen)) {
-      await this.deps.sendReply(chatId, transport, `❌ ${providerId} 不支持 ${chosen} 登录(支持: ${supported.join(" / ")})`);
+      await this.deps.sendReply(chatId, transport, t("login.unsupportedMethod", { id: providerId, method: chosen, methods: supported.join(" / ") }));
       return;
     }
 
@@ -319,11 +318,7 @@ export class LoginManager {
       finished: false,
     };
     this.pending.set(chatId, entry);
-    await this.deps.sendReply(
-      chatId,
-      transport,
-      `🔑 已开始 ${providerId} ${chosen} 登录流程,请按提示操作(任意时刻发送「取消」中止)。`
-    );
+    await this.deps.sendReply(chatId, transport, t("login.started", { id: providerId, method: chosen }));
     // Long-running by design: never block the message pipeline — the flow
     // continues over the capture channel (deliver / cancel).
     void this.run(entry);
@@ -336,7 +331,7 @@ export class LoginManager {
   async deliver(chatId: string, text: string): Promise<boolean> {
     const entry = this.pending.get(chatId);
     if (!entry || entry.finished) return false;
-    if (text === "取消") {
+    if (isCancelInput(text)) {
       await this.cancel(chatId);
       return true;
     }
@@ -347,12 +342,12 @@ export class LoginManager {
       await this.deps.sendReply(chatId, entry.transport, answer.hint);
       return true;
     }
-    if (answer.kind === "cancel") return true; // unreachable: 取消 handled above
+    if (answer.kind === "cancel") return true; // unreachable: cancel handled above
     current.submit(answer.value);
     return true;
   }
 
-  /** Abort the room's pending flow (「取消」 or a replacement command). */
+  /** Abort the room's pending flow (cancel word or a replacement command). */
   async cancel(chatId: string): Promise<boolean> {
     const entry = this.pending.get(chatId);
     if (!entry || entry.finished) return false;
@@ -361,7 +356,7 @@ export class LoginManager {
     // Aborting rejects the parked prompt (LoginCancelledError) → upstream
     // login exits abnormally; run() stays silent for this path.
     entry.controller.abort();
-    await this.deps.sendReply(chatId, entry.transport, `🛑 已取消 ${entry.providerId} 的登录流程`);
+    await this.deps.sendReply(chatId, entry.transport, t("login.cancelled", { id: entry.providerId }));
     return true;
   }
 
@@ -373,17 +368,13 @@ export class LoginManager {
       const runtime = await this.getRuntime();
       const credentials = await runtime.listCredentials();
       if (!credentials.some((c) => c.providerId === providerId)) {
-        await this.deps.sendReply(chatId, transport, `❌ ${providerId} 没有已保存的凭据(用 /auth 查看)`);
+        await this.deps.sendReply(chatId, transport, t("login.noStoredCred", { id: providerId }));
         return;
       }
       await runtime.logout(providerId);
-      await this.deps.sendReply(
-        chatId,
-        transport,
-        `✅ 已删除 ${providerId} 的凭据。运行中的 pi 进程仍持有旧凭据,空闲后执行 /reload all 使登出生效。`
-      );
+      await this.deps.sendReply(chatId, transport, t("login.logoutOk", { id: providerId }));
     } catch (err) {
-      await this.deps.sendReply(chatId, transport, `❌ 登出失败: ${(err as Error).message}`);
+      await this.deps.sendReply(chatId, transport, t("login.logoutFailed", { message: (err as Error).message }));
     }
   }
 
@@ -393,7 +384,7 @@ export class LoginManager {
       const runtime = await this.getRuntime();
       await this.deps.sendReply(chatId, transport, formatCredentials([...(await runtime.listCredentials())]));
     } catch (err) {
-      await this.deps.sendReply(chatId, transport, `❌ 读取凭据失败: ${(err as Error).message}`);
+      await this.deps.sendReply(chatId, transport, t("login.readFailed", { message: (err as Error).message }));
     }
   }
 
@@ -423,7 +414,7 @@ export class LoginManager {
       if (entry.controller.signal.aborted) return; // cancelled mid-write
       entry.finished = true;
       this.drop(entry);
-      const lines = [`✅ ${providerId} 登录成功,凭据已写入 ${this.deps.authPath ?? defaultAuthPath()}`];
+      const lines = [t("login.success", { id: providerId, path: this.deps.authPath ?? defaultAuthPath() })];
       try {
         // pi subprocesses read the credential file once at startup — restart
         // the idle ones now, tell the room about the busy ones (issue #55).
@@ -436,7 +427,7 @@ export class LoginManager {
       entry.finished = true;
       this.drop(entry);
       if (err instanceof LoginCancelledError || entry.controller.signal.aborted) return;
-      await this.deps.sendReply(chatId, transport, `❌ ${providerId} 登录失败: ${(err as Error).message}`);
+      await this.deps.sendReply(chatId, transport, t("login.failed", { id: providerId, message: (err as Error).message }));
     }
   }
 

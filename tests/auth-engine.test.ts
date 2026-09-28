@@ -70,7 +70,7 @@ describe("ChallengeAuth strategy engine", () => {
     await auth.checkAuthorization("@eve:server", "!dm:server", "eve", false, false, async (_cid, text) => {
       sent.push(text);
     }, "matrix");
-    expect(sent.some((t) => t.includes("here in this chat"))).toBe(true);
+    expect(sent.some((t) => t.includes("6 位配对码") && t.includes("本聊天"))).toBe(true);
   });
 
   it("challenge codes expire after 2 minutes", async () => {

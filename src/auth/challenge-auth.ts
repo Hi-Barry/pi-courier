@@ -11,6 +11,7 @@
  */
 
 import { matchesAdmin, matchesTrustedEntry, namespacedId } from "../identity.js";
+import { t } from "../i18n/index.js";
 
 interface ChallengeData {
   code: string;
@@ -280,10 +281,7 @@ export class ChallengeAuth {
     // Then send message to user asking for the code
     if (sendMessage) {
       try {
-        await sendMessage(
-          chatId,
-          "🔐 Please enter the 6-digit code provided by the bot admin — here in this chat.\n⏱️ Expires in 2 minutes."
-        );
+        await sendMessage(chatId, t("auth.challenge.prompt"));
       } catch (_err) {
         // Ignore send errors
       }
