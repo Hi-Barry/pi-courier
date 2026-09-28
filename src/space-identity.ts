@@ -17,6 +17,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { t } from "./i18n/index.js";
 
 /** Number of images in each art-set pool (`<set>-01 … <set>-12`). */
 export const AVATAR_POOL_SIZE = 12;
@@ -116,7 +117,7 @@ export function readAvatarBundled(file: string): Buffer {
 function avatarAssetUrl(file: string): URL {
   // src/space-identity.ts and dist/space-identity.js both sit one level below
   // the package root, so ../assets resolves in the repo and in the npm tarball.
-  if (!/^[\w.-]+\.png$/.test(file)) throw new Error(`非法的头像文件名: ${file}`);
+  if (!/^[\w.-]+\.png$/.test(file)) throw new Error(t("space.badAvatarFile", { file }));
   return new URL(`../assets/avatars/${file}`, import.meta.url);
 }
 

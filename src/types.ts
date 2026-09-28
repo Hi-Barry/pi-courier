@@ -145,6 +145,12 @@ export interface MsgBridgeConfig {
    */
   extensionUiTimeoutMinutes?: number;
   /**
+   * 界面语言(issue #83):zh | en。缺省时回落链接管:PI_LANGUAGE 环境变量
+   * > 本字段 > 系统 locale(LC_ALL > LC_MESSAGES > LANG,zh* → zh) > en。
+   * setup 向导首问并写入;运行中不热切换,重启生效。
+   */
+  language?: "zh" | "en";
+  /**
    * Matrix 附件输入(issue #66):媒体事件的下载落盘配置。
    * directory 缺省 ~/.pi/pi-courier/attachments;maxMb 缺省 10。
    */

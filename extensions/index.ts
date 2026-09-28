@@ -23,12 +23,12 @@ interface PiApi {
 }
 
 const USAGE = [
-  "pi-courier — 通过 Matrix 远程使用 pi(消息桥接)。",
+  "pi-courier — run the pi coding agent from Matrix (messenger bridge). / 通过 Matrix 远程使用 pi(消息桥接)。",
   "",
-  "安装: npm install -g pi-courier",
-  "配置: pi-courier setup",
-  "运行: pi-courier run(前台)或 pi-courier enable(systemd 开机自启)",
-  "仓库: https://github.com/Hi-Barry/pi-courier",
+  "Install: npm install -g pi-courier",
+  "Configure: pi-courier setup",
+  "Run: pi-courier run (foreground) or pi-courier enable (systemd auto-start)",
+  "Repo: https://github.com/Hi-Barry/pi-courier",
 ].join("\n");
 
 export default function register(pi: PiApi): void {

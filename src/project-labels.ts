@@ -15,6 +15,7 @@
  */
 
 import * as path from "node:path";
+import { t } from "./i18n/index.js";
 
 export interface LabelSource {
   name?: string;
@@ -33,15 +34,15 @@ const MAX_LABEL_LENGTH = 30;
 
 /** Validate a user-supplied label against the format rules and the existing
  *  labels (case-insensitive uniqueness). Returns an error message (user-
- *  facing, Chinese) or null when the label is acceptable. */
+ *  facing, in the configured locale) or null when the label is acceptable. */
 export function validateProjectLabel(candidate: string, existingLabels: string[]): string | null {
   const name = candidate.trim();
-  if (!name) return "项目名不能为空";
-  if (/[[\]]/.test(name)) return "项目名不能包含方括号 [ ](会破坏日志格式)";
-  if (/\s/.test(name)) return "项目名不能包含空白字符";
-  if (name.length > MAX_LABEL_LENGTH) return `项目名最长 ${MAX_LABEL_LENGTH} 字符(当前 ${name.length})`;
+  if (!name) return t("label.empty");
+  if (/[[\]]/.test(name)) return t("label.noBrackets");
+  if (/\s/.test(name)) return t("label.noWhitespace");
+  if (name.length > MAX_LABEL_LENGTH) return t("label.tooLong", { max: MAX_LABEL_LENGTH, length: name.length });
   const lower = name.toLowerCase();
   const clash = existingLabels.find((l) => l.toLowerCase() === lower);
-  if (clash) return `项目名「${name}」与现有项目「${clash}」仅大小写不同(日志过滤按名字匹配,会混淆)`;
+  if (clash) return t("label.caseClash", { name, clash });
   return null;
 }

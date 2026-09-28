@@ -635,7 +635,7 @@ describe("message-router authorization pipeline (real ChallengeAuth)", () => {
     await router.handleIncoming(eveMsg("/help"));
     expect(rpc.prompt).not.toHaveBeenCalled();
     expect(codeBox.current).not.toBeNull();
-    expect(replies.at(-1)!.text).toContain("6-digit");
+    expect(replies.at(-1)!.text).toContain("6 位");
   });
 });
 

@@ -12,7 +12,8 @@
 
 import { pathToFileURL } from "node:url";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
-import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore } from "./config.js";
+import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, resolveLanguage } from "./config.js";
+import { setLocale, t } from "./i18n/index.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
@@ -42,29 +43,27 @@ function parseArgs(argv: string[]): { workdir?: string; logLevel?: string } {
         break;
       case "--setup":
       case "--configure":
-        console.warn("⚠️  旧参数已废弃,请用 `pi-courier setup`");
+        console.warn(t("cli.arg.deprecatedSetup"));
         break;
       case "--pi-cli":
-        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 cliPath,或设 PI_CLI_PATH");
+        console.warn(t("cli.arg.deprecatedCliPath"));
         i++;
         break;
       case "--session-dir":
-        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 sessionDir");
+        console.warn(t("cli.arg.deprecatedSessionDir"));
         i++;
         break;
       case "--debug":
-        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 debug: true");
+        console.warn(t("cli.arg.deprecatedDebug"));
         break;
       default:
-        console.warn(`⚠️  忽略未知参数: ${arg}(旧参数已废弃,请用配置或子命令)`);
+        console.warn(t("cli.arg.unknown", { arg }));
     }
   }
   return result;
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
-  const args = parseArgs(argv);
-
   // Single-instance guard (same lock file as the extension mode)
   if (!acquireLock()) {
     console.error("[bridge] another pi-courier instance is already running — exiting");
@@ -77,6 +76,20 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // NOTE: resolve `config` only AFTER store.update calls are done — update()
   // replaces the in-memory object, so an earlier alias would go stale.
   const store = new ConfigStore();
+
+  // 语言解析(issue #83)必须在 parseArgs 之前:废弃参数警告跟随语言。
+  const language = resolveLanguage(store.get());
+  setLocale(language.locale);
+  if (language.source === "system" || language.source === "default") {
+    logger.info(
+      t(
+        language.source === "system" ? "startup.language.system" : "startup.language.default",
+        { locale: language.locale }
+      )
+    );
+  }
+
+  const args = parseArgs(argv);
   const workdir = await resolveWorkdir(args.workdir, store, undefined, (wd) =>
     logger.info(`工作目录: ${wd}(已保存到 ~/.pi/pi-courier.json,改配置后重启即生效)`)
   );
@@ -98,7 +111,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const auth = new ChallengeAuth(
     (code, username) => {
       logger.info(`🔐 Challenge code for @${username}: ${code}`);
-      void startup.sendPairingNotice(`🔐 配对码 @${username}: ${code}(2 分钟内有效,发给该用户用于配对)`);
+      void startup.sendPairingNotice(
+        t("startup.pairingNotice", { username, code })
+      );
     },
     (message, level) => logger.info(`[auth:${level ?? "info"}] ${message}`)
   );
@@ -188,10 +203,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // 查找 —— C8 退役注册表后,全文已无按 transport 名寻址的消费方
       // (grep 证实:仅剩字符串插值);签名保留以维持日志口径不变。
       // ExternalMessage.transport 字段本身是路由元数据,照旧携带。
-      const t = matrix;
-      if (!t) throw new Error(`Transport ${transport} not found`);
-      if (!t.isConnected) throw new Error(`Transport ${transport} not connected`);
-      await t.sendMessage(chatId, text);
+      const provider = matrix;
+      if (!provider) throw new Error(`Transport ${transport} not found`);
+      if (!provider.isConnected) throw new Error(`Transport ${transport} not connected`);
+      await provider.sendMessage(chatId, text);
       const short = text.replace(/\s+/g, " ").trim();
       logger.withLabel(projectManager.labelForRoom(chatId)).debug(`📤 [${transport}] ${short.slice(0, 500)}${short.length > 500 ? "…" : ""}`);
     } catch (err) {

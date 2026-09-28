@@ -13,6 +13,7 @@
  * errors via journalctl itself; no silent fallback (spec #34 decision).
  */
 
+import { t } from "./i18n/index.js";
 import type { LogLevel } from "./logger.js";
 import { parseLogLevel } from "./logger.js";
 
@@ -54,7 +55,7 @@ export function buildLogFilterArgs(req: LogFilterRequest): LogFilterResult {
 
   const level = parseLogLevel(req.level);
   if (!level) {
-    return { ok: false, message: `未知日志级别: ${req.level}(可选: debug / info / warn / error)` };
+    return { ok: false, message: t("logs.unknownLevel", { level: req.level }) };
   }
 
   if (req.requestedProjects.length > 0) {
@@ -62,10 +63,10 @@ export function buildLogFilterArgs(req: LogFilterRequest): LogFilterResult {
       (p) => !req.availableLabels.some((l) => l.toLowerCase() === p.toLowerCase())
     );
     if (unknown.length > 0) {
-      const list = req.availableLabels.length > 0 ? req.availableLabels.join(", ") : "(当前无项目)";
+      const list = req.availableLabels.length > 0 ? req.availableLabels.join(", ") : t("logs.noProjects");
       return {
         ok: false,
-        message: `未找到项目: ${unknown.join(", ")}\n可用项目: ${list}`,
+        message: t("logs.projectsNotFound", { unknown: unknown.join(", "), list }),
       };
     }
     // Case-insensitive exact matching is delegated to `--case=0`: the pattern

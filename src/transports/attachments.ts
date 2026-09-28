@@ -16,6 +16,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { t } from "../i18n/index.js";
 
 // ─── 附件输入(issue #66)────────────────────────────────────────
 
@@ -84,7 +85,7 @@ export interface IncomingMedia {
 /** 附件超过大小上限 — 带上预检用的声明值与实际上限,文案在 message 里。 */
 export class AttachmentTooLargeError extends Error {
   constructor(declaredBytes: number, maxBytes: number) {
-    super(`附件过大(${formatBytes(declaredBytes)} > 上限 ${formatBytes(maxBytes)}),未保存。请压缩后重发,或让管理员调大 attachments.maxMb 配置。`);
+    super(t("attach.tooLarge", { declared: formatBytes(declaredBytes), max: formatBytes(maxBytes) }));
     this.name = "AttachmentTooLargeError";
   }
 }
@@ -92,7 +93,7 @@ export class AttachmentTooLargeError extends Error {
 /** 下载/解密 I/O 失败 — message 直接可用于房间回执。 */
 export class AttachmentDownloadError extends Error {
   constructor(detail: string) {
-    super(`附件下载失败: ${detail}`);
+    super(t("attach.downloadFailed", { detail }));
     this.name = "AttachmentDownloadError";
   }
 }
@@ -128,7 +129,7 @@ export class AttachmentStore {
   async save(roomId: string, media: IncomingMedia): Promise<SavedAttachment> {
     const mxcKey = media.encryptedFile?.url ?? media.mxcUrl;
     if (!mxcKey) {
-      throw new AttachmentDownloadError("事件中没有可下载的媒体地址");
+      throw new AttachmentDownloadError(t("attach.noMediaUrl"));
     }
 
     // Dedup (ticket 3): a forwarded/re-sent mxc maps to the existing file.
@@ -151,7 +152,7 @@ export class AttachmentStore {
     try {
       if (media.encryptedFile) {
         if (!this.source.downloadEncrypted) {
-          throw new Error("加密附件需要启用 E2EE(部署未开启加密或 crypto 原生库不可用)");
+          throw new Error(t("attach.e2eeRequired"));
         }
         data = await withTimeout(this.source.downloadEncrypted(media.encryptedFile));
       } else {
@@ -207,7 +208,7 @@ async function statSize(p: string): Promise<number> {
 
 function withTimeout(p: Promise<Buffer>): Promise<Buffer> {
   return new Promise<Buffer>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`下载超时(${DOWNLOAD_TIMEOUT_MS / 1000}s)`)), DOWNLOAD_TIMEOUT_MS);
+    const timer = setTimeout(() => reject(new Error(t("attach.downloadTimeout", { seconds: DOWNLOAD_TIMEOUT_MS / 1000 }))), DOWNLOAD_TIMEOUT_MS);
     timer.unref?.();
     p.then(
       (v) => {

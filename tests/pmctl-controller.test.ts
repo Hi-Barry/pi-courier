@@ -441,6 +441,9 @@ describe("PmctlController", () => {
     vi.doMock("node:os", homedirMock);
     const { ConfigStore: IsolatedStore } = await import("../src/config");
     const { PmctlController: IsolatedPmctlController } = await import("../src/rpc/pmctl-controller");
+    // resetModules 重建了 i18n 模块图 —— 全局 setup 的 zh 锚要重新落上。
+    const i18n = await import("../src/i18n/index");
+    i18n.setLocale("zh");
     const store = new IsolatedStore({
       managementRooms: [],
       projects: {},

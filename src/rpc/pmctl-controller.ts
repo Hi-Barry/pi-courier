@@ -15,6 +15,8 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName } from "../config.js";
+import { t } from "../i18n/index.js";
+import { isCancelInput } from "../i18n/parse.js";
 import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
 import { provisionManagedRoom } from "../space.js";
 import type { RoomOps } from "../transports/interface.js";
@@ -74,18 +76,18 @@ export class PmctlController {
 
     // In single-project mode /pmctl is not available.
     if (projectManager.isMultiProject === false) {
-      await reply("❌ 当前为单工程模式,未启用项目管理。\n如需多工程:发 `/multiproject on` 并重启(pi-courier restart)。");
+      await reply(t("pmctl.singleProjectMode"));
       return true;
     }
     // Management commands are only available in the management room
     // (the first paired DM). Project rooms are for conversation only.
     if (!call.isManagementRoom) {
-      await reply("❌ /pmctl 仅可在管理房间(与 bot 的私聊)使用");
+      await reply(t("pmctl.managementRoomOnly"));
       return true;
     }
     const { roomOps } = this.opts;
     if (!roomOps) {
-      await reply("❌ /pmctl 不可用(仅 Matrix 部署支持)");
+      await reply(t("pmctl.matrixOnly"));
       return true;
     }
 
@@ -125,7 +127,7 @@ export class PmctlController {
         await this.rename(rest, reply, roomOps);
         return true;
       default:
-        await reply(`❌ 未知操作: ${op}\n可用操作: new / list / show / rm / mv / rename`);
+        await reply(t("pmctl.unknownOp", { op }));
         return true;
     }
   }
@@ -160,11 +162,7 @@ export class PmctlController {
     const pm = this.opts.projectManager;
     const [pname, workdirArg] = splitFirst(rest);
     if (!pname) {
-      await reply(
-        "用法: /pmctl new <项目名> [路径]\n" +
-          "路径可选:缺省为工程根下同名目录(如 newapp → ~/Projects/newapp);" +
-          "也可用相对路径或绝对路径。"
-      );
+      await reply(t("pmctl.new.usage"));
       return;
     }
     // Path is optional: default to <project root>/<name>.
@@ -177,7 +175,7 @@ export class PmctlController {
       return;
     }
     if (!call.senderMxid) {
-      await reply("❌ 缺少邀请对象(未配置信任用户)");
+      await reply(t("pmctl.noInviteTarget"));
       return;
     }
     try {
@@ -196,21 +194,15 @@ export class PmctlController {
       // elevation — not just the sender. Failure must not fail the (already
       // created) project: surface it as its own warning reply.
       if (provision.elevationError) {
-        await reply(
-          `⚠️ 房间已创建,但信任用户补权失败(可手动设置): ${provision.elevationError.message}`
-        );
+        await reply(t("pmctl.new.elevationFailed", { message: provision.elevationError.message }));
       }
       // 挂链/品牌失败:单点文案附注拼进成功回执(展示层 — 不影响项目)。
       const notes = provision.notes.map((note) => `\n⚠️ ${note}`).join("");
       await reply(
-        `✅ 项目「${pname}」创建完成!\n\n` +
-          `• 房间: ${provision.roomId}\n` +
-          `• 工作目录: ${resolvedWorkdir}\n` +
-          `• 已邀请你进入新房间\n\n` +
-          `项目对话请到新房间进行(独立上下文与工作目录)。${notes}`
+        t("pmctl.new.ok", { name: pname, room: provision.roomId, workdir: resolvedWorkdir, notes })
       );
     } catch (err) {
-      await reply(`❌ 创建项目失败: ${(err as Error).message}`);
+      await reply(t("pmctl.new.failed", { message: (err as Error).message }));
     }
   }
 
@@ -224,13 +216,13 @@ export class PmctlController {
     const pm = this.opts.projectManager;
     const projects = pm.listProjects();
     if (projects.length === 0) {
-      return "暂无项目(用 /pmctl new <名称> <路径> 创建)";
+      return t("pmctl.empty");
     }
     const lines = projects.map(([roomId, p]) => {
-      const status = pm.isRunning(roomId) ? "✅ 运行中" : "⏸️ 未启动";
+      const status = pm.isRunning(roomId) ? t("pmctl.statusRunning") : t("pmctl.statusStopped");
       return `• ${projectLabelOf(p)} — ${status}\n  ${p.workdir} (${roomId})`;
     });
-    return `**项目列表** (${projects.length}):\n${lines.join("\n")}`;
+    return t("pmctl.list", { count: projects.length, lines: lines.join("\n") });
   }
 
   /** Resolve a user-supplied target ("name" or room ID) to a project,
@@ -242,22 +234,24 @@ export class PmctlController {
   private async show(rest: string, reply: Reply): Promise<void> {
     const target = rest.trim();
     if (!target) {
-      await reply("用法: /pmctl show <项目名|房间ID>");
+      await reply(t("pmctl.show.usage"));
       return;
     }
     const found = this.findProject(target);
     if (!found) {
-      await reply(`❌ 未找到项目: ${target}(用 /pmctl list 查看)`);
+      await reply(t("pmctl.notFound", { target }));
       return;
     }
     const [roomId, entry] = found;
     const pm = this.opts.projectManager;
     await reply(
-      `📁 项目: ${projectLabelOf(entry)}\n` +
-        `• 房间: ${roomId}\n` +
-        `• 工作目录: ${entry.workdir}\n` +
-        `• 状态: ${pm.isRunning(roomId) ? "✅ 运行中" : "⏸️ 未启动(lazy)"}\n` +
-        `• 会话: ${entry.workdir}/.pi-session`
+      t("pmctl.show.ok", {
+        name: projectLabelOf(entry),
+        room: roomId,
+        workdir: entry.workdir,
+        status: pm.isRunning(roomId) ? t("pmctl.statusRunning") : t("pmctl.statusLazy"),
+        session: `${entry.workdir}/.pi-session`,
+      })
     );
   }
 
@@ -265,38 +259,33 @@ export class PmctlController {
     const pm = this.opts.projectManager;
     const target = rest.trim();
     if (!target) {
-      await reply("用法: /pmctl rm <项目名|房间ID>");
+      await reply(t("pmctl.rm.usage"));
       return;
     }
     // cancel: clear the armed confirmation
-    if (target === "cancel" || target === "no" || target === "取消") {
+    if (target === "no" || isCancelInput(target)) {
       const had = this.pendingRm.delete(call.chatId);
-      await reply(had ? "✅ 已取消删除" : "当前没有待确认的删除操作");
+      await reply(had ? t("pmctl.rm.cancelled") : t("pmctl.rm.nothingPending"));
       return;
     }
     const found = this.findProject(target);
     if (!found) {
       this.pendingRm.delete(call.chatId);
-      await reply(`❌ 未找到项目: ${target}(用 /pmctl list 查看)`);
+      await reply(t("pmctl.notFound", { target }));
       return;
     }
     const [roomId, entry] = found;
     const pending = this.pendingRm.get(call.chatId);
     if (pending && Date.now() - pending.ts > RM_CONFIRM_WINDOW_MS) {
       this.pendingRm.delete(call.chatId); // expired — treat as a fresh rm
-      await reply(`⏳ 上次确认已超时(60 秒),需重新确认。`);
+      await reply(t("pmctl.rm.expired"));
     }
     // Only the exact room armed for THIS chat confirms — a stale or
     // different-room pending entry can never delete the wrong project.
     if (this.pendingRm.get(call.chatId)?.roomId === roomId) {
       this.pendingRm.delete(call.chatId);
       await pm.removeProject(roomId);
-      await reply(
-        `🗑️ 项目「${projectLabelOf(entry)}」已删除\n` +
-          `• 已解除映射并停止进程\n` +
-          `• 工作目录保留: ${entry.workdir}(如需删除请自行处理)\n` +
-          `• 正在主动退出房间…`
-      );
+      await reply(t("pmctl.rm.done", { name: projectLabelOf(entry), workdir: entry.workdir }));
       // Unfile from the space first — once the bot leaves, it can no longer
       // clear the space-side child state (ghost entry). Best-effort: the
       // removal proceeds even if the unlink fails.
@@ -305,56 +294,47 @@ export class PmctlController {
         try {
           await roomOps.removeRoomFromSpace(spaceRoomId, roomId);
         } catch (err) {
-          await reply(`⚠️ 从空间移除失败(空间里可能残留条目,可手动移除): ${(err as Error).message}`);
+          await reply(t("pmctl.rm.unlinkFailed", { message: (err as Error).message }));
         }
       }
       try {
-        await roomOps.leaveRoom(roomId, "项目已删除");
+        await roomOps.leaveRoom(roomId, t("pmctl.leaveReason"));
       } catch (err) {
-        await reply(`⚠️ 房间退出失败(可手动退出): ${(err as Error).message}`);
+        await reply(t("pmctl.rm.leaveFailed", { message: (err as Error).message }));
       }
       return;
     }
     // First send: arm the confirmation only, never delete.
     this.pendingRm.set(call.chatId, { roomId, ts: Date.now() });
-    await reply(
-      `⚠️ 确认删除项目「${projectLabelOf(entry)}」?\n\n` +
-        `再次发送 \`/pmctl rm ${projectLabelOf(entry)}\` 确认删除。\n` +
-        `确认后我会停止进程并主动退出该房间。\n` +
-        `(发送 \`/pmctl rm cancel\` 取消)`
-    );
+    await reply(t("pmctl.rm.confirm", { name: projectLabelOf(entry) }));
   }
 
   private async mv(rest: string, reply: Reply): Promise<void> {
     const [target, newWorkdir] = splitFirst(rest);
     if (!target || !newWorkdir) {
-      await reply("用法: /pmctl mv <项目名|房间ID> <新路径>(相对路径基于工程根)");
+      await reply(t("pmctl.mv.usage"));
       return;
     }
     const resolvedWorkdir = this.resolveProjectPath(newWorkdir);
     const found = this.findProject(target);
     if (!found) {
-      await reply(`❌ 未找到项目: ${target}(用 /pmctl list 查看)`);
+      await reply(t("pmctl.notFound", { target }));
       return;
     }
     const [roomId, entry] = found;
     this.opts.projectManager.updateProjectWorkdir(roomId, resolvedWorkdir);
-    await reply(
-      `🚚 项目「${projectLabelOf(entry)}」已迁移\n` +
-        `• 新工作目录: ${resolvedWorkdir}\n` +
-        `• 会话将重新开始(旧会话保留在旧目录 .pi-session)`
-    );
+    await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir }));
   }
 
   private async rename(rest: string, reply: Reply, roomOps: RoomOps): Promise<void> {
     const [target, newName] = splitFirst(rest);
     if (!target || !newName) {
-      await reply("用法: /pmctl rename <项目名|房间ID> <新名称>");
+      await reply(t("pmctl.rename.usage"));
       return;
     }
     const found = this.findProject(target);
     if (!found) {
-      await reply(`❌ 未找到项目: ${target}(用 /pmctl list 查看)`);
+      await reply(t("pmctl.notFound", { target }));
       return;
     }
     const [roomId] = found;
@@ -371,14 +351,14 @@ export class PmctlController {
       return;
     }
     this.opts.projectManager.renameProject(roomId, newName);
-    const renamed = `✏️ 项目已重命名为「${newName}」`;
+    const renamed = t("pmctl.rename.ok", { name: newName });
     // The project mapping is already renamed; surface room-rename failures
     // instead of swallowing them.
     try {
       await roomOps.setRoomName(roomId, newName);
       await reply(renamed);
     } catch (err) {
-      await reply(`${renamed}(房间改名失败: ${(err as Error).message})`);
+      await reply(`${renamed}${t("pmctl.rename.roomFailed", { message: (err as Error).message })}`);
     }
   }
 }

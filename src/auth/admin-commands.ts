@@ -9,6 +9,7 @@
  * injected config store — this module touches no disk and holds no state.
  */
 
+import { t } from "../i18n/index.js";
 import { displayIdentity, namespacedId } from "../identity.js";
 import { type ChallengeAuth } from "./challenge-auth.js";
 
@@ -59,10 +60,7 @@ function handled(result: Omit<AdminCommandResult, "handled">): AdminCommandResul
  *  (assembled by the command map; the management-room guide belongs to the
  *  router and pi-command help to the command map). */
 export function adminCommandHelpText(): string {
-  return [
-    "**Bridge 管理命令**: `/help`(本帮助)、`/trusted`、`/revoke`、`/channels`、`/enable`、`/disable`、`/toggletools`",
-    "**认证**: 首次私聊 bot → bot 终端与管理房间会显示 6 位验证码 → 在收到提示的那个聊天里输入验证码即成为信任用户(第一个信任用户 = 管理员)。群聊由信任用户在群里发 `/enable <模式>` 启用。",
-  ].join("\n");
+  return t("auth.help.admin");
 }
 
 /**
@@ -112,7 +110,7 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
           // gentle pointer per (user, chat), cooldown-backed (spec #93 票3).
           if (input.chatId && auth.shouldHintPairing(namespacedUserId, input.chatId)) {
             return handled({
-              replies: ["ℹ️ 没有进行中的配对。如需配对,请先私信 bot,收到 6 位配对码后回复即可。"],
+              replies: [t("auth.pairing.noPendingHint")],
               notifications: [],
               effects: [],
             });

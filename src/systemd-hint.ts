@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { t } from "./i18n/index.js";
 
 /**
  * Targeted hint for the `su`-without-`-` trap (issue #59, observed live on
@@ -42,18 +43,22 @@ export function busFailureHint(input: BusFailureHintInput): string | null {
   if (!stderrPointsAtBus && !ownerMismatchWithEperm) return null;
 
   const tail = [
-    "   常见原因:用 `su <用户>`(不带 -)切换用户时继承了原用户的环境,或当前 shell 缺少完整登录会话。",
-    "   解决:export XDG_RUNTIME_DIR=/run/user/$(id -u) 后重试,或改用 `su - <用户>` 重新切换;",
-    "   若 /run/user/$(id -u) 不存在,请以该用户登录一次,或由 root 执行 loginctl enable-linger <用户>。",
+    t("hint.bus.tail1"),
+    t("hint.bus.tail2"),
+    t("hint.bus.tail3"),
   ];
   if (typeof xdgOwnerUid === "number" && xdgOwnerUid !== euid) {
     return [
-      `💡 检测到 XDG_RUNTIME_DIR=${xdgRuntimeDir ?? "(未设置)"}(属主 uid ${xdgOwnerUid})指向其他用户的会话总线,而当前用户是 uid ${euid}。`,
+      t("hint.bus.ownerMismatch", {
+        dir: xdgRuntimeDir ?? t("hint.bus.unsetWithParens"),
+        owner: xdgOwnerUid,
+        euid,
+      }),
       ...tail,
     ].join("\n");
   }
   return [
-    `💡 未能连接到当前用户的 systemd 会话总线(XDG_RUNTIME_DIR=${xdgRuntimeDir ?? "未设置"})。`,
+    t("hint.bus.connectFailed", { dir: xdgRuntimeDir ?? t("hint.bus.unset") }),
     ...tail,
   ].join("\n");
 }

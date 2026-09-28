@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { detectSystemLanguage } from "./i18n/detect.js";
+import type { Locale } from "./i18n/index.js";
 import type { MsgBridgeConfig } from "./types.js";
 
 const CONFIG_DIR = path.join(os.homedir(), ".pi");
@@ -142,6 +144,30 @@ export function attachmentsMaxMb(cfg: MsgBridgeConfig): number {
 /** 单个附件上限(字节),供附件存储直接消费;下限钳制为正。 */
 export function attachmentsMaxBytes(cfg: MsgBridgeConfig): number {
   return Math.max(1, attachmentsMaxMb(cfg)) * 1024 * 1024;
+}
+
+// ── 语言解析链(issue #83)──────────────────────────────────────────
+// PI_LANGUAGE 环境变量 > config "language" > 系统 locale 检测 > "en"。
+// env 最高:容器/极简部署里最稳;系统 locale 语义见 i18n/detect.ts。
+// source 供启动日志解释"语言从哪来"(非显式配置时打一行 info)。
+
+export type LanguageSource = "env" | "config" | "system" | "default";
+
+export function resolveLanguage(
+  cfg: MsgBridgeConfig,
+  env: NodeJS.ProcessEnv = process.env
+): { locale: Locale; source: LanguageSource } {
+  const envLang = env.PI_LANGUAGE?.trim().toLowerCase();
+  if (envLang === "zh" || envLang === "en") return { locale: envLang, source: "env" };
+  if (cfg.language === "zh" || cfg.language === "en") return { locale: cfg.language, source: "config" };
+  const detected = detectSystemLanguage(env);
+  if (detected) return { locale: detected, source: "system" };
+  return { locale: "en", source: "default" };
+}
+
+/** 生效语言(派生函数族:与 effectiveWorkdir 等同模式,单点解释)。 */
+export function effectiveLanguage(cfg: MsgBridgeConfig, env: NodeJS.ProcessEnv = process.env): Locale {
+  return resolveLanguage(cfg, env).locale;
 }
 
 /** Space mode = multi-project deployment with the organizational space

@@ -28,6 +28,8 @@
  * cancelled:true response resolves the dialog to its default value.
  */
 
+import { t } from "../i18n/index.js";
+import { isCancelInput } from "../i18n/parse.js";
 import type { LeveledLogger } from "../logger.js";
 import type { ExternalMessage, MsgBridgeConfig, ReplyTarget } from "../types.js";
 import type { ExtensionUIResponsePayload, PiRpc } from "./pi-rpc.js";
@@ -62,18 +64,19 @@ function oneLine(text: string, max: number): string {
 }
 
 /** The question message posted to the room (issue #54). The phrasing doubles
- *  as the user-facing protocol: reply content is the answer, 「取消」 backs out. */
+ *  as the user-facing protocol: reply content is the answer, the cancel word
+ *  backs out (both 取消 and cancel accepted — i18n/parse). */
 export function extensionUIQuestionText(request: ExtensionUIRequestView): string {
-  const title = oneLine(request.title ?? "(无标题)", 200);
+  const title = oneLine(request.title ?? t("xq.untitled"), 200);
   switch (request.method) {
     case "confirm":
-      return `❓ ${title}\n${oneLine(request.message ?? "", 300)}\n回复 y / n(发送「取消」放弃)`;
+      return `❓ ${title}\n${oneLine(request.message ?? "", 300)}\n${t("xq.confirm.how")}`;
     case "select": {
       const lines = (request.options ?? []).map((option, i) => `${i + 1}. ${option}`);
-      return `❓ ${title}\n${lines.join("\n")}\n回复序号选择(发送「取消」放弃)`;
+      return `❓ ${title}\n${lines.join("\n")}\n${t("xq.select.how")}`;
     }
     default: // input / editor
-      return `❓ ${title}\n直接回复内容作为答案(发送「取消」放弃)`;
+      return `❓ ${title}\n${t("xq.input.how")}`;
   }
 }
 
@@ -85,18 +88,19 @@ export type ExtensionUIAnswer =
   | { kind: "invalid"; hint: string };
 
 /** Map a room message onto a pending question's answer (issue #54). Pure —
- *  the confirm/select mapping rules are directly testable. 「取消」 must match
- *  exactly; confirm accepts y/yes/n/no case-insensitively (anything else
- *  re-asks); select maps the 1-based index onto options (out of range
- *  re-asks); input/editor take the whole message as the value. */
+ *  the confirm/select mapping rules are directly testable. The cancel word
+ *  (取消/cancel, any case) matches after trimming; confirm accepts y/yes/n/no
+ *  case-insensitively (anything else re-asks); select maps the 1-based index
+ *  onto options (out of range re-asks); input/editor take the whole message
+ *  as the value. */
 export function parseExtensionUIAnswer(request: ExtensionUIRequestView, text: string): ExtensionUIAnswer {
-  if (text === "取消") return { kind: "cancel" };
+  if (isCancelInput(text)) return { kind: "cancel" };
   switch (request.method) {
     case "confirm": {
       const normalized = text.toLowerCase();
       if (normalized === "y" || normalized === "yes") return { kind: "confirmed", confirmed: true };
       if (normalized === "n" || normalized === "no") return { kind: "confirmed", confirmed: false };
-      return { kind: "invalid", hint: "⚠️ 请回复 y 或 n(发送「取消」放弃)" };
+      return { kind: "invalid", hint: t("xq.confirm.invalid") };
     }
     case "select": {
       const options = request.options ?? [];
@@ -104,7 +108,7 @@ export function parseExtensionUIAnswer(request: ExtensionUIRequestView, text: st
       if (index >= 1 && index <= options.length) {
         return { kind: "value", value: options[index - 1]! };
       }
-      return { kind: "invalid", hint: `⚠️ 请回复 1 到 ${options.length} 之间的序号(发送「取消」放弃)` };
+      return { kind: "invalid", hint: t("xq.select.invalid", { max: options.length }) };
     }
     default: // input / editor — the whole message is the answer
       return { kind: "value", value: text };
@@ -198,7 +202,7 @@ export class ExtensionQuestions {
         if (level === "warning" || level === "error") {
           if (target) {
             const icon = level === "error" ? "🔴" : "⚠️";
-            this.deps.sendReply(target.chatId, target.transport, `${icon} 扩展通知: ${message}`).catch(() => {});
+            this.deps.sendReply(target.chatId, target.transport, `${icon} ${t("xq.notify", { message })}`).catch(() => {});
           } else {
             log.warn(`[extension-ui] 扩展通知(${level},无绑定房间): ${message}`);
           }
@@ -242,12 +246,12 @@ export class ExtensionQuestions {
     const index = queue?.indexOf(entry) ?? -1;
     if (!queue || index === -1) return; // answered or cancelled in the meantime
     queue.splice(index, 1);
-    const title = oneLine(entry.request.title ?? "(无标题)", 80);
+    const title = oneLine(entry.request.title ?? t("xq.untitled"), 80);
     entry.log.info(`[extension-ui] 提问超时未答,已代答取消 (id ${entry.request.id})`);
     this.deps.respond(rpc, { id: entry.request.id, cancelled: true }).catch((err: unknown) => {
       entry.log.error(`[extension-ui] 超时代答回写失败 (id ${entry.request.id}): ${(err as Error).message}`);
     });
-    this.deps.sendReply(entry.target.chatId, entry.target.transport, `⌛ 问题「${title}」超时未答,已按取消处理`).catch(() => {});
+    this.deps.sendReply(entry.target.chatId, entry.target.transport, t("xq.expired", { title })).catch(() => {});
   }
 
   /** Commit an answer to the oldest pending question (issue #54): write the
@@ -271,9 +275,13 @@ export class ExtensionQuestions {
       await this.deps.respond(rpc, payload);
     } catch (err) {
       log.error(`[extension-ui] 应答回写失败 (id ${entry.request.id}): ${(err as Error).message}`);
-      await this.deps.sendReply(msg.chatId, msg.transport, "❌ 答案无法回传给 pi(进程可能已退出)");
+      await this.deps.sendReply(msg.chatId, msg.transport, t("xq.answer.lost"));
       return;
     }
-    await this.deps.sendReply(msg.chatId, msg.transport, answer.kind === "cancel" ? "已取消" : "✅ 已回应");
+    await this.deps.sendReply(
+      msg.chatId,
+      msg.transport,
+      answer.kind === "cancel" ? t("xq.answer.cancelled") : t("xq.answer.ok")
+    );
   }
 }

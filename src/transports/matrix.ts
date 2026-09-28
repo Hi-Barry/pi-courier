@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import { t } from "../i18n/index.js";
 import { logger, suppressLogLines } from "../logger.js";
 import { buildGroupJoinHint } from "../management-room.js";
 import { createQuoteCache, type QuoteCache } from "../quote-cache.js";
@@ -301,7 +302,7 @@ export class MatrixProvider {
             downloadEncrypted: async (file) => {
               const crypto = this.client?.crypto;
               if (!crypto) {
-                throw new Error("E2EE crypto 原生库不可用,无法解密加密附件");
+                throw new Error(t("attach.e2eeNativeMissing"));
               }
               // Our EncryptedMediaFile is a structural subset of the SDK's
               // EncryptedFile; at runtime this IS the event's original object,

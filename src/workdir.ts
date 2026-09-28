@@ -13,6 +13,7 @@
 import * as readline from "node:readline";
 import type { ConfigStore } from "./config.js";
 import { defaultProjectsRoot } from "./config.js";
+import { t } from "./i18n/index.js";
 
 export type WorkdirPrompt = () => Promise<string | undefined>;
 
@@ -23,7 +24,7 @@ async function promptWorkdir(fallback: string): Promise<string | undefined> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
     const answer = await new Promise<string>((resolve) => {
-      rl.question(`未配置工作目录。请输入 pi 工作目录 [默认 ${fallback}]: `, (a) => resolve(a.trim()));
+      rl.question(t("workdir.prompt", { fallback }), (a) => resolve(a.trim()));
     });
     return answer || undefined;
   } finally {
