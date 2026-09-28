@@ -18,6 +18,7 @@ import {
   splitMessage,
 } from "../formatting.js";
 import { namespacedId } from "../identity.js";
+import { t } from "../i18n/index.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
 import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUserToSpaceOnce, maybeInitManagementRoom } from "../space.js";
 import { formatBytes } from "../transports/attachments.js";
@@ -137,7 +138,7 @@ export function buildTurnReply(
   // used to swallow failed turns silently (holding an unpinned binding
   // forever). Partial content survives; the failure line rides along.
   if (message.stopReason === "error") {
-    parts.push(`❌ 本轮失败: ${message.errorMessage ?? "未知错误"}`);
+    parts.push(t("router.turn.failed", { message: message.errorMessage ?? t("common.unknownError") }));
   }
   if (parts.length === 0) return { text: null, pendingTools };
   return { text: parts.join("\n\n"), pendingTools };
@@ -177,7 +178,7 @@ export function withAttachmentPrefix(
 ): string {
   if (!attachments?.length) return text;
   const lines = attachments.map((a) => `- ${a.path}`);
-  return `用户发来附件(请用 read 工具查看):\n${lines.join("\n")}\n\n${text}`;
+  return `${t("router.attach.inject")}\n${lines.join("\n")}\n\n${text}`;
 }
 
 /** 附件清单的记账键:房间 + 发送者(群聊里甲的图不被乙的消息消耗)。 */
@@ -187,7 +188,7 @@ export function attachmentLedgerKey(chatId: string, userId: string): string {
 
 /** 保存成功回执(issue #66 票1):路径可见,清单状态不静默。 */
 export function attachmentSavedReply(attachment: MessageAttachment): string {
-  return `📎 附件已保存: ${attachment.path}(${formatBytes(attachment.bytes)})\n下一条消息发送时会自动附上它。`;
+  return t("router.attach.saved", { path: attachment.path, bytes: formatBytes(attachment.bytes) });
 }
 
 /** 附件失败回执:transport 给出的原因原样透传(下载/解密/超限各有文案)。 */
@@ -283,7 +284,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             await sendReply(
               ctx.msg.chatId,
               ctx.msg.transport,
-              `🤷 暂不支持的消息类型(${ctx.msg.payload.msgtype}),已忽略。文字、图片和文件都可以直接发给我。`
+              t("router.payload.unsupported", { msgtype: ctx.msg.payload.msgtype })
             );
             return true;
           case "media": {
@@ -379,18 +380,18 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         const parts = text.split(/\s+/);
         const mode = (parts[1] || "trusted-only") as "all" | "mentions" | "trusted-only";
         if (mode !== "all" && mode !== "mentions" && mode !== "trusted-only") {
-          await sendReply(msg.chatId, msg.transport, "用法: /enable <all|mentions|trusted-only>(本房间)");
+          await sendReply(msg.chatId, msg.transport, t("router.enable.usage"));
           return true;
         }
         // "all" responds to everyone — admin-only. Trusted users may only
         // request trusted-only / mentions.
         if (mode === "all" && !auth.isAdminUser(msg.userId, msg.transport)) {
-          await sendReply(msg.chatId, msg.transport, "❌ all 模式仅管理员可用(可采用 trusted-only 或 mentions)");
+          await sendReply(msg.chatId, msg.transport, t("router.enable.allAdminOnly"));
           return true;
         }
         auth.enableChannel(msg.chatId, mode);
         store.update({ auth: auth.exportConfig() });
-        await sendReply(msg.chatId, msg.transport, `✅ 本房间已启用 (mode: ${mode})`);
+        await sendReply(msg.chatId, msg.transport, t("router.enable.ok", { mode }));
         logger.info(`[auth] 房间 ${msg.chatId} 已由 ${msg.username} 启用 (${mode})`);
         return true;
       },
@@ -415,29 +416,28 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         if (!text.startsWith("/multiproject")) return false;
         const isTrusted = auth.isTrustedUser(msg.userId, msg.transport);
         if (!isTrusted) {
-          await sendReply(msg.chatId, msg.transport, "❌ 无权限(仅信任用户可切换多工程模式)");
+          await sendReply(msg.chatId, msg.transport, t("router.multiproject.forbidden"));
           return true;
         }
         const action = text.split(/\s+/)[1]?.toLowerCase() ?? "";
-        const current = projectManager.isMultiProject ? "多工程模式(开启)" : "单工程模式(关闭)";
+        const current = projectManager.isMultiProject ? t("router.multiproject.currentOn") : t("router.multiproject.currentOff");
         if (action === "on" || action === "off") {
           const next = action === "on";
           if (next === projectManager.isMultiProject) {
-            await sendReply(msg.chatId, msg.transport, `当前已是${current},无需切换。`);
+            await sendReply(msg.chatId, msg.transport, t("router.multiproject.noChange", { current }));
             return true;
           }
           store.update({ multiProject: next });
           await sendReply(
             msg.chatId,
             msg.transport,
-            `✅ 已${next ? "开启" : "关闭"}多工程模式。\n重启生效:运行 \`pi-courier restart\`(${next ? "重启后将启用管理房间/项目房间 /pmctl" : "重启后所有房间直接连默认 pi"})。`
+            t("router.multiproject.switched", {
+              state: next ? t("common.enabled") : t("common.disabled"),
+              detail: next ? t("router.multiproject.detailOn") : t("router.multiproject.detailOff"),
+            })
           );
         } else {
-          await sendReply(
-            msg.chatId,
-            msg.transport,
-            `当前: ${current}\n\n用法:\n/multiproject on  — 开启多工程(重启生效)\n/multiproject off — 关闭多工程,回到单工程(重启生效)`
-          );
+          await sendReply(msg.chatId, msg.transport, t("router.multiproject.usage", { current }));
         }
         return true;
       },
@@ -508,11 +508,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           ? ctx.isManagementRoom
           : !msg.isGroupChat;
         if (!auth.isAdminUser(msg.userId, msg.transport)) {
-          await sendReply(msg.chatId, msg.transport, "❌ 无权限(仅管理员可管理 provider 登录)");
+          await sendReply(msg.chatId, msg.transport, t("router.login.forbidden"));
           return true;
         }
         if (!loginRoomAllowed) {
-          await sendReply(msg.chatId, msg.transport, "❌ 登录管理仅可在管理房间使用(单工程模式下与 bot 的私聊即可)");
+          await sendReply(msg.chatId, msg.transport, t("router.login.roomRestricted"));
           return true;
         }
         const loginCmd = text.split(/\s+/)[0]!.toLowerCase();
@@ -528,7 +528,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         }
         if (loginCmd === "/logout") {
           if (!loginArgs) {
-            await sendReply(msg.chatId, msg.transport, "用法: /logout <provider>");
+            await sendReply(msg.chatId, msg.transport, t("router.login.logoutUsage"));
             return true;
           }
           await login.logout(msg.chatId, msg.transport, loginArgs.split(/\s+/)[0]!);
@@ -559,7 +559,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           });
           return handled;
         } catch (err) {
-          await sendReply(ctx.msg.chatId, ctx.msg.transport, `❌ 命令执行失败: ${(err as Error).message}`);
+          await sendReply(ctx.msg.chatId, ctx.msg.transport, t("cmd.generic.error", { message: (err as Error).message }));
           return true;
         }
       },
@@ -580,12 +580,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         void sendReply(
           ctx.msg.chatId,
           ctx.msg.transport,
-          `⏳ 正在执行: ${bang.command}${bang.excluded ? "(结果不写入上下文)" : ""} — 完成后回帖,/bashstop 可中止。`
+          t("router.bang.inProgress", { command: bang.command, suffix: bang.excluded ? t("cmd.bash.excludedNote") : "" })
         ).catch(() => {});
         rpc.bash(bang.command, { excludeFromContext: bang.excluded })
           .then((result) => sendReply(ctx.msg.chatId, ctx.msg.transport, formatBashReply(bang.command, result, bang.excluded)))
           .catch((err: unknown) =>
-            sendReply(ctx.msg.chatId, ctx.msg.transport, `❌ bash 执行失败: ${(err as Error).message}`)
+            sendReply(ctx.msg.chatId, ctx.msg.transport, t("cmd.bash.error", { message: (err as Error).message }))
           )
           .catch(() => {})
           .finally(release);
@@ -644,7 +644,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           pendingAttachments.delete(key);
         } catch (err) {
           if (err === RPC_ABORT) throw err;
-          await sendReply(ctx.msg.chatId, ctx.msg.transport, `❌ 无法发送给 pi: ${(err as Error).message}`);
+          await sendReply(ctx.msg.chatId, ctx.msg.transport, t("router.prompt.failed", { message: (err as Error).message }));
         }
         return true;
       },
@@ -699,7 +699,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             );
             return rpc;
           }).catch((err: unknown) => {
-            void sendReply(msg.chatId, msg.transport, `❌ 无法启动 pi 进程: ${(err as Error).message}`);
+            void sendReply(msg.chatId, msg.transport, t("router.rpc.startFailed", { message: (err as Error).message }));
             throw RPC_ABORT;
           });
           return rpcOnce;
@@ -792,7 +792,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           sendReply(
             target.chatId,
             target.transport,
-            `⚠️ 调用失败,正在重试 ${event.attempt ?? "?"}/${event.maxAttempts ?? "?"}: ${summarizeArg(event.errorMessage, 200) || "未知错误"}`
+            t("router.retry.inProgress", {
+              attempt: event.attempt ?? "?",
+              max: event.maxAttempts ?? "?",
+              error: summarizeArg(event.errorMessage, 200) || t("common.unknownError"),
+            })
           ).catch(() => {});
         }
         return;
@@ -805,7 +809,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           sendReply(
             target.chatId,
             target.transport,
-            `❌ 自动重试耗尽: ${summarizeArg(event.finalError, 300) || "未知错误"}`
+            t("router.retry.exhausted", { error: summarizeArg(event.finalError, 300) || t("common.unknownError") })
           ).catch(() => {});
         }
         return;

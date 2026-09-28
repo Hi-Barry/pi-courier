@@ -23,7 +23,9 @@ const en: Record<MessageKey, string> = {
   "cmd.new.ok": "✅ New session started",
   "cmd.new.cancelled": "⚠️ New session cancelled by an extension",
   "cmd.generic.error": "❌ Command failed: {message}",
+  "cmd.bash.error": "❌ bash failed: {message}",
   "cmd.bash.notWritten": "(output not written to context)",
+  "cmd.bash.excludedNote": "(output not written to context)",
   "cmd.bash.aborted": "⏹ Aborted: {command}{suffix}",
   "cmd.queue.warning": "⚠️ {count} queued message(s) will take effect on the next turn:\n{lines}",
   "cmd.rpc.defaultName": "default",
@@ -126,6 +128,48 @@ const en: Record<MessageKey, string> = {
     "  rm needs a second confirmation; after confirming, the process stops and the bot leaves the room)",
   "cmd.help.passthrough":
     "**Passthrough**: `/skill:<name>`, prompt templates and extension commands run directly; plain text goes to the model.",
+
+  // ── router ────────────────────────────────────────────────────────────
+  "common.unknownError": "unknown error",
+  "router.turn.failed": "❌ Turn failed: {message}",
+  "router.attach.inject": "The user sent attachment(s) (view them with the read tool):",
+  "router.attach.saved": "📎 Attachment saved: {path} ({bytes})\nIt will be attached automatically with your next message.",
+  "router.payload.unsupported":
+    "🤷 Unsupported message type ({msgtype}) — ignored. You can send text, images and files directly.",
+  "router.enable.usage": "Usage: /enable <all|mentions|trusted-only> (in this room)",
+  "router.enable.allAdminOnly": "❌ The all mode is admin-only (use trusted-only or mentions instead)",
+  "router.enable.ok": "✅ Room enabled (mode: {mode})",
+  "router.multiproject.forbidden": "❌ Not allowed (only trusted users can toggle multi-project mode)",
+  "router.multiproject.currentOn": "multi-project mode (on)",
+  "router.multiproject.currentOff": "single-project mode (off)",
+  "router.multiproject.noChange": "Already {current}; nothing to switch.",
+  "router.multiproject.switched": "✅ Multi-project mode {state}.\nTakes effect on restart: run `pi-courier restart` ({detail})",
+  "router.multiproject.detailOn": "after restart, the management room / project rooms /pmctl become available",
+  "router.multiproject.detailOff": "after restart, every room connects straight to the default pi",
+  "router.multiproject.usage":
+    "Current: {current}\n\nUsage:\n/multiproject on  — enable multi-project (restart to apply)\n/multiproject off — back to single-project (restart to apply)",
+  "router.login.forbidden": "❌ Not allowed (only the admin can manage provider logins)",
+  "router.login.roomRestricted":
+    "❌ Login management is only available in the management room (in single-project mode, any DM with the bot works)",
+  "router.login.logoutUsage": "Usage: /logout <provider>",
+  "router.bang.inProgress": "⏳ Running: {command}{suffix} — the result will follow as a reply; /bashstop can abort it.",
+  "router.prompt.failed": "❌ Could not send to pi: {message}",
+  "router.rpc.startFailed": "❌ Could not start the pi process: {message}",
+  "router.retry.inProgress": "⚠️ Call failed, retrying {attempt}/{max}: {error}",
+  "router.retry.exhausted": "❌ Auto-retry exhausted: {error}",
+
+  // ── xq ────────────────────────────────────────────────────────────────
+  "xq.untitled": "(untitled)",
+  "xq.confirm.how": "Reply y / n (send \"cancel\" to back out)",
+  "xq.select.how": "Reply with a number to choose (send \"cancel\" to back out)",
+  "xq.input.how": "Reply directly with the content as the answer (send \"cancel\" to back out)",
+  "xq.confirm.invalid": "⚠️ Please reply y or n (send \"cancel\" to back out)",
+  "xq.select.invalid": "⚠️ Please reply with a number between 1 and {max} (send \"cancel\" to back out)",
+  "xq.notify": "Extension notification: {message}",
+  "xq.expired": "⌛ Question \"{title}\" timed out without an answer; treated as cancelled",
+  "xq.answer.lost": "❌ Could not deliver the answer to pi (the process may have exited)",
+  "xq.answer.cancelled": "Cancelled",
+  "xq.answer.ok": "✅ Answer delivered",
 
   // ── startup ───────────────────────────────────────────────────────────
   "startup.language.system":
