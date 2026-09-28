@@ -281,6 +281,27 @@ const en: Record<MessageKey, string> = {
   "pmctl.rename.ok": "✏️ Project renamed to \"{name}\"",
   "pmctl.rename.roomFailed": " (room rename failed: {message})",
 
+  // ── attach / room / workdir / logs ────────────────────────────────────
+  "attach.tooLarge":
+    "Attachment too large ({declared} > limit {max}); not saved. Compress it and resend, or ask the admin to raise the attachments.maxMb setting.",
+  "attach.downloadFailed": "Attachment download failed: {detail}",
+  "attach.noMediaUrl": "The event carries no downloadable media URL",
+  "attach.e2eeRequired": "Encrypted attachments require E2EE (encryption not enabled for this deployment, or the native crypto library unavailable)",
+  "attach.downloadTimeout": "Download timed out ({seconds}s)",
+  "attach.e2eeNativeMissing": "The E2EE crypto native library is unavailable; cannot decrypt the encrypted attachment",
+  "room.notConnected": "Matrix not connected",
+  "workdir.prompt": "No working directory configured. Enter the pi workdir [default {fallback}]: ",
+  "logs.unknownLevel": "Unknown log level: {level} (choose: debug / info / warn / error)",
+  "logs.noProjects": "(no projects right now)",
+  "logs.projectsNotFound": "Project(s) not found: {unknown}\nAvailable projects: {list}",
+
+  // ── cli ───────────────────────────────────────────────────────────────
+  "cli.arg.deprecatedSetup": "⚠️  Deprecated flag; use `pi-courier setup` instead",
+  "cli.arg.deprecatedCliPath": "⚠️  Deprecated flag; set cliPath in ~/.pi/pi-courier.json or PI_CLI_PATH instead",
+  "cli.arg.deprecatedSessionDir": "⚠️  Deprecated flag; set sessionDir in ~/.pi/pi-courier.json instead",
+  "cli.arg.deprecatedDebug": "⚠️  Deprecated flag; set debug: true in ~/.pi/pi-courier.json instead",
+  "cli.arg.unknown": "⚠️  Ignoring unknown argument: {arg} (deprecated flags removed; use config or subcommands)",
+
   // ── startup ───────────────────────────────────────────────────────────
   "startup.language.system":
     "language: {locale} (detected from the system locale; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",

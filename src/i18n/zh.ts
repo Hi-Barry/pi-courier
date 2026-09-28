@@ -265,6 +265,26 @@ const zh = {
   "pmctl.rename.ok": "✏️ 项目已重命名为「{name}」",
   "pmctl.rename.roomFailed": "(房间改名失败: {message})",
 
+  // ── attach / room / workdir / logs(传输与运行时)──────────────────────
+  "attach.tooLarge": "附件过大({declared} > 上限 {max}),未保存。请压缩后重发,或让管理员调大 attachments.maxMb 配置。",
+  "attach.downloadFailed": "附件下载失败: {detail}",
+  "attach.noMediaUrl": "事件中没有可下载的媒体地址",
+  "attach.e2eeRequired": "加密附件需要启用 E2EE(部署未开启加密或 crypto 原生库不可用)",
+  "attach.downloadTimeout": "下载超时({seconds}s)",
+  "attach.e2eeNativeMissing": "E2EE crypto 原生库不可用,无法解密加密附件",
+  "room.notConnected": "Matrix 未连接",
+  "workdir.prompt": "未配置工作目录。请输入 pi 工作目录 [默认 {fallback}]: ",
+  "logs.unknownLevel": "未知日志级别: {level}(可选: debug / info / warn / error)",
+  "logs.noProjects": "(当前无项目)",
+  "logs.projectsNotFound": "未找到项目: {unknown}\n可用项目: {list}",
+
+  // ── cli(命令行参数与子命令输出)────────────────────────────────────
+  "cli.arg.deprecatedSetup": "⚠️  旧参数已废弃,请用 `pi-courier setup`",
+  "cli.arg.deprecatedCliPath": "⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 cliPath,或设 PI_CLI_PATH",
+  "cli.arg.deprecatedSessionDir": "⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 sessionDir",
+  "cli.arg.deprecatedDebug": "⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 debug: true",
+  "cli.arg.unknown": "⚠️  忽略未知参数: {arg}(旧参数已废弃,请用配置或子命令)",
+
   // ── startup(语言配置可见性;语言功能自身的一部分,破例双语)─────────
   "startup.language.system":
     "language: {locale}(检测自系统 locale;如需固定,请在 ~/.pi/pi-courier.json 配置 \"language\" 或设 PI_LANGUAGE)",

@@ -1,4 +1,5 @@
 import { MatrixError } from "matrix-bot-sdk";
+import { t } from "../i18n/index.js";
 import { suppressLogLines } from "../logger.js";
 import type { RoomOps } from "./interface.js";
 import type { MatrixClientPort } from "./matrix-client.js";
@@ -66,7 +67,7 @@ export class MatrixRoomOps implements RoomOps {
 
   private get client(): MatrixClientPort {
     const client = this.deps.getClient();
-    if (!client) throw new Error("Matrix 未连接");
+    if (!client) throw new Error(t("room.notConnected"));
     return client;
   }
 

@@ -43,29 +43,27 @@ function parseArgs(argv: string[]): { workdir?: string; logLevel?: string } {
         break;
       case "--setup":
       case "--configure":
-        console.warn("⚠️  旧参数已废弃,请用 `pi-courier setup`");
+        console.warn(t("cli.arg.deprecatedSetup"));
         break;
       case "--pi-cli":
-        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 cliPath,或设 PI_CLI_PATH");
+        console.warn(t("cli.arg.deprecatedCliPath"));
         i++;
         break;
       case "--session-dir":
-        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 sessionDir");
+        console.warn(t("cli.arg.deprecatedSessionDir"));
         i++;
         break;
       case "--debug":
-        console.warn("⚠️  旧参数已废弃,请在 ~/.pi/pi-courier.json 配置 debug: true");
+        console.warn(t("cli.arg.deprecatedDebug"));
         break;
       default:
-        console.warn(`⚠️  忽略未知参数: ${arg}(旧参数已废弃,请用配置或子命令)`);
+        console.warn(t("cli.arg.unknown", { arg }));
     }
   }
   return result;
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
-  const args = parseArgs(argv);
-
   // Single-instance guard (same lock file as the extension mode)
   if (!acquireLock()) {
     console.error("[bridge] another pi-courier instance is already running — exiting");
@@ -78,14 +76,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // NOTE: resolve `config` only AFTER store.update calls are done — update()
   // replaces the in-memory object, so an earlier alias would go stale.
   const store = new ConfigStore();
-  const workdir = await resolveWorkdir(args.workdir, store, undefined, (wd) =>
-    logger.info(`工作目录: ${wd}(已保存到 ~/.pi/pi-courier.json,改配置后重启即生效)`)
-  );
-  const config = store.get();
 
-  // 语言解析(issue #83):PI_LANGUAGE > config "language" > 系统 locale > en。
-  // 非显式配置时打一行 info —— "语言从哪来"可观测,排查话术语言问题先看这。
-  const language = resolveLanguage(config);
+  // 语言解析(issue #83)必须在 parseArgs 之前:废弃参数警告跟随语言。
+  const language = resolveLanguage(store.get());
   setLocale(language.locale);
   if (language.source === "system" || language.source === "default") {
     logger.info(
@@ -95,6 +88,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       )
     );
   }
+
+  const args = parseArgs(argv);
+  const workdir = await resolveWorkdir(args.workdir, store, undefined, (wd) =>
+    logger.info(`工作目录: ${wd}(已保存到 ~/.pi/pi-courier.json,改配置后重启即生效)`)
+  );
+  const config = store.get();
   const sessionDir = config.sessionDir;
   const cliPath = config.cliPath;
 
