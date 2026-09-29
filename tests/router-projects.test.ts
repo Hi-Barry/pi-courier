@@ -730,11 +730,11 @@ describe("multi-project log tagging (spec #34 票3)", () => {
     const router = fx.makeRouter();
     await router.handleIncoming(makeMsg({ chatId: "!proj:server", text: "go" }));
     router.handleEvent({ type: "tool_execution_start", toolName: "bash", args: { command: "ls" } }, prj);
-    const toolLine = lines.find((l) => l.includes("🔧 工具调用"));
+    const toolLine = lines.find((l) => l.includes("🔧 tool call"));
     expect(toolLine).toContain("[INFO] [ai-api]");
     // The reply line rides the same label:
     router.handleEvent({ type: "turn_end", message: textMessage("done") }, prj);
-    const replyLine = lines.find((l) => l.includes("[agent] 回复"));
+    const replyLine = lines.find((l) => l.includes("[agent] reply"));
     expect(replyLine).toContain("[ai-api]");
   });
 
@@ -742,7 +742,7 @@ describe("multi-project log tagging (spec #34 票3)", () => {
     const router = fx.makeRouter();
     await router.handleIncoming(makeMsg({ text: "hi" }));
     router.handleEvent({ type: "tool_execution_start", toolName: "bash", args: {} }, fx.rpc);
-    const toolLine = lines.find((l) => l.includes("🔧 工具调用"));
+    const toolLine = lines.find((l) => l.includes("🔧 tool call"));
     expect(toolLine).toMatch(/\[INFO\] \[agent\]/);
     expect(toolLine).not.toMatch(/ai-api/);
   });
