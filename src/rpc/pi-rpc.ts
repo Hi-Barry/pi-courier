@@ -63,6 +63,44 @@ export interface BashResultView {
   fullOutputPath?: string;
 }
 
+/**
+ * pi.dev managed install (layout "releases-v1") ships `bin/pi` as a POSIX
+ * shell wrapper — not a symlink — so realpath leaves it untouched and node
+ * would die parsing shell syntax as JS (issue #111). When `realBin` sits in
+ * `<agent>/bin/`, resolve the JS entry the wrapper execs:
+ * `<agent>/install/releases/<current-version>/node_modules/@earendil-works/
+ * pi-coding-agent/dist/bundle/cli.js`. Undefined whenever the layout doesn't
+ * match, leaving the caller's passthrough behavior intact.
+ */
+function managedInstallEntry(realBin: string): string | undefined {
+  const agentDir = path.dirname(path.dirname(realBin)); // <agent>/bin/pi → <agent>
+  let version: string;
+  try {
+    version = fs
+      .readFileSync(path.join(agentDir, "install", "current-version"), "utf-8")
+      .trim();
+  } catch {
+    return undefined;
+  }
+  if (!version) return undefined;
+  const pkgDir = path.join(
+    agentDir,
+    "install",
+    "releases",
+    version,
+    "node_modules",
+    "@earendil-works",
+    "pi-coding-agent",
+  );
+  // dist/bundle/cli.js is the managed layout's entry; dist/cli.js covers a
+  // plain npm package shape inside a release dir, should the layout shift.
+  for (const rel of ["dist/bundle/cli.js", "dist/cli.js"]) {
+    const entry = path.join(pkgDir, ...rel.split("/"));
+    if (fs.existsSync(entry)) return entry;
+  }
+  return undefined;
+}
+
 export class PiRpc {
   private client?: RpcClient;
   private commandsCache?: { at: number; list: RpcSlashCommandInfo[] };
@@ -100,7 +138,14 @@ export class PiRpc {
     try {
       const bin = execFileSync("which", ["pi"], { encoding: "utf-8" }).trim();
       if (bin) {
-        return fs.realpathSync(bin);
+        const real = fs.realpathSync(bin);
+        // npm-installed pi is a symlink to a JS entry — node runs it as-is.
+        if (/\.[cm]?js$/i.test(real)) return real;
+        // pi.dev managed install (layout releases-v1): bin/pi is a POSIX
+        // shell wrapper, not a symlink, and node cannot execute it (issue
+        // #111). Follow the layout to the real JS entry; anything else
+        // keeps the old passthrough so the spawn error stays visible.
+        return managedInstallEntry(real) ?? real;
       }
     } catch {
       // fall through

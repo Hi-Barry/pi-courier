@@ -5,7 +5,7 @@
  * adapters (matrix.ts message I/O, matrix-rooms.ts room capabilities)
  * actually use — no more — so tests can inject fakes and the SDK stays
  * quarantined in this module. The production factory wires storage paths,
- * E2EE crypto storage (with graceful degradation), the auto-join mixin and
+ * E2EE crypto storage (with graceful degradation), the auto-join handler and
  * the SDK log facade; the real MatrixClient structurally satisfies the
  * port, so no wrapper class is needed.
  */
@@ -13,7 +13,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ILogger, RoomCreateOptions } from "matrix-bot-sdk";
 import {
-  AutojoinRoomsMixin,
   LogService,
   MatrixClient,
   RustSdkCryptoStorageProvider,
@@ -120,8 +119,21 @@ export function createMatrixClient(config: MatrixClientConfig): MatrixClientPort
 
   const client = new MatrixClient(config.homeserverUrl, config.accessToken, storage, cryptoProvider);
 
-  // Auto-join rooms the bot is invited to
-  AutojoinRoomsMixin.setupOnClient(client);
+  // Auto-join rooms the bot is invited to — best-effort, never fatal. The
+  // SDK's AutojoinRoomsMixin returns the joinRoom promise from the listener
+  // and EventEmitter drops listener return values, so any unjoinable invite
+  // (remote room without via servers, banned, gone) surfaces as an unhandled
+  // rejection that kills the process (issue #110). Register our own handler
+  // with an explicit catch instead.
+  client.on("room.invite", (roomId: string) => {
+    client.joinRoom(roomId).catch((err: unknown) => {
+      logger.warn(
+        "[Matrix] auto-join failed for invited room, skipping:",
+        roomId,
+        err instanceof Error ? err.message : err,
+      );
+    });
+  });
 
   // Route SDK-internal logs through the shared leveled logger — trace/debug
   // land on debug (silent at the default info threshold), info/warn/error
