@@ -1,7 +1,7 @@
 {
   "name": "pi-courier",
   "version": "0.3.1",
-  "description": "Run pi coding agent from Matrix. Slash commands, skills and prompts fully work from messengers via the RPC protocol.",
+  "description": "Run the pi coding agent from Matrix. Slash commands, skills and prompts fully work via the RPC protocol.",
   "type": "module",
   "main": "dist/standalone.js",
   "bin": {
@@ -35,7 +35,6 @@
     "messenger",
     "bridge",
     "matrix",
-    "telegram",
     "rpc",
     "remote",
     "chat",

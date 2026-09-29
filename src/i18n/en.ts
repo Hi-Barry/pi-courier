@@ -304,6 +304,8 @@ const en: Record<MessageKey, string> = {
   "cli.arg.unknown": "⚠️  Ignoring unknown argument: {arg} (deprecated flags removed; use config or subcommands)",
 
   // ── setup ─────────────────────────────────────────────────────────────
+  "setup.title": "=== pi-courier setup wizard ===",
+  "setup.languagePrompt": "Language? [{def}] (en/zh): ",
   "setup.header": "Writes ~/.pi/pi-courier.json (mode 600; an existing config prefills the defaults — press Enter to keep them)\n",
   "setup.homeserver.default": "Matrix homeserver URL [default {def}]: ",
   "setup.homeserver.plain": "Matrix homeserver URL (e.g. https://matrix.example.com): ",

@@ -288,6 +288,8 @@ const zh = {
   "cli.arg.unknown": "⚠️  忽略未知参数: {arg}(旧参数已废弃,请用配置或子命令)",
 
   // ── setup(首跑向导;语言首问之后,以下全部跟随所选语言)───────────────
+  "setup.title": "=== pi-courier 配置向导 ===",
+  "setup.languagePrompt": "语言? [{def}] (en/zh): ",
   "setup.header": "将写入 ~/.pi/pi-courier.json(权限 600;已有配置作为默认值,直接回车沿用)\n",
   "setup.homeserver.default": "Matrix homeserver URL [默认 {def}]: ",
   "setup.homeserver.plain": "Matrix homeserver URL (如 https://matrix.example.com): ",

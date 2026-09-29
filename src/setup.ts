@@ -198,20 +198,30 @@ async function acquireToken(
 export async function runSetup(): Promise<void> {
   const { ask, close } = createPrompter();
   console.log("");
-  // 标题双语固定:此刻语言还未确定;首问确定后,后续全部文案跟随所选语言。
-  console.log("=== pi-courier setup wizard / 配置向导 ===");
 
   try {
     // Existing config → prefill defaults on repeated runs.
     const existing = loadConfig();
 
     // ---- 0. language (issue #83) ------------------------------------------
-    // The very first question, asked in a fixed bilingual line (no locale to
-    // render it in yet). Default = config, else the system locale, else en;
-    // Enter accepts the default and the choice is persisted with the config,
-    // so the running service never depends on terminal-side locale again.
-    const langDefault: Locale = existing.language ?? detectSystemLanguage() ?? "en";
-    const langRaw = (await ask(`Language / 语言? [${langDefault}] (en/zh): `)).trim().toLowerCase();
+    // Pre-detect the language with the same chain the service uses
+    // (PI_LANGUAGE > config "language" > system locale): when it yields a
+    // locale, the whole wizard — title included — renders in that language.
+    // Only when nothing is usable (C/POSIX locale, fresh config) do we fall
+    // back to the fixed bilingual title/prompt. The first question still
+    // asks: Enter keeps the detected default, en/zh overrides it, and the
+    // choice is persisted with the config so the running service never
+    // depends on terminal-side locale again.
+    const envLang = process.env.PI_LANGUAGE?.trim().toLowerCase();
+    const preLang: Locale | null =
+      envLang === "zh" || envLang === "en"
+        ? envLang
+        : (existing.language ?? detectSystemLanguage());
+    if (preLang) setLocale(preLang);
+    console.log(preLang ? t("setup.title") : "=== pi-courier setup wizard / 配置向导 ===");
+
+    const langDefault: Locale = preLang ?? "en";
+    const langRaw = (await ask(t("setup.languagePrompt", { def: langDefault }))).trim().toLowerCase();
     const lang: Locale = langRaw === "zh" || langRaw === "en" ? langRaw : langDefault;
     setLocale(lang);
     console.log(t("setup.header"));
