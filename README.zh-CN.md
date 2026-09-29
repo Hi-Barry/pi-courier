@@ -341,6 +341,8 @@ npm install -g @earendil-works/pi-coding-agent@latest
 pi-courier restart
 ```
 
+pi.dev 托管安装(`~/.pi/agent`)同样支持:pi-courier 会把 `bin/pi` 包装脚本自动解析到当前版本的真实 JS 入口,pi 升级后无需改配置(0.3.1 起)。
+
 ## 4. 常见问题
 
 **Q: `npm install` 卡住 / 只有 20-60 kB/s?**

@@ -349,6 +349,8 @@ npm install -g @earendil-works/pi-coding-agent@latest
 pi-courier restart
 ```
 
+A pi.dev managed install (`~/.pi/agent`) is supported too: pi-courier resolves the `bin/pi` wrapper script to the current version's real JS entry automatically, so pi upgrades need no config changes (0.3.1+).
+
 ## 4. FAQ
 
 **Q: `npm install` hangs / crawls at 20-60 kB/s?**

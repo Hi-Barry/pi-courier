@@ -177,7 +177,7 @@ pi 0.83.0 就绪。
 在 pi-messenger-bridge 的 fork 基础上,新增了三个核心模块:
 
 **`src/rpc/pi-rpc.ts`**(366 行)—— PiRpc 封装
-- pi CLI 探测:`PI_CLI_PATH` 环境变量 → `which pi` → 本地 node_modules,三级回退
+- pi CLI 探测:`PI_CLI_PATH` 环境变量 → `which pi` → 本地 node_modules,三级回退;`which pi` 命中的若是 pi.dev 托管安装的 `bin/pi`(POSIX shell 包装脚本,非符号链接,node 无法执行,issue #111),按 releases-v1 布局自动解析到 `install/releases/<版本>/.../dist/bundle/cli.js`,未知包装脚本保持原样透传(报错可见)
 - 冷启动握手重试:pi 进程起来需要时间,封装了就绪等待
 - 发送语义恒定显式(0.1.39 起):每条 `prompt` 都携带 `streamingBehavior` —— steer = Enter 语义 / followUp = Alt+Enter 排队,空闲会话自动忽略该参数,一条消息覆盖两种状态;参数经上游私有 `send` 下发(公开 `prompt()` 不暴露它),不再依赖报错文案降级
 - `get_commands` 60 秒缓存:避免频繁查询命令列表
@@ -236,7 +236,7 @@ pi 0.83.0 就绪。
 
 **`src/transports/matrix-client.ts`** —— Matrix client 端口 + 生产适配器(spec #99 票1/#100)
 - `MatrixClientPort`:两个适配器(消息 I/O + RoomOps)实际用到的 SDK 表面全集(连接生命周期/事件注册/读取/出站/媒体/房间能力六组),同时是「用了 matrix-bot-sdk 哪些表面」的依赖足迹文档
-- `createMatrixClient(config)` 生产工厂:封装 `~/.pi` 下两个存储路径(SimpleFsStorageProvider + Rust crypto SQLite,构造失败降级仅警告)、真实客户端构造、AutojoinRoomsMixin、SDK 日志门面接入;真实 MatrixClient 结构化满足端口,测试注入内存假客户端(matrix-fakes.ts 共享 fixture)
+- `createMatrixClient(config)` 生产工厂:封装 `~/.pi` 下两个存储路径(SimpleFsStorageProvider + Rust crypto SQLite,构造失败降级仅警告)、真实客户端构造、自注册的 best-effort 自动加入监听(0.3.1 起弃用 SDK 的 AutojoinRoomsMixin——它把 joinRoom 的 rejected promise 从监听器原样返回,EventEmitter 丢弃返回值,任何加不进的邀请都会以 unhandled rejection 杀死进程,issue #110;改为自注册带 catch 的监听,失败仅 warn)、SDK 日志门面接入;真实 MatrixClient 结构化满足端口,测试注入内存假客户端(matrix-fakes.ts 共享 fixture)
 
 **`src/transports/matrix-rooms.ts`** —— Matrix RoomOps 适配器(spec #22 从 matrix.ts 拆出)
 - `MatrixRoomOps implements RoomOps`:createRoom/createSpace、空间挂链/摘链(m.space.child + m.room.parent)、邀请/改名/权力等级/退房、`encryptionAvailable`
