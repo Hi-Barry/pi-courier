@@ -47,6 +47,8 @@ npm install -g pi-courier
 
 That's it. Verify: `pi-courier help`.
 
+> **⚠️ Don't use `pi install`**: the package page on pi.dev shows `pi install npm:pi-courier`. That installs pi-courier as a **pi extension** (just a `/pi-courier` usage hint inside pi) — it does **not** create the `pi-courier` command, so `pi-courier -v` will fail with "command not found". The bridge is a standalone service and must be installed with `npm install -g pi-courier`. If you already ran `pi install`, clean it up with `pi remove npm:pi-courier`.
+
 ### Option B: Developers — from source
 
 ```bash
@@ -79,38 +81,39 @@ pi needs an LLM provider configured in `~/.pi/agent/` (`models.json`, `auth.json
 pi-courier setup
 ```
 
-It walks you through, prompting for each value (defaults in brackets; press Enter to accept):
+It walks you through, prompting for each value (defaults in brackets; press Enter to accept) — real wizard output, English locale (the wizard follows `PI_LANGUAGE` / config / system locale):
 
 ```
-=== pi-courier 首次配置向导 ===
-将生成 ~/.pi/pi-courier.json(权限 600)
+=== pi-courier setup wizard ===
+Language? [en] (en/zh):                                          ← bot message language; Enter keeps the locale-detected default (persisted to the config)
+Writes ~/.pi/pi-courier.json (mode 600; an existing config prefills the defaults — press Enter to keep them)
 
-Language / 语言? [en] (en/zh):                           ← bot message language; Enter keeps the detected default (also written to the config, so the running service ignores terminal locale)
-Matrix homeserver URL (如 https://matrix.example.com):   ← 输入,如 https://matrix.example.com
-获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1):  ← 1 或 2(Enter 默认 1)
-  [方式 1] bot 用户名 (如 test2):                        ← bot 账号名,如 test3
-           bot 密码:                                     ← 密码(不回显)
-  [方式 2] 粘贴 access token (syt_...):                  ← 已有 token
-✅ 登录成功,账号: @test3:matrix.example.com
-信任用户(管理员)MXID [默认 @test3:matrix.example.com]:   ← Enter = only the bot is trusted; better fill your account, e.g. @barry:matrix.example.com
-信任房间 ID(可选,回车跳过;多个逗号分隔,如 !abc:server 或 !abc:server:mentions):   ← for group chats; default mode trusted-only; skip or use /enable later
-启用 E2EE 加密? [y/N]:                                  ← y/n(非加密房间也选 y 无妨)
-pi 工作目录 [默认 /home/you/Projects]:                   ← Enter 或输入其他目录
-附件保存目录 [默认 /home/you/.pi/pi-courier-attachments]:  ← where chat images/files land; Enter for default
-单个附件大小上限 MB [默认 10]:                            ← oversize attachments are rejected with a notice
-实例名/机器名 [默认 debian]:                             ← distinguish multiple deployments; shown in the management room name
-启用多工程模式? [y/N]:                                   ← default N = single-project (one bot ↔ one pi); y = multi-project (management + project rooms)
-启用空间组织? [Y/n]:                                     ← only asked with multi-project; fresh configs default Y — all bot-created rooms are grouped into one Element space (see below)
+Matrix homeserver URL (e.g. https://matrix.example.com):                        ← your homeserver URL
+How to get the token [1=password login, 2=paste an existing token] (1):        ← Enter = password login
+bot username (e.g. test2):                                                     ← the bot account's username
+bot password:                                                                  ← typed blind
+✅ Login succeeded, account: @***:*** (device PICOURIERZNLMIKUW)
+Trusted user (admin) MXID [default @***:***]:                                  ← Enter trusts the bot only; better enter your own account, e.g. @barry:***
+Trusted room IDs (optional, Enter to skip; comma-separated, e.g. !abc:server or !abc:server:trusted-only):   ← for group chats; skip for DM-only
+Enable E2EE encryption? [y/N]:                                                 ← y/n (y is fine even on unencrypted rooms)
+pi workdir [default /home/you/Projects]:                                       ← Enter keeps the default
+Attachment save directory [default /home/you/.pi/pi-courier-attachments]:      ← where chat images/files land
+Per-attachment size limit in MB [default 10]:                                  ← oversize attachments are rejected with a notice
+Instance/machine name (default debian; tells multi-machine deployments apart, shown in the management room name):   ← Enter keeps the hostname
+Enable multi-project mode? [y/N] (multi-project = management room + isolated project rooms with /pmctl; default N = single-project, one bot to one pi):   ← Enter for single-project (Spaces are only asked in multi-project mode)
 
-✅ 配置已写入 ~/.pi/pi-courier.json
-   账号: @test3:...
-   信任用户: @barry:...
-   E2EE: 开启
-   工作目录: /home/you/Projects
-   实例名: debian(multi-machine label, shown in the management room name)
-   多工程: 关闭(单工程)
-   设备 ID: PICOURIERXXXXXXXX(固定,重跑 setup 复用)
-   信任房间: !abc:server (trusted-only) 或无(群聊默认不回应)
+✅ Config written to ~/.pi/pi-courier.json
+   account: @***:***
+   trusted user: @***:***
+   E2EE: enabled
+   workdir: /home/you/Projects
+   attachment dir: /home/you/.pi/pi-courier-attachments (limit 10 MB)
+   instance name: debian (differentiates multi-machine deployments; shown in the management room name)
+   multi-project: off (single-project)
+   device ID: PICOURIERZNLMIKUW (fixed; reused when you re-run setup — delete this field to get a new device)
+   trusted rooms: none (groups are ignored by default; add them later with /enable)
+
+Next: pi-courier enable (auto-start on boot) or pi-courier run (foreground)
 ```
 
 The wizard verifies the token and writes `~/.pi/pi-courier.json`. To skip the wizard, create that file manually — the format is in the [FAQ](#4-faq).
@@ -151,8 +154,8 @@ Startup success looks like:
 You can chat normally right away:
 
 ```
-[2026-08-06T02:38:55.685Z] [INFO] 📥 [matrix] @barry: 你好,收到请回复!
-[2026-08-06T02:38:57.884Z] [INFO] [agent] 回复 @barry: 你好!收到,我在线。...
+[2026-08-06T02:38:55.685Z] [INFO] 📥 [matrix] @barry: Hello, just checking — please ack!
+[2026-08-06T02:38:57.884Z] [INFO] [agent] 回复 @barry: Hello! Online and ready....
 ```
 
 You are now a trusted user (the first trusted user also becomes admin). In multi-project mode trusted users are also invited into the management room automatically and hold admin power in every room the bot manages — see [Multi-project rooms](#multi-project-rooms-project-isolation). Any user not in `auth.trustedUsers` goes through this flow once; pre-listed users skip it entirely.
@@ -190,14 +193,14 @@ You are now a trusted user (the first trusted user also becomes admin). In multi
 
 ### While pi is busy: steer, queue, interrupt
 
-Since 0.1.39 sending mirrors pi's TUI. A plain text message always rides with steering semantics (TUI Enter): pi idle → it runs immediately; pi mid-task → it is injected into the running task.
+Since 0.1.39 sending mirrors pi's TUI. A plain text message is always sent with steering semantics (the TUI's Enter): pi idle → it runs immediately; pi mid-task → it is injected into the running task.
 
 - `/queue <text>` — TUI Alt+Enter: while pi runs, the message is queued and executes when the task finishes; an idle pi simply runs it at once
 - `/queue` — show the current steering/followUp queues (count + content, cross-checked against pi's own pending-message count)
 - `/interrupt <text>` — idle: runs directly; mid-task: stops the current task and sends the new instruction
 - `/stop` — stop everything now; semantics unchanged
 
-**Queue limitation, stated up front**: pi's RPC has no "clear queue" — aborting does not discard messages that were queued before the stop. After `/stop` or `/interrupt`, messages queued beforehand take effect on the **next** turn; both commands reply with an explicit `⚠️ 队列中仍有 N 条消息将在下一轮生效` listing them, so nothing fires unseen.
+**Queue limitation, stated up front**: pi's RPC has no "clear queue" — aborting does not discard messages that were queued before the stop. After `/stop` or `/interrupt`, messages queued beforehand take effect on the **next** turn; both commands reply with an explicit `⚠️ N queued message(s) will take effect on the next turn:` listing them, so nothing fires unseen.
 
 ### Extension questions land in the room
 
@@ -245,7 +248,7 @@ A failed turn (usage exhausted, auth expired, provider unreachable…) tells the
 No shell needed to (re-)login a provider:
 
 - `/login` — list login-able providers (oauth / api_key capability, ✅ badge for authenticated ones)
-- `/login <provider> [oauth|api_key]` — interactive login in the room; send 「取消」 at any moment to abort. **OAuth**: open the link in any browser, authorize, then paste the redirect URL back into the chat. **API key**: just paste the key. ⚠️ What you paste stays in the room history — delete the message afterwards if that matters to you.
+- `/login <provider> [oauth|api_key]` — interactive login in the room; send `cancel` (or `取消`) at any moment to abort. **OAuth**: open the link in any browser, authorize, then paste the redirect URL back into the chat. **API key**: just paste the key. ⚠️ What you paste stays in the room history — delete the message afterwards if that matters to you.
 - `/logout <provider>` — delete a stored credential (running pi processes keep theirs in memory; `/reload all` once idle)
 - `/auth` — the authenticated providers
 
@@ -253,13 +256,13 @@ Gate: admin + management room only (single-project mode: your DM with the bot). 
 
 ### Replying to an earlier message
 
-Reply (Matrix reply) to an earlier **user** message — e.g. one of your own long prompts — and send the new instruction: a one-line excerpt (≈200 chars) of the referenced text is prepended to the prompt, so "这个" / "the one above" resolve for the agent. The excerpt cache is per-room, in-memory, 50 most recent messages; the bot's own replies are not cached, and quotes that miss (too old, or from before a restart) are silently ignored — the message just goes out without the prefix.
+Reply (Matrix reply) to an earlier **user** message — e.g. one of your own long prompts — and send the new instruction: a one-line excerpt (≈200 chars) of the referenced text is prepended to the prompt, so references like "这个" ("this one") or "the one above" resolve for the agent. The excerpt cache is per-room, in-memory, 50 most recent messages; the bot's own replies are not cached, and quotes that miss (too old, or from before a restart) are silently ignored — the message just goes out without the prefix.
 
 ### Sending images and files to the agent
 
 Just **paste or send files** in Element — the bot saves them first, the agent reads them after:
 
-1. Paste an image (or send a file) → the bot replies `📎 附件已保存: <absolute path>` and does **not** wake the agent;
+1. Paste an image (or send a file) → the bot replies `📎 Attachment saved: <absolute path>` and does **not** wake the agent;
 2. Send a text instruction next → the path is prepended to the prompt automatically, and the agent reads it with its `read` tool (same workflow as pi TUI's `@path`), combining the attachment with your instruction.
 
 Supported: `m.image` / `m.file` / `m.audio` / `m.video` / stickers. Images are handed to the vision model by pi (its `read` pipeline downscales large images before the model call, per pi's own source); audio/video can't be ingested by models directly, but the agent can process them with bash/ffmpeg. Limits and details:
@@ -277,8 +280,9 @@ Supported: `m.image` / `m.file` / `m.audio` / `m.video` / stickers. Images are h
 **Default is single-project (simple)**: one bot account ↔ one pi. Every room talks directly to the default working directory (`workdir`); there are **no** management/project rooms and `/pmctl` is unavailable — ideal for users who just want to chat with the bot.
 
 **Enable multi-project when you need isolation**:
-- answer `y` to "启用多工程模式?" in setup, or
-- later send `/multiproject on` and `pi-courier restart`
+
+- answer `y` to "Enable multi-project mode?" during setup
+- or later send `/multiproject on` and restart with `pi-courier restart`
 
 > **Offline backlog note**: messages sent while the bot was down are dropped on restart (never executed retroactively) — resend anything important.
 
@@ -288,8 +292,8 @@ Supported: `m.image` / `m.file` / `m.audio` / `m.video` / stickers. Images are h
 
 One bot account can serve multiple projects — each project gets its own private room (named after the project), its own pi process, working directory and conversation history.
 
-- **Management room**: with the **space feature enabled** (fresh multi-project setups default to it), the bot **creates the management room itself at startup**, inside a private Element space `π <instance>`, and invites all trusted users — no first DM needed; trusted users who join via the challenge later are invited into the management room automatically (one invite per person, failures retried by the next-start self-heal). With the space off (or if its creation fails), the classic behavior applies: the first room where the bot **successfully accepts (authorizes) a message** — a non-project, ≤2-person room — becomes the management room (renamed to `项目管理(<instance>)`, guide sent, room ID persisted to `config.managementRooms`). Either way the room is the admin console — `/pmctl` works only there — and its ID is stable afterwards.
-- **Space organization (Element)**: a purely cosmetic grouping — a private space `π <instanceName>` collects every room the bot creates (the management room and all `/pmctl new` project rooms) so they don't scatter across your room list. The space itself takes no part in authorization — who may send commands and who holds which room permissions is decided by the permission model below. `/pmctl rm` also removes the room from the space. Toggle it in `setup` (`启用空间组织?`, fresh configs default on, existing configs keep their current state); creation is lazy at the next start, and any failure just falls back to the unspace'd behavior with a warning and a retry on the next start. Users who pass the challenge later are invited into the space automatically (one invite per person, ever). A space still carrying the old `pi-courier · <instance>` name is renamed to the short form by the next-start self-heal (manually renamed spaces are left alone).
+- **Management room**: with the **space feature enabled** (fresh multi-project setups default to it), the bot **creates the management room itself at startup**, inside a private Element space `π <instance>`, and invites all trusted users — no first DM needed; trusted users who join via the challenge later are invited into the management room automatically (one invite per person, failures retried by the next-start self-heal). With the space off (or if its creation fails), the classic behavior applies: the first room where the bot **successfully accepts (authorizes) a message** — a non-project, ≤2-person room — becomes the management room (renamed to `Project Management (<instance>)` — localized per the bot language — guide sent, room ID persisted to `config.managementRooms`). Either way the room is the admin console — `/pmctl` works only there — and its ID is stable afterwards.
+- **Space organization (Element)**: a purely cosmetic grouping — a private space `π <instanceName>` collects every room the bot creates (the management room and all `/pmctl new` project rooms) so they don't scatter across your room list. The space itself takes no part in authorization — who may send commands and who holds which room permissions is decided by the permission model below. `/pmctl rm` also removes the room from the space. Toggle it in `setup` ("Enable space organization?", fresh configs default on, existing configs keep their current state); creation is lazy at the next start, and any failure just falls back to the unspace'd behavior with a warning and a retry on the next start. Users who pass the challenge later are invited into the space automatically (one invite per person, ever). A space still carrying the old `pi-courier · <instance>` name is renamed to the short form by the next-start self-heal (manually renamed spaces are left alone).
 - **Avatars (three art sets)**: the bot automatically brands everything it manages with bundled 512×512 art — and each kind of entity gets its own set, so you can tell them apart at a glance: **spaces** pick from a cool-pastel **landscape** set (aurora, islands, forests…), **project rooms** from a warm **cottage** set (red-roof cabin, mushroom house, lighthouse…), the **management room** wears the cottage set's dedicated golden-roof castle, and the **bot account itself** (the agent's face, shown in member lists and next to its messages) wears an **animal** set. Within a set the image is picked by hashing the instance/project name (same name → same image forever, different ones usually differ). Existing rooms are branded on the next start too; an avatar you set manually is never replaced — except when an art set ships a full restyle, in which case that set's scope (its rooms — or the bot face, for the animal set) is re-branded once on the next start, each set migrating independently (manual avatars are kept again from then on). Not a fan of the art? Replace any PNG in `assets/avatars/` (same filename) with your own.
 - **Permission model (trusted = admin)**: trusted users automatically hold **admin power** (PL 100) in every room the bot manages — the space, the management room and all project rooms — regardless of whether trust came from setup or the challenge, and regardless of membership (late joiners arrive with the level already in place). `/revoke <userId>` strips that admin power in every managed room at the same time (back to plain member); a failed demotion is retried by the next-start self-heal. Zero configuration — the first start after upgrading heals existing rooms too. Admins promoted by the pre-0.1.37 special case (project-room creator) are not in the demotion ledger: `/revoke` still demotes them on the spot, and only if that on-the-spot demotion fails do you need to lower them manually once in your client.
 - **Create a project** (in the management room):
@@ -361,6 +365,9 @@ A: The native binary didn't download (postinstall blocked). Run manually: `cd no
 
 **Q: `npm install -g pi-courier` fails with EEXIST?**
 A: A previous `npm link` left a conflicting bin. `npm unlink -g pi-courier && rm -f $(npm prefix -g)/bin/pi-courier && npm install -g pi-courier`.
+
+**Q: Installed but `pi-courier: command not found`?**
+A: You likely used `pi install npm:pi-courier` from the pi.dev package page. That installs pi-courier as a pi extension (a `/pi-courier` usage hint inside pi), not the CLI. Install the CLI with `npm install -g pi-courier`, then optionally remove the extension with `pi remove npm:pi-courier`.
 
 **Q: The systemd service restarts in a loop?**
 A: Almost always a Node version mismatch — the pi child crashes on system node v20 (`webidl.util.markAsUncloneable is not a function`). Load nvm and re-run `pi-courier enable` (v0.1.2+ writes the correct PATH into the unit). Stick to one Node version everywhere.
