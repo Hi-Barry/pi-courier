@@ -129,6 +129,12 @@ export class PiRpc {
     return index >= 0 ? args[index + 1] : undefined;
   }
 
+  /** The working directory this pi process runs in (reply status footer;
+   *  default rpc = the resolved workdir, project rpc = the entry's workdir). */
+  get cwd(): string | undefined {
+    return this.options.cwd;
+  }
+
   /** Locate the pi CLI entry point. Env override (PI_CLI_PATH) is folded
    *  into config.cliPath by loadConfig (spec #72 票4/C4) — this chain only
    *  resolves between the configured path and the two install locations. */

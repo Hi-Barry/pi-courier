@@ -36,6 +36,7 @@ import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
 import { RpcTransientState } from "./rpc-transient-state.js";
+import { appendStatusFooter, collectStatusFooter } from "./status-footer.js";
 
 export interface MessageRouterDeps {
   /** Multi-project routing: resolves the PiRpc for a room (default when unmapped). */
@@ -770,9 +771,25 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           return;
         }
 
-        for (const chunk of splitMessage(turn.text, 4000)) {
-          sendReply(target.chatId, target.transport, chunk).catch(() => {});
-        }
+        const chunks = splitMessage(turn.text, 4000);
+        // 回复末尾状态脚注:仅收敛终答(pendingTools=false)挂 —— 工具循环
+        // 中间消息不挂(否则 N 步任务挂 N 条);失败回复(stopReason=error)
+        // 与正文同路,一并携带。数据现拉现用(collectStatusFooter 永不抛,
+        // 失败段显示 '?'),多片长文只挂最后一片。fire-and-forget:终答因此
+        // 改为异步出站,但下方绑定释放保持同步原位,不等派发落账。
+        const dispatch = async (): Promise<void> => {
+          let outgoing = chunks;
+          if (!turn.pendingTools) {
+            const footer = await collectStatusFooter(rpc);
+            outgoing = chunks.map((chunk, index) =>
+              index === chunks.length - 1 ? appendStatusFooter(chunk, footer) : chunk
+            );
+          }
+          for (const chunk of outgoing) {
+            sendReply(target.chatId, target.transport, chunk).catch(() => {});
+          }
+        };
+        void dispatch();
 
         // A completed conversational turn releases unpinned bindings (the
         // shared default rpc) so late events never reply to a stale chat.
