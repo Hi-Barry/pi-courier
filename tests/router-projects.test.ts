@@ -55,6 +55,9 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     waitForIdle: vi.fn().mockResolvedValue(undefined),
     restart: vi.fn().mockResolvedValue(undefined),
     getState: vi.fn().mockResolvedValue({ model: { id: "m" }, isStreaming: false, pendingMessageCount: 0 }),
+    getSessionStats: vi.fn().mockResolvedValue({
+      contextUsage: { tokens: 123_000, contextWindow: 1_000_000, percent: 12.3 },
+    }),
     newSession: vi.fn().mockResolvedValue({ cancelled: false }),
     requireClient: () => rpc,
     onEvent: vi.fn(),
@@ -66,6 +69,7 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     setAutoRetry: vi.fn().mockResolvedValue(undefined),
     switchSession: vi.fn().mockResolvedValue({ cancelled: false }),
     sessionDir: undefined as string | undefined,
+    cwd: "/tmp/w",
   } as unknown as PiRpc;
   const projectManager = {
     getRpcForRoom: vi.fn().mockReturnValue(rpc),
@@ -385,14 +389,17 @@ describe("message-router multi-project routing", () => {
     await router.handleIncoming(makeMsg({ chatId: "!proj:server", text: "hi from B" }));
 
     // A's turn completes — its reply MUST go to A despite B's prompt in between.
+    // Replies now dispatch asynchronously (status-footer fetch): flush so the
+    // reply lands before it is asserted / the next turn is fired.
     router.handleEvent({ type: "turn_end", message: textMessage("reply to A") }, rpc);
     await new Promise((r) => setTimeout(r, 0));
-    expect(replies.at(-1)).toMatchObject({ chatId: "!dm:server", transport: "matrix", text: "reply to A" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replies.at(-1)).toMatchObject({ chatId: "!dm:server", transport: "matrix", text: expect.stringContaining("reply to A") });
 
     // B's own turn completes — pinned to the project room.
     router.handleEvent({ type: "turn_end", message: textMessage("reply to B") }, projectRpc);
     await new Promise((r) => setTimeout(r, 0));
-    expect(replies.at(-1)).toMatchObject({ chatId: "!proj:server", text: "reply to B" });
+    expect(replies.at(-1)).toMatchObject({ chatId: "!proj:server", text: expect.stringContaining("reply to B") });
   });
 
   it("a second DM prompt retargets the shared default process (protocol limit, documented)", async () => {
@@ -406,7 +413,7 @@ describe("message-router multi-project routing", () => {
     // would fix this at ~300MB each — deliberately out of scope, spec #3.)
     router.handleEvent({ type: "turn_end", message: textMessage("late reply") }, rpc);
     await new Promise((r) => setTimeout(r, 0));
-    expect(replies.at(-1)).toMatchObject({ chatId: "!carol:server", text: "late reply" });
+    expect(replies.at(-1)).toMatchObject({ chatId: "!carol:server", text: expect.stringContaining("late reply") });
   });
 
   it("a completed conversational turn releases the default binding; project bindings stay pinned", async () => {
@@ -423,6 +430,7 @@ describe("message-router multi-project routing", () => {
 
     router.handleEvent({ type: "turn_end", message: textMessage("done") }, rpc);
     await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0)); // footer fetch is async — let the reply land before counting
     const repliesAfterDm = replies.length;
     // Late default-rpc event: binding released — nothing replies anywhere.
     router.handleEvent({ type: "extension_error", error: "boom" }, rpc);
@@ -431,8 +439,9 @@ describe("message-router multi-project routing", () => {
 
     // Project binding survives its own completed turn (pinned parity).
     router.handleEvent({ type: "turn_end", message: textMessage("proj done") }, projectRpc);
+    await new Promise((r) => setTimeout(r, 0)); // let the footer-carrying reply land first…
     router.handleEvent({ type: "extension_error", error: "late boom" }, projectRpc);
-    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0)); // …so at(-1) below stays the extension error
     expect(replies.at(-1)).toMatchObject({ chatId: "!proj:server", text: "⚠️ 扩展错误 (unknown): late boom" });
   });
 
@@ -443,10 +452,37 @@ describe("message-router multi-project routing", () => {
     try {
       router.handleEvent({ type: "turn_end", message: textMessage("still routed") }, rpc);
       await new Promise((r) => setTimeout(r, 0));
-      expect(replies.at(-1)).toMatchObject({ chatId: "!dm:server", text: "still routed" });
+      expect(replies.at(-1)).toMatchObject({ chatId: "!dm:server", text: expect.stringContaining("still routed") });
     } finally {
       logger.setLogLevel("info");
     }
+  });
+
+  it("final answers carry a status footer; tool-loop intermediates do not", async () => {
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ text: "hi" }));
+
+    // Tool-loop intermediate (pendingTools=true): plain text, never a footer —
+    // a 10-step task must not pin 10 status lines into the chat.
+    const toolMsg = {
+      content: [
+        { type: "text", text: "running bash" },
+        { type: "toolCall", name: "bash", arguments: {} },
+      ],
+    } as unknown as AssistantMessage;
+    router.handleEvent({ type: "turn_end", message: toolMsg }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replies.at(-1)!.text).toContain("running bash");
+    expect(replies.at(-1)!.text).not.toContain("---");
+
+    // Converged final answer (pendingTools=false): cwd/context/model ride the
+    // text after a blank line + --- (renders as <hr> in Matrix).
+    router.handleEvent({ type: "turn_end", message: textMessage("all done") }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    const finalText = replies.at(-1)!.text;
+    expect(finalText).toContain("all done");
+    expect(finalText).toContain("📂 /tmp/w");
+    expect(finalText.endsWith("📂 /tmp/w · 📜 12.3%/1.0M · 🤖 m")).toBe(true);
   });
 
   it("room-creation failure surfaces the thrown message (no null-branch)", async () => {
