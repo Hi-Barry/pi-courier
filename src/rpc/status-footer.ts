@@ -52,9 +52,28 @@ export async function collectStatusFooter(rpc: PiRpc): Promise<StatusFooterInfo>
   return info;
 }
 
+/** 正文是否停在未闭合的代码围栏里(模型漏关 ``` 或分片恰好切进围栏)。
+ *  围栏行 = 行首 0-3 空格 + ≥3 个连续 ` 或 ~;只有同字符、长度不小于开栏
+ *  的围栏行才能闭合。返回未闭合的开栏标记(如 '```'),已闭合返回 null。 */
+function unclosedFence(text: string): string | null {
+  let open: string | null = null;
+  for (const line of text.split("\n")) {
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (!m?.[1]) continue;
+    const marker = m[1];
+    if (open === null) open = marker;
+    else if (marker[0] === open[0] && marker.length >= open.length) open = null;
+  }
+  return open;
+}
+
 /** 把脚注行接到正文末尾。分割线前必须空行('\n\n')——MarkdownIt 下
  *  '---' 不带空行会把正文上一行吞成 setext <h2>,带空行才渲染 <hr>;
- *  段间 ' · '(空格+间隔号)即窄屏自然折行点。 */
+ *  段间 ' · '(空格+间隔号)即窄屏自然折行点。正文停在未闭合代码围栏
+ *  里时先补上同款闭合围栏 —— 否则分割线与脚注整体落进代码块按字面
+ *  渲染(markdown-it 实测 <pre> 内无 <hr>)。 */
 export function appendStatusFooter(text: string, info: StatusFooterInfo): string {
-  return `${text}\n\n---\n\n📂 ${info.cwd ?? "?"} · 📜 ${info.context ?? "?"} · 🤖 ${info.model ?? "?"}`;
+  const open = unclosedFence(text);
+  const body = open ? `${text}\n${open}` : text;
+  return `${body}\n\n---\n\n📂 ${info.cwd ?? "?"} · 📜 ${info.context ?? "?"} · 🤖 ${info.model ?? "?"}`;
 }

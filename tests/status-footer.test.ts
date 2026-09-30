@@ -44,6 +44,26 @@ describe("appendStatusFooter", () => {
     expect(html).toContain("<hr>");
     expect(html).not.toContain("<h2>");
   });
+
+  it("closes an unclosed code fence before the divider so the footer renders outside it", () => {
+    const out = appendStatusFooter("看这段:\n```bash\nls -la", { cwd: "/w", context: "1.0M", model: "m" });
+    expect(out).toBe("看这段:\n```bash\nls -la\n```\n\n---\n\n📂 /w · 📜 1.0M · 🤖 m");
+    const md = new MarkdownIt({ html: false, breaks: true });
+    const html = md.render(out);
+    expect(html).toContain("<hr>");
+    expect(html).toContain("📂 /w");
+  });
+
+  it("closes a tilde fence with its own marker (chars must match to close)", () => {
+    expect(appendStatusFooter("x\n~~~\ncode", { cwd: "/w", context: "1.0M", model: "m" })).toBe(
+      "x\n~~~\ncode\n~~~\n\n---\n\n📂 /w · 📜 1.0M · 🤖 m"
+    );
+  });
+
+  it("leaves balanced fences untouched", () => {
+    const out = appendStatusFooter("a\n```js\ncode\n```\ndone", { cwd: "/w", context: "1.0M", model: "m" });
+    expect(out.startsWith("a\n```js\ncode\n```\ndone\n\n---\n\n📂 /w")).toBe(true);
+  });
 });
 
 describe("collectStatusFooter", () => {

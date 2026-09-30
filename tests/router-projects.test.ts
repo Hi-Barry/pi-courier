@@ -485,6 +485,24 @@ describe("message-router multi-project routing", () => {
     expect(finalText.endsWith("📂 /tmp/w · 📜 12.3%/1.0M · 🤖 m")).toBe(true);
   });
 
+  it("a >4000-char final answer splits and only the last chunk carries the footer", async () => {
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ text: "hi" }));
+
+    // No \n / space anywhere → splitMessage hard-cuts at 4000: two chunks.
+    const before = replies.length;
+    router.handleEvent({ type: "turn_end", message: textMessage("x".repeat(4500)) }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const chunks = replies.slice(before);
+    expect(chunks.length).toBe(2);
+    expect(chunks[0]!.text).not.toContain("---");
+    expect(chunks[0]!.text).not.toContain("📂");
+    expect(chunks[1]!.text.startsWith("x")).toBe(true);
+    expect(chunks[1]!.text.endsWith("📂 /tmp/w · 📜 12.3%/1.0M · 🤖 m")).toBe(true);
+  });
+
   it("room-creation failure surfaces the thrown message (no null-branch)", async () => {
     store.update({ managementRooms: ["!dm:server"] });
     roomOps.createProjectRoom.mockRejectedValue(new Error("Matrix 未连接"));
