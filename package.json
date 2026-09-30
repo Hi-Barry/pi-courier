@@ -1,6 +1,6 @@
 {
   "name": "pi-courier",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Run the pi coding agent from Matrix. Slash commands, skills and prompts fully work via the RPC protocol.",
   "type": "module",
   "main": "dist/standalone.js",
