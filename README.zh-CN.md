@@ -126,7 +126,7 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 
 想先快速前台测试:`pi-courier run`(Ctrl+C 停止)。
 
-启动成功长这样(服务日志固定英文,与消息语言无关):
+启动成功长这样(启动横幅固定英文,与消息语言无关):
 
 ```
 ✅ Matrix connected as @test3:... (2 rooms, E2EE enabled)

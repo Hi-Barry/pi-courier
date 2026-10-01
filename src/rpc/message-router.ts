@@ -393,7 +393,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         auth.enableChannel(msg.chatId, mode);
         store.update({ auth: auth.exportConfig() });
         await sendReply(msg.chatId, msg.transport, t("router.enable.ok", { mode }));
-        logger.info(`[auth] 房间 ${msg.chatId} 已由 ${msg.username} 启用 (${mode})`);
+        logger.info(`[auth] room ${msg.chatId} enabled by ${msg.username} (${mode})`);
         return true;
       },
     },
@@ -764,7 +764,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // Reply summary at INFO level — the full conversation is also in pi's
         // session file.
         const replyPreview = turn.text ?? "";
-        log.info(`[agent] 回复 @${target.username}: ${replyPreview.slice(0, 500)}${replyPreview.length > 500 ? "…" : ""}`);
+        log.info(`[agent] reply to @${target.username}: ${replyPreview.slice(0, 500)}${replyPreview.length > 500 ? "…" : ""}`);
 
         if (turn.text === null) {
           // No content this turn — keep the binding for a follow-up turn
@@ -833,7 +833,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
 
       if (event.type === "extension_error") {
-        log.error(`[agent] 扩展错误 (${event.extensionPath ?? "unknown"}): ${event.error ?? "unknown"}`);
+        log.error(`[agent] extension error (${event.extensionPath ?? "unknown"}): ${event.error ?? "unknown"}`);
         if (target) {
           sendReply(
             target.chatId,
@@ -854,10 +854,10 @@ function summarizeStreamDelta(event: {
   const e = event.assistantMessageEvent as
     | { type?: string; text?: string; thinking?: string; delta?: string; toolCall?: unknown }
     | undefined;
-  if (!e) return "(无增量)";
+  if (!e) return "(no delta)";
   if (e.type === "text" && e.text) return e.text.slice(0, 300);
-  if (e.type === "thinking" && e.thinking) return `思考: ${e.thinking.slice(0, 300)}`;
-  if (e.type === "tool_call") return "工具调用增量";
+  if (e.type === "thinking" && e.thinking) return `thinking: ${e.thinking.slice(0, 300)}`;
+  if (e.type === "tool_call") return "tool call delta";
   if (e.delta) return e.delta.slice(0, 300);
   return `(${e.type ?? "unknown"})`;
 }
@@ -895,63 +895,63 @@ type AgentEventView = {
 function logAgentEvent(event: AgentEventView, log: LeveledLogger): void {
   switch (event.type) {
     case "agent_start":
-      log.debug("[agent] run 开始");
+      log.debug("[agent] run started");
       break;
     case "agent_end":
-      log.debug(`[agent] run 结束(willRetry: ${event.willRetry ?? false})`);
+      log.debug(`[agent] run finished (willRetry: ${event.willRetry ?? false})`);
       break;
     case "agent_settled":
-      log.debug("[agent] 已收敛");
+      log.debug("[agent] settled");
       break;
     case "message_start":
-      log.debug("[agent] 消息开始");
+      log.debug("[agent] message started");
       break;
     case "message_update":
       // Streaming delta (includes thinking deltas). DEBUG level, truncated.
-      log.debug(`[agent] 流式增量: ${summarizeStreamDelta(event)}`);
+      log.debug(`[agent] stream delta: ${summarizeStreamDelta(event)}`);
       break;
     case "message_end":
-      log.debug("[agent] 消息完成");
+      log.debug("[agent] message completed");
       break;
     case "tool_execution_start":
-      log.info(`[agent] 🔧 工具调用: ${event.toolName ?? "?"}(${summarizeArg(event.args)})`);
+      log.info(`[agent] 🔧 tool call: ${event.toolName ?? "?"}(${summarizeArg(event.args)})`);
       break;
     case "tool_execution_update":
-      log.debug(`[agent] 工具进度: ${event.toolName ?? "?"} → ${summarizeArg(event.partialResult, 300)}`);
+      log.debug(`[agent] tool progress: ${event.toolName ?? "?"} → ${summarizeArg(event.partialResult, 300)}`);
       break;
     case "tool_execution_end":
       log.info(
-        `[agent] 工具完成: ${event.toolName ?? "?"} → ${event.isError ? "❌ 错误" : "✅ 成功"} ${summarizeArg(event.result, 500)}`
+        `[agent] tool done: ${event.toolName ?? "?"} → ${event.isError ? "❌ error" : "✅ ok"} ${summarizeArg(event.result, 500)}`
       );
       break;
     case "compaction_start":
-      log.warn(`[agent] 上下文压缩开始(${event.reason ?? "?"})`);
+      log.warn(`[agent] compaction started (${event.reason ?? "?"})`);
       break;
     case "compaction_end":
       log.warn(
-        `[agent] 上下文压缩${event.aborted ? "中止" : "结束"}(${event.reason ?? "?"}${event.errorMessage ? `, 错误: ${event.errorMessage}` : ""})`
+        `[agent] compaction ${event.aborted ? "aborted" : "finished"} (${event.reason ?? "?"}${event.errorMessage ? `, error: ${event.errorMessage}` : ""})`
       );
       break;
     case "auto_retry_start":
-      log.warn(`[agent] 自动重试 ${event.attempt}/${event.maxAttempts}(${event.errorMessage ?? ""})`);
+      log.warn(`[agent] auto-retry ${event.attempt}/${event.maxAttempts}(${event.errorMessage ?? ""})`);
       break;
     case "auto_retry_end":
-      log.warn(`[agent] 自动重试结束: ${event.success ? "成功" : `失败(${event.finalError ?? ""})`}`);
+      log.warn(`[agent] auto-retry finished: ${event.success ? "ok" : `failed (${event.finalError ?? ""})`}`);
       break;
     case "queue_update":
-      log.debug(`[agent] 队列更新(steer: ${event.steering?.length ?? 0}, followUp: ${event.followUp?.length ?? 0})`);
+      log.debug(`[agent] queue updated (steer: ${event.steering?.length ?? 0}, followUp: ${event.followUp?.length ?? 0})`);
       break;
     case "thinking_level_changed":
-      log.info(`[agent] 思考级别: ${String(event.level ?? "?")}`);
+      log.info(`[agent] thinking level: ${String(event.level ?? "?")}`);
       break;
     case "session_info_changed":
-      log.debug(`[agent] 会话名称: ${event.name ?? "(清除)"}`);
+      log.debug(`[agent] session name: ${event.name ?? "(cleared)"}`);
       break;
     case "entry_appended":
-      log.debug("[agent] 会话条目已写入");
+      log.debug("[agent] session entry written");
       break;
     default:
-      log.debug(`[agent] 事件: ${event.type}`);
+      log.debug(`[agent] event: ${event.type}`);
       break;
   }
 }
