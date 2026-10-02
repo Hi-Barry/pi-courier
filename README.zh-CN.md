@@ -39,6 +39,8 @@ pi --version
 
 用 nvm 的话,每个新终端先 `source ~/.nvm/nvm.sh`,确保 `pi` 和 `node` 在 PATH 里。
 
+> **⚠️ pi 1.0+ 的 Node 版本要求**:pi 1.0 起上游硬性要求 **Node ≥ 22.19**——更老的 Node 下 pi CLI 一启动就崩(缺 `fs.globSync`,报 `SyntaxError`)。pi-courier 本体仍支持 Node ≥ 20;如果必须留在 Node 20/21,请继续用 1.0 之前的 pi(如 `npm install -g @earendil-works/pi-coding-agent@0.83.0`)。pi-courier 启动时会检查这一点并给出明确提示,而不是让 pi 报天书崩溃。
+
 ### 方式 A:普通用户 —— 一条命令
 
 ```bash

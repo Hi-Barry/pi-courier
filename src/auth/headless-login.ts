@@ -36,7 +36,6 @@ import type {
   CredentialInfo,
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { formatReloadAllResult, restartIdleRpcs } from "../rpc/command-map.js";
@@ -201,15 +200,27 @@ export interface LoginRuntime {
   listCredentials(): Promise<readonly CredentialInfo[]>;
 }
 
+/**
+ * Lazy loader for @earendil-works/pi-coding-agent. The package is a runtime
+ * poison on Node <22.19 since pi 1.0 (`fs.globSync` import dies at module
+ * evaluation, killing this whole process) — so it must never appear in a
+ * static value import here. The engine gate in pi-rpc runs before any RPC
+ * spawn; this loader keeps the login path equally safe.
+ */
+async function loadCodingAgent(): Promise<typeof import("@earendil-works/pi-coding-agent")> {
+  return import("@earendil-works/pi-coding-agent");
+}
+
 /** The credential file this module writes: pi's standard auth.json under the
  *  agent dir (PI_CODING_AGENT_DIR respected) — shared with every pi subprocess. */
-export function defaultAuthPath(): string {
-  return path.join(getAgentDir(), "auth.json");
+export async function defaultAuthPath(): Promise<string> {
+  return path.join((await loadCodingAgent()).getAgentDir(), "auth.json");
 }
 
 async function defaultRuntimeFactory(authPath: string): Promise<LoginRuntime> {
   // No model-catalog network access needed for login (allowModelNetwork false
   // is upstream's default) and no key validation — we only write credentials.
+  const { ModelRuntime } = await loadCodingAgent();
   return ModelRuntime.create({ authPath });
 }
 
@@ -392,7 +403,7 @@ export class LoginManager {
 
   private async getRuntime(): Promise<LoginRuntime> {
     this.runtime ??= (this.deps.runtimeFactory ?? defaultRuntimeFactory)(
-      this.deps.authPath ?? defaultAuthPath()
+      this.deps.authPath ?? (await defaultAuthPath())
     );
     return this.runtime;
   }
@@ -414,7 +425,7 @@ export class LoginManager {
       if (entry.controller.signal.aborted) return; // cancelled mid-write
       entry.finished = true;
       this.drop(entry);
-      const lines = [t("login.success", { id: providerId, path: this.deps.authPath ?? defaultAuthPath() })];
+      const lines = [t("login.success", { id: providerId, path: this.deps.authPath ?? (await defaultAuthPath()) })];
       try {
         // pi subprocesses read the credential file once at startup — restart
         // the idle ones now, tell the room about the busy ones (issue #55).

@@ -13,10 +13,10 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  RpcClient,
-  type RpcEventListener,
-} from "@earendil-works/pi-coding-agent";
+// Type-only import: the runtime value (RpcClient) is loaded lazily in
+// doStart() — see assertPiEngineSupported for why (pi 1.0+ crashes the
+// importing process itself on Node <22.19, before any gate could run).
+import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
 
 export interface PiRpcOptions {
   /** Absolute path to pi's dist/cli.js (default: config.cliPath ← PI_CLI_PATH env, then local node_modules, then `which pi`) */
@@ -99,6 +99,101 @@ function managedInstallEntry(realBin: string): string | undefined {
     if (fs.existsSync(entry)) return entry;
   }
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// pi 1.0+ Node engine gate (upstream hard requirement, not a warning)
+// ---------------------------------------------------------------------------
+
+/** Parsed "<major>.<minor>.<patch>" triple. */
+type SemverTriple = [number, number, number];
+
+function parseSemver(version: string): SemverTriple | undefined {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
+  if (!match) return undefined;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function compareSemver(a: SemverTriple, b: SemverTriple): number {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i]! - b[i]!;
+  }
+  return 0;
+}
+
+/**
+ * Extract the minimum Node version from an engines range we understand —
+ * only the plain ">=x[.y[.z]]" form upstream actually ships. Anything else
+ * (caret ranges, OR ranges, no range) returns undefined: skip the gate
+ * rather than guess.
+ */
+export function minNodeVersionOf(engineRange: string): SemverTriple | undefined {
+  const match = /^>=\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?\s*$/.exec(engineRange.trim());
+  if (!match) return undefined;
+  return [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)];
+}
+
+/**
+ * Read the installed pi package's version and engines.node by walking up
+ * from the CLI entry to its package.json. Only the real pi package counts —
+ * a custom cliPath pointing at unrelated scripts yields undefined (no gate).
+ */
+export function piPackageEngines(
+  cliPath: string,
+): { version: string; enginesNode?: string } | undefined {
+  let dir = path.dirname(cliPath);
+  for (let depth = 0; depth < 6; depth++) {
+    const pkgJsonPath = path.join(dir, "package.json");
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
+        name?: string;
+        version?: string;
+        engines?: { node?: string };
+      };
+      if (
+        pkg.name === "@earendil-works/pi-coding-agent" &&
+        typeof pkg.version === "string"
+      ) {
+        return { version: pkg.version, enginesNode: pkg.engines?.node };
+      }
+    } catch {
+      // no package.json here (or unreadable) — keep walking up
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
+}
+
+/**
+ * Refuse to spawn a pi we know will crash on this Node runtime. Since pi
+ * 1.0 upstream treats its engines field as a hard contract (pi 1.0 imports
+ * `fs.globSync`, a Node 22.19+ API, and dies with a SyntaxError on older
+ * Node). The 0.x line is exempt: its engines said ">=22.19.0" too, but the
+ * code actually runs fine on Node 20 (verified against 0.83.0) — gating on
+ * it would reject combinations that work.
+ */
+export function assertPiEngineSupported(
+  cliPath: string,
+  nodeVersion: string = process.version,
+): void {
+  const pkg = piPackageEngines(cliPath);
+  if (!pkg) return;
+  const major = parseSemver(pkg.version)?.[0] ?? 0;
+  if (major < 1) return; // 0.x: engines claim is unreliable, real-world runs are fine
+  const required = pkg.enginesNode ? minNodeVersionOf(pkg.enginesNode) : undefined;
+  if (!required) return;
+  const running = parseSemver(nodeVersion);
+  if (!running) return;
+  if (compareSemver(running, required) >= 0) return;
+  throw new Error(
+    `pi@${pkg.version} requires Node >=${required.join(".")} (hard requirement since pi 1.0), ` +
+      `but pi-courier is running on Node ${nodeVersion}. ` +
+      `Fix: upgrade Node (e.g. "nvm install 22"), or pin a pre-1.0 pi ` +
+      `(e.g. "npm i -g @earendil-works/pi-coding-agent@0.83.0"), ` +
+      `or point PI_CLI_PATH at a compatible pi install.`,
+  );
 }
 
 export class PiRpc {
@@ -204,6 +299,13 @@ export class PiRpc {
     }
 
     const cliPath = this.options.cliPath ?? (await PiRpc.resolveCliPath());
+    // Fail with a human-readable message instead of pi's SyntaxError from a
+    // missing Node 22 builtin (pi 1.0+ hard-requires Node >=22.19). This must
+    // run BEFORE the dynamic import below — on Node <22.19 importing the pi
+    // 1.0+ package itself kills this process at module-evaluation time, so a
+    // static import at the top of this file would crash before any gate.
+    assertPiEngineSupported(cliPath);
+    const { RpcClient } = await import("@earendil-works/pi-coding-agent");
     const client = new RpcClient({
       cliPath,
       cwd: this.options.cwd,
