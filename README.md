@@ -39,6 +39,8 @@ pi --version
 
 Using nvm? Run `source ~/.nvm/nvm.sh` in each new terminal so `pi` and `node` are on PATH.
 
+> **⚠️ Node version for pi 1.0+**: since pi 1.0, upstream hard-requires **Node ≥ 22.19** — on older Node the pi CLI dies at startup with a `SyntaxError` (missing `fs.globSync`). pi-courier itself still runs on Node ≥ 20; if you must stay on Node 20/21, keep a pre-1.0 pi (e.g. `npm install -g @earendil-works/pi-coding-agent@0.83.0`). pi-courier checks this at startup and tells you what to do instead of letting pi crash cryptically.
+
 ### Option A: Regular users — one command
 
 ```bash
