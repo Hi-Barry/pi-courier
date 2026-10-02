@@ -238,16 +238,16 @@ describe("LoginManager (issue #55)", () => {
     await manager.startLogin(CHAT, "matrix", "nope");
     expect(replies.at(-1)).toContain("❌ 未知 provider: nope");
 
-    await manager.startLogin(CHAT, "matrix", "openai", "oauth"); // openai has no oauth login
+    await manager.startLogin(CHAT, "matrix", "zai", "oauth"); // zai has no oauth login (pi 1.0: openai gained ChatGPT sign-in, so it now has oauth)
     expect(replies.at(-1)).toContain("不支持 oauth 登录");
 
     await manager.startLogin(CHAT, "matrix", "nope", "bogus");
     expect(replies.at(-1)).toContain("❌ 未知 provider: nope");
 
     // Unambiguous provider: the only supported method is picked automatically.
-    await manager.startLogin(CHAT, "matrix", "openai");
+    await manager.startLogin(CHAT, "matrix", "zai");
     await vi.waitFor(() =>
-      expect((runtime.login as ReturnType<typeof vi.fn>).mock.calls[0]?.slice(0, 2)).toEqual(["openai", "api_key"])
+      expect((runtime.login as ReturnType<typeof vi.fn>).mock.calls[0]?.slice(0, 2)).toEqual(["zai", "api_key"])
     );
     await manager.cancel(CHAT);
 
