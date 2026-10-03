@@ -177,6 +177,9 @@ const zh = {
     "为避免接错上下文,自动接力已暂停;消息仍会继续转发显示。\n" +
     "处理:在 TUI 里用 /tree 选回主分支,或重新 /attach。",
   "mirror.relay.failed": "⚠️ 会话上下文自动接力失败(消息仍会发出,但可能不含 TUI 的最新对话): {message}",
+  "mirror.newSession.notice":
+    "🆕 检测到 TUI 侧开始了新会话({file})——Matrix 侧仍在原会话,接下来两端各聊各的(消息仍会镜像显示,但上下文互不相通)。\n" +
+    "要让 Matrix 跟上 TUI 的新会话:发 /sessions 后用 /switch <序号> 切过去,或重新 /attach 获取新会话的附加命令。",
 
   // ── xq(扩展 UI 提问机,extension-questions.ts)───────────────────────
   "xq.untitled": "(无标题)",

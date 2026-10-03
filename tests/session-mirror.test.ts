@@ -47,19 +47,28 @@ function modelChangeLine(id: string, parentId: string | null): string {
 }
 
 /** 收集回调的 mirror + spy 工厂。 */
-function makeMirror(opts?: { cwd?: string; initialLeafId?: string | null }): {
+function makeMirror(opts?: { cwd?: string; initialLeafId?: string | null; initialSessionFile?: string }): {
   mirror: SessionMirror;
   external: MirroredEntry[];
   forks: MirroredEntry[];
+  foreign: string[];
 } {
   const external: MirroredEntry[] = [];
   const forks: MirroredEntry[] = [];
+  const foreign: string[] = [];
   const callbacks: MirrorCallbacks = {
     onExternalMessage: (entry) => external.push(entry),
     onFork: (entry) => forks.push(entry),
+    onForeignSession: (file) => foreign.push(file),
   };
-  const mirror = new SessionMirror({ sessionDir: dir, cwd: opts?.cwd ?? HEADER_CWD(), callbacks, initialLeafId: opts?.initialLeafId });
-  return { mirror, external, forks };
+  const mirror = new SessionMirror({
+    sessionDir: dir,
+    cwd: opts?.cwd ?? HEADER_CWD(),
+    callbacks,
+    initialLeafId: opts?.initialLeafId,
+    initialSessionFile: opts?.initialSessionFile,
+  });
+  return { mirror, external, forks, foreign };
 }
 
 const flush = async (ms = 120): Promise<void> => {
@@ -219,6 +228,50 @@ describe("SessionMirror tail", () => {
     await flush(150);
     expect(external.length).toBe(0);
   });
+
+  it("新会话提醒:attach 时的主会话文件不触发;TUI 另开的会话首条对话触发一次", async () => {
+    const mainFile = seedSessionFile("main.jsonl", [messageLine("e0", null, "user", "基线")]);
+    const { mirror, external, foreign } = makeMirror({ initialLeafId: "e0", initialSessionFile: mainFile });
+    mirror.start();
+    try {
+      // 主会话文件的外部消息:正常转发,不提醒。
+      fs.appendFileSync(mainFile, messageLine("m1", "e0", "user", "主会话消息") + "\n");
+      await vi.waitFor(() => expect(external.length).toBe(1));
+      expect(foreign).toEqual([]);
+      // TUI /new 另开的新会话文件:首条对话触发提醒,且消息照常转发。
+      const lines = [
+        JSON.stringify({ type: "session", version: 3, id: "s-new", cwd: HEADER_CWD() }),
+        messageLine("n1", null, "user", "新会话首条"),
+      ];
+      const newFile = path.join(dir, "new-session.jsonl");
+      fs.writeFileSync(newFile, lines.map((l) => `${l}\n`).join(""));
+      await vi.waitFor(() => expect(external.length).toBe(2));
+      expect(foreign).toEqual(["new-session.jsonl"]);
+      // 同一新会话的第二条消息:不重复提醒。
+      fs.appendFileSync(newFile, messageLine("n2", "n1", "assistant", "新会话回复") + "\n");
+      await vi.waitFor(() => expect(external.length).toBe(3));
+      expect(foreign).toEqual(["new-session.jsonl"]);
+    } finally {
+      mirror.stop();
+    }
+  });
+
+  it("新会话的非对话 entry(如 model_change)不触发提醒", async () => {
+    const mainFile = seedSessionFile("main.jsonl");
+    const { mirror, foreign } = makeMirror({ initialLeafId: "e0", initialSessionFile: mainFile });
+    mirror.start();
+    try {
+      const lines = [
+        JSON.stringify({ type: "session", version: 3, id: "s-q", cwd: HEADER_CWD() }),
+        modelChangeLine("q1", null),
+      ];
+      fs.writeFileSync(path.join(dir, "quiet.jsonl"), lines.map((l) => `${l}\n`).join(""));
+      await flush(150);
+      expect(foreign).toEqual([]);
+    } finally {
+      mirror.stop();
+    }
+  });
 });
 
 describe("MirrorManager.ensureFreshContext", () => {
@@ -242,7 +295,7 @@ describe("MirrorManager.ensureFreshContext", () => {
   /** 经真实 MirrorManager + SessionMirror 造 dirty(跑一遍 tail)。 */
   async function makeDirty(rpc: ReturnType<typeof mockRpc>["rpc"]): Promise<MirrorManager> {
     const manager = new MirrorManager();
-    const mirror = manager.attach(rpc, dir, { onExternalMessage: () => {}, onFork: () => {} }, "e0");
+    const mirror = manager.attach(rpc, dir, { onExternalMessage: () => {}, onFork: () => {}, onForeignSession: () => {} }, "e0");
     // 模拟 TUI /new 的真实产物:header + 首条 entry 一次写入(新树根 parentId=null)。
     const lines = [
       JSON.stringify({ type: "session", version: 3, id: "s-relay", cwd: HEADER_CWD() }),
@@ -257,7 +310,7 @@ describe("MirrorManager.ensureFreshContext", () => {
     const { rpc, switches } = mockRpc({ sessionFile: "/x.jsonl" });
     const manager = new MirrorManager();
     expect(await manager.ensureFreshContext(rpc)).toEqual({ kind: "clean" });
-    const mirror = manager.attach(rpc, dir, { onExternalMessage: () => {}, onFork: () => {} }, null);
+    const mirror = manager.attach(rpc, dir, { onExternalMessage: () => {}, onFork: () => {}, onForeignSession: () => {} }, null);
     expect(await manager.ensureFreshContext(rpc)).toEqual({ kind: "clean" });
     expect(switches).toEqual([]);
     mirror.stop();
@@ -291,7 +344,7 @@ describe("MirrorManager.ensureFreshContext", () => {
     const manager = new MirrorManager();
     // attach 时文件已存在且已跟踪(基线 leaf e0),之后 TUI 从旧节点接枝 → 断裂。
     seedSessionFile("forked.jsonl", [messageLine("e0", null, "user", "基线")]);
-    manager.attach(rpc, dir, { onExternalMessage: () => {}, onFork: () => {} }, "e0");
+    manager.attach(rpc, dir, { onExternalMessage: () => {}, onFork: () => {}, onForeignSession: () => {} }, "e0");
     fs.appendFileSync(path.join(dir, "forked.jsonl"), messageLine("fk1", "old-branch", "user", "分叉") + "\n");
     await vi.waitFor(() => expect(manager.has(rpc) && managerEnsureForked(manager, rpc)).toBe(true));
     expect(await manager.ensureFreshContext(rpc)).toEqual({ kind: "forked" });

@@ -180,6 +180,9 @@ const en: Record<MessageKey, string> = {
     "Auto-relay is paused to avoid attaching the wrong context; message forwarding continues.\n" +
     "To resolve: pick the main branch again with /tree in the TUI, or /attach afresh.",
   "mirror.relay.failed": "⚠️ Auto-relay of session context failed (the message still goes out, but may miss the latest TUI conversation): {message}",
+  "mirror.newSession.notice":
+    "🆕 The TUI started a NEW session ({file}) — Matrix is still on the previous one. From here the two ends converse separately (messages keep mirroring, but their contexts are unrelated).\n" +
+    "To bring Matrix along: send /sessions and /switch <number>, or /attach again to get the attach command for the new session.",
 
   // ── xq ────────────────────────────────────────────────────────────────
   "xq.untitled": "(untitled)",

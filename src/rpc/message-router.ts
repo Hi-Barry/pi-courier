@@ -264,7 +264,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       onFork: () => {
         sendReply(target.chatId, target.transport, t("mirror.fork.warning")).catch(() => {});
       },
-    }, leafId);
+      onForeignSession: (file) => {
+        sendReply(target.chatId, target.transport, t("mirror.newSession.notice", { file })).catch(() => {});
+      },
+    }, leafId, state.sessionFile);
     const attachCommand = `pi${rpc.sessionDir ? ` --session-dir ${rpc.sessionDir}` : ""} --session ${state.sessionId}`;
     return t("cmd.attach.ok", { id: state.sessionId, command: attachCommand, dir: resolveSessionDir(rpc) });
   };

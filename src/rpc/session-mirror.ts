@@ -43,6 +43,9 @@ export interface MirrorCallbacks {
   onExternalMessage: (entry: MirroredEntry) => void;
   /** 分叉检测命中(一次性):之后自动接力停用。 */
   onFork: (entry: MirroredEntry) => void;
+  /** TUI 侧另开了新会话(外部 message 落在一个非 attach 时会话文件里,每文件
+   *  提醒一次):接力不会跨会话文件,router 提示用户如何跟上。 */
+  onForeignSession: (file: string) => void;
 }
 
 interface TrackedFile {
@@ -51,6 +54,9 @@ interface TrackedFile {
   offset: number;
   /** 尾部半行缓冲(等下一次 change 拼全)。 */
   pending: string;
+  /** 非 attach 时会话文件(TUI 另开/切换的会话):首条外部对话提醒一次。 */
+  foreignNew: boolean;
+  foreignNotified: boolean;
 }
 
 /** 解析会话文件首行 header;不是合法 JSON 或非 session 类型返回 undefined。 */
@@ -98,12 +104,21 @@ export class SessionMirror {
   private stopped = false;
   /** 外部写入标记(ensureFreshContext 的触发依据)。 */
   private dirty = false;
+  /** attach 时刻 RPC 进程的会话文件:之外的都是 TUI 侧另开的会话。 */
+  private readonly initialSessionFile: string | undefined;
 
-  constructor(opts: { sessionDir: string; cwd?: string; callbacks: MirrorCallbacks; initialLeafId?: string | null }) {
+  constructor(opts: {
+    sessionDir: string;
+    cwd?: string;
+    callbacks: MirrorCallbacks;
+    initialLeafId?: string | null;
+    initialSessionFile?: string;
+  }) {
     this.sessionDir = opts.sessionDir;
     this.cwd = opts.cwd;
     this.callbacks = opts.callbacks;
     this.lastSeenLeafId = opts.initialLeafId ?? null;
+    this.initialSessionFile = opts.initialSessionFile;
   }
 
   /** RPC 自身写入记账(entry_appended 事件的 entry id,tail 去重依据)。 */
@@ -164,11 +179,22 @@ export class SessionMirror {
       const header = readSessionHeader(full);
       if (!header || !this.cwdMatches(header)) continue;
       try {
-        this.files.set(full, { path: full, offset: fs.statSync(full).size, pending: "" });
+        this.files.set(full, this.newTrackedFile(full, fs.statSync(full).size));
       } catch {
         // 读 size 失败(竞态删除):跳过,后续 watch 事件会再试。
       }
     }
+  }
+
+  /** 构建跟踪记录:attach 时会话文件之外的都是 TUI 侧的「另开会话」。 */
+  private newTrackedFile(fullPath: string, offset: number): TrackedFile {
+    return {
+      path: fullPath,
+      offset,
+      pending: "",
+      foreignNew: this.initialSessionFile !== undefined && fullPath !== this.initialSessionFile,
+      foreignNotified: false,
+    };
   }
 
   private cwdMatches(header: SessionHeader): boolean {
@@ -193,7 +219,7 @@ export class SessionMirror {
     // 未跟踪的新文件(TUI /new /resume 产物):读 header,cwd 匹配则从头跟踪。
     const header = readSessionHeader(full);
     if (!header || !this.cwdMatches(header)) return;
-    this.files.set(full, { path: full, offset: 0, pending: "" });
+    this.files.set(full, this.newTrackedFile(full, 0));
     this.tailFile(full);
   }
 
@@ -228,11 +254,11 @@ export class SessionMirror {
     // 最后一段可能是半行:留回 pending 等下一次拼全。
     file.pending = lines.pop() ?? "";
     for (const line of lines) {
-      this.handleLine(line);
+      this.handleLine(line, file);
     }
   }
 
-  private handleLine(line: string): void {
+  private handleLine(line: string, file: TrackedFile): void {
     const trimmed = line.trim();
     if (!trimmed) return;
     let entry: MirroredEntry;
@@ -263,6 +289,11 @@ export class SessionMirror {
     const role = (entry.message as { role?: string } | undefined)?.role;
     if (role !== "user" && role !== "assistant") return;
     this.dirty = true;
+    // TUI 另开的会话首条对话:提醒一次(接力不跨会话文件,用户需要指引)。
+    if (file.foreignNew && !file.foreignNotified) {
+      file.foreignNotified = true;
+      this.callbacks.onForeignSession(path.basename(file.path));
+    }
     this.callbacks.onExternalMessage({ ...entry, role });
   }
 }
@@ -311,7 +342,8 @@ export class MirrorManager {
     rpc: RelayRpc & { cwd?: string },
     sessionDir: string,
     callbacks: MirrorCallbacks,
-    initialLeafId: string | null
+    initialLeafId: string | null,
+    initialSessionFile?: string
   ): SessionMirror {
     this.detach(rpc);
     const mirror = new SessionMirror({
@@ -319,6 +351,7 @@ export class MirrorManager {
       cwd: rpc.cwd,
       callbacks,
       initialLeafId,
+      initialSessionFile,
     });
     mirror.start();
     this.mirrors.set(rpc, mirror);
