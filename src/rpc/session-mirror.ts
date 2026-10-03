@@ -6,8 +6,9 @@
  * 时读一次)。镜像器补上跨进程的缺口:
  *
  *  1. 显示(给眼睛):对 sessionDir 递归 watch + 按文件 offset 增量 tail。tail
- *     读到的 entry 若 id 不在本端已知集合(= RPC 自己写入的,经 entry_appended
- *     事件喂进来)即为 TUI 侧写入 → 渲染成文本回调给 router 转发 Matrix 房间。
+ *     读到的 message entry 先向 RPC 进程做权威源判定(get_entries 查 id 是否
+ *     本端写入 —— 上游普通消息落盘不发 entry_appended 事件,事件记账不可用)
+ *     ,确认非本端才是 TUI 侧写入 → 渲染成文本回调给 router 转发 Matrix 房间。
  *  2. 上下文接力(给脑子):外部写入置 dirty;Matrix 下次 prompt 前由 router
  *     调 ensureFreshContext() —— 空闲则 switchSession(同一文件)让 RPC 进程重读
  *     文件,agent 的对话历史追上 TUI 写入的内容。
@@ -37,9 +38,6 @@ export interface MirroredEntry {
   /** type === "message" 时有效:上游 AgentMessage(role/content 在其中)。 */
   message?: unknown;
 }
-
-/** 外部写入判定期(毫秒):entry_appended 自写记账与 fs.watch 的赛跑余量。 */
-const EXTERNAL_SETTLE_MS = 50;
 
 /** mirror 对外回调:外部(TUI)写入的对话消息,router 负责渲染与发送。 */
 export interface MirrorCallbacks {
@@ -99,7 +97,6 @@ export class SessionMirror {
   private readonly sessionDir: string;
   /** 只跟踪 header.cwd 匹配此值的文件(undefined = 不过滤,测试用)。 */
   private readonly cwd: string | undefined;
-  private readonly knownIds = new Set<string>();
   private readonly files = new Map<string, TrackedFile>();
   private watcher: fs.FSWatcher | undefined;
   private lastSeenLeafId: string | null = null;
@@ -110,12 +107,11 @@ export class SessionMirror {
   /** 当前会话文件(attach 时快照,rebase 随 /new /switch 更新):之外的都是
    *  TUI 侧的「另一个会话」。 */
   private initialSessionFile: string | undefined;
-  /** 外部写入的判定期窗口:fs.watch 回调与 entry_appended 事件(自写记账)
-   *  无先后保证,延迟一拍再查已知集合,输了竞态也不把自己的消息回显成 TUI 的。 */
-  private pendingExternal = new Map<
-    string,
-    { entry: MirroredEntry; role: string; file: TrackedFile; timer: NodeJS.Timeout }
-  >();
+  /** 权威源自写判定:返回 RPC 进程当前会话的全部 entry id(可能 undefined =
+   *  查询不可用,届时未知 id 一律按 TUI 写入处理)。 */
+  private readonly querySelfEntryIds: (() => Promise<Set<string>>) | undefined;
+  /** 在途的判定查询(同 id 只查一次)。 */
+  private readonly pendingResolve = new Map<string, Promise<boolean>>();
 
   constructor(opts: {
     sessionDir: string;
@@ -123,19 +119,14 @@ export class SessionMirror {
     callbacks: MirrorCallbacks;
     initialLeafId?: string | null;
     initialSessionFile?: string;
+    querySelfEntryIds?: () => Promise<Set<string>>;
   }) {
     this.sessionDir = opts.sessionDir;
     this.cwd = opts.cwd;
     this.callbacks = opts.callbacks;
     this.lastSeenLeafId = opts.initialLeafId ?? null;
     this.initialSessionFile = opts.initialSessionFile;
-  }
-
-  /** RPC 自身写入记账(entry_appended 事件的 entry id,tail 去重依据)。 */
-  noteSelfEntry(entryId: string): void {
-    this.knownIds.add(entryId);
-    // 自身写入也推进 leaf 视角(与 tail 读到等价)。
-    this.lastSeenLeafId = entryId;
+    this.querySelfEntryIds = opts.querySelfEntryIds;
   }
 
   isDirty(): boolean {
@@ -154,11 +145,7 @@ export class SessionMirror {
     this.dirty = false;
     this.forkDetected = false;
     this.lastSeenLeafId = null;
-    this.knownIds.clear();
-    for (const pending of this.pendingExternal.values()) {
-      clearTimeout(pending.timer);
-    }
-    this.pendingExternal.clear();
+    this.pendingResolve.clear();
     for (const file of this.files.values()) {
       file.foreignNew = sessionFile !== undefined && file.path !== sessionFile;
       file.foreignNotified = false;
@@ -309,34 +296,43 @@ export class SessionMirror {
       this.callbacks.onFork();
     }
     this.lastSeenLeafId = entry.id;
-    if (this.knownIds.has(entry.id)) return; // 自身写入,不转发。
     if (entry.type !== "message") return;
     // role 在 message 里(会话文件结构:message:{role,content}),不在顶层。
     const role = (entry.message as { role?: string } | undefined)?.role;
     if (role !== "user" && role !== "assistant") return;
-    // 竞态窗口:fs.watch 与 entry_appended(自写记账)无先后保证,延迟一拍
-    // 再查已知集合 —— 输了竞态也不把自己的消息回显成 TUI 的。
-    if (!this.pendingExternal.has(entry.id)) {
-      const pending = { entry, role, file, timer: undefined as unknown as NodeJS.Timeout };
-      pending.timer = setTimeout(() => this.flushExternal(entry.id), EXTERNAL_SETTLE_MS);
-      this.pendingExternal.set(entry.id, pending);
-    }
+    void this.resolveExternal(entry, role, file);
   }
 
-  /** 判定期结束:仍是未知 id 才算 TUI 写入(转发 + dirty + 跨会话提醒)。 */
-  private flushExternal(id: string): void {
-    const pending = this.pendingExternal.get(id);
-    if (!pending) return;
-    this.pendingExternal.delete(id);
-    if (this.knownIds.has(id)) return; // entry_appended 已记账:自身写入。
+  /**
+   * 外部判定:向 RPC 进程查这个 entry id 是否本端写入(上游普通消息落盘不
+   * 发 entry_appended,文件层无法区分两端,权威源是唯一可靠判据)。查询失败
+   * 按外部处理 —— 回显一条自己的消息是丑,吞一条 TUI 的消息是错。
+   */
+  private async resolveExternal(entry: MirroredEntry, role: string, file: TrackedFile): Promise<void> {
+    if (this.stopped) return;
+    let inflight = this.pendingResolve.get(entry.id);
+    if (!inflight) {
+      inflight = this.doResolveExternal(entry.id);
+      this.pendingResolve.set(entry.id, inflight);
+    }
+    const isSelf = await inflight.finally(() => this.pendingResolve.delete(entry.id));
+    if (isSelf || this.stopped) return;
     this.dirty = true;
-    const { entry, role, file } = pending;
     // TUI 在另一个会话写入:提醒一次(接力不跨会话文件,用户需要指引)。
     if (file.foreignNew && !file.foreignNotified) {
       file.foreignNotified = true;
       this.callbacks.onForeignSession(path.basename(file.path));
     }
     this.callbacks.onExternalMessage({ ...entry, role });
+  }
+
+  private async doResolveExternal(id: string): Promise<boolean> {
+    if (!this.querySelfEntryIds) return false;
+    try {
+      return (await this.querySelfEntryIds()).has(id);
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -357,11 +353,12 @@ export function readSessionHeader(filePath: string): SessionHeader | undefined {
   }
 }
 
-/** ensureFreshContext 的最小 RPC 面(结构类型,PiRpc 天然满足;mock 直测)。 */
+/** ensureFreshContext 与自写判定的最小 RPC 面(结构类型,PiRpc 天然满足;mock 直测)。 */
 export interface RelayRpc {
   requireClient(): {
     getState(): Promise<{ isStreaming?: boolean; pendingMessageCount?: number; sessionFile?: string; sessionId?: string }>;
     switchSession(sessionPath: string): Promise<{ cancelled?: boolean }>;
+    getEntries(): Promise<{ entries: Array<{ id: string }>; leafId: string | null }>;
   };
 }
 
@@ -384,7 +381,8 @@ export class MirrorManager {
     sessionDir: string,
     callbacks: MirrorCallbacks,
     initialLeafId: string | null,
-    initialSessionFile?: string
+    initialSessionFile?: string,
+    querySelfEntryIds?: () => Promise<Set<string>>
   ): SessionMirror {
     this.detach(rpc);
     const mirror = new SessionMirror({
@@ -393,6 +391,7 @@ export class MirrorManager {
       callbacks,
       initialLeafId,
       initialSessionFile,
+      querySelfEntryIds,
     });
     mirror.start();
     this.mirrors.set(rpc, mirror);
@@ -409,11 +408,6 @@ export class MirrorManager {
 
   has(rpc: object): boolean {
     return this.mirrors.has(rpc);
-  }
-
-  /** entry_appended 记账(router 的事件路径喂)。 */
-  noteSelfEntry(rpc: object, entryId: string): void {
-    this.mirrors.get(rpc)?.noteSelfEntry(entryId);
   }
 
   /** 换会话(Matrix 侧 /new /switch 成功后调):当前会话文件重置。 */

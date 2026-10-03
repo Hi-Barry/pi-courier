@@ -46,8 +46,13 @@ function modelChangeLine(id: string, parentId: string | null): string {
   return JSON.stringify({ type: "model_change", id, parentId, timestamp: new Date().toISOString(), provider: "p", modelId: "m" });
 }
 
-/** 收集回调的 mirror + spy 工厂。 */
-function makeMirror(opts?: { cwd?: string; initialLeafId?: string | null; initialSessionFile?: string }): {
+/** 收集回调的 mirror + spy 工厂。selfIds = 权威源判定的本端 entry id 集合。 */
+function makeMirror(opts?: {
+  cwd?: string;
+  initialLeafId?: string | null;
+  initialSessionFile?: string;
+  selfIds?: Set<string>;
+}): {
   mirror: SessionMirror;
   external: MirroredEntry[];
   forks: number[];
@@ -67,6 +72,7 @@ function makeMirror(opts?: { cwd?: string; initialLeafId?: string | null; initia
     callbacks,
     initialLeafId: opts?.initialLeafId,
     initialSessionFile: opts?.initialSessionFile,
+    querySelfEntryIds: opts?.selfIds ? async () => opts.selfIds! : undefined,
   });
   return { mirror, external, forks, foreign };
 }
@@ -124,16 +130,37 @@ describe("SessionMirror tail", () => {
     }
   });
 
-  it("自身写入(noteSelfEntry)不触发回调", async () => {
+  it("权威源判定:RPC 自己写入的 entry(id 在 get_entries 集合里)不回显", async () => {
     seedSessionFile("s.jsonl");
-    const { mirror, external } = makeMirror({ initialLeafId: "e0" });
-    mirror.noteSelfEntry("self-1");
+    const { mirror, external } = makeMirror({ initialLeafId: "e0", selfIds: new Set(["self-1"]) });
     mirror.start();
     try {
       fs.appendFileSync(path.join(dir, "s.jsonl"), messageLine("self-1", "e0", "user", "Matrix 自己的消息") + "\n");
       await flush(150);
       expect(external.length).toBe(0);
       expect(mirror.isDirty()).toBe(false);
+    } finally {
+      mirror.stop();
+    }
+  });
+
+  it("权威源查询失败按外部处理(回显可见好过吞 TUI 消息)", async () => {
+    seedSessionFile("s.jsonl");
+    const external: MirroredEntry[] = [];
+    const mirror = new SessionMirror({
+      sessionDir: dir,
+      cwd: HEADER_CWD(),
+      initialLeafId: "e0",
+      callbacks: { onExternalMessage: (e) => external.push(e), onFork: () => {}, onForeignSession: () => {} },
+      querySelfEntryIds: async () => {
+        throw new Error("rpc down");
+      },
+    });
+    mirror.start();
+    try {
+      fs.appendFileSync(path.join(dir, "s.jsonl"), messageLine("q1", "e0", "user", "查不到就转发") + "\n");
+      await vi.waitFor(() => expect(external.length).toBe(1));
+      expect(extractUserText(external[0]?.message)).toBe("查不到就转发");
     } finally {
       mirror.stop();
     }
@@ -197,18 +224,17 @@ describe("SessionMirror tail", () => {
     }
   });
 
-  it("竞态窗口:tail 先于 entry_appended 读到自身写入,flush 查已知集合后不回显", async () => {
+  it("权威源判定与时序无关:entry 落盘即在 RPC 内存,任何先后都不回显", async () => {
     seedSessionFile("s.jsonl");
-    const { mirror, external } = makeMirror({ initialLeafId: "e0" });
+    // 模拟真实 RPC:get_entries 反映它内存里的全部 entry(写入即在内)。
+    const selfIds = new Set<string>(["e0"]);
+    const { mirror, external } = makeMirror({ initialLeafId: "e0", selfIds });
     mirror.start();
     try {
       const file = path.join(dir, "s.jsonl");
-      // 模拟最坏时序:watch 回调先入判定窗口,entry_appended 记账随后(10ms)
-      // 到达,50ms flush 时查表命中 → 不回显。若回调更慢则 knownIds 直接
-      // 命中,断言同样成立(两种真实时序都绿)。
-      fs.appendFileSync(file, messageLine("race-1", "e0", "user", "Matrix 自己的消息") + "\n");
-      setTimeout(() => mirror.noteSelfEntry("race-1"), 10);
-      await flush(120); // 越过 50ms 判定期。
+      fs.appendFileSync(file, messageLine("mine-1", "e0", "user", "Matrix 自己的消息") + "\n");
+      selfIds.add("mine-1"); // appendMessage 同步入内存,先后无关。
+      await flush(150);
       expect(external.length).toBe(0);
       expect(mirror.isDirty()).toBe(false);
     } finally {

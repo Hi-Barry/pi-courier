@@ -261,6 +261,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // get_entries 不可用时按未知 leaf 起步(见上)。
     }
     const dir = resolveSessionDir(rpc);
+    // 权威源自写判定:上游普通消息落盘不发 entry_appended,文件层分不出两端,
+    // 疑似外部写入时直接问 RPC 进程(get_entries 的 id 集合)。
+    const querySelfEntryIds = async (): Promise<Set<string>> => {
+      const { entries } = await rpc.requireClient().getEntries();
+      return new Set(entries.map((e) => e.id));
+    };
     mirrors.attach(rpc, dir, {
       onExternalMessage: (entry) => mirrorForward(entry, target),
       onFork: () => {
@@ -269,8 +275,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       onForeignSession: (file) => {
         sendReply(target.chatId, target.transport, t("mirror.newSession.notice", { file })).catch(() => {});
       },
-    }, leafId, state.sessionFile);
-    const attachCommand = `pi${rpc.sessionDir ? ` --session-dir ${rpc.sessionDir}` : ""} --session ${state.sessionId}`;
+    }, leafId, state.sessionFile, querySelfEntryIds);
+    // 附加命令用会话文件路径而非 id:实测 pi 1.0 的 id 查找在本布局下不可靠
+    // (get_state 的 sessionId 与文件 header id 在 resume 后会漂移,且按 id 查
+    // 两者都 No session found;路径模式直开文件,永远有效)。--session-dir 保
+    // 持与本进程同源,用户后续 /new 时新会话落在同一目录,镜像照常覆盖。
+    const attachCommand = `pi${rpc.sessionDir ? ` --session-dir ${rpc.sessionDir}` : ""} --session '${state.sessionFile}'`;
     return t("cmd.attach.ok", { command: attachCommand, dir });
   };
 
@@ -819,12 +829,6 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         });
       }
 
-      // 会话镜像(/attach 生效时):entry_appended = 本进程落盘了一条 entry,
-      // 把 id 喂给镜像器做 tail 去重(文件里再读到同 id 即自身写入,不转发)。
-      if (event.type === "entry_appended" && event.entry?.id) {
-        mirrors.noteSelfEntry(rpc, event.entry.id);
-      }
-
       // Extension UI (issue #54): questions are asked in the bound room and
       // parked for the next plain message to answer; notify is presented by
       // level; TUI-only display methods are ignored. 提问机模块自持队列与
@@ -970,7 +974,6 @@ type AgentEventView = {
         followUp?: readonly string[];
         extensionPath?: string;
         error?: string;
-        entry?: { id?: string; type?: string };
      };
 
 /**
