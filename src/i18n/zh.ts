@@ -171,7 +171,8 @@ const zh = {
   "router.extensionError": "⚠️ 扩展错误 ({path}): {error}",
 
   // ── mirror(TUI ↔ Matrix 会话镜像,session-mirror.ts / router)─────────
-  "mirror.user": "🖥 **TUI** › {text}",
+  "mirror.user": "🖥 **TUI·用户** › {text}",
+  "mirror.assistant": "🤖 **TUI·助手** › {text}",
   "mirror.fork.warning":
     "⚠️ 检测到会话分叉(TUI 进程不会自动重读会话文件,Matrix 侧回复后它在 TUI 里续写就会从旧节点接枝;或 TUI 切换了树分支)。\n" +
     "接力将继续跟随最新分支;若发现上下文对不上,在 TUI 里 /resume 重进本会话即可拉平两端。",

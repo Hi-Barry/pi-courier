@@ -330,7 +330,7 @@ Keep working in the terminal while the bot echoes everything into Matrix. In a r
 
 The bot replies with the exact command to run in a terminal, e.g. `pi --session <id>` (with `--session-dir` when the deployment uses a custom one). Attach in the terminal and the two ends stay in sync:
 
-- **TUI → Matrix (live mirror)**: every prompt you send in the TUI and every reply the agent gives is forwarded to the room in real time — user lines carry a `🖥 **TUI**` prefix; tool-call traffic is not forwarded, only conversation text.
+- **TUI → Matrix (live mirror)**: every prompt you send in the TUI and every reply the agent gives is forwarded to the room in real time — user lines carry a `🖥 **TUI user**` prefix and agent replies a `🤖 **TUI assistant**` one (all posted by the bot account, so the role prefixes are the only distinction); tool-call traffic is not forwarded, only conversation text.
 - **Matrix → TUI (inherited context)**: attaching opens the very same session file, so the TUI starts with the full history of what Matrix already discussed.
 - **Back to Matrix (auto-relay)**: after working in the TUI, just message the room again — before answering, the bot reloads the session file while idle, so the agent's context includes whatever happened in the TUI. In-flight work and queued messages are never interrupted by a reload.
 - **TUI-side `/new`**: a new session started in the TUI keeps mirroring, but the room posts a notice — the Matrix side stays on its previous session, and the two contexts are unrelated (different session files). To bring Matrix along: `/sessions` then `/switch <number>`, or `/attach` again for the new session's command; likewise, after a Matrix-side `/new`, re-run `/attach` in the TUI.

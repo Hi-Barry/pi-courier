@@ -284,7 +284,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     return t("cmd.attach.ok", { command: attachCommand, dir });
   };
 
-  /** TUI 写入的对话消息 → 渲染转发房间(镜像链路任何异常不影响主流程)。 */
+  /**
+   * TUI 写入的对话消息 → 渲染转发房间。两类消息都带角色前缀:Matrix 里全部
+   * 由 bot 账号发出,不加前缀就无法区分「TUI 里的人说的话」和「TUI 里的
+   * agent 回复」。只转对话文本:工具循环中间消息无文本时 buildTurnReply 给
+   * text=null,自然跳过(hideToolCalls 恒 true)。镜像链路任何异常不影响主流程。
+   */
   const mirrorForward = (entry: MirroredEntry, target: ReplyTarget): void => {
     try {
       if (entry.role === "user") {
@@ -295,11 +300,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         return;
       }
       if (entry.role === "assistant") {
-        // 只转对话文本(hideToolCalls 恒 true):工具循环中间消息无文本时
-        // buildTurnReply 给 text=null,自然跳过。
         const turn = buildTurnReply(entry.message as AssistantMessage, true);
         if (turn.text) {
-          sendReply(target.chatId, target.transport, turn.text).catch(() => {});
+          sendReply(target.chatId, target.transport, t("mirror.assistant", { text: truncate(turn.text, 3000) })).catch(() => {});
         }
       }
     } catch {

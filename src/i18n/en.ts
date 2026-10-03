@@ -174,7 +174,8 @@ const en: Record<MessageKey, string> = {
   "router.extensionError": "⚠️ Extension error ({path}): {error}",
 
   // ── mirror (TUI ↔ Matrix session mirror, session-mirror.ts / router) ──
-  "mirror.user": "🖥 **TUI** › {text}",
+  "mirror.user": "🖥 **TUI user** › {text}",
+  "mirror.assistant": "🤖 **TUI assistant** › {text}",
   "mirror.fork.warning":
     "⚠️ Session fork detected (the TUI process never re-reads the session file, so writing in the TUI after a Matrix-side reply branches off the old node; or the TUI switched tree branches).\n" +
     "Relay keeps following the newest branch; if the context feels off, /resume the session in the TUI to converge both ends.",
