@@ -15,7 +15,7 @@ import {
   extractTextFromMessage,
   formatToolCalls,
   hasToolCalls,
-  splitMessage,
+  splitMessage,truncate 
 } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { namespacedId } from "../identity.js";
@@ -30,12 +30,14 @@ import {
   formatBashReply,
   handleSlashCommand,
   parseBangCommand,
+  resolveSessionDir,
 } from "./command-map.js";
 import { ExtensionQuestions, type ExtensionUIRequestView, extensionUiTimeoutMs } from "./extension-questions.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
 import { RpcTransientState } from "./rpc-transient-state.js";
+import { extractUserText, type MirroredEntry, MirrorManager } from "./session-mirror.js";
 import { appendStatusFooter, collectStatusFooter } from "./status-footer.js";
 
 export interface MessageRouterDeps {
@@ -237,6 +239,58 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     timeoutMs: () => extensionUiTimeoutMs(store.get()),
     subscribeRestart: (rpc, handler) => rpc.onRestarted?.(handler),
   });
+
+  // TUI ↔ Matrix 会话镜像(/attach /detach):显示靠 tail + 去重,上下文靠
+  // prompt 前自动接力 —— 机制都在 session-mirror.ts,router 只做渲染、目标
+  // 绑定与接力时机编排。
+  const mirrors = new MirrorManager();
+
+  /** /attach:开启当前房间对本进程会话目录的镜像,返回给房间的说明文案。 */
+  const attachMirror = async (rpc: PiRpc, target: ReplyTarget): Promise<string> => {
+    const state = await rpc.requireClient().getState();
+    if (!state.sessionFile || !state.sessionId) {
+      return t("cmd.attach.noSession");
+    }
+    // 初始 leaf(分叉检测的基线):失败容忍 —— null 时第一条 tail entry 不判
+    // 分叉,只建立基线,之后的断裂仍会被发现。
+    let leafId: string | null = null;
+    try {
+      leafId = (await rpc.requireClient().getEntries()).leafId;
+    } catch {
+      // get_entries 不可用时按未知 leaf 起步(见上)。
+    }
+    mirrors.attach(rpc, resolveSessionDir(rpc), {
+      onExternalMessage: (entry) => mirrorForward(entry, target),
+      onFork: () => {
+        sendReply(target.chatId, target.transport, t("mirror.fork.warning")).catch(() => {});
+      },
+    }, leafId);
+    const attachCommand = `pi${rpc.sessionDir ? ` --session-dir ${rpc.sessionDir}` : ""} --session ${state.sessionId}`;
+    return t("cmd.attach.ok", { id: state.sessionId, command: attachCommand, dir: resolveSessionDir(rpc) });
+  };
+
+  /** TUI 写入的对话消息 → 渲染转发房间(镜像链路任何异常不影响主流程)。 */
+  const mirrorForward = (entry: MirroredEntry, target: ReplyTarget): void => {
+    try {
+      if (entry.role === "user") {
+        const text = extractUserText(entry.message);
+        if (text) {
+          sendReply(target.chatId, target.transport, t("mirror.user", { text: truncate(text, 3000) })).catch(() => {});
+        }
+        return;
+      }
+      if (entry.role === "assistant") {
+        // 只转对话文本(hideToolCalls 恒 true):工具循环中间消息无文本时
+        // buildTurnReply 给 text=null,自然跳过。
+        const turn = buildTurnReply(entry.message as AssistantMessage, true);
+        if (turn.text) {
+          sendReply(target.chatId, target.transport, turn.text).catch(() => {});
+        }
+      }
+    } catch {
+      // 镜像渲染失败静默:显示是附加能力,不影响会话与转发主链路。
+    }
+  };
 
   // ── 管道阶段(spec #72 票3/C1)─────────────────────────────────────
   // 顺序即执行顺序。每个阶段的 handle 返回 true = 消息已被处理(管道终止)。
@@ -557,6 +611,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             queueView: () => transient.mirror(rpc),
             allRpcs: () => projectManager.allRpcs(),
             bashTracker,
+            mirror: {
+              attach: async () => attachMirror(rpc, { chatId: ctx.msg.chatId, transport: ctx.msg.transport, username: ctx.msg.username }),
+              detach: async () =>
+                mirrors.detach(rpc) ? t("cmd.detach.ok") : t("cmd.detach.notActive"),
+            },
           });
           return handled;
         } catch (err) {
@@ -636,6 +695,17 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // attachments parked so the retry carries them.
       handle: async (ctx) => {
         const rpc = await ctx.roomRpc();
+        // 自动接力(镜像 /attach 生效时):发 prompt 前若 TUI 有未接力的写入
+        // 且进程空闲,先 switchSession 重读会话文件,agent 带着全量上下文作答。
+        // 失败只警告不阻断;busy/forked/clean 静默(forked 已在 onFork 警告过)。
+        try {
+          const relay = await mirrors.ensureFreshContext(rpc);
+          if (relay.kind === "failed") {
+            await sendReply(ctx.msg.chatId, ctx.msg.transport, t("mirror.relay.failed", { message: relay.message }));
+          }
+        } catch {
+          // 接力检查的任何意外不得挡住 prompt 本身。
+        }
         try {
           const key = attachmentLedgerKey(ctx.msg.chatId, ctx.msg.userId);
           const carried = pendingAttachments.get(key);
@@ -739,6 +809,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           steering: [...(event.steering ?? [])],
           followUp: [...(event.followUp ?? [])],
         });
+      }
+
+      // 会话镜像(/attach 生效时):entry_appended = 本进程落盘了一条 entry,
+      // 把 id 喂给镜像器做 tail 去重(文件里再读到同 id 即自身写入,不转发)。
+      if (event.type === "entry_appended" && event.entry?.id) {
+        mirrors.noteSelfEntry(rpc, event.entry.id);
       }
 
       // Extension UI (issue #54): questions are asked in the bound room and
@@ -886,6 +962,7 @@ type AgentEventView = {
         followUp?: readonly string[];
         extensionPath?: string;
         error?: string;
+        entry?: { id?: string; type?: string };
      };
 
 /**

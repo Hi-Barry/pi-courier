@@ -42,6 +42,13 @@ export interface SlashCommandContext {
   /** 在跑 bash 记账(/bashstop 的"列出"数据源)。Absence = /bashstop 只能
    *  盲停(仍然可用:上游 abortBash 无在跑命令时是无害空操作)。 */
   bashTracker?: BashTracker;
+  /** TUI ↔ Matrix 会话镜像(/attach /detach,issue: TUI 双端协同)。
+   *  attach/detach 返回已渲染好的房间文案(router 侧拼装:绑定房间 + i18n)。
+   *  Absence = 镜像能力不可用,回复不可用文案。 */
+  mirror?: {
+    attach: () => Promise<string>;
+    detach: () => Promise<string>;
+  };
   /** Router-owned per-rpc transient state (queue mirror, pending extension
    *  questions) must not survive a restart: the new subprocess knows nothing
    *  of old question ids, and a stale question would swallow the room's next
@@ -505,6 +512,25 @@ export async function handleSlashCommand(
         }
         const result = await rpc.requireClient().switchSession(target.path);
         await reply(result.cancelled ? t("cmd.switch.cancelled") : t("cmd.switch.ok", { file: target.file }));
+        return true;
+      }
+
+      // --- TUI ↔ Matrix 会话镜像 ------------------------------------------------
+      case "/attach": {
+        if (!ctx.mirror) {
+          await reply(t("cmd.attach.unavailable"));
+          return true;
+        }
+        await reply(await ctx.mirror.attach());
+        return true;
+      }
+
+      case "/detach": {
+        if (!ctx.mirror) {
+          await reply(t("cmd.attach.unavailable"));
+          return true;
+        }
+        await reply(await ctx.mirror.detach());
         return true;
       }
 

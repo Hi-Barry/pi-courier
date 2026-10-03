@@ -71,6 +71,18 @@ const zh = {
   "cmd.switch.outOfRange": "❌ 序号超出范围: {index}(用 /sessions 查看当前列表)。",
   "cmd.switch.cancelled": "⚠️ 切换会话被扩展取消",
   "cmd.switch.ok": "✅ 已切换会话: {file}",
+  "cmd.attach.ok":
+    "🔗 已开启会话镜像(本房间 ↔ TUI 双端同步)。\n" +
+    "终端里跑这条命令附加同一会话:\n" +
+    "`{command}`\n\n" +
+    "• TUI 里收发的消息会实时转发到本房间;\n" +
+    "• TUI 用完后回本房间发消息,上下文自动接上(空闲时自动接力);\n" +
+    "• 会话目录: {dir}\n" +
+    "• 结束镜像用 /detach。",
+  "cmd.attach.noSession": "💤 当前还没有会话文件(先发一条消息开启会话),稍后再 /attach。",
+  "cmd.attach.unavailable": "❌ 会话镜像在当前部署不可用。",
+  "cmd.detach.ok": "✅ 已关闭会话镜像。TUI 的消息不再转发到本房间。",
+  "cmd.detach.notActive": "💤 当前没有开启的会话镜像。",
   "cmd.reload.allUnavailable": "❌ /reload all 不可用(当前部署未启用多进程枚举)。",
   "cmd.reload.allInProgress": "🔄 正在逐个重启全部 pi 进程(空闲才重启,忙碌跳过)…",
   "cmd.reload.inProgress": "🔄 正在重启 pi 进程(扩展/技能/配置将重新加载)…",
@@ -107,6 +119,8 @@ const zh = {
     "• `/autoretry on|off` — 自动重试开关(实例级生效,同上)\n" +
     "• `/sessions` — 列出最近会话(按修改时间)\n" +
     "• `/switch <序号>` — 切换到 /sessions 列出的会话(流式中需先 /stop)\n" +
+    "• `/attach` — 开启 TUI ↔ Matrix 会话镜像(回复附加命令,终端跑它即可双端同步)\n" +
+    "• `/detach` — 关闭会话镜像\n" +
     "• `/last` — 复述 agent 最近一次回复\n" +
     "• `/session` — 会话统计与费用\n" +
     "• `/status` — 当前模型与状态\n" +
@@ -155,6 +169,14 @@ const zh = {
   "router.retry.inProgress": "⚠️ 调用失败,正在重试 {attempt}/{max}: {error}",
   "router.retry.exhausted": "❌ 自动重试耗尽: {error}",
   "router.extensionError": "⚠️ 扩展错误 ({path}): {error}",
+
+  // ── mirror(TUI ↔ Matrix 会话镜像,session-mirror.ts / router)─────────
+  "mirror.user": "🖥 **TUI** › {text}",
+  "mirror.fork.warning":
+    "⚠️ 检测到会话分叉(TUI 与 Matrix 同时写入了同一会话,或 TUI 切换了树分支)。\n" +
+    "为避免接错上下文,自动接力已暂停;消息仍会继续转发显示。\n" +
+    "处理:在 TUI 里用 /tree 选回主分支,或重新 /attach。",
+  "mirror.relay.failed": "⚠️ 会话上下文自动接力失败(消息仍会发出,但可能不含 TUI 的最新对话): {message}",
 
   // ── xq(扩展 UI 提问机,extension-questions.ts)───────────────────────
   "xq.untitled": "(无标题)",

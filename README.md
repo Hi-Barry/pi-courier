@@ -320,6 +320,23 @@ One bot account can serve multiple projects — each project gets its own privat
   ```
 - Each project room lazily starts its own pi process (~300MB RAM each) with `--session-dir <workdir>/.pi-session`, so sessions survive restarts per project.
 
+### TUI ↔ Matrix session mirror (two-way sync)
+
+Keep working in the terminal while the bot echoes everything into Matrix. In a room, send:
+
+```
+/attach
+```
+
+The bot replies with the exact command to run in a terminal, e.g. `pi --session <id>` (with `--session-dir` when the deployment uses a custom one). Attach in the terminal and the two ends stay in sync:
+
+- **TUI → Matrix (live mirror)**: every prompt you send in the TUI and every reply the agent gives is forwarded to the room in real time — user lines carry a `🖥 **TUI**` prefix; tool-call traffic is not forwarded, only conversation text.
+- **Matrix → TUI (inherited context)**: attaching opens the very same session file, so the TUI starts with the full history of what Matrix already discussed.
+- **Back to Matrix (auto-relay)**: after working in the TUI, just message the room again — before answering, the bot reloads the session file while idle, so the agent's context includes whatever happened in the TUI. In-flight work and queued messages are never interrupted by a reload.
+- **Fork guard**: if both ends write to the session at the same time (or the TUI switches tree branches), the bot posts a warning and pauses auto-relay — mirroring keeps running; resolve the branch in the TUI (`/tree`) or `/attach` afresh.
+
+`/detach` stops mirroring for that room. The mirror is per-room and follows the room's own process: project rooms mirror their project's session directory; a room using the shared default process mirrors its session directory, filtered by working directory, so unrelated projects' terminal sessions never leak in.
+
 ### Managing the service
 
 ```bash
