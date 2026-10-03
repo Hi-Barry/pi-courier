@@ -69,6 +69,18 @@ const en: Record<MessageKey, string> = {
   "cmd.switch.outOfRange": "❌ Number out of range: {index} (use /sessions to see the current list).",
   "cmd.switch.cancelled": "⚠️ Session switch cancelled by an extension",
   "cmd.switch.ok": "✅ Session switched: {file}",
+  "cmd.attach.ok":
+    "🔗 Session mirror enabled (this room ↔ TUI, two-way sync).\n" +
+    "Run this command in a terminal to attach to the same session:\n" +
+    "`{command}`\n\n" +
+    "• Messages sent/received in the TUI are forwarded to this room in real time;\n" +
+    "• When you come back and message this room, the context is carried over automatically (auto-relay while idle);\n" +
+    "• Session directory: {dir}\n" +
+    "• Use /detach to stop mirroring.",
+  "cmd.attach.noSession": "💤 No session file yet (send a message to start a session), then run /attach again.",
+  "cmd.attach.unavailable": "❌ Session mirroring is unavailable in this deployment.",
+  "cmd.detach.ok": "✅ Session mirror stopped. TUI messages are no longer forwarded to this room.",
+  "cmd.detach.notActive": "💤 No active session mirror.",
   "cmd.reload.allUnavailable": "❌ /reload all unavailable (multi-process enumeration is not enabled in this deployment).",
   "cmd.reload.allInProgress": "🔄 Restarting every pi process one by one (idle ones only, busy ones skipped)…",
   "cmd.reload.inProgress": "🔄 Restarting the pi process (extensions/skills/config will reload)…",
@@ -106,6 +118,8 @@ const en: Record<MessageKey, string> = {
     "• `/autoretry on|off` — auto-retry toggle (instance-wide, same as above)\n" +
     "• `/sessions` — list recent sessions (by modification time)\n" +
     "• `/switch <number>` — switch to a session from /sessions (run /stop first while streaming)\n" +
+    "• `/attach` — enable the TUI ↔ Matrix session mirror (replies with a command to run in a terminal for two-way sync)\n" +
+    "• `/detach` — stop the session mirror\n" +
     "• `/last` — repeat the agent's latest reply\n" +
     "• `/session` — session stats and cost\n" +
     "• `/status` — current model and state\n" +
@@ -158,6 +172,18 @@ const en: Record<MessageKey, string> = {
   "router.retry.inProgress": "⚠️ Call failed, retrying {attempt}/{max}: {error}",
   "router.retry.exhausted": "❌ Auto-retry exhausted: {error}",
   "router.extensionError": "⚠️ Extension error ({path}): {error}",
+
+  // ── mirror (TUI ↔ Matrix session mirror, session-mirror.ts / router) ──
+  "mirror.user": "🖥 **TUI** › {text}",
+  "mirror.fork.warning":
+    "⚠️ Session fork detected (the TUI process never re-reads the session file, so writing in the TUI after a Matrix-side reply branches off the old node; or the TUI switched tree branches).\n" +
+    "Relay keeps following the newest branch; if the context feels off, /resume the session in the TUI to converge both ends.",
+  "mirror.relay.failed": "⚠️ Auto-relay of session context failed (the message still goes out, but may miss the latest TUI conversation): {message}",
+  "mirror.newSession.notice":
+    "🆕 The TUI wrote to a DIFFERENT session ({file}) — Matrix is on another one, and their contexts are unrelated (messages keep mirroring).\n" +
+    "To bring Matrix to that session: send /sessions and /switch <number>, or /attach again for the fresh attach command.",
+  "cmd.new.mirrorHint":
+    "ℹ️ The session mirror is still active for this room (TUI messages keep forwarding), but the attach command in your terminal now points at the old session — run /attach again for the new one.",
 
   // ── xq ────────────────────────────────────────────────────────────────
   "xq.untitled": "(untitled)",

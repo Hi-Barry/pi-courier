@@ -42,6 +42,20 @@ export interface SlashCommandContext {
   /** 在跑 bash 记账(/bashstop 的"列出"数据源)。Absence = /bashstop 只能
    *  盲停(仍然可用:上游 abortBash 无在跑命令时是无害空操作)。 */
   bashTracker?: BashTracker;
+  /** TUI ↔ Matrix 会话镜像(/attach /detach,TUI 双端协同)。attach/detach
+   *  返回已渲染好的房间文案(router 侧拼装:绑定房间 + i18n);rebase 在
+   *  /new /switch 换会话后同步镜像的「当前会话文件」;active 供 /new 追加
+   *  「重新 /attach」提示的判据。Absence = 镜像能力不可用,回复不可用文案。 */
+  sessionMirror?: {
+    attach: () => Promise<string>;
+    detach: () => Promise<string>;
+    /** 本进程当前是否挂着镜像。 */
+    active: () => boolean;
+    /** 换会话成功后同步镜像基线(新 sessionFile;尚无文件时传 undefined)。 */
+    rebase: (sessionFile: string | undefined) => void;
+    /** 当前会话文件路径(换会话后取新值用;不可用时 undefined)。 */
+    currentSessionFile: () => Promise<string | undefined>;
+  };
   /** Router-owned per-rpc transient state (queue mirror, pending extension
    *  questions) must not survive a restart: the new subprocess knows nothing
    *  of old question ids, and a stale question would swallow the room's next
@@ -369,6 +383,14 @@ export async function handleSlashCommand(
       case "/clear": {
         const { cancelled } = await rpc.requireClient().newSession();
         await reply(cancelled ? t("cmd.new.cancelled") : t("cmd.new.ok"));
+        if (!cancelled) {
+          // 镜像(active)跟随房间进程而非写死的文件 id,目录级 watch 对新
+          // 会话照常生效;过期的是终端里那条附加命令 —— 指路重新 /attach。
+          if (ctx.sessionMirror?.active()) {
+            ctx.sessionMirror.rebase(await ctx.sessionMirror.currentSessionFile());
+            await reply(t("cmd.new.mirrorHint"));
+          }
+        }
         return true;
       }
 
@@ -505,6 +527,28 @@ export async function handleSlashCommand(
         }
         const result = await rpc.requireClient().switchSession(target.path);
         await reply(result.cancelled ? t("cmd.switch.cancelled") : t("cmd.switch.ok", { file: target.file }));
+        if (!result.cancelled) {
+          ctx.sessionMirror?.rebase(await ctx.sessionMirror.currentSessionFile());
+        }
+        return true;
+      }
+
+      // --- TUI ↔ Matrix 会话镜像 ------------------------------------------------
+      case "/attach": {
+        if (!ctx.sessionMirror) {
+          await reply(t("cmd.attach.unavailable"));
+          return true;
+        }
+        await reply(await ctx.sessionMirror.attach());
+        return true;
+      }
+
+      case "/detach": {
+        if (!ctx.sessionMirror) {
+          await reply(t("cmd.attach.unavailable"));
+          return true;
+        }
+        await reply(await ctx.sessionMirror.detach());
         return true;
       }
 

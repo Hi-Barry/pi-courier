@@ -198,6 +198,7 @@ pi 0.83.0 就绪。
 - `/queue [文本]` → 队列查看 / 排队;`/interrupt <指令>` → 打断并重发(spec #51)
 - `/last` `/cyclemodel` `/cyclethinking` `/sessions`+`/switch` `/autocompact` `/autoretry` → 小命令批(spec #51)
 - `/reload` → 重启 pi 进程(后加);`/reload all` → 本实例全部空闲进程(spec #51)
+- `/attach` `/detach` → TUI↔Matrix 会话镜像的开关(TUI 双端协同;/attach 回执带可复制的 `pi [--session-dir <dir>] --session <id>` 附加命令)
 - `/login` `/logout` `/auth` → 无头登录,门禁在 router(spec #51)
 - 其余 `/xxx` → 透传给 pi 的 `prompt`,由 pi 展开命令/技能/模板
 
@@ -279,6 +280,11 @@ pi 0.83.0 就绪。
 **`src/rpc/extension-questions.ts`** —— extension-UI 提问机状态机(spec #99 票3/#104 自 router 迁出)
 - 自带状态:每进程 FIFO 队列 + 超时计时器;构造注入 sendReply/应答写入口/超时来源/重启订阅,router 阶段只调 handle/deliver/clear
 - 不变量即 interface 契约:FIFO 最老优先、超时代答取消、invalid 重问不出队、无绑定代答取消、`/` 开头仍走命令通道、登录捕获优先于悬置提问(spec #51 票3/#54)
+
+**`src/rpc/session-mirror.ts`** —— TUI↔Matrix 会话镜像(TUI 双端协同,2026-10-03)
+- 机制:递归 `fs.watch` 会话目录 + 按文件 offset 增量 tail(pi 会话为纯追加 JSONL,每条 entry 即时落盘);`entry_appended` 事件喂入自身写入 id 集合,tail 读到未知 id 才是 TUI 侧写入(50ms 判定期窗口对冲 watch 回调与 RPC 事件的竞态)
+- 三个方向:TUI→Matrix 实时镜像(🖥 TUI 前缀,只转对话,复用 buildTurnReply 渲染);Matrix→TUI 继承(TUI 附加同一文件天然全量);回 Matrix 自动接力——prompt 阶段发 prompt 前 `ensureFreshContext()`(空闲才接力:流式中/队列非空跳过,`switch_session` 同文件重读让 agent 上下文追上 TUI 写入)
+- 边界语义:header.cwd 过滤(单工程全局目录防其他项目串台);分叉(对端从旧节点接枝)只警告一次、接力继续跟随文件序最新分支;TUI 在另一会话写入时提醒一次(接力不跨会话文件);Matrix 侧 /new /switch 后 `rebase()` 重置基线并提示重新 /attach
 
 **`src/startup-state.ts`** —— 启动状态可注入模块(spec #99 票7/#106)
 - `sendPairingNotice` 配对码落地槽:先构造后接线,接线前到达的配对码进缓冲、`wirePairingSink` 后按序补发——晚绑定从"注释保证不发生"变"结构保证不丢"
@@ -808,7 +814,7 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
           → 登录管理(/login /logout /auth —— 仅管理员 + 管理房间,单工程模式 DM 即管理房间)
             → RPC 映射命令(/new /compact /model /queue /interrupt ...;DM /help 也在这里,统一输出 pi 命令 + bridge 命令)
               → 应答捕获(非 / 消息:登录流程优先于 extension_ui 悬置提问;「取消」一律中止)
-                → 透传 prompt(命中回复引用时摘录前缀一并下发;/skill:xxx /template 普通文本)
+                → 透传 prompt(命中回复引用时摘录前缀一并下发;/skill:xxx /template 普通文本;镜像生效且空闲时先 switch_session 重读会话文件——TUI↔Matrix 自动接力)
 ```
 
 策略(认证、挑战码、群 /enable)只存在于 router 的 `handleIncoming` 管道一份,管理命令判定在 `src/auth/admin-commands.ts`(纯输入输出,effects 由 router 落盘——`persistAuth` 写 auth 快照、`hideToolCalls` 写开关、`spaceInvite` 触发空间 fire-once 邀请);transport 侧不做任何授权判定(否则未启用房间的消息到不了 `/enable`,该功能在真实链路上不可达)。注意:/enable 步骤在「授权生效」之前执行,但位于「授权计算」之后——两者缺一不可。/pmctl 的门禁与动作集中在 PmctlController,邀请目标由 router 以 transport 原生 MXID 传入。

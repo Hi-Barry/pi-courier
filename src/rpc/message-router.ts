@@ -15,7 +15,7 @@ import {
   extractTextFromMessage,
   formatToolCalls,
   hasToolCalls,
-  splitMessage,
+  splitMessage,truncate 
 } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { namespacedId } from "../identity.js";
@@ -30,12 +30,14 @@ import {
   formatBashReply,
   handleSlashCommand,
   parseBangCommand,
+  resolveSessionDir,
 } from "./command-map.js";
 import { ExtensionQuestions, type ExtensionUIRequestView, extensionUiTimeoutMs } from "./extension-questions.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
 import { RpcTransientState } from "./rpc-transient-state.js";
+import { extractUserText, type MirroredEntry, MirrorManager } from "./session-mirror.js";
 import { appendStatusFooter, collectStatusFooter } from "./status-footer.js";
 
 export interface MessageRouterDeps {
@@ -237,6 +239,73 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     timeoutMs: () => extensionUiTimeoutMs(store.get()),
     subscribeRestart: (rpc, handler) => rpc.onRestarted?.(handler),
   });
+
+  // TUI ↔ Matrix 会话镜像(/attach /detach):显示靠 tail + 去重,上下文靠
+  // prompt 前自动接力 —— 机制都在 session-mirror.ts,router 只做渲染、目标
+  // 绑定与接力时机编排。
+  const mirrors = new MirrorManager();
+
+  /** /attach:开启当前房间对本进程会话目录的镜像,返回给房间的说明文案。 */
+  const attachMirror = async (rpc: PiRpc, target: ReplyTarget): Promise<string> => {
+    const client = rpc.requireClient();
+    const state = await client.getState();
+    if (!state.sessionFile || !state.sessionId) {
+      return t("cmd.attach.noSession");
+    }
+    // 初始 leaf(分叉检测的基线):失败容忍 —— null 时第一条 tail entry 不判
+    // 分叉,只建立基线,之后的断裂仍会被发现。
+    let leafId: string | null = null;
+    try {
+      leafId = (await client.getEntries()).leafId;
+    } catch {
+      // get_entries 不可用时按未知 leaf 起步(见上)。
+    }
+    const dir = resolveSessionDir(rpc);
+    // 权威源自写判定:上游普通消息落盘不发 entry_appended,文件层分不出两端,
+    // 疑似外部写入时直接问 RPC 进程(get_entries 的 id 集合)。
+    const querySelfEntryIds = async (): Promise<Set<string>> => {
+      const { entries } = await rpc.requireClient().getEntries();
+      return new Set(entries.map((e) => e.id));
+    };
+    mirrors.attach(rpc, dir, {
+      onExternalMessage: (entry) => mirrorForward(entry, target),
+      onFork: () => {
+        sendReply(target.chatId, target.transport, t("mirror.fork.warning")).catch(() => {});
+      },
+      onForeignSession: (file) => {
+        sendReply(target.chatId, target.transport, t("mirror.newSession.notice", { file })).catch(() => {});
+      },
+    }, leafId, state.sessionFile, querySelfEntryIds);
+    // 附加命令用会话文件路径而非 id:实测 pi 1.0 的 id 查找在本布局下不可靠
+    // (get_state 的 sessionId 与文件 header id 在 resume 后会漂移,且按 id 查
+    // 两者都 No session found;路径模式直开文件,永远有效)。--session-dir 保
+    // 持与本进程同源,用户后续 /new 时新会话落在同一目录,镜像照常覆盖。
+    const attachCommand = `pi${rpc.sessionDir ? ` --session-dir ${rpc.sessionDir}` : ""} --session '${state.sessionFile}'`;
+    return t("cmd.attach.ok", { command: attachCommand, dir });
+  };
+
+  /** TUI 写入的对话消息 → 渲染转发房间(镜像链路任何异常不影响主流程)。 */
+  const mirrorForward = (entry: MirroredEntry, target: ReplyTarget): void => {
+    try {
+      if (entry.role === "user") {
+        const text = extractUserText(entry.message);
+        if (text) {
+          sendReply(target.chatId, target.transport, t("mirror.user", { text: truncate(text, 3000) })).catch(() => {});
+        }
+        return;
+      }
+      if (entry.role === "assistant") {
+        // 只转对话文本(hideToolCalls 恒 true):工具循环中间消息无文本时
+        // buildTurnReply 给 text=null,自然跳过。
+        const turn = buildTurnReply(entry.message as AssistantMessage, true);
+        if (turn.text) {
+          sendReply(target.chatId, target.transport, turn.text).catch(() => {});
+        }
+      }
+    } catch {
+      // 镜像渲染失败静默:显示是附加能力,不影响会话与转发主链路。
+    }
+  };
 
   // ── 管道阶段(spec #72 票3/C1)─────────────────────────────────────
   // 顺序即执行顺序。每个阶段的 handle 返回 true = 消息已被处理(管道终止)。
@@ -557,6 +626,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             queueView: () => transient.mirror(rpc),
             allRpcs: () => projectManager.allRpcs(),
             bashTracker,
+            sessionMirror: {
+              attach: async () => attachMirror(rpc, { chatId: ctx.msg.chatId, transport: ctx.msg.transport, username: ctx.msg.username }),
+              detach: async () =>
+                mirrors.detach(rpc) ? t("cmd.detach.ok") : t("cmd.detach.notActive"),
+              active: () => mirrors.has(rpc),
+              rebase: (sessionFile) => mirrors.rebase(rpc, sessionFile),
+              currentSessionFile: async () => (await rpc.requireClient().getState()).sessionFile,
+            },
           });
           return handled;
         } catch (err) {
@@ -636,6 +713,17 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // attachments parked so the retry carries them.
       handle: async (ctx) => {
         const rpc = await ctx.roomRpc();
+        // 自动接力(镜像 /attach 生效时):发 prompt 前若 TUI 有未接力的写入
+        // 且进程空闲,先 switchSession 重读会话文件,agent 带着全量上下文作答。
+        // 失败只警告不阻断;busy/forked/clean 静默(forked 已在 onFork 警告过)。
+        try {
+          const relay = await mirrors.ensureFreshContext(rpc);
+          if (relay.kind === "failed") {
+            await sendReply(ctx.msg.chatId, ctx.msg.transport, t("mirror.relay.failed", { message: relay.message }));
+          }
+        } catch {
+          // 接力检查的任何意外不得挡住 prompt 本身。
+        }
         try {
           const key = attachmentLedgerKey(ctx.msg.chatId, ctx.msg.userId);
           const carried = pendingAttachments.get(key);
