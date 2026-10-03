@@ -50,15 +50,15 @@ function modelChangeLine(id: string, parentId: string | null): string {
 function makeMirror(opts?: { cwd?: string; initialLeafId?: string | null; initialSessionFile?: string }): {
   mirror: SessionMirror;
   external: MirroredEntry[];
-  forks: MirroredEntry[];
+  forks: number[];
   foreign: string[];
 } {
   const external: MirroredEntry[] = [];
-  const forks: MirroredEntry[] = [];
+  const forks: number[] = [];
   const foreign: string[] = [];
   const callbacks: MirrorCallbacks = {
     onExternalMessage: (entry) => external.push(entry),
-    onFork: (entry) => forks.push(entry),
+    onFork: () => forks.push(1),
     onForeignSession: (file) => foreign.push(file),
   };
   const mirror = new SessionMirror({
@@ -79,7 +79,6 @@ describe("parseSessionHeaderLine", () => {
   it("解析合法 header", () => {
     const header = parseSessionHeaderLine('{"type":"session","version":3,"id":"x","cwd":"/a/b"}');
     expect(header?.cwd).toBe("/a/b");
-    expect(header?.id).toBe("x");
   });
 
   it("非 session 类型与坏 JSON 返回 undefined", () => {
@@ -177,7 +176,7 @@ describe("SessionMirror tail", () => {
     }
   });
 
-  it("分叉检测:parentId 断裂触发 onFork(一次)并停用 dirty", async () => {
+  it("分叉检测:parentId 断裂触发 onFork(一次);警告不阻断接力(dirty 照常置位)", async () => {
     seedSessionFile("s.jsonl");
     const { mirror, external, forks } = makeMirror({ initialLeafId: "e0" });
     mirror.start();
@@ -188,8 +187,62 @@ describe("SessionMirror tail", () => {
       await vi.waitFor(() => expect(forks.length).toBe(1));
       fs.appendFileSync(file, messageLine("f2", "f1", "assistant", "分叉回复") + "\n");
       await vi.waitFor(() => expect(external.length).toBe(2));
-      expect(mirror.isForked()).toBe(true);
-      expect(mirror.isDirty()).toBe(false); // 分叉后不再置 dirty(接力停用)。
+      expect(mirror.isDirty()).toBe(true); // 分叉只是提示,接力继续跟随最新分支。
+      // 后续正常接力的写入不再重复警告。
+      fs.appendFileSync(file, messageLine("f3", "f2", "user", "继续") + "\n");
+      await vi.waitFor(() => expect(external.length).toBe(3));
+      expect(forks.length).toBe(1);
+    } finally {
+      mirror.stop();
+    }
+  });
+
+  it("竞态窗口:tail 先于 entry_appended 读到自身写入,flush 查已知集合后不回显", async () => {
+    seedSessionFile("s.jsonl");
+    const { mirror, external } = makeMirror({ initialLeafId: "e0" });
+    mirror.start();
+    try {
+      const file = path.join(dir, "s.jsonl");
+      // 模拟最坏时序:watch 回调先入判定窗口,entry_appended 记账随后(10ms)
+      // 到达,50ms flush 时查表命中 → 不回显。若回调更慢则 knownIds 直接
+      // 命中,断言同样成立(两种真实时序都绿)。
+      fs.appendFileSync(file, messageLine("race-1", "e0", "user", "Matrix 自己的消息") + "\n");
+      setTimeout(() => mirror.noteSelfEntry("race-1"), 10);
+      await flush(120); // 越过 50ms 判定期。
+      expect(external.length).toBe(0);
+      expect(mirror.isDirty()).toBe(false);
+    } finally {
+      mirror.stop();
+    }
+  });
+
+  it("rebase(换会话):dirty 清零、当前文件重指、外来文件重新计提醒", async () => {
+    const mainFile = seedSessionFile("main.jsonl", [messageLine("e0", null, "user", "基线")]);
+    const { mirror, external, foreign } = makeMirror({ initialLeafId: "e0", initialSessionFile: mainFile });
+    mirror.start();
+    try {
+      // TUI 在外来会话写入 → 提醒 + dirty。
+      const lines = [
+        JSON.stringify({ type: "session", version: 3, id: "s-x", cwd: HEADER_CWD() }),
+        messageLine("x1", null, "user", "外来会话"),
+      ];
+      const foreignFile = path.join(dir, "foreign.jsonl");
+      fs.writeFileSync(foreignFile, lines.map((l) => `${l}\n`).join(""));
+      await vi.waitFor(() => expect(external.length).toBe(1));
+      expect(foreign.length).toBe(1);
+      expect(mirror.isDirty()).toBe(true);
+      // Matrix 侧 /new → rebase 指向新会话文件:dirty 作废,原外来文件被
+      // 重新标为 foreign(再写入会再提醒一次)。
+      const nextFile = path.join(dir, "next.jsonl");
+      fs.writeFileSync(
+        nextFile,
+        `${JSON.stringify({ type: "session", version: 3, id: "s-next", cwd: HEADER_CWD() })}\n`
+      );
+      mirror.rebase(nextFile);
+      expect(mirror.isDirty()).toBe(false);
+      fs.appendFileSync(foreignFile, messageLine("x2", "x1", "user", "外来会话继续") + "\n");
+      await vi.waitFor(() => expect(external.length).toBe(2));
+      expect(foreign.length).toBe(2); // rebase 后重新提醒一次。
     } finally {
       mirror.stop();
     }
@@ -339,15 +392,16 @@ describe("MirrorManager.ensureFreshContext", () => {
     expect(switches).toEqual([]);
   });
 
-  it("分叉 → forked,永不接力", async () => {
-    const { rpc } = mockRpc({ sessionFile: "/x.jsonl" });
+  it("分叉只是警告:接力继续(relayed),跟随文件序最新分支", async () => {
+    const { rpc, switches } = mockRpc({ sessionFile: "/x/sess.jsonl" });
     const manager = new MirrorManager();
     // attach 时文件已存在且已跟踪(基线 leaf e0),之后 TUI 从旧节点接枝 → 断裂。
     seedSessionFile("forked.jsonl", [messageLine("e0", null, "user", "基线")]);
     manager.attach(rpc, dir, { onExternalMessage: () => {}, onFork: () => {}, onForeignSession: () => {} }, "e0");
     fs.appendFileSync(path.join(dir, "forked.jsonl"), messageLine("fk1", "old-branch", "user", "分叉") + "\n");
-    await vi.waitFor(() => expect(manager.has(rpc) && managerEnsureForked(manager, rpc)).toBe(true));
-    expect(await manager.ensureFreshContext(rpc)).toEqual({ kind: "forked" });
+    await vi.waitFor(() => expect(mirrorStillDirty(manager, rpc)).toBe(true));
+    expect(await manager.ensureFreshContext(rpc)).toEqual({ kind: "relayed" });
+    expect(switches).toEqual(["/x/sess.jsonl"]);
   });
 
   it("switchSession 抛错 → failed 带消息,dirty 保留", async () => {
@@ -369,8 +423,4 @@ describe("MirrorManager.ensureFreshContext", () => {
 /** 从 manager 里摸出 mirror 的 dirty 状态(测试辅助,不进生产面)。 */
 function mirrorStillDirty(manager: MirrorManager, rpc: object): boolean {
   return (manager as unknown as { mirrors: WeakMap<object, { isDirty(): boolean }> }).mirrors.get(rpc)?.isDirty() ?? false;
-}
-
-function managerEnsureForked(manager: MirrorManager, rpc: object): boolean {
-  return (manager as unknown as { mirrors: WeakMap<object, { isForked(): boolean }> }).mirrors.get(rpc)?.isForked() ?? false;
 }

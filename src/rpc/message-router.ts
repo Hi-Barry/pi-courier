@@ -247,7 +247,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
   /** /attach:开启当前房间对本进程会话目录的镜像,返回给房间的说明文案。 */
   const attachMirror = async (rpc: PiRpc, target: ReplyTarget): Promise<string> => {
-    const state = await rpc.requireClient().getState();
+    const client = rpc.requireClient();
+    const state = await client.getState();
     if (!state.sessionFile || !state.sessionId) {
       return t("cmd.attach.noSession");
     }
@@ -255,11 +256,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     // 分叉,只建立基线,之后的断裂仍会被发现。
     let leafId: string | null = null;
     try {
-      leafId = (await rpc.requireClient().getEntries()).leafId;
+      leafId = (await client.getEntries()).leafId;
     } catch {
       // get_entries 不可用时按未知 leaf 起步(见上)。
     }
-    mirrors.attach(rpc, resolveSessionDir(rpc), {
+    const dir = resolveSessionDir(rpc);
+    mirrors.attach(rpc, dir, {
       onExternalMessage: (entry) => mirrorForward(entry, target),
       onFork: () => {
         sendReply(target.chatId, target.transport, t("mirror.fork.warning")).catch(() => {});
@@ -269,7 +271,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       },
     }, leafId, state.sessionFile);
     const attachCommand = `pi${rpc.sessionDir ? ` --session-dir ${rpc.sessionDir}` : ""} --session ${state.sessionId}`;
-    return t("cmd.attach.ok", { id: state.sessionId, command: attachCommand, dir: resolveSessionDir(rpc) });
+    return t("cmd.attach.ok", { command: attachCommand, dir });
   };
 
   /** TUI 写入的对话消息 → 渲染转发房间(镜像链路任何异常不影响主流程)。 */
@@ -614,10 +616,13 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             queueView: () => transient.mirror(rpc),
             allRpcs: () => projectManager.allRpcs(),
             bashTracker,
-            mirror: {
+            sessionMirror: {
               attach: async () => attachMirror(rpc, { chatId: ctx.msg.chatId, transport: ctx.msg.transport, username: ctx.msg.username }),
               detach: async () =>
                 mirrors.detach(rpc) ? t("cmd.detach.ok") : t("cmd.detach.notActive"),
+              active: () => mirrors.has(rpc),
+              rebase: (sessionFile) => mirrors.rebase(rpc, sessionFile),
+              currentSessionFile: async () => (await rpc.requireClient().getState()).sessionFile,
             },
           });
           return handled;

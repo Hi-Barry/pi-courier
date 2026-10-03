@@ -173,13 +173,14 @@ const zh = {
   // ── mirror(TUI ↔ Matrix 会话镜像,session-mirror.ts / router)─────────
   "mirror.user": "🖥 **TUI** › {text}",
   "mirror.fork.warning":
-    "⚠️ 检测到会话分叉(TUI 与 Matrix 同时写入了同一会话,或 TUI 切换了树分支)。\n" +
-    "为避免接错上下文,自动接力已暂停;消息仍会继续转发显示。\n" +
-    "处理:在 TUI 里用 /tree 选回主分支,或重新 /attach。",
+    "⚠️ 检测到会话分叉(TUI 进程不会自动重读会话文件,Matrix 侧回复后它在 TUI 里续写就会从旧节点接枝;或 TUI 切换了树分支)。\n" +
+    "接力将继续跟随最新分支;若发现上下文对不上,在 TUI 里 /resume 重进本会话即可拉平两端。",
   "mirror.relay.failed": "⚠️ 会话上下文自动接力失败(消息仍会发出,但可能不含 TUI 的最新对话): {message}",
   "mirror.newSession.notice":
-    "🆕 检测到 TUI 侧开始了新会话({file})——Matrix 侧仍在原会话,接下来两端各聊各的(消息仍会镜像显示,但上下文互不相通)。\n" +
-    "要让 Matrix 跟上 TUI 的新会话:发 /sessions 后用 /switch <序号> 切过去,或重新 /attach 获取新会话的附加命令。",
+    "🆕 检测到 TUI 侧在另一个会话({file})写入——Matrix 侧当前会话不同,两边上下文互不相通(消息仍会镜像显示)。\n" +
+    "要让 Matrix 跟上该会话:发 /sessions 后用 /switch <序号> 切过去,或重新 /attach 获取新的附加命令。",
+  "cmd.new.mirrorHint":
+    "ℹ️ 会话镜像仍在本房间生效(TUI 的新消息照常转发),但终端里那条附加命令已指向旧会话——重新 /attach 获取新会话的命令。",
 
   // ── xq(扩展 UI 提问机,extension-questions.ts)───────────────────────
   "xq.untitled": "(无标题)",

@@ -11,8 +11,9 @@
  *  2. 上下文接力(给脑子):外部写入置 dirty;Matrix 下次 prompt 前由 router
  *     调 ensureFreshContext() —— 空闲则 switchSession(同一文件)让 RPC 进程重读
  *     文件,agent 的对话历史追上 TUI 写入的内容。
- *  3. 分叉检测:tail entry 的 parentId ≠ 已见 leaf(双端同时写 / TUI 切分支)
- *     → 一次性回调警告,并停用自动接力(分叉后接谁都不对,留给用户处理)。
+ *  3. 分叉提示:TUI 进程不重读文件,Matrix 侧回复后 TUI 再写必然从旧节点
+ *     接枝(双进程并写模型的常态)——检测到时一次性提示(怎么拉平),接力
+ *     不中断,继续跟随文件序最新分支。
  *
  * 边界(有意不做):不转发 TUI 流式 delta(落盘即完整消息)、不转发工具调用、
  * 不反向实时驱动 TUI(TUI 重进即见,接力语义已覆盖)。
@@ -23,7 +24,6 @@ import * as path from "node:path";
 /** pi 会话文件首行 header:{"type":"session","version":3,"id":...,"cwd":...} */
 export interface SessionHeader {
   cwd?: string;
-  id?: string;
 }
 
 /** tail 解析出的最小 entry 视图(只需要路由判断字段,不依赖上游类型)。 */
@@ -38,13 +38,16 @@ export interface MirroredEntry {
   message?: unknown;
 }
 
+/** 外部写入判定期(毫秒):entry_appended 自写记账与 fs.watch 的赛跑余量。 */
+const EXTERNAL_SETTLE_MS = 50;
+
 /** mirror 对外回调:外部(TUI)写入的对话消息,router 负责渲染与发送。 */
 export interface MirrorCallbacks {
   onExternalMessage: (entry: MirroredEntry) => void;
-  /** 分叉检测命中(一次性):之后自动接力停用。 */
-  onFork: (entry: MirroredEntry) => void;
-  /** TUI 侧另开了新会话(外部 message 落在一个非 attach 时会话文件里,每文件
-   *  提醒一次):接力不会跨会话文件,router 提示用户如何跟上。 */
+  /** 分叉检测命中(一次性):接力继续(跟随文件序最新分支),router 只提示。 */
+  onFork: () => void;
+  /** TUI 侧在另一个会话写入(非当前会话文件的首条对话,每文件提醒一次):
+   *  接力不跨会话文件,router 提示用户如何跟上。 */
   onForeignSession: (file: string) => void;
 }
 
@@ -62,9 +65,9 @@ interface TrackedFile {
 /** 解析会话文件首行 header;不是合法 JSON 或非 session 类型返回 undefined。 */
 export function parseSessionHeaderLine(line: string): SessionHeader | undefined {
   try {
-    const parsed = JSON.parse(line) as { type?: string; cwd?: string; id?: string };
+    const parsed = JSON.parse(line) as { type?: string; cwd?: string };
     if (parsed.type !== "session") return undefined;
-    return { cwd: parsed.cwd, id: parsed.id };
+    return { cwd: parsed.cwd };
   } catch {
     return undefined;
   }
@@ -104,8 +107,15 @@ export class SessionMirror {
   private stopped = false;
   /** 外部写入标记(ensureFreshContext 的触发依据)。 */
   private dirty = false;
-  /** attach 时刻 RPC 进程的会话文件:之外的都是 TUI 侧另开的会话。 */
-  private readonly initialSessionFile: string | undefined;
+  /** 当前会话文件(attach 时快照,rebase 随 /new /switch 更新):之外的都是
+   *  TUI 侧的「另一个会话」。 */
+  private initialSessionFile: string | undefined;
+  /** 外部写入的判定期窗口:fs.watch 回调与 entry_appended 事件(自写记账)
+   *  无先后保证,延迟一拍再查已知集合,输了竞态也不把自己的消息回显成 TUI 的。 */
+  private pendingExternal = new Map<
+    string,
+    { entry: MirroredEntry; role: string; file: TrackedFile; timer: NodeJS.Timeout }
+  >();
 
   constructor(opts: {
     sessionDir: string;
@@ -129,16 +139,30 @@ export class SessionMirror {
   }
 
   isDirty(): boolean {
-    return this.dirty && !this.forkDetected;
-  }
-
-  isForked(): boolean {
-    return this.forkDetected;
+    return this.dirty;
   }
 
   /** 清 dirty(接力成功后由 manager 调)。 */
   clearDirty(): void {
     this.dirty = false;
+  }
+
+  /** 换会话(Matrix 侧 /new、/switch 成功后):当前会话文件重置,旧的外来
+   *  写入作废(已提示过指路,不再触发跨会话接力),基线全部重建。 */
+  rebase(sessionFile: string | undefined): void {
+    this.initialSessionFile = sessionFile;
+    this.dirty = false;
+    this.forkDetected = false;
+    this.lastSeenLeafId = null;
+    this.knownIds.clear();
+    for (const pending of this.pendingExternal.values()) {
+      clearTimeout(pending.timer);
+    }
+    this.pendingExternal.clear();
+    for (const file of this.files.values()) {
+      file.foreignNew = sessionFile !== undefined && file.path !== sessionFile;
+      file.foreignNotified = false;
+    }
   }
 
   /** 启动目录监听并扫描既有 *.jsonl(只看增量:offset = 当前文件大小)。 */
@@ -269,8 +293,10 @@ export class SessionMirror {
     } catch {
       return; // 坏行跳过(与上游加载器同一容忍语义)。
     }
-    // 分叉检测:entry 的父不是我们已见的最后一条 = 有别端从旧节点接枝
-    // (双端同时写 / TUI 切树分支)。一次性警告,之后自动接力停用。
+    // 分叉检测:entry 的父不是我们已见的最后一条 = 写入方从旧节点接枝。
+    // **触发面如实的说明**:TUI 进程不重读文件,Matrix 侧回复后 TUI 再写
+    // 必然从旧 leaf 分叉——这是 pi 双进程并写模型的常态,不是异常。警告
+    // 一次(文案解释怎么拉平),接力照常跟随文件序最新分支。
     // header 行(type "session")没有 parentId,必须跳过 —— undefined ≠ null
     // 会在新文件首条上误报。
     if (
@@ -280,7 +306,7 @@ export class SessionMirror {
       entry.parentId !== this.lastSeenLeafId
     ) {
       this.forkDetected = true;
-      this.callbacks.onFork(entry);
+      this.callbacks.onFork();
     }
     this.lastSeenLeafId = entry.id;
     if (this.knownIds.has(entry.id)) return; // 自身写入,不转发。
@@ -288,8 +314,24 @@ export class SessionMirror {
     // role 在 message 里(会话文件结构:message:{role,content}),不在顶层。
     const role = (entry.message as { role?: string } | undefined)?.role;
     if (role !== "user" && role !== "assistant") return;
+    // 竞态窗口:fs.watch 与 entry_appended(自写记账)无先后保证,延迟一拍
+    // 再查已知集合 —— 输了竞态也不把自己的消息回显成 TUI 的。
+    if (!this.pendingExternal.has(entry.id)) {
+      const pending = { entry, role, file, timer: undefined as unknown as NodeJS.Timeout };
+      pending.timer = setTimeout(() => this.flushExternal(entry.id), EXTERNAL_SETTLE_MS);
+      this.pendingExternal.set(entry.id, pending);
+    }
+  }
+
+  /** 判定期结束:仍是未知 id 才算 TUI 写入(转发 + dirty + 跨会话提醒)。 */
+  private flushExternal(id: string): void {
+    const pending = this.pendingExternal.get(id);
+    if (!pending) return;
+    this.pendingExternal.delete(id);
+    if (this.knownIds.has(id)) return; // entry_appended 已记账:自身写入。
     this.dirty = true;
-    // TUI 另开的会话首条对话:提醒一次(接力不跨会话文件,用户需要指引)。
+    const { entry, role, file } = pending;
+    // TUI 在另一个会话写入:提醒一次(接力不跨会话文件,用户需要指引)。
     if (file.foreignNew && !file.foreignNotified) {
       file.foreignNotified = true;
       this.callbacks.onForeignSession(path.basename(file.path));
@@ -328,7 +370,6 @@ export type RelayOutcome =
   | { kind: "relayed" }
   | { kind: "clean" } // 没有 dirty,无需接力
   | { kind: "busy" } // 流式中/队列非空,跳过(dirty 保留)
-  | { kind: "forked" } // 分叉停用
   | { kind: "failed"; message: string };
 
 /**
@@ -375,15 +416,20 @@ export class MirrorManager {
     this.mirrors.get(rpc)?.noteSelfEntry(entryId);
   }
 
+  /** 换会话(Matrix 侧 /new /switch 成功后调):当前会话文件重置。 */
+  rebase(rpc: object, sessionFile: string | undefined): void {
+    this.mirrors.get(rpc)?.rebase(sessionFile);
+  }
+
   /**
    * prompt 前自动接力:有未接力外部写入且进程空闲(不在流式、队列空)时,
    * switchSession(同一文件)让 agent 重新读盘 —— 脑子追上 TUI 的对话。
+   * 分叉(检测性警告)不阻断接力:跟随文件序最新分支是最合理默认。
    * 任何失败都不阻断 prompt(警告由调用方决定是否展示)。
    */
   async ensureFreshContext(rpc: RelayRpc): Promise<RelayOutcome> {
     const mirror = this.mirrors.get(rpc);
     if (!mirror) return { kind: "clean" };
-    if (mirror.isForked()) return { kind: "forked" };
     if (!mirror.isDirty()) return { kind: "clean" };
     try {
       const state = await rpc.requireClient().getState();
