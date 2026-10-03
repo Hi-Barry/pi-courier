@@ -585,7 +585,7 @@ export async function handleSlashCommand(
           }
           const current = await rpc.requireClient().getState();
           const list = models
-            .map((m) => `• ${m.provider}/${m.id}${m.id === current.model?.id ? t("cmd.model.currentMarker") : ""}`)
+            .map((m) => `• ${m.provider}/${m.id}${isCurrentModel(m, current.model) ? t("cmd.model.currentMarker") : ""}`)
             .join("\n");
           await reply(t("cmd.model.list", { list }));
           return true;
@@ -616,7 +616,7 @@ export async function handleSlashCommand(
         const current = await rpc.requireClient().getState();
         await reply(
           models
-            .map((m) => `• ${m.provider}/${m.id}${m.id === current.model?.id ? t("cmd.model.currentMarker") : ""}`)
+            .map((m) => `• ${m.provider}/${m.id}${isCurrentModel(m, current.model) ? t("cmd.model.currentMarker") : ""}`)
             .join("\n")
         );
         return true;
@@ -650,7 +650,9 @@ export async function handleSlashCommand(
 
       case "/status": {
         const state = await rpc.requireClient().getState();
-        const modelName = state.model?.name || state.model?.id || "unknown";
+        const modelName = state.model
+          ? `${state.model.provider}/${state.model.name || state.model.id}`
+          : "unknown";
         await reply(t("cmd.status.ok", { model: modelName, streaming: state.isStreaming ? t("common.yes") : t("common.no") }));
         return true;
       }
@@ -720,6 +722,12 @@ export async function handleSlashCommand(
     await reply(t("cmd.generic.error", { message: (err as Error).message }));
     return true;
   }
+}
+
+/** 「当前模型」标记判定:provider 与 id 双比较 —— 同名模型(如 glm-5.3)常在
+ *  多家 provider 目录并存,单比 id 会同时标记两行。 */
+function isCurrentModel(model: { provider: string; id: string }, current: { provider?: string; id?: string } | undefined): boolean {
+  return !!current && model.provider === current.provider && model.id === current.id;
 }
 
 /** Parse "/model <provider>/<modelId>" or a bare id; bare ids keep the current provider. */
