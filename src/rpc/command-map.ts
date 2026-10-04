@@ -21,7 +21,8 @@ import * as path from "node:path";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
 import { t } from "../i18n/index.js";
-import type { BashResultView, PiRpc } from "./pi-rpc.js";
+import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
+import { upstreamClearQueueSend } from "./pi-rpc.js";
 
 /** Mirror of the upstream steering/followUp queues (router's queue_update view). */
 export interface QueueSnapshot {
@@ -151,17 +152,24 @@ function truncateLine(text: string, max = 120): string {
   return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
 }
 
+/** Total queued messages in a snapshot (0 when absent). */
+export function queueTotal(snapshot: QueueSnapshot | undefined): number {
+  return (snapshot?.steering.length ?? 0) + (snapshot?.followUp.length ?? 0);
+}
+
 /**
- * Unified queue warning for /stop and /interrupt replies: abort preserves the
- * upstream queues (RPC has no clear_queue), so remaining messages would fire
- * on the NEXT turn — surface that explicitly. Null when nothing is queued.
+ * Fallback queue warning for /stop and /interrupt replies on old upstreams
+ * (<0.84.4, clear_queue rejected — issue #112): abort alone preserves the
+ * queues, so remaining messages would fire on the NEXT turn — surface that
+ * explicitly. Null when nothing is queued. On current upstreams the commands
+ * clear the queue instead and report what was dropped.
  */
 export function queueWarning(snapshot: QueueSnapshot | undefined): string | null {
-  const steering = snapshot?.steering ?? [];
-  const followUp = snapshot?.followUp ?? [];
-  const total = steering.length + followUp.length;
+  const total = queueTotal(snapshot);
   if (total === 0) return null;
-  const lines = [...steering, ...followUp].map((m) => `- ${truncateLine(m)}`);
+  const lines = [...(snapshot?.steering ?? []), ...(snapshot?.followUp ?? [])].map(
+    (m) => `- ${truncateLine(m)}`
+  );
   return t("cmd.queue.warning", { count: total, lines: lines.join("\n") });
 }
 
@@ -169,6 +177,18 @@ export function queueWarning(snapshot: QueueSnapshot | undefined): string | null
 function withQueueWarning(replyText: string, snapshot: QueueSnapshot | undefined): string {
   const warning = queueWarning(snapshot);
   return warning ? `${replyText}\n${warning}` : replyText;
+}
+
+/**
+ * View of one clear_queue answer for the i18n reply (issue #112): count +
+ * bounded line list, same rendering style as queueWarning. Null when the
+ * upstream had nothing left to clear (e.g. the turn consumed the queue
+ * between our mirror snapshot and the clear).
+ */
+export function clearedQueuesView(cleared: UpstreamQueues): { count: number; lines: string } | null {
+  const all = [...cleared.steering, ...cleared.followUp];
+  if (all.length === 0) return null;
+  return { count: all.length, lines: all.map((m) => `- ${truncateLine(m)}`).join("\n") };
 }
 
 // --- Instance-wide restart (/reload all + login success — issue #55) --------
@@ -407,10 +427,35 @@ export async function handleSlashCommand(
 
       case "/stop":
       case "/abort": {
+        // pi TUI Esc semantics (issue #112): clear the queue BEFORE aborting
+        // (reverse order lets abort keep consuming queued messages), then
+        // report exactly what was dropped. Old upstreams (<0.84.4) reject
+        // clear_queue → fall back to the spec #51 behaviour: abort only, and
+        // warn that the queue survives.
+        const snapshot = queueView?.();
+        let cleared: UpstreamQueues | undefined;
+        let clearFailed = false;
+        if (queueTotal(snapshot) > 0) {
+          try {
+            cleared = await upstreamClearQueueSend(rpc.requireClient());
+          } catch {
+            clearFailed = true;
+          }
+        }
         await rpc.requireClient().abort();
-        // abort preserves the upstream queues (RPC has no clear_queue) — the
-        // warning makes that limitation explicit instead of surprising the user.
-        await reply(withQueueWarning(t("cmd.stop.ok"), queueView?.()));
+        const view = cleared ? clearedQueuesView(cleared) : null;
+        if (view) {
+          await reply(t("cmd.stop.cleared", view));
+        } else if (cleared) {
+          // Clear succeeded with nothing left (the turn consumed the queue
+          // between our mirror snapshot and the clear) — upstream is
+          // authoritatively empty; a stale mirror must not resurrect it.
+          await reply(t("cmd.stop.ok"));
+        } else if (clearFailed) {
+          await reply(withQueueWarning(`${t("cmd.stop.ok")}\n${t("cmd.queue.clearUnsupported")}`, snapshot));
+        } else {
+          await reply(withQueueWarning(t("cmd.stop.ok"), snapshot));
+        }
         return true;
       }
 
@@ -438,10 +483,33 @@ export async function handleSlashCommand(
           await reply(t("cmd.interrupt.idle"));
           return true;
         }
+        // Same clear-first order as /stop (issue #112): queued messages must
+        // not fire after the abort+waitForIdle, and the dropped ones are
+        // reported. Old upstreams fall back to abort-only + queue warning.
+        const snapshot = queueView?.();
+        let cleared: UpstreamQueues | undefined;
+        let clearFailed = false;
+        if (queueTotal(snapshot) > 0) {
+          try {
+            cleared = await upstreamClearQueueSend(rpc.requireClient());
+          } catch {
+            clearFailed = true;
+          }
+        }
         await rpc.requireClient().abort();
         await rpc.requireClient().waitForIdle();
         await rpc.prompt(args);
-        await reply(withQueueWarning(t("cmd.interrupt.done"), queueView?.()));
+        const view = cleared ? clearedQueuesView(cleared) : null;
+        if (view) {
+          await reply(`${t("cmd.interrupt.done")}\n${t("cmd.interrupt.cleared", view)}`);
+        } else if (cleared) {
+          // Authoritatively empty upstream (see /stop) — no stale warning.
+          await reply(t("cmd.interrupt.done"));
+        } else if (clearFailed) {
+          await reply(withQueueWarning(`${t("cmd.interrupt.done")}\n${t("cmd.queue.clearUnsupported")}`, snapshot));
+        } else {
+          await reply(withQueueWarning(t("cmd.interrupt.done"), snapshot));
+        }
         return true;
       }
 

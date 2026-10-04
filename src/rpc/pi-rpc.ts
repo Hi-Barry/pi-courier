@@ -449,7 +449,8 @@ export class PiRpc {
 }
 
 // ── 上游兼容层(spec #72 票7/C7)──────────────────────────────────────
-// 对 pi 上游私有行为的两处依赖集中在这两个命名函数里;上游重构时只查这里。
+// 对 pi 上游私有行为的依赖(私有 send 应答通道、扩展应答 stdin 直写)集中在
+// 这几个命名函数里;上游重构时只查这里。
 
 /**
  * COMPAT(上游 prompt 语义):公开 RpcClient.prompt() 不暴露 streamingBehavior,
@@ -516,4 +517,31 @@ export async function upstreamBashSend(
     throw new Error(response.error ?? "bash failed");
   }
   return response.data as BashResultView;
+}
+
+/**
+ * COMPAT(上游清队,issue #112):clear_queue 自 v0.84.4(2026-08-28)才有,
+ * 运行时对端的 pi 子进程可能更旧 —— 不走公开 clearQueue()(它按当前打包的
+ * 上游库生成,语义等价,但依赖面应与 prompt/bash 一致集中在此),沿用私有
+ * send() 发送。应答 data 为被移除的 steering + followUp 文本;对端过旧时
+ * success=false(error = "Unknown command: clear_queue"),由调用方降级。
+ */
+export interface UpstreamQueues {
+  steering: string[];
+  followUp: string[];
+}
+
+export async function upstreamClearQueueSend(client: RpcClient): Promise<UpstreamQueues> {
+  const send = client as unknown as {
+    send: (cmd: { type: "clear_queue" }) => Promise<{
+      success: boolean;
+      error?: string;
+      data?: UpstreamQueues;
+    }>;
+  };
+  const response = await send.send({ type: "clear_queue" });
+  if (!response.success) {
+    throw new Error(response.error ?? "clear_queue failed");
+  }
+  return response.data ?? { steering: [], followUp: [] };
 }
