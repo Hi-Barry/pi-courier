@@ -178,7 +178,7 @@ You are now a trusted user (the first trusted user also becomes admin). In multi
 | `/bash <cmd>` | Run a shell command |
 | `! <cmd>` / `!! <cmd>` | Shell shortcut, like the TUI's `!`/`!!`: `!` writes the output into the context (the model sees it), `!!` keeps it out of the context (for your eyes only). Exclamation mark(s) + space + command — half- or full-width (`！`, `！！`) both work; without the space (`!git`) it stays a normal message |
 | `/bashstop` | List running bash commands (`!`/`!!`/`/bash`) and abort them all; each command then replies with the output captured so far |
-| `/stop` | Stop all tasks immediately (like Esc in the TUI; alias `/abort`; queued messages are not cleared — see below) |
+| `/stop` | Stop everything now, exactly like the TUI's Esc: also **clears queued messages** and lists what was dropped (alias `/abort`; on pi older than 0.84.4 the queue survives — the reply says so) |
 | `/queue [text]` | Show the queue / queue a message for after the running task (Alt+Enter semantics) |
 | `/interrupt <text>` | Interrupt the running task and send a new instruction — one message does both |
 | `/last` | Repeat the agent's last reply |
@@ -200,9 +200,9 @@ Since 0.1.39 sending mirrors pi's TUI. A plain text message is always sent with 
 - `/queue <text>` — TUI Alt+Enter: while pi runs, the message is queued and executes when the task finishes; an idle pi simply runs it at once
 - `/queue` — show the current steering/followUp queues (count + content, cross-checked against pi's own pending-message count)
 - `/interrupt <text>` — idle: runs directly; mid-task: stops the current task and sends the new instruction
-- `/stop` — stop everything now; semantics unchanged
+- `/stop` — stop everything now, the TUI's Esc: queued messages are cleared too
 
-**Queue limitation, stated up front**: pi's RPC has no "clear queue" — aborting does not discard messages that were queued before the stop. After `/stop` or `/interrupt`, messages queued beforehand take effect on the **next** turn; both commands reply with an explicit `⚠️ N queued message(s) will take effect on the next turn:` listing them, so nothing fires unseen.
+**What happens to the queue, stated up front**: since 0.3.8 `/stop` and `/interrupt` mirror the TUI's Esc — the queue is cleared **before** the abort, and the reply lists exactly which queued messages were dropped, so nothing disappears unseen. On a pi older than 0.84.4 (no `clear_queue` RPC) the old behaviour applies: the queue survives and fires on the **next** turn; the reply says so explicitly (`⚠️ N queued message(s) will take effect on the next turn:`).
 
 ### Extension questions land in the room
 

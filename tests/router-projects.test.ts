@@ -7,6 +7,7 @@ import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { handleAdminCommand } from "../src/auth/admin-commands";
 import { logger } from "../src/logger";
 import { buildTurnReply } from "../src/rpc/message-router";
+import { clearedQueuesView } from "../src/rpc/command-map";
 import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createMessageRouter } from "../src/rpc/message-router";
@@ -982,8 +983,10 @@ describe("management room invite on trust transition (issue #43 票2)", () => {
  * always a steer-carrying prompt (asserted at the PiRpc level in
  * pi-rpc-send.test.ts — the router only sees PiRpc.prompt), /queue routes to
  * the followUp queue or renders the mirror, /interrupt composes
- * abort → waitForIdle → prompt while streaming, and /stop //interrupt replies
- * surface the surviving-queue limitation (abort preserves upstream queues).
+ * clear → abort → waitForIdle → prompt while streaming, and /stop //interrupt
+ * follow the TUI Esc semantics (issue #112): clear_queue first and report the
+ * dropped messages, falling back to the surviving-queue warning on old
+ * upstreams (<0.84.4).
  */
 describe("send semantics command family (issue #53 ticket 2)", () => {
   let rpc: PiRpc;
@@ -1053,38 +1056,94 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
     expect(replies.at(-1)!.text).not.toContain("⚠️");
   });
 
-  it("/interrupt while streaming aborts, waits for idle, then prompts — and warns about the surviving queue", async () => {
+  it("/interrupt while streaming clears the queue first (TUI Esc order), then abort → waitForIdle → prompt", async () => {
     getState({ isStreaming: true, pendingMessageCount: 1 });
+    // upstreamClearQueueSend casts the client to its private send channel.
+    const send = vi.fn().mockResolvedValue({ success: true, data: { steering: ["old task"], followUp: [] } });
+    (rpc as unknown as { send: unknown }).send = send;
+    const router = makeRouter();
+    router.handleEvent({ type: "queue_update", steering: ["old task"], followUp: [] }, rpc);
+    await router.handleIncoming(makeMsg({ text: "/interrupt new order" }));
+    expect(send).toHaveBeenCalledWith({ type: "clear_queue" });
+    expect(rpc.requireClient().abort).toHaveBeenCalledTimes(1);
+    expect(rpc.requireClient().waitForIdle).toHaveBeenCalledTimes(1);
+    expect(rpc.prompt).toHaveBeenCalledWith("new order");
+    // The sequence is strict: clear_queue → abort → waitForIdle → prompt.
+    const order = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
+    expect(order(send)).toBeLessThan(order(rpc.requireClient().abort));
+    expect(order(rpc.requireClient().abort)).toBeLessThan(order(rpc.requireClient().waitForIdle));
+    expect(order(rpc.requireClient().waitForIdle)).toBeLessThan(order(rpc.prompt));
+    const text = replies.at(-1)!.text;
+    expect(text).toContain("已打断,新指令已发出");
+    expect(text).toContain("已清掉 1 条排队消息");
+    expect(text).toContain("- old task");
+    expect(text).not.toContain("⚠️");
+  });
+
+  it("/interrupt falls back to abort + queue warning when the client has no private send channel", async () => {
+    getState({ isStreaming: true, pendingMessageCount: 1 });
+    // No `send` on the client mock: upstreamClearQueueSend throws a TypeError
+    // — the degradation path that also covers a pre-0.84.4 client library.
     const router = makeRouter();
     router.handleEvent({ type: "queue_update", steering: ["old task"], followUp: [] }, rpc);
     await router.handleIncoming(makeMsg({ text: "/interrupt new order" }));
     expect(rpc.requireClient().abort).toHaveBeenCalledTimes(1);
     expect(rpc.requireClient().waitForIdle).toHaveBeenCalledTimes(1);
     expect(rpc.prompt).toHaveBeenCalledWith("new order");
-    // The sequence is strict: abort → waitForIdle → prompt.
-    const order = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
-    expect(order(rpc.requireClient().abort)).toBeLessThan(order(rpc.requireClient().waitForIdle));
-    expect(order(rpc.requireClient().waitForIdle)).toBeLessThan(order(rpc.prompt));
     const text = replies.at(-1)!.text;
     expect(text).toContain("已打断,新指令已发出");
+    expect(text).toContain("版本过旧");
     expect(text).toContain("⚠️ 队列中仍有 1 条消息将在下一轮生效");
     expect(text).toContain("- old task");
   });
 
-  it("/stop appends the queue warning when the upstream queues survive the abort", async () => {
+  it("/stop clears the queue and lists what was dropped (issue #112)", async () => {
+    const send = vi.fn().mockResolvedValue({ success: true, data: { steering: ["queued A"], followUp: ["queued B"] } });
+    (rpc as unknown as { send: unknown }).send = send;
+    const router = makeRouter();
+    router.handleEvent({ type: "queue_update", steering: ["queued A"], followUp: ["queued B"] }, rpc);
+    await router.handleIncoming(makeMsg({ text: "/stop" }));
+    expect(send).toHaveBeenCalledWith({ type: "clear_queue" });
+    expect(rpc.requireClient().abort).toHaveBeenCalledTimes(1);
+    const text = replies.at(-1)!.text;
+    expect(text).toContain("已停止,并清掉 2 条排队消息");
+    expect(text).toContain("- queued A");
+    expect(text).toContain("- queued B");
+    expect(text).not.toContain("队列中仍有");
+  });
+
+  it("/stop falls back to abort + queue warning when upstream rejects clear_queue (old pi)", async () => {
+    const send = vi.fn().mockRejectedValue(new Error("Unknown command: clear_queue"));
+    (rpc as unknown as { send: unknown }).send = send;
     const router = makeRouter();
     router.handleEvent({ type: "queue_update", steering: ["queued A"], followUp: ["queued B"] }, rpc);
     await router.handleIncoming(makeMsg({ text: "/stop" }));
     expect(rpc.requireClient().abort).toHaveBeenCalledTimes(1);
     const text = replies.at(-1)!.text;
     expect(text).toContain("已停止所有任务");
+    expect(text).toContain("版本过旧");
     expect(text).toContain("⚠️ 队列中仍有 2 条消息将在下一轮生效");
     expect(text).toContain("- queued A");
     expect(text).toContain("- queued B");
   });
 
-  it("/stop with an empty queue carries no warning", async () => {
+  it("/stop with a stale mirror (clear returns empty) trusts the upstream and stays quiet", async () => {
+    const send = vi.fn().mockResolvedValue({ success: true, data: { steering: [], followUp: [] } });
+    (rpc as unknown as { send: unknown }).send = send;
+    const router = makeRouter();
+    router.handleEvent({ type: "queue_update", steering: ["consumed"], followUp: [] }, rpc);
+    await router.handleIncoming(makeMsg({ text: "/stop" }));
+    expect(send).toHaveBeenCalledWith({ type: "clear_queue" });
+    const text = replies.at(-1)!.text;
+    expect(text).toContain("已停止所有任务");
+    expect(text).not.toContain("⚠️");
+  });
+
+  it("/stop with an empty queue carries no warning and never attempts clear_queue", async () => {
+    const send = vi.fn();
+    (rpc as unknown as { send: unknown }).send = send;
     await makeRouter().handleIncoming(makeMsg({ text: "/stop" }));
+    expect(send).not.toHaveBeenCalled();
     const text = replies.at(-1)!.text;
     expect(text).toContain("已停止所有任务");
     expect(text).not.toContain("⚠️");
@@ -1096,6 +1155,29 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
     expect(help).toContain("/queue");
     expect(help).toContain("/interrupt");
     expect(help).toContain("/stop");
+  });
+});
+
+/**
+ * clearedQueuesView (issue #112): pure rendering of one clear_queue answer —
+ * count + bounded line list, same style as queueWarning.
+ */
+describe("clearedQueuesView (issue #112)", () => {
+  it("joins steering + followUp into a counted list", () => {
+    expect(clearedQueuesView({ steering: ["a"], followUp: ["b", "c"] })).toEqual({
+      count: 3,
+      lines: "- a\n- b\n- c",
+    });
+  });
+
+  it("collapses whitespace and truncates long entries with an ellipsis", () => {
+    const view = clearedQueuesView({ steering: ["x".repeat(300)], followUp: [] });
+    expect(view!.count).toBe(1);
+    expect(view!.lines).toBe(`- ${"x".repeat(120)}…`);
+  });
+
+  it("is null when the upstream had nothing left to clear", () => {
+    expect(clearedQueuesView({ steering: [], followUp: [] })).toBeNull();
   });
 });
 

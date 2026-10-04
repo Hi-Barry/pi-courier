@@ -695,7 +695,7 @@ setup 把信任用户拉进空间和管理房间后,他们在 Matrix 客户端�
 | 票 | 内容 |
 |---|---|
 | #52 | 错误可见性:turn 以 stopReason "error" 结束必回 `❌ 本轮失败: <原因>`(此前 text=null 路径会静默吞掉失败轮并永久占住未钉绑定);auto_retry_start/end 回发 `⚠️ 调用失败,正在重试 n/N` 与耗尽终错,成功重试不打扰;主动 /stop 中止不误报 |
-| #53 | 发送语义对齐 pi TUI:prompt 恒带 streamingBehavior(steer = Enter:空闲即执行、运行中注入当前运行;/queue = followUp:排队不打断,空闲退化直发);`/queue` 无参查看队列(条数+内容,与上游 pendingMessageCount 交叉核对);`/interrupt` 一条消息完成打断+重发(空闲直接执行);RPC 无 clear_queue、abort 不清队列 —— /stop 与 /interrupt 回复显式回显"⚠️ 队列中仍有 N 条消息将在下一轮生效" |
+| #53 | 发送语义对齐 pi TUI:prompt 恒带 streamingBehavior(steer = Enter:空闲即执行、运行中注入当前运行;/queue = followUp:排队不打断,空闲退化直发);`/queue` 无参查看队列(条数+内容,与上游 pendingMessageCount 交叉核对);`/interrupt` 一条消息完成打断+重发(空闲直接执行);RPC 无 clear_queue、abort 不清队列 —— /stop 与 /interrupt 回复显式回显"⚠️ 队列中仍有 N 条消息将在下一轮生效"(0.3.8 修订,issue #112:上游 v0.84.4 起已提供 clear_queue,/stop·/interrupt 升级为「先清队再打断+回显被清消息」,上述队列局限仅存于旧版 pi 的降级路径) |
 | #54 | extension_ui 交互:confirm/select/input/editor 提问发进绑定房间、下一条普通消息即答案(confirm→y/n、select→序号、input/editor→直接打字;「取消」精确匹配放弃);FIFO 最老优先、"/"开头仍走命令通道;notify 分档(warning/error 进房间,info 留日志,TUI 专属展示方法忽略);`extensionUiTimeoutMinutes`(默认 10 分钟,不进向导)兜底超时代答取消 |
 | #55 | 无头登录:`/login` 列可登录 provider(oauth/api_key 能力+已认证标记)、`/login <provider> [oauth|api_key]` 交互式登录(OAuth 开链接任意浏览器授权后把重定向 URL 粘回房间;API key 聊天直贴,提示会留房间历史)、`/logout`、`/auth`;门禁仅管理员+管理房间(单工程 = DM);凭据经独立 ModelRuntime 直写 pi 标准 auth.json,成功后空闲进程自动重启、忙碌提示稍后 /reload |
 | #56 | 小命令批 + 回复引用:`/last`(复述最近回复)、`/cyclemodel`、`/cyclethinking`、`/sessions`+`/switch <序号>`(流式中拒绝)、`/autocompact on|off`、`/autoretry on|off`(后两者写 pi 全局设置并持久化:本机全部 pi 进程生效、重启仍有效);Matrix reply 引用命中时摘录前缀(≈200 字)拼进 prompt,未命中静默忽略 |
@@ -867,7 +867,7 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 11. **每个工程一个独立 pi 进程**:工程间进程隔离、会话独立、互不干扰;懒启动按需拉起,避免多工程常驻资源浪费。
 12. **固定设备 ID**:password 登录用稳定 device_id,把"重跑 setup 就触发 E2EE 设备坑"这类可预见问题从根上消除,而不是靠 FAQ 让用户手动删 crypto store。
 13. **信任即管理员(0.1.37)**:托管房间内信任用户 = 管理员(PL 100),Matrix 权限轴与命令信任轴合一条规则——不引入第三种档位、不加配置项;撤销信任对称降权,以提权名单簿记为降权依据,名单之外的高权用户永不动。
-14. **发送语义镜像 TUI(0.1.39)**:聊天里 Enter / Alt+Enter / Esc 都有对应物 —— 普通文本 = steer、`/queue` = followUp、`/stop`·`/interrupt` = abort;协议没给的能力(clear_queue)不假装给了,队列局限随命令回复显式告知。
+14. **发送语义镜像 TUI(0.1.39)**:聊天里 Enter / Alt+Enter / Esc 都有对应物 —— 普通文本 = steer、`/queue` = followUp、`/stop`·`/interrupt` = abort;协议没给的能力(clear_queue)不假装给了,队列局限随命令回复显式告知。(0.3.8 修订,issue #112:上游已给 clear_queue,如数采纳 —— /stop·/interrupt 对齐 Esc「先清队再打断」并回显被清消息;对端 pi <0.84.4 时降级回本条原行为。)
 15. **凭据不过手(0.1.39)**:无头登录的凭据经独立 ModelRuntime 直写 pi 标准 auth.json,courier 不保存、不回显密钥;房间只是录入通道,密钥留房间历史的风险如实提示。
 
 ---
