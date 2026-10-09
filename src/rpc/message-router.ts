@@ -21,6 +21,7 @@ import { t } from "../i18n/index.js";
 import { namespacedId } from "../identity.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
 import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUserToSpaceOnce, maybeInitManagementRoom } from "../space.js";
+import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
@@ -65,6 +66,24 @@ export interface MessageRouterDeps {
    *  answers of in-flight login flows. Injected by tests (mock runtime);
    *  defaults to a real ModelRuntime at pi's standard credential file. */
   login?: LoginManager;
+  /** Durable pending-attachment ledger (issue #114): injected by the
+   *  composition root, absent in tests/legacy deployments. Injected → the
+   *  ledger survives restarts (24h TTL); absent → pure in-memory, byte-for-byte
+   *  the pre-#114 behaviour. */
+  attachmentsLedger?: JsonStateFile<PersistedAttachmentEntry[]>;
+}
+
+/** Disk shape of one pending-attachment entry (issue #114). An array of
+ *  entries — not a keyed map — keeps the `\u0000` ledger-key separator out of
+ *  JSON object keys, where it would be hostile to hand editing and to some
+ *  JSON tooling. */
+export interface PersistedAttachmentEntry {
+  chatId: string;
+  userId: string;
+  /** Epoch ms when the first attachment for this room+sender was parked —
+   *  drives the 24h TTL on load. */
+  at: number;
+  attachments: MessageAttachment[];
 }
 
 /**
@@ -210,11 +229,53 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 状态模块订阅 PiRpc 的重启生命周期,不再有外借的 clearRpcState 扳机。
   const transient = new RpcTransientState((rpc, handler) => rpc.onRestarted?.(handler));
 
-  // 待处理附件清单(issue #66 票1):按 房间+发送者 记账,内存态 — 重启即清
-  // (每张回执都带路径,不构成数据丢失)。消耗规则:该发送者在同一条管道里
-  // 真正发给 pi 的下一条对话消息(prompt 唯一注入点)一次性带上全部并清空;
-  // 管理命令、登录/extension-ui 应答捕获都在注入点之前 return,天然不消耗。
+  // 待处理附件清单(issue #66 票1):按 房间+发送者 记账。消耗规则:该发送
+  // 者在同一条管道里真正发给 pi 的下一条对话消息(prompt 唯一注入点)一次性
+  // 带上全部并清空;管理命令、登录/extension-ui 应答捕获都在注入点之前
+  // return,天然不消耗。
   const pendingAttachments = new Map<string, MessageAttachment[]>();
+  // 首次停车时间(落盘 TTL 的依据,issue #114):只记第一次,后来追加的附件
+  // 不顺延 —— 挂了 24h 没被消费的条目在下次启动装载时过期。
+  const parkedAt = new Map<string, number>();
+
+  // 落盘账本(issue #114):磁盘只做备份,内存 Map 仍是唯一热路径(ConfigStore
+  // 单写者哲学)。注入 ledger 则启动装载一次(24h TTL,过期/残缺条目静默跳过),
+  // 记账与消耗两处变更后原子落盘;写失败仅 warn(内存仍是权威,退回 0.3.8
+  // 行为)。不注入 = 纯内存,行为与 0.3.8 逐字节一致。
+  const LEDGER_TTL_MS = 24 * 60 * 60 * 1000;
+  if (deps.attachmentsLedger) {
+    const now = Date.now();
+    let restored = 0;
+    for (const entry of deps.attachmentsLedger.load()) {
+      if (!entry || typeof entry.chatId !== "string" || typeof entry.userId !== "string") continue;
+      if (!Array.isArray(entry.attachments) || entry.attachments.length === 0) continue;
+      if (typeof entry.at !== "number" || now - entry.at > LEDGER_TTL_MS) continue;
+      pendingAttachments.set(attachmentLedgerKey(entry.chatId, entry.userId), entry.attachments);
+      parkedAt.set(attachmentLedgerKey(entry.chatId, entry.userId), entry.at);
+      restored += entry.attachments.length;
+    }
+    if (restored > 0) {
+      logger.info(
+        `restored ${restored} parked attachment(s) across ${pendingAttachments.size} room+sender entries from disk`
+      );
+    }
+  }
+  const persistLedger = (): void => {
+    const ledger = deps.attachmentsLedger;
+    if (!ledger) return;
+    const entries: PersistedAttachmentEntry[] = [];
+    for (const [key, attachments] of pendingAttachments) {
+      const sep = key.indexOf("\u0000");
+      if (sep <= 0) continue; // malformed key never reaches disk
+      entries.push({
+        chatId: key.slice(0, sep),
+        userId: key.slice(sep + 1),
+        at: parkedAt.get(key) ?? Date.now(),
+        attachments,
+      });
+    }
+    ledger.save(entries);
+  };
 
   // 在跑 bash 记账(/bashstop 的数据源):/bash 与 `!`/`!!` 共用一份,
   // 按 pi 进程记账,promise 落定自动销账(见 createBashTracker)。
@@ -368,6 +429,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
               await sendReply(ctx.msg.chatId, ctx.msg.transport, attachmentSavedReply(attachment));
             }
             pendingAttachments.set(key, ledger);
+            parkedAt.set(key, parkedAt.get(key) ?? Date.now());
+            persistLedger();
             return true;
           }
         }
@@ -734,6 +797,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           const quoted = ctx.msg.payload.kind === "text" ? ctx.msg.payload.quoted : undefined;
           await rpc.prompt(withAttachmentPrefix(withQuotePrefix(ctx.text, quoted), pending));
           pendingAttachments.delete(key);
+          parkedAt.delete(key);
+          persistLedger();
         } catch (err) {
           if (err === RPC_ABORT) throw err;
           await sendReply(ctx.msg.chatId, ctx.msg.transport, t("router.prompt.failed", { message: (err as Error).message }));

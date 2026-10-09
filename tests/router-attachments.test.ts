@@ -3,7 +3,10 @@
  * seam — fake rpc, assert prompt text. The transport is NOT involved here;
  * attachments arrive as ExternalMessage.paths already saved on disk.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { ConfigStore } from "../src/config";
 import {
@@ -12,9 +15,11 @@ import {
   createMessageRouter,
   withAttachmentPrefix,
 } from "../src/rpc/message-router";
+import type { PersistedAttachmentEntry } from "../src/rpc/message-router";
 import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
+import { JsonStateFile } from "../src/state/json-file";
 import type { RoomOps } from "../src/transports/interface";
 import type { ExternalMessage, MessageAttachment } from "../src/types";
 
@@ -40,7 +45,7 @@ const ATT: MessageAttachment = {
   bytes: 2048,
 };
 
-function makeFixtures() {
+function makeFixtures(opts: { ledger?: JsonStateFile<PersistedAttachmentEntry[]> } = {}) {
   const replies: Array<{ chatId: string; transport: string; text: string }> = [];
   const sendReply = async (chatId: string, transport: string, text: string) => {
     replies.push({ chatId, transport, text });
@@ -68,7 +73,16 @@ function makeFixtures() {
   });
   const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
   const pmctl = new PmctlController({ projectManager, roomOps, store });
-  const router = createMessageRouter({ projectManager, auth, sendReply, sendTyping: vi.fn(), roomOps, store, pmctl });
+  const router = createMessageRouter({
+    projectManager,
+    auth,
+    sendReply,
+    sendTyping: vi.fn(),
+    roomOps,
+    store,
+    pmctl,
+    ...(opts.ledger ? { attachmentsLedger: opts.ledger } : {}),
+  });
   return { router, prompt, replies, lastReply: () => replies.at(-1)!.text };
 }
 
@@ -196,5 +210,99 @@ describe("attachment prompt prefix (issue #66 票1)", () => {
   it("ledger key separates room and sender", () => {
     expect(attachmentLedgerKey("!r:s", "@a:s")).not.toBe(attachmentLedgerKey("!r:s", "@b:s"));
     expect(attachmentLedgerKey("!r:s", "@a:s")).not.toBe(attachmentLedgerKey("!r2:s", "@a:s"));
+  });
+});
+
+/**
+ * Durable attachment ledger (issue #114): the in-memory Map stays the hot
+ * path; the disk file is a backup. Ledger injected → parked attachments
+ * survive a router (= service) restart, 24h TTL on load; absent → the
+ * pre-#114 behaviour (a restart loses the ledger).
+ */
+describe("durable attachment ledger (issue #114)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
+  });
+
+  function tempLedger() {
+    const dir = mkdtempSync(join(tmpdir(), "pi-courier-ledger-"));
+    dirs.push(dir);
+    const file = join(dir, "pending-attachments.json");
+    return { ledger: new JsonStateFile<PersistedAttachmentEntry[]>(file, []), file };
+  }
+
+  it("parked attachments survive a router restart; consumption clears memory and disk", async () => {
+    const { ledger, file } = tempLedger();
+    const first = makeFixtures({ ledger });
+    await first.router.handleIncoming(
+      makeMsg({ messageId: "m1", payload: { kind: "media", saved: [ATT, { ...ATT, path: "/x/second.jpg" }] } })
+    );
+
+    // "Restart": a brand-new router over the same ledger file.
+    const second = makeFixtures({ ledger });
+    await second.router.handleIncoming(makeMsg({ messageId: "m2", text: "看看刚才那张图" }));
+    expect(second.prompt).toHaveBeenCalledTimes(1);
+    const sent = second.prompt.mock.calls[0]![0] as string;
+    expect(sent).toContain(ATT.path);
+    expect(sent).toContain("/x/second.jpg");
+
+    // Consumed exactly once → both copies empty afterwards.
+    await second.router.handleIncoming(makeMsg({ messageId: "m3", text: "再看看" }));
+    expect((second.prompt.mock.calls[1]![0] as string)).not.toContain(ATT.path);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual([]);
+  });
+
+  it("entries older than the 24h TTL are dropped on load", async () => {
+    const { ledger, file } = tempLedger();
+    writeFileSync(
+      file,
+      JSON.stringify([
+        { chatId: "!dm:server", userId: "@barry:server", at: Date.now() - 25 * 60 * 60 * 1000, attachments: [ATT] },
+      ]),
+      "utf8"
+    );
+    const fx = makeFixtures({ ledger });
+    await fx.router.handleIncoming(makeMsg({ messageId: "m1", text: "还在吗" }));
+    expect((fx.prompt.mock.calls[0]![0] as string)).not.toContain(ATT.path);
+  });
+
+  it("malformed load entries are skipped; per-sender isolation survives the restore", async () => {
+    const { ledger, file } = tempLedger();
+    writeFileSync(
+      file,
+      JSON.stringify([
+        null,
+        { chatId: "!dm:server", userId: "@barry:server", at: Date.now(), attachments: [ATT] },
+        { chatId: "!dm:server", userId: "@carol:server", at: Date.now(), attachments: [{ ...ATT, path: "/x/carol.jpg" }] },
+        { chatId: "!dm:server", at: Date.now(), attachments: [{ ...ATT, path: "/x/orphan.jpg" }] },
+      ]),
+      "utf8"
+    );
+    const fx = makeFixtures({ ledger });
+    await fx.router.handleIncoming(makeMsg({ messageId: "m1", text: "看" }));
+    const sent = fx.prompt.mock.calls[0]![0] as string;
+    expect(sent).toContain(ATT.path);
+    expect(sent).not.toContain("/x/carol.jpg"); // carol's park is hers alone
+    expect(sent).not.toContain("/x/orphan.jpg"); // userId-less entry skipped
+    // The rewrite after barry's consumption leaves only well-formed entries —
+    // carol's untouched park persists (per-sender isolation end to end).
+    await fx.router.handleIncoming(makeMsg({ messageId: "m2", text: "再看" }));
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual([
+      {
+        chatId: "!dm:server",
+        userId: "@carol:server",
+        at: expect.any(Number),
+        attachments: [{ bytes: 2048, filename: "abc123def456-photo.png", path: "/x/carol.jpg" }],
+      },
+    ]);
+  });
+
+  it("no ledger injected → pure in-memory behaviour (a restart loses the park)", async () => {
+    const first = makeFixtures();
+    await first.router.handleIncoming(makeMsg({ messageId: "m1", payload: { kind: "media", saved: [ATT] } }));
+    const second = makeFixtures();
+    await second.router.handleIncoming(makeMsg({ messageId: "m2", text: "看看" }));
+    expect((second.prompt.mock.calls[0]![0] as string)).not.toContain(ATT.path);
   });
 });

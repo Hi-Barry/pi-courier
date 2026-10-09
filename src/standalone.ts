@@ -10,18 +10,22 @@
  *   Messenger <── replies <────────── bridge <── agent events (stdout JSONL)
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
 import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, resolveLanguage } from "./config.js";
 import { setLocale, t } from "./i18n/index.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
-import { createMessageRouter } from "./rpc/message-router.js";
+import { createMessageRouter, type PersistedAttachmentEntry } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
 import { ensureSpaceAndManagementRoom } from "./space.js";
 import { createStartupState, runStartupHeals } from "./startup-state.js";
+import { JsonStateFile } from "./state/json-file.js";
 import { AttachmentStore } from "./transports/attachments.js";
 import type { RoomOps } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
@@ -235,6 +239,20 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // 启动状态模块持有;router 只拿到只读查询。
   const pmctl = new PmctlController({ projectManager, roomOps, store });
 
+  // ---- durable state (issue #114) --------------------------------------------
+  // ~/.pi/pi-courier-state/(0700)收桥的派生状态文件:磁盘是备份,内存是热路径。
+  // 配置(pi-courier.json)、Matrix SDK 存储、PID 锁各归 ~/.pi 原位,不迁。
+  const stateDir = path.join(os.homedir(), ".pi", "pi-courier-state");
+  try {
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  } catch (err) {
+    logger.warn(`state dir unavailable (state files degrade to in-memory): ${(err as Error).message}`);
+  }
+  const attachmentsLedger = new JsonStateFile<PersistedAttachmentEntry[]>(
+    path.join(stateDir, "pending-attachments.json"),
+    []
+  );
+
   const router = createMessageRouter({
     projectManager,
     auth,
@@ -244,6 +262,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     store,
     pmctl,
     managementRoomAdoptionAllowed: () => startup.managementRoomAdoptionAllowed(),
+    attachmentsLedger,
   });
 
   matrix?.onMessage((msg) => {
