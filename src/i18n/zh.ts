@@ -51,6 +51,20 @@ const zh = {
   "cmd.compact.tokens": "  tokens: {before} → 压缩后(见摘要)",
   "cmd.compact.summary": "\n摘要: {summary}",
   "cmd.stop.ok": "🛑 已停止所有任务,等待下一步指示。",
+  "cmd.remind.unavailable": "❌ 提醒功能未装配(状态目录不可用)。",
+  "cmd.remind.usage": "用法: /remind <时间> <内容> — 时间支持 30m / 2h / 1d、HH:MM(已过顺延明天)、ISO(如 2026-10-09T09:00)。例:/remind 30m 泡茶",
+  "cmd.remind.invalidTime": "❌ 认不出时间「{input}」。支持:30m / 2h / 1d、HH:MM、ISO(如 2026-10-09T09:00)。",
+  "cmd.remind.ok": "⏰ 已定提醒:{when} — {text}",
+  "cmd.remind.list.empty": "💤 本房间没有活跃提醒。用 /remind <时间> <内容> 定一个。",
+  "cmd.remind.list.header": "⏰ 本房间的提醒:\n{lines}",
+  "cmd.remind.list.item": "{n}. {when} — {text}({user})",
+  "cmd.remind.rm.usage": "用法: /remind rm <序号>(序号见 /remind list)",
+  "cmd.remind.rm.ok": "✅ 已取消提醒:{text}",
+  "cmd.remind.rm.notFound": "❌ 没有这个序号,先 /remind list 看一眼。",
+  "cmd.remind.limit": "⚠️ 本房间活跃提醒已达上限(20 条),先 /remind rm 清理再定。",
+  "remind.due": "⏰ 提醒 @{user}:{text}",
+  "remind.late": "(迟到 {minutes} 分钟)",
+  "remind.dropped": "⚠️ 另有 {count} 条过期提醒已静默丢弃。",
   "cmd.stop.cleared": "🛑 已停止,并清掉 {count} 条排队消息:\n{lines}",
   "cmd.interrupt.cleared": "🧹 已清掉 {count} 条排队消息(不再执行):\n{lines}",
   "cmd.queue.clearUnsupported": "⚠️ 上游 pi 版本过旧(<0.84.4),不支持清队,队列保留:",
@@ -136,6 +150,8 @@ const zh = {
     "• `/queue [文本]` — 无参:查看队列;带文本:排队不打断当前任务(≈ Alt+Enter)\n" +
     "• `/interrupt <新指令>` — 打断当前任务并立即下发新指令(一条消息完成)\n" +
     "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)\n" +
+    "• `/remind <时间> <内容>` — 定时提醒(先落盘再跑,重启不丢;例:/remind 30m 泡茶)\n" +
+    "• `/remind list` / `/remind rm <序号>` — 查看 / 取消本房间的提醒\n" +
     "• `/reload` — 重启 pi 进程(装插件/改配置后使用);`/reload all` — 重启本实例全部进程(空闲才重启,忙碌跳过)\n" +
     "• `/login [provider [oauth|api_key]]` — 无参:可登录 provider 列表;带参:无头登录(仅管理员 + 管理房间)\n" +
     "• `/logout <provider>` — 删除 provider 凭据(仅管理员 + 管理房间)\n" +

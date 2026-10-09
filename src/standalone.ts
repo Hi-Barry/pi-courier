@@ -10,18 +10,25 @@
  *   Messenger <── replies <────────── bridge <── agent events (stdout JSONL)
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
 import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, resolveLanguage } from "./config.js";
 import { setLocale, t } from "./i18n/index.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
-import { createMessageRouter } from "./rpc/message-router.js";
+import { ReminderClock } from "./reminders/reminder-clock.js";
+import type { ReminderEntry } from "./reminders/reminder-store.js";
+import { ReminderStore } from "./reminders/reminder-store.js";
+import { createMessageRouter, type PersistedAttachmentEntry } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
 import { ensureSpaceAndManagementRoom } from "./space.js";
 import { createStartupState, runStartupHeals } from "./startup-state.js";
+import { JsonStateFile } from "./state/json-file.js";
 import { AttachmentStore } from "./transports/attachments.js";
 import type { RoomOps } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
@@ -235,6 +242,30 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // 启动状态模块持有;router 只拿到只读查询。
   const pmctl = new PmctlController({ projectManager, roomOps, store });
 
+  // ---- durable state (issue #114) --------------------------------------------
+  // ~/.pi/pi-courier-state/(0700)收桥的派生状态文件:磁盘是备份,内存是热路径。
+  // 配置(pi-courier.json)、Matrix SDK 存储、PID 锁各归 ~/.pi 原位,不迁。
+  const stateDir = path.join(os.homedir(), ".pi", "pi-courier-state");
+  try {
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  } catch (err) {
+    logger.warn(`state dir unavailable (state files degrade to in-memory): ${(err as Error).message}`);
+  }
+  const attachmentsLedger = new JsonStateFile<PersistedAttachmentEntry[]>(
+    path.join(stateDir, "pending-attachments.json"),
+    []
+  );
+
+  // ---- reminders (issue #117):先落盘再跑,重启不丢 ---------------------------
+  // 时钟句柄不跨进程:reminders.json 才是真相,start() 在 transports 连接后
+  // 重装载并补起全部定时器,离线窗口过期的提醒立即补投(注明迟到)。
+  const reminderStore = new ReminderStore(
+    new JsonStateFile<ReminderEntry[]>(path.join(stateDir, "reminders.json"), [])
+  );
+  const reminderClock = new ReminderClock(reminderStore, (delivery) =>
+    sendReply(delivery.chatId, delivery.transport, delivery.text)
+  );
+
   const router = createMessageRouter({
     projectManager,
     auth,
@@ -244,7 +275,20 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     store,
     pmctl,
     managementRoomAdoptionAllowed: () => startup.managementRoomAdoptionAllowed(),
+    attachmentsLedger,
+    reminders: reminderClock,
   });
+
+  // 房间消亡销账(issue #114/#117 后续):/pmctl rm 确认后清掉该房间的附件
+  // 清单与提醒 —— 意图已无人能兑现,不等 TTL。此时 router/时钟才存在,故在
+  // 装配后回填;失败在 pmctl 侧已兜(仅 warn),这里不加层。
+  pmctl.onRoomRemoved = (roomId) => {
+    const attachments = router.purgeRoomAttachments(roomId);
+    const reminders = reminderClock.purgeRoom(roomId);
+    if (attachments + reminders > 0) {
+      logger.info(`purged room state after project removal: ${attachments} attachment(s), ${reminders} reminder(s)`);
+    }
+  };
 
   matrix?.onMessage((msg) => {
     router.handleIncoming(msg).catch((err) => {
@@ -284,6 +328,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // Lazy + idempotent (config.space.roomId / managementRooms[0]); any failure
   // degrades to the unspace'd behaviour and re-opens DM adoption. Runs before
   // rpc.start so the room wiring is complete before the first prompt lands.
+  // 提醒时钟也在此刻启动(issue #117):迟到补投要走 sendReply,必须等
+  // transport 连接落定 —— 早发必被"未连接"吞掉,提醒就真丢了。
+  await reminderClock.start().catch((err: unknown) => {
+    logger.warn(`reminder clock failed to start: ${(err as Error).message}`);
+  });
   if (roomOps) {
     const spaceResult = await ensureSpaceAndManagementRoom({ roomOps, store, sendReply });
     if (spaceResult === "degraded") startup.allowAdoption();

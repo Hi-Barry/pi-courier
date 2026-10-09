@@ -21,6 +21,8 @@ import * as path from "node:path";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
 import { t } from "../i18n/index.js";
+import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
+import type { ReminderEntry } from "../reminders/reminder-store.js";
 import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
 import { upstreamClearQueueSend } from "./pi-rpc.js";
 
@@ -56,6 +58,17 @@ export interface SlashCommandContext {
     rebase: (sessionFile: string | undefined) => void;
     /** 当前会话文件路径(换会话后取新值用;不可用时 undefined)。 */
     currentSessionFile: () => Promise<string | undefined>;
+  };
+  /** 聊天里的定时提醒(/remind,issue #117):router 按本消息的房间与发起人
+   *  预先绑定好的视图 —— 命令层不接触 chatId/userId。Absence = 未装配
+   *  (回复不可用文案)。 */
+  reminders?: {
+    /** 落盘 + 起定时器;false = 本房间达到活跃提醒上限。 */
+    add(text: string, dueAt: number): boolean;
+    /** 本房间的活跃提醒,最早到期优先。 */
+    list(): ReminderEntry[];
+    /** 取消本房间列表的第 index(1 基)条;序号不存在返回 undefined。 */
+    removeByIndex(index: number): ReminderEntry | undefined;
   };
   /** Router-owned per-rpc transient state (queue mirror, pending extension
    *  questions) must not survive a restart: the new subprocess knows nothing
@@ -456,6 +469,59 @@ export async function handleSlashCommand(
         } else {
           await reply(withQueueWarning(t("cmd.stop.ok"), snapshot));
         }
+        return true;
+      }
+
+      // --- Reminders (issue #117):先落盘再跑,重启不丢 -------------------------
+      case "/remind": {
+        if (!ctx.reminders) {
+          await reply(t("cmd.remind.unavailable"));
+          return true;
+        }
+        if (!args) {
+          await reply(t("cmd.remind.usage"));
+          return true;
+        }
+        if (args === "list") {
+          const roomList = ctx.reminders.list();
+          if (roomList.length === 0) {
+            await reply(t("cmd.remind.list.empty"));
+            return true;
+          }
+          const lines = roomList.map((entry, i) =>
+            t("cmd.remind.list.item", { n: i + 1, when: formatReminderTime(entry.dueAt), text: entry.text, user: entry.username })
+          );
+          await reply(t("cmd.remind.list.header", { lines: lines.join("\n") }));
+          return true;
+        }
+        if (args === "rm" || args.startsWith("rm ")) {
+          const numText = args.slice(2).trim();
+          const index = Number(numText);
+          if (!numText || !Number.isInteger(index) || index < 1) {
+            await reply(t("cmd.remind.rm.usage"));
+            return true;
+          }
+          const removed = ctx.reminders.removeByIndex(index);
+          await reply(removed ? t("cmd.remind.rm.ok", { text: removed.text }) : t("cmd.remind.rm.notFound"));
+          return true;
+        }
+        const spaceIndex = args.indexOf(" ");
+        const whenText = spaceIndex === -1 ? args : args.slice(0, spaceIndex);
+        const text = spaceIndex === -1 ? "" : args.slice(spaceIndex + 1).trim();
+        if (!text) {
+          await reply(t("cmd.remind.usage"));
+          return true;
+        }
+        const dueAt = parseReminderTime(whenText, Date.now());
+        if (dueAt === null) {
+          await reply(t("cmd.remind.invalidTime", { input: whenText }));
+          return true;
+        }
+        if (!ctx.reminders.add(text, dueAt)) {
+          await reply(t("cmd.remind.limit"));
+          return true;
+        }
+        await reply(t("cmd.remind.ok", { when: formatReminderTime(dueAt), text }));
         return true;
       }
 

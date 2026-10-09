@@ -49,6 +49,20 @@ const en: Record<MessageKey, string> = {
   "cmd.compact.tokens": "  tokens: {before} → after compaction (see summary)",
   "cmd.compact.summary": "\nSummary: {summary}",
   "cmd.stop.ok": "🛑 All tasks stopped. Awaiting your next instruction.",
+  "cmd.remind.unavailable": "❌ Reminders are unavailable (the state directory is not usable).",
+  "cmd.remind.usage": "Usage: /remind <time> <text> — time formats: 30m / 2h / 1d, HH:MM (rolls to tomorrow if past), ISO (e.g. 2026-10-09T09:00). Example: /remind 30m brew tea",
+  "cmd.remind.invalidTime": "❌ Can't read the time \"{input}\". Supported: 30m / 2h / 1d, HH:MM, ISO (e.g. 2026-10-09T09:00).",
+  "cmd.remind.ok": "⏰ Reminder set: {when} — {text}",
+  "cmd.remind.list.empty": "💤 No active reminders in this room. Set one with /remind <time> <text>.",
+  "cmd.remind.list.header": "⏰ Reminders in this room:\n{lines}",
+  "cmd.remind.list.item": "{n}. {when} — {text} ({user})",
+  "cmd.remind.rm.usage": "Usage: /remind rm <n> (see /remind list)",
+  "cmd.remind.rm.ok": "✅ Reminder cancelled: {text}",
+  "cmd.remind.rm.notFound": "❌ No such number — check /remind list first.",
+  "cmd.remind.limit": "⚠️ This room hit the 20 active-reminder cap; clean up with /remind rm first.",
+  "remind.due": "⏰ Reminder for @{user}: {text}",
+  "remind.late": "(late by {minutes} min)",
+  "remind.dropped": "⚠️ {count} more overdue reminder(s) were silently dropped.",
   "cmd.stop.cleared": "🛑 Stopped, and cleared {count} queued message(s):\n{lines}",
   "cmd.interrupt.cleared": "🧹 Cleared {count} queued message(s) (they won't run):\n{lines}",
   "cmd.queue.clearUnsupported": "⚠️ The upstream pi is too old (<0.84.4) to clear queues; they are kept:",
@@ -135,6 +149,8 @@ const en: Record<MessageKey, string> = {
     "• `/queue [text]` — no args: view the queue; with text: queue without interrupting (≈ Alt+Enter)\n" +
     "• `/interrupt <new instruction>` — interrupt the current task and send the new one (single message)\n" +
     "• `/stop` — stop all tasks immediately (≈ TUI Esc; alias `/abort`)\n" +
+    "• `/remind <time> <text>` — a timed reminder (persisted before it runs, survives restarts; e.g. /remind 30m brew tea)\n" +
+    "• `/remind list` / `/remind rm <n>` — view / cancel this room's reminders\n" +
     "• `/reload` — restart the pi process (after installing extensions / changing config); `/reload all` — restart every process of this instance (idle ones only, busy skipped)\n" +
     "• `/login [provider [oauth|api_key]]` — no args: list login-able providers; with args: headless login (admin + management room only)\n" +
     "• `/logout <provider>` — delete a provider credential (admin + management room only)\n" +
