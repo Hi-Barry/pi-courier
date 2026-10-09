@@ -169,6 +169,21 @@ describe("ReminderClock (issue #117)", () => {
     expect(store.listForRoom("!r:s")).toHaveLength(1);
   });
 
+  it("purgeRoom drops only that room's reminders, persists, and the other rooms keep firing", async () => {
+    const { clock } = makeClock();
+    await clock.start();
+    clock.add({ chatId: "!a:s", transport: "matrix", userId: "u", username: "barry", text: "a-one", dueAt: BASE + MIN });
+    clock.add({ chatId: "!a:s", transport: "matrix", userId: "u", username: "barry", text: "a-two", dueAt: BASE + 2 * MIN });
+    clock.add({ chatId: "!b:s", transport: "matrix", userId: "u", username: "barry", text: "b-live", dueAt: BASE + MIN });
+
+    expect(clock.purgeRoom("!a:s")).toBe(2);
+    expect(clock.purgeRoom("!a:s")).toBe(0); // idempotent
+    // Room B's reminder is untouched and still fires on time.
+    await vi.advanceTimersByTimeAsync(MIN + 5_000);
+    expect(delivered.map((d) => d.chatId)).toEqual(["!b:s"]);
+    expect(new ReminderStore(new JsonStateFile<ReminderEntry[]>(file, [])).listForRoom("!a:s")).toEqual([]);
+  });
+
   it("stop() disarms the timer: nothing fires afterwards", async () => {
     const { clock } = makeClock();
     await clock.start();

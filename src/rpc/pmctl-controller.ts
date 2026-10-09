@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName } from "../config.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
+import { logger } from "../logger.js";
 import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
 import { provisionManagedRoom } from "../space.js";
 import type { RoomOps } from "../transports/interface.js";
@@ -58,6 +59,12 @@ const RM_CONFIRM_WINDOW_MS = 60_000;
 
 export class PmctlController {
   private pendingRm = new Map<string, PendingRm>();
+
+  /** 房间消亡销账钩子(issue #114/#117 后续):/pmctl rm 确认成功后以被删
+   *  房间 ID 调用一次 —— 挂在该房间的提醒与附件清单随删除同步清理。组合根
+   *  在 router 装配完成后回填(构造期 router 尚不存在);best-effort,失败
+   *  不阻断 rm,残留条目走 TTL 自然过期。 */
+  onRoomRemoved?: (roomId: string) => Promise<void> | void;
 
   constructor(private opts: PmctlControllerOptions) {}
 
@@ -285,6 +292,15 @@ export class PmctlController {
     if (this.pendingRm.get(call.chatId)?.roomId === roomId) {
       this.pendingRm.delete(call.chatId);
       await pm.removeProject(roomId);
+      // 房间意图销账:删除确认后立即清掉挂在该房间的提醒与附件清单 ——
+      // 意图已无人能兑现,不等 TTL。失败不阻断 rm 本身(工程已删)。
+      if (this.onRoomRemoved) {
+        try {
+          await this.onRoomRemoved(roomId);
+        } catch (err) {
+          logger.warn(`room-death purge failed (entries expire via TTL): ${(err as Error).message}`);
+        }
+      }
       await reply(t("pmctl.rm.done", { name: projectLabelOf(entry), workdir: entry.workdir }));
       // Unfile from the space first — once the bot leaves, it can no longer
       // clear the space-side child state (ghost entry). Best-effort: the

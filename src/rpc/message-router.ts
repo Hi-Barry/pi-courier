@@ -127,6 +127,9 @@ export interface MessageRouter {
   /** Handle an agent event emitted by `rpc` — the reply target comes from
    *  the rpc's binding (see RoomBinding), never from a global slot. */
   handleEvent(rawEvent: unknown, rpc: PiRpc): void;
+  /** 房间消亡销账(/pmctl rm 确认后由组合根经 PmctlController.onRoomRemoved
+   *  调用):清掉该房间的停车附件并落盘,返回条数。 */
+  purgeRoomAttachments(roomId: string): number;
 }
 
 /**
@@ -835,6 +838,22 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     /** 管道阶段表:顺序即执行顺序(导航入口,直测面见 pipeline())。 */
     pipeline(): PipelineStageView[] {
       return stages.map(({ name, preAuth, consumesLedger, needsRpc }) => ({ name, preAuth, consumesLedger, needsRpc }));
+    },
+
+    /** 房间销账(/pmctl rm 确认后由组合根调用):清掉该房间全部停车附件并
+     *  落盘,返回条数。房间删除后其清单条目已无人能消费 —— 意图随房间销账,
+     *  不等 24h TTL 自然过期。 */
+    purgeRoomAttachments(roomId: string): number {
+      let removed = 0;
+      for (const key of [...pendingAttachments.keys()]) {
+        if (key.slice(0, key.indexOf("\u0000")) === roomId) {
+          pendingAttachments.delete(key);
+          parkedAt.delete(key);
+          removed++;
+        }
+      }
+      if (removed > 0) persistLedger();
+      return removed;
     },
 
     async handleIncoming(msg: ExternalMessage): Promise<void> {

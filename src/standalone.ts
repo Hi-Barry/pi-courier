@@ -279,6 +279,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     reminders: reminderClock,
   });
 
+  // 房间消亡销账(issue #114/#117 后续):/pmctl rm 确认后清掉该房间的附件
+  // 清单与提醒 —— 意图已无人能兑现,不等 TTL。此时 router/时钟才存在,故在
+  // 装配后回填;失败在 pmctl 侧已兜(仅 warn),这里不加层。
+  pmctl.onRoomRemoved = (roomId) => {
+    const attachments = router.purgeRoomAttachments(roomId);
+    const reminders = reminderClock.purgeRoom(roomId);
+    if (attachments + reminders > 0) {
+      logger.info(`purged room state after project removal: ${attachments} attachment(s), ${reminders} reminder(s)`);
+    }
+  };
+
   matrix?.onMessage((msg) => {
     router.handleIncoming(msg).catch((err) => {
       logger.error("❌ message handling error:", (err as Error).message);

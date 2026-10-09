@@ -104,6 +104,14 @@ export class ReminderClock implements ReminderController {
     return removed;
   }
 
+  /** Room-death cleanup (/pmctl rm): drop the room's reminders, re-arm, and
+   *  return how many went away. */
+  purgeRoom(chatId: string): number {
+    const purged = this.store.purgeRoom(chatId);
+    if (purged > 0) this.arm();
+    return purged;
+  }
+
   /** Arm exactly one timer for the earliest future reminder (chunked at
    *  Node's setTimeout ceiling). No timer when nothing is pending. */
   private arm(): void {

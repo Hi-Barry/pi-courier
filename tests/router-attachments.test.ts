@@ -305,4 +305,23 @@ describe("durable attachment ledger (issue #114)", () => {
     await second.router.handleIncoming(makeMsg({ messageId: "m2", text: "看看" }));
     expect((second.prompt.mock.calls[0]![0] as string)).not.toContain(ATT.path);
   });
+
+  it("purgeRoomAttachments (room-death cleanup) drops only that room's parks", async () => {
+    const { ledger, file } = tempLedger();
+    const fx = makeFixtures({ ledger });
+    await fx.router.handleIncoming(makeMsg({ messageId: "m1", chatId: "!roomA:server", payload: { kind: "media", saved: [ATT] } }));
+    await fx.router.handleIncoming(makeMsg({ messageId: "m2", chatId: "!roomB:server", payload: { kind: "media", saved: [{ ...ATT, path: "/x/b.jpg" }] } }));
+
+    expect(fx.router.purgeRoomAttachments("!roomA:server")).toBe(1);
+    expect(fx.router.purgeRoomAttachments("!roomA:server")).toBe(0); // idempotent
+    // The purge-time rewrite keeps only room B's entry on disk (read BEFORE
+    // room B's park gets consumed below).
+    const onDisk = JSON.parse(readFileSync(file, "utf8")) as PersistedAttachmentEntry[];
+    expect(onDisk.map((e) => e.chatId)).toEqual(["!roomB:server"]);
+    // Room A's park is gone; room B's is untouched and still injects.
+    await fx.router.handleIncoming(makeMsg({ messageId: "m3", chatId: "!roomA:server", text: "看A" }));
+    expect((fx.prompt.mock.calls[0]![0] as string)).not.toContain(ATT.path);
+    await fx.router.handleIncoming(makeMsg({ messageId: "m4", chatId: "!roomB:server", text: "看B" }));
+    expect((fx.prompt.mock.calls[1]![0] as string)).toContain("/x/b.jpg");
+  });
 });

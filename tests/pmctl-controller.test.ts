@@ -247,6 +247,43 @@ describe("PmctlController", () => {
     expect(replies.at(-1)).toContain("已删除");
   });
 
+  it("the room-death purge hook fires once on confirmed rm — never on arm/cancel/expiry", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!proj:server", { name: "myapp", workdir: "/w/myapp" }],
+    ]);
+    const onRoomRemoved = vi.fn();
+    controller.onRoomRemoved = onRoomRemoved;
+
+    await handle("/pmctl rm myapp"); // arm only
+    expect(onRoomRemoved).not.toHaveBeenCalled();
+    await handle("/pmctl rm cancel"); // cancel clears
+    expect(onRoomRemoved).not.toHaveBeenCalled();
+
+    await handle("/pmctl rm myapp"); // arm again
+    vi.setSystemTime(1_000_000 + 61_000); // expiry → re-arm, no delete
+    await handle("/pmctl rm myapp");
+    expect(onRoomRemoved).not.toHaveBeenCalled();
+
+    vi.setSystemTime(1_000_000 + 62_000);
+    await handle("/pmctl rm myapp"); // arm
+    await handle("/pmctl rm myapp"); // confirm
+    expect(onRoomRemoved).toHaveBeenCalledTimes(1);
+    expect(onRoomRemoved).toHaveBeenCalledWith("!proj:server");
+  });
+
+  it("a throwing purge hook never breaks the rm flow (best-effort by contract)", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!proj:server", { name: "myapp", workdir: "/w/myapp" }],
+    ]);
+    controller.onRoomRemoved = vi.fn().mockRejectedValue(new Error("ledger unreadable"));
+
+    await handle("/pmctl rm myapp");
+    await handle("/pmctl rm myapp");
+    expect(pm.removeProject).toHaveBeenCalledWith("!proj:server");
+    expect(roomOps.leaveRoom).toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("已删除");
+  });
+
   it("cancel clears the armed confirmation both ways", async () => {
     await handle("/pmctl rm cancel");
     expect(replies.at(-1)).toContain("当前没有待确认的删除操作");

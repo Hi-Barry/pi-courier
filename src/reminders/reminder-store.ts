@@ -66,6 +66,17 @@ export class ReminderStore {
     return removed;
   }
 
+  /** Room-death cleanup (/pmctl rm): drop every reminder of one room and
+   *  persist. Unfulfillable intent should not wait out the clock — returns
+   *  how many were removed. */
+  purgeRoom(chatId: string): number {
+    const before = this.entries.length;
+    this.entries = this.entries.filter((entry) => entry.chatId !== chatId);
+    const removed = before - this.entries.length;
+    if (removed > 0) this.persist();
+    return removed;
+  }
+
   /** Everything due at or before `now` (clock tick / startup catch-up). */
   due(now: number): ReminderEntry[] {
     return this.list().filter((entry) => entry.dueAt <= now);
