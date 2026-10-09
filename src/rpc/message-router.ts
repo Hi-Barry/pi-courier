@@ -20,6 +20,7 @@ import {
 import { t } from "../i18n/index.js";
 import { namespacedId } from "../identity.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
+import type { ReminderController } from "../reminders/reminder-clock.js";
 import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUserToSpaceOnce, maybeInitManagementRoom } from "../space.js";
 import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
@@ -71,6 +72,11 @@ export interface MessageRouterDeps {
    *  ledger survives restarts (24h TTL); absent → pure in-memory, byte-for-byte
    *  the pre-#114 behaviour. */
   attachmentsLedger?: JsonStateFile<PersistedAttachmentEntry[]>;
+  /** Chat reminders (/remind, issue #117): the ReminderClock (also the
+   *  ReminderController). The router binds each command invocation to the
+   *  message's room+sender before the command layer sees it. Absent =
+   *  /remind replies unavailable. */
+  reminders?: ReminderController;
 }
 
 /** Disk shape of one pending-attachment entry (issue #114). An array of
@@ -692,6 +698,23 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             queueView: () => transient.mirror(rpc),
             allRpcs: () => projectManager.allRpcs(),
             bashTracker,
+            // /remind(issue #117):命令层不接触 chatId/userId —— 这里按本消息
+            // 的房间与发起人预先绑定。
+            reminders: deps.reminders
+              ? {
+                  add: (text, dueAt) =>
+                    deps.reminders!.add({
+                      chatId: ctx.msg.chatId,
+                      transport: ctx.msg.transport,
+                      userId: ctx.msg.userId,
+                      username: ctx.msg.username,
+                      text,
+                      dueAt,
+                    }),
+                  list: () => deps.reminders!.listForRoom(ctx.msg.chatId),
+                  removeByIndex: (index) => deps.reminders!.removeByIndex(ctx.msg.chatId, index),
+                }
+              : undefined,
             sessionMirror: {
               attach: async () => attachMirror(rpc, { chatId: ctx.msg.chatId, transport: ctx.msg.transport, username: ctx.msg.username }),
               detach: async () =>

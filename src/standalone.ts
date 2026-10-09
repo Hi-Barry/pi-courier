@@ -19,6 +19,9 @@ import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, resolveLanguage
 import { setLocale, t } from "./i18n/index.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
+import { ReminderClock } from "./reminders/reminder-clock.js";
+import type { ReminderEntry } from "./reminders/reminder-store.js";
+import { ReminderStore } from "./reminders/reminder-store.js";
 import { createMessageRouter, type PersistedAttachmentEntry } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
@@ -253,6 +256,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     []
   );
 
+  // ---- reminders (issue #117):先落盘再跑,重启不丢 ---------------------------
+  // 时钟句柄不跨进程:reminders.json 才是真相,start() 在 transports 连接后
+  // 重装载并补起全部定时器,离线窗口过期的提醒立即补投(注明迟到)。
+  const reminderStore = new ReminderStore(
+    new JsonStateFile<ReminderEntry[]>(path.join(stateDir, "reminders.json"), [])
+  );
+  const reminderClock = new ReminderClock(reminderStore, (delivery) =>
+    sendReply(delivery.chatId, delivery.transport, delivery.text)
+  );
+
   const router = createMessageRouter({
     projectManager,
     auth,
@@ -263,6 +276,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     pmctl,
     managementRoomAdoptionAllowed: () => startup.managementRoomAdoptionAllowed(),
     attachmentsLedger,
+    reminders: reminderClock,
   });
 
   matrix?.onMessage((msg) => {
@@ -303,6 +317,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // Lazy + idempotent (config.space.roomId / managementRooms[0]); any failure
   // degrades to the unspace'd behaviour and re-opens DM adoption. Runs before
   // rpc.start so the room wiring is complete before the first prompt lands.
+  // 提醒时钟也在此刻启动(issue #117):迟到补投要走 sendReply,必须等
+  // transport 连接落定 —— 早发必被"未连接"吞掉,提醒就真丢了。
+  await reminderClock.start().catch((err: unknown) => {
+    logger.warn(`reminder clock failed to start: ${(err as Error).message}`);
+  });
   if (roomOps) {
     const spaceResult = await ensureSpaceAndManagementRoom({ roomOps, store, sendReply });
     if (spaceResult === "degraded") startup.allowAdoption();
