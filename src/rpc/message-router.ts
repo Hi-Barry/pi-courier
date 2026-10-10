@@ -28,7 +28,8 @@ import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
-import { BacklogInbox } from "./backlog-inbox.js";import {
+import { BacklogInbox } from "./backlog-inbox.js";
+import {
   type BashTracker,
   clearedQueuesView,
   createBashTracker,

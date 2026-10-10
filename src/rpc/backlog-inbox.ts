@@ -53,7 +53,7 @@ export class BacklogInbox {
 
   /** backlogAnswer 阶段入口:「执行/忽略」消费悬置征询(返回 true = 消息
    *  已处理,不得漏到 pi 当对话);其它输入照常走管道,征询继续挂着等。 */
-  answer(text: string, msg: ExternalMessage): boolean {
+  async answer(text: string, msg: ExternalMessage): Promise<boolean> {
     const pending = this.awaiting.get(msg.chatId);
     if (!pending) return false;
     if (isExecuteInput(text)) {
@@ -69,9 +69,8 @@ export class BacklogInbox {
     if (isIgnoreInput(text)) {
       this.awaiting.delete(msg.chatId);
       clearTimeout(pending.timer);
-      void this.options
-        .reply(msg.chatId, msg.transport, t("inbox.ignored", { count: pending.entries.length }))
-        .catch(() => {});
+      // 与旧实现逐字节一致:回执 await 落定,发送失败沿管道上抛(不吞)。
+      await this.options.reply(msg.chatId, msg.transport, t("inbox.ignored", { count: pending.entries.length }));
       return true;
     }
     return false;
@@ -86,6 +85,11 @@ export class BacklogInbox {
     }
   }
 
+  /** 积压清单逐行渲染(user + 单行预览)。 */
+  private renderLines(entries: ExternalMessage[]): string {
+    return entries.map((e) => t("inbox.entry.line", { user: e.username, preview: this.preview(e) })).join("\n");
+  }
+
   /** 结算:首条积压后 5s(等回放波灌完)或本房首条实时消息到达。auto 模式
    *  告知后按序执行;confirm(默认)汇总征询,「执行」按序处理 /「忽略」
    *  丢弃 / 超时视为忽略。新积压波并入旧待答(重开一轮计时与征询)。 */
@@ -98,7 +102,7 @@ export class BacklogInbox {
     const entries = this.buffers.get(chatId);
     if (!entries || entries.length === 0) return;
     this.buffers.delete(chatId);
-    const lines = entries.map((e) => t("inbox.entry.line", { user: e.username, preview: this.preview(e) })).join("\n");
+    const lines = this.renderLines(entries);
     const transport = entries[0]!.transport;
 
     if (inboxMode(this.options.config()) === "auto") {
@@ -117,9 +121,7 @@ export class BacklogInbox {
       prior.entries.push(...entries);
     }
     const merged = prior?.entries ?? entries;
-    const mergedLines = merged
-      .map((e) => t("inbox.entry.line", { user: e.username, preview: this.preview(e) }))
-      .join("\n");
+    const mergedLines = this.renderLines(merged);
     const confirmTimer = setTimeout(() => {
       // 超时默认忽略:静默丢弃,不发补充通知(征询文案已写明规则)。
       this.awaiting.delete(chatId);
