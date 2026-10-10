@@ -138,7 +138,7 @@ describe("offline inbox settlement (issue #113)", () => {
     await router.handleIncoming(backlog("冻结一号"));
     await router.handleIncoming(backlog("冻结二号"));
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(replies).toEqual([]); // 旧代码此处已丢积压:定时器在未连接里开火
+    expect(replies).toEqual([]); // 旧代码此处已出征询(fake 回执不抛;生产里发送失败→按忽略丢积压)
     expect(prompt).not.toHaveBeenCalled();
     signal.release();
     await vi.advanceTimersByTimeAsync(0); // 放行回补定时器(微任务落定)

@@ -38,11 +38,14 @@ export class BacklogInbox {
   private buffers = new Map<string, ExternalMessage[]>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private awaiting = new Map<string, { entries: ExternalMessage[]; timer: ReturnType<typeof setTimeout> }>();
-  private ready = false;
+  private ready: boolean;
   private freezeLogged = false;
 
   constructor(private options: BacklogInboxOptions) {
-    void (options.transportsReady ?? Promise.resolve()).then(
+    // 缺省同步就绪(字段文档「缺省 = 已就绪」逐字成立,不留微任务假冻结窗);
+    // 注入信号时才冻结,release 幂等护栏兜住重复放行。
+    this.ready = options.transportsReady === undefined;
+    void options.transportsReady?.then(
       () => this.release(),
       () => this.release()
     );
