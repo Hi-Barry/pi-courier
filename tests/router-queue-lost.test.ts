@@ -5,36 +5,16 @@
  * through PiRpc.onRestarted, and only the transport/rpc boundaries are fake.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChallengeAuth } from "../src/auth/challenge-auth";
-import { ConfigStore } from "../src/config";
-import { createMessageRouter } from "../src/rpc/message-router";
-import { PmctlController } from "../src/rpc/pmctl-controller";
+import type { MessageRouter } from "../src/rpc/message-router";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
-import type { RoomOps } from "../src/transports/interface";
-import type { ExternalMessage } from "../src/types";
-
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: "m1",
-    timestamp: new Date(),
-    ...rest,
-  };
-}
+import { makeMsg, makeRouterFixture } from "./helpers";
 
 describe("queue lost notice on subprocess restart (issue #115 stage 1)", () => {
   let replies: Array<{ chatId: string; transport: string; text: string }>;
   let restartHooks: Array<(rpc: PiRpc) => void>;
   let rpc: PiRpc;
-  let router: ReturnType<typeof createMessageRouter>;
+  let router: MessageRouter;
 
   beforeEach(() => {
     replies = [];
@@ -56,29 +36,12 @@ describe("queue lost notice on subprocess restart (issue #115 stage 1)", () => {
         send: vi.fn().mockResolvedValue({ success: true, data: { steering: ["排队一", "排队二"], followUp: [] } }),
       }),
     } as unknown as PiRpc;
-    const projectManager = {
-      getRpcForRoom: vi.fn().mockReturnValue(rpc),
-      isProjectRoom: vi.fn().mockReturnValue(false),
-      labelForRoom: vi.fn().mockReturnValue(undefined),
-      isMultiProject: false,
-      allRpcs: vi.fn().mockReturnValue([rpc]),
-    } as unknown as ProjectManager;
-    const store = new ConfigStore({});
-    const auth = new ChallengeAuth(() => {}, () => {});
-    auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
-    const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
-    const pmctl = new PmctlController({ projectManager, roomOps, store });
-    router = createMessageRouter({
-      projectManager,
-      auth,
-      sendReply: async (chatId, transport, text) => {
+    router = makeRouterFixture({
+      rpc,
+      sendReply: async (chatId: string, transport: string, text: string) => {
         replies.push({ chatId, transport, text });
       },
-      sendTyping: vi.fn(),
-      roomOps,
-      store,
-      pmctl,
-    });
+    }).router;
   });
 
   afterEach(() => {
@@ -137,7 +100,7 @@ describe("queue snapshot persistence through the router (issue #115 stage 2)", (
   let defaultRpc: PiRpc;
   let projectRpc: PiRpc;
   let saved: Array<{ roomId: string; snapshot: unknown }>;
-  let router: ReturnType<typeof createMessageRouter>;
+  let router: MessageRouter;
 
   beforeEach(() => {
     replies = [];
@@ -169,28 +132,21 @@ describe("queue snapshot persistence through the router (issue #115 stage 2)", (
       isMultiProject: true,
       allRpcs: vi.fn().mockReturnValue([defaultRpc, projectRpc]),
     } as unknown as ProjectManager;
-    const store = new ConfigStore({});
-    const auth = new ChallengeAuth(() => {}, () => {});
-    auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
-    const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
-    const pmctl = new PmctlController({ projectManager, roomOps, store });
-    router = createMessageRouter({
+    router = makeRouterFixture({
+      rpc: defaultRpc,
       projectManager,
-      auth,
-      sendReply: async (chatId, transport, text) => {
+      sendReply: async (chatId: string, transport: string, text: string) => {
         replies.push({ chatId, transport, text });
       },
-      sendTyping: vi.fn(),
-      roomOps,
-      store,
-      pmctl,
       // 存储缝用假件记账(save/remove 的盘上语义归 queue-snapshots.test.ts)
-      queueSnapshots: {
-        save: (roomId: string, snapshot: unknown) => {
-          saved.push({ roomId, snapshot });
-        },
-      } as never,
-    });
+      extra: {
+        queueSnapshots: {
+          save: (roomId: string, snapshot: unknown) => {
+            saved.push({ roomId, snapshot });
+          },
+        } as never,
+      },
+    }).router;
   });
 
   afterEach(() => {

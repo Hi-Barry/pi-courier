@@ -5,35 +5,16 @@
  * 其余全真。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { ConfigStore } from "../src/config";
-import { createMessageRouter } from "../src/rpc/message-router";
-import { PmctlController } from "../src/rpc/pmctl-controller";
+import type { MessageRouter } from "../src/rpc/message-router";
 import type { PiRpc } from "../src/rpc/pi-rpc";
-import type { ProjectManager } from "../src/rpc/project-manager";
-import type { RoomOps } from "../src/transports/interface";
 import type { ExternalMessage } from "../src/types";
-
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: `m-${Math.random().toString(36).slice(2)}`,
-    timestamp: new Date(),
-    ...rest,
-  };
-}
+import { makeMsg, makeRouterFixture } from "./helpers";
 
 describe("offline inbox settlement (issue #113)", () => {
   let replies: Array<{ chatId: string; transport: string; text: string }>;
   let prompt: ReturnType<typeof vi.fn>;
-  let router: ReturnType<typeof createMessageRouter>;
+  let router: MessageRouter;
   let store: ConfigStore;
 
   beforeEach(() => {
@@ -61,28 +42,16 @@ describe("offline inbox settlement (issue #113)", () => {
       label: undefined,
       onEvent: vi.fn(),
     } as unknown as PiRpc;
-    const projectManager = {
-      getRpcForRoom: vi.fn().mockReturnValue(rpc),
-      isProjectRoom: vi.fn().mockReturnValue(false),
-      labelForRoom: vi.fn().mockReturnValue(undefined),
-      isMultiProject: false,
-      allRpcs: vi.fn().mockReturnValue([rpc]),
-    } as unknown as ProjectManager;
-    const auth = new ChallengeAuth(() => {}, () => {});
-    auth.loadFromConfig({ trustedUsers: trusted, adminUserId: "matrix:@barry:server", channels });
-    const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
-    const pmctl = new PmctlController({ projectManager, roomOps, store });
-    return createMessageRouter({
-      projectManager,
-      auth,
-      sendReply: async (chatId, transport, text) => {
+    const fixture = makeRouterFixture({
+      store,
+      rpc,
+      trusted,
+      channels,
+      sendReply: async (chatId: string, transport: string, text: string) => {
         replies.push({ chatId, transport, text });
       },
-      sendTyping: vi.fn(),
-      roomOps,
-      store,
-      pmctl,
     });
+    return fixture.router;
   }
 
   const backlog = (text: string, overrides: Partial<ExternalMessage> = {}): ExternalMessage =>

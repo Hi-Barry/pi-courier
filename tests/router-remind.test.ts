@@ -8,43 +8,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChallengeAuth } from "../src/auth/challenge-auth";
-import { ConfigStore } from "../src/config";
-import { createMessageRouter } from "../src/rpc/message-router";
-import { PmctlController } from "../src/rpc/pmctl-controller";
+import type { MessageRouter } from "../src/rpc/message-router";
 import { ReminderClock } from "../src/reminders/reminder-clock";
 import { ReminderStore, type ReminderEntry } from "../src/reminders/reminder-store";
 import type { PiRpc } from "../src/rpc/pi-rpc";
-import type { ProjectManager } from "../src/rpc/project-manager";
 import { JsonStateFile } from "../src/state/json-file";
-import type { RoomOps } from "../src/transports/interface";
-import type { ExternalMessage } from "../src/types";
+import { makeMsg, makeRouterFixture } from "./helpers";
 
 const BASE = new Date(2026, 9, 8, 10, 0, 0, 0).getTime();
 const MIN = 60_000;
-
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: "m1",
-    timestamp: new Date(),
-    ...rest,
-  };
-}
 
 describe("/remind command family (issue #117)", () => {
   let dir: string;
   let file: string;
   let replies: Array<{ chatId: string; transport: string; text: string }>;
   let prompt: ReturnType<typeof vi.fn>;
-  let router: ReturnType<typeof createMessageRouter>;
+  let router: MessageRouter;
   let clock: ReminderClock;
 
   beforeEach(() => {
@@ -61,18 +40,6 @@ describe("/remind command family (issue #117)", () => {
       label: undefined,
       onEvent: vi.fn(),
     } as unknown as PiRpc;
-    const projectManager = {
-      getRpcForRoom: vi.fn().mockReturnValue(rpc),
-      isProjectRoom: vi.fn().mockReturnValue(false),
-      labelForRoom: vi.fn().mockReturnValue(undefined),
-      isMultiProject: false,
-      allRpcs: vi.fn().mockReturnValue([rpc]),
-    } as unknown as ProjectManager;
-    const store = new ConfigStore({});
-    const auth = new ChallengeAuth(() => {}, () => {});
-    auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
-    const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
-    const pmctl = new PmctlController({ projectManager, roomOps, store });
     const sendReply = async (chatId: string, transport: string, text: string) => {
       replies.push({ chatId, transport, text });
     };
@@ -81,7 +48,7 @@ describe("/remind command family (issue #117)", () => {
       // 与 standalone 的接线同形:deliver 收整个投递对象,这里适配到 sendReply。
       (d) => sendReply(d.chatId, d.transport, d.text)
     );
-    router = createMessageRouter({ projectManager, auth, sendReply, sendTyping: vi.fn(), roomOps, store, pmctl, reminders: clock });
+    router = makeRouterFixture({ rpc, sendReply, extra: { reminders: clock } }).router;
   });
 
   afterEach(() => {
@@ -159,29 +126,12 @@ describe("/remind command family (issue #117)", () => {
       label: undefined,
       onEvent: vi.fn(),
     } as unknown as PiRpc;
-    const projectManager = {
-      getRpcForRoom: vi.fn().mockReturnValue(rpc),
-      isProjectRoom: vi.fn().mockReturnValue(false),
-      labelForRoom: vi.fn().mockReturnValue(undefined),
-      isMultiProject: false,
-      allRpcs: vi.fn().mockReturnValue([rpc]),
-    } as unknown as ProjectManager;
-    const store = new ConfigStore({});
-    const auth = new ChallengeAuth(() => {}, () => {});
-    auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
-    const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
-    const pmctl = new PmctlController({ projectManager, roomOps, store });
     const bareReplies: Array<{ chatId: string; transport: string; text: string }> = [];
-    const bare = createMessageRouter({
-      projectManager,
-      auth,
-      sendReply: async (chatId, transport, text) => {
+    const { router: bare } = makeRouterFixture({
+      rpc,
+      sendReply: async (chatId: string, transport: string, text: string) => {
         bareReplies.push({ chatId, transport, text });
       },
-      sendTyping: vi.fn(),
-      roomOps,
-      store,
-      pmctl,
     });
     await bare.handleIncoming(makeMsg({ text: "/remind 30m 泡茶" }));
     expect(bareReplies.at(-1)!.text).toContain("未装配");
