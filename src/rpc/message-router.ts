@@ -10,7 +10,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { LoginManager } from "../auth/headless-login.js";
-import { inboxMode, type ConfigStore, managementRoomId } from "../config.js";
+import { type ConfigStore, inboxMode, managementRoomId } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,

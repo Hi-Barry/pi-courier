@@ -15,7 +15,7 @@
  * 订阅接缝自行失效 —— 两个状态都只依赖 rpc.onRestarted,互不纠缠。
  */
 
-import { queueTotal, type QueueSnapshot } from "./command-map.js";
+import { type QueueSnapshot, queueTotal } from "./command-map.js";
 import type { PiRpc } from "./pi-rpc.js";
 
 /** How this module learns about restarts: the router wires it to

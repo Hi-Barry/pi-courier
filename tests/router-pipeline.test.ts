@@ -61,6 +61,8 @@ describe("pipeline stage table (spec #72 票3/C1)", () => {
       "adminCommands",
       "groupEnable",
       "authorizationGate",
+      "backlogAnswer",
+      "backlogInbox",
       "multiproject",
       "managementAdoption",
       "roomBinding",

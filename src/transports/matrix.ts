@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import type { InboxMode } from "../config.js";
 import { t } from "../i18n/index.js";
 import { logger, suppressLogLines } from "../logger.js";
 import { buildGroupJoinHint } from "../management-room.js";
@@ -6,6 +7,7 @@ import { createQuoteCache, type QuoteCache } from "../quote-cache.js";
 import type { ExternalMessage } from "../types.js";
 import type { MediaSource } from "./attachments.js";
 import { AttachmentStore } from "./attachments.js";
+import type { EventLedger } from "./event-ledger.js";
 import {
   createMatrixClient,
   type MatrixClientConfig,
@@ -14,8 +16,6 @@ import {
 } from "./matrix-client.js";
 import { createEventTranslator, isMediaContent, type MediaEventContent } from "./matrix-events.js";
 import { MatrixRoomOps } from "./matrix-rooms.js";
-import type { EventLedger } from "./event-ledger.js";
-import type { InboxMode } from "../config.js";
 
 /**
  * Matrix transport provider using matrix-bot-sdk
