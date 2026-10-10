@@ -32,7 +32,9 @@ export function captureConsole(): string[] {
 }
 
 /** One inbound Matrix-shaped message; overrides win, ids are unique by default.
- *  `quoted` is the text-payload shorthand from the ExternalMessage type. */
+ *  `quoted` is the text-payload shorthand from the ExternalMessage type.
+ *  注意:默认用户是 barry(信任+admin);像 guest-tier 那样默认身份不同的文件,
+ *  每个调用点必须显式传 userId/username,无参调用会静默落到 barry 的权限档。 */
 export function makeMsg(
   overrides: Partial<ExternalMessage> & { text?: string; quoted?: { username: string; excerpt: string } } = {}
 ): ExternalMessage {
@@ -56,9 +58,10 @@ export function makeMsg(
  *  with a bespoke rpc (stateful models, bash mocks, restart dispatch) pass
  *  their own and never touch this one. */
 export function makeFakeRpc(): PiRpc {
+  const idleState = { isStreaming: false, model: { id: "m" }, pendingMessageCount: 0 };
   return {
     prompt: vi.fn().mockResolvedValue(undefined),
-    getState: vi.fn().mockResolvedValue({ isStreaming: false, model: { id: "m" }, pendingMessageCount: 0 }),
+    getState: vi.fn().mockResolvedValue(idleState),
     label: undefined,
     onEvent: vi.fn(),
     onRestarted: vi.fn().mockReturnValue(() => {}),
@@ -68,7 +71,7 @@ export function makeFakeRpc(): PiRpc {
       waitForIdle: vi.fn().mockResolvedValue(undefined),
       send: vi.fn().mockResolvedValue({ success: true, data: { steering: ["排队一", "排队二"], followUp: [] } }),
       newSession: vi.fn().mockResolvedValue({ cancelled: false }),
-      getState: vi.fn().mockResolvedValue({ isStreaming: false, model: { id: "m" }, pendingMessageCount: 0 }),
+      getState: vi.fn().mockResolvedValue(idleState),
     }),
   } as unknown as PiRpc;
 }
