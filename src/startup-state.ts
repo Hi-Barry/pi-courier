@@ -19,7 +19,8 @@
 
 import { type ConfigStore, isSpaceMode, managementRoomId } from "./config.js";
 import { logger } from "./logger.js";
-import { healBotAvatar, healRoomIdentities, healTrustedPowerLevels } from "./space.js";
+import { healTrustedPowerLevels } from "./power-heal.js";
+import { healBotAvatar, healRoomIdentities } from "./room-branding.js";
 import type { RoomOps } from "./transports/interface.js";
 
 /** 组合根 sendReply 的形状(接线时由组合根交入)。 */

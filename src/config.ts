@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { detectSystemLanguage } from "./i18n/detect.js";
 import type { Locale } from "./i18n/index.js";
+import { adoptManagementRoomPatch } from "./management-room.js";
 import type { MsgBridgeConfig } from "./types.js";
 
 const CONFIG_DIR = path.join(os.homedir(), ".pi");
@@ -185,8 +186,10 @@ export function activeSpaceRoomId(cfg: MsgBridgeConfig): string | undefined {
 }
 
 /** 管理房间 ID(spec #99 票6 / issue #102):config 以列表存储,但公开语义
- *  是单管理房 —— "取首个"是有意为之,收养(router)与自建(space ensure)
- *  两条写路径都保证列表最多一个元素。未配置或空列表返回 undefined,即
+ *  是单管理房 —— "取首个"是有意为之。「列表至多一个元素」
+ *  的写侧不变量结构化于 management-room.ts 的 adoptManagementRoomPatch
+ *  (架构候选4),收养(router)与自建(space ensure)两条写路径经
+ *  adoptManagementRoom 委托之。未配置或空列表返回 undefined,即
  *  "还没有管理房";其余所有"管理房是哪个"的读取都走这里,不再手写
  *  `managementRooms?.[0]`。 */
 export function managementRoomId(cfg: MsgBridgeConfig): string | undefined {
@@ -302,8 +305,7 @@ export function presetProblems(cfg: MsgBridgeConfig): PresetProblem[] {
  *  收养同一房间返回空 patch,不产生重复条目。返回 patch 形状,供
  *  store.update 直接消费,也可展开后与其它字段合并为一次原子 update。 */
 export function adoptManagementRoom(cfg: MsgBridgeConfig, chatId: string): Partial<MsgBridgeConfig> {
-  const rooms = cfg.managementRooms ?? [];
-  return rooms.includes(chatId) ? {} : { managementRooms: [...rooms, chatId] };
+  return adoptManagementRoomPatch(cfg.managementRooms, chatId);
 }
 
 /**

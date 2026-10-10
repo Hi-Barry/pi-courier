@@ -33,7 +33,7 @@ describe("space ensure", () => {
       return { ...actual, homedir: () => tmpDir };
     });
     const config = await import("../src/config");
-    const space = await import("../src/space");
+    const space = await import("../src/space-topology");
     // The dynamically imported graph holds its own logger instance — return
     // it so warn-spies observe the same object space.ts writes through.
     const loggerModule = await import("../src/logger");
@@ -342,7 +342,7 @@ describe("space ensure", () => {
     const { config, space } = await importModules();
     const store = new config.ConfigStore({ ...baseConfig(), ...configOverrides });
     const roomOps = makeRoomOps(roomOpsOverrides);
-    await space.healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
+    await (await import("../src/power-heal")).healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
     return { store, roomOps };
   }
 
@@ -409,7 +409,7 @@ describe("space ensure", () => {
           : Promise.resolve({ users: {} })
       ),
     });
-    await space.healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
+    await (await import("../src/power-heal")).healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!mgmt:server"));
     // The other room in the sweep was still processed.
     expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!space:server", "@barry:server", 100);
@@ -436,7 +436,7 @@ describe("space ensure", () => {
         userId === "@carol:server" ? Promise.reject(new Error("M_LIMIT_EXCEEDED")) : Promise.resolve()
       ),
     });
-    await space.healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
+    await (await import("../src/power-heal")).healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!space:server"));
     expect(store.get().powerElevatedUsers).toEqual(["matrix:@barry:server"]);
   });
@@ -465,7 +465,7 @@ describe("space ensure", () => {
     const warnSpy = vi.spyOn(loggerModule.logger, "warn");
     const store = new config.ConfigStore({ ...baseConfig(), ...configOverrides });
     const roomOps = makeRoomOps(roomOpsOverrides);
-    await space.healRoomIdentities(roomOps as unknown as RoomOps, store);
+    await (await import("../src/room-branding")).healRoomIdentities(roomOps as unknown as RoomOps, store);
     return { store, roomOps, loggerModule, warnSpy };
   }
 
@@ -641,7 +641,7 @@ describe("space ensure", () => {
         roomId === "!mgmt:server" ? Promise.reject(new Error("M_FORBIDDEN")) : Promise.resolve()
       ),
     });
-    await space.healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
+    await (await import("../src/power-heal")).healTrustedPowerLevels(roomOps as unknown as RoomOps, store);
     // Successful rooms were stripped...
     expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!space:server", "@eve:server", 0);
     expect(roomOps.setUserPowerLevel).toHaveBeenCalledWith("!proj:server", "@eve:server", 0);
@@ -809,7 +809,7 @@ describe("invite-once idempotency (issue #62 — already in the room)", () => {
       return { ...actual, homedir: () => tmpDir };
     });
     const config = await import("../src/config");
-    const space = await import("../src/space");
+    const space = await import("../src/space-topology");
     const loggerModule = await import("../src/logger");
     return { config, space, loggerModule };
   }

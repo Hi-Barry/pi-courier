@@ -1,10 +1,11 @@
 /**
- * Management-room naming + usage guide — the single assembly point for the
- * management room's user-facing text. Both entry points (DM adoption and the
- * bot-created room in the startup space ensure — both in space.ts) import
- * from here so the two can never drift. All copy comes from the i18n tables
- * (issue #83) — the locale is fixed at startup; already-created rooms keep
- * their original name/guide (no retroactive rebranding).
+ * Management-room concept home: naming + usage guide (the single assembly
+ * point for the management room's user-facing text — DM adoption and the
+ * bot-created room in the startup space ensure both import from here so the
+ * two can never drift) AND the「至多一个管理房」adoption-write invariant
+ * (架构候选4). All copy comes from the i18n tables (issue #83) — the locale
+ * is fixed at startup; already-created rooms keep their original name/guide
+ * (no retroactive rebranding).
  */
 
 import { t } from "./i18n/index.js";
@@ -34,4 +35,19 @@ export function buildManagementRoomHelp(
   workdir: string
 ): string {
   return t("mgmt.help", { instanceName, botAccount, workdir });
+}
+
+/** 「管理房至多一个」的收养写侧不变量(架构候选4):已有管理房(列表
+ *  非空)→ 空 patch 拒绝再写;空/未配置 → 单元素列表。原来这条不变量靠
+ *  调用方先查 managementRoomId 的纪律维持(config 注释自称「两条写路径
+ *  都保证」,而原实现是 append),现结构化于此——config 的
+ *  adoptManagementRoom 委托本函数,未来新写路径不可能悄悄破坏不变量。
+ *  读侧语义不变:managementRoomId 取首个(权威读取器,仍在 config);
+ *  手编残留的全表容忍归 power-heal 的 managedRoomIds(spec #99 评审修复)。 */
+export function adoptManagementRoomPatch(
+  current: readonly string[] | undefined,
+  roomId: string
+): { managementRooms: string[] } | {} {
+  if (current && current.length > 0) return {};
+  return { managementRooms: [roomId] };
 }

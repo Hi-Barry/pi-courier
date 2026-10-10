@@ -41,7 +41,7 @@ describe("bot profile avatar heal", () => {
       return { ...actual, homedir: () => tmpDir };
     });
     const config = await import("../src/config");
-    const space = await import("../src/space");
+    const space = await import("../src/space-topology");
     return { config, space };
   }
 
@@ -76,7 +76,7 @@ describe("bot profile avatar heal", () => {
     const { config, space } = await importModules();
     const store = new config.ConfigStore({ ...baseConfig(), ...configOverrides });
     const roomOps = makeRoomOps(roomOpsOverrides);
-    await space.healBotAvatar(roomOps as unknown as RoomOps, store);
+    await (await import("../src/room-branding")).healBotAvatar(roomOps as unknown as RoomOps, store);
     return { store, roomOps };
   }
 

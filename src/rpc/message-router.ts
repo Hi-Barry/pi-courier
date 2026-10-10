@@ -25,8 +25,9 @@ import {
 import { t } from "../i18n/index.js";
 import { namespacedId } from "../identity.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
+import { demoteTrustedUserEverywhere } from "../power-heal.js";
 import type { ReminderController } from "../reminders/reminder-clock.js";
-import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUserToSpaceOnce, maybeInitManagementRoom } from "../space.js";
+import { inviteUserToManagementRoomOnce, inviteUserToSpaceOnce, maybeInitManagementRoom } from "../space-topology.js";
 import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
