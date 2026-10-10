@@ -43,6 +43,9 @@ export interface SlashCommandContext {
    *  清掉的队列若只等上游 queue_update 推送归零,推送与重启生命周期之间的
    *  竞态会让「自己清的」误触发队列丢失回执。Absence = 不钉(测试场景)。 */
   setQueueMirror?: (snapshot: QueueSnapshot) => void;
+  /** 审计缝(issue #124):命令层只按真实语义上报「发生了什么」(如 /stop
+   *  实际清掉几条),落账仍在 router。Absence = 不上报(测试场景)。 */
+  audit?: (event: string, detail?: string) => void;
   /** Every rpc of this instance (default + started project rpcs) — enables
    *  `/reload all` (issue #55). Absent = /reload stays single-process. */
   allRpcs?: () => PiRpc[];
@@ -408,6 +411,8 @@ export async function handleSlashCommand(
   const { rpc, reply, queueView, setQueueMirror } = ctx;
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return false;
+  // 命令名(审计详情用):/stop 与 /abort 的别名同语义,如实上报触发词。
+  const commandWord = trimmed.split(/\s+/)[0]!.toLowerCase();
 
   const spaceIndex = trimmed.indexOf(" ");
   const name = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
@@ -462,7 +467,13 @@ export async function handleSlashCommand(
         await rpc.requireClient().abort();
         // 清队成功 = 上游权威为空:镜像立即钉零,不等 queue_update 推送 ——
         // 推送与重启生命周期赛跑时会误触发「队列丢失」回执(issue #115)。
-        if (cleared) setQueueMirror?.({ steering: [], followUp: [] });
+        if (cleared) {
+          setQueueMirror?.({ steering: [], followUp: [] });
+          // 审计(issue #124,#115 回填):队列清理是运行时突变 —— 命令层
+          // 按真实语义上报(实际清掉的条数),router 落账。
+          const clearedCount = cleared ? cleared.steering.length + cleared.followUp.length : 0;
+          ctx.audit?.("queue.clear", `${commandWord} cleared ${clearedCount} queued message(s)`);
+        }
         const view = cleared ? clearedQueuesView(cleared) : null;
         if (view) {
           await reply(t("cmd.stop.cleared", view));

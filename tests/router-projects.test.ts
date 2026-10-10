@@ -1358,7 +1358,7 @@ describe("small command batch + reply quotes (issue #56 ticket 5)", () => {
     await makeRouter().handleIncoming(
       makeMsg({ text: "这个是什么意思", quoted: { username: "carol", excerpt: "被引用的旧消息" } })
     );
-    expect(rpc.prompt).toHaveBeenCalledWith("「@carol: 被引用的旧消息」\n这个是什么意思");
+    expect(rpc.prompt).toHaveBeenCalledWith("「引用自 @carol 的历史消息:被引用的旧消息」\n这个是什么意思");
   });
 
   it("without a quote the prompt is the raw text, unchanged", async () => {
