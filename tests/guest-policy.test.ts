@@ -1,17 +1,21 @@
 /**
- * Guest policy (issue #120): the blocklist is a snapshot-pinned constant —
- * a new dangerous command that forgets to register here turns these tests
- * red. The bang-detection regex is pinned for EQUIVALENCE with
- * command-map's parseBangCommand (same rule, two homes, one test-enforced
- * truth — a runtime import would close an auth→rpc→auth cycle).
+ * Guest policy (issue #120): the verdict is snapshot-pinned against the
+ * command registry (架构候选3) — a new dangerous command that forgets to
+ * register there turns these tests red. The bang regex is single-homed in
+ * the registry; the old copy-and-pin-equivalence bandage is retired (the
+ * sample-set test below still guards both parsers' agreement).
  */
 import { describe, expect, it } from "vitest";
-import { GUEST_ALLOWED_COMMANDS, GUEST_BLOCKED_COMMANDS, guestCommandVerdict } from "../src/auth/guest-policy";
+import { AUDIT_EVENTS } from "../src/audit/audit-log";
+import { guestCommandVerdict } from "../src/auth/guest-policy";
+import { COMMAND_REGISTRY, commandPolicy, GUEST_READ_ONLY_DOC } from "../src/command-registry";
 import { parseBangCommand } from "../src/rpc/command-map";
 
 describe("guest policy blocklist (issue #120)", () => {
-  it("snapshot: the blocklist contains exactly the dangerous surface", () => {
-    expect([...GUEST_BLOCKED_COMMANDS].sort()).toEqual(
+  it("snapshot: the registry's blocked set is exactly the dangerous surface", () => {
+    expect(
+      COMMAND_REGISTRY.filter((c) => c.guest === "blocked").map((c) => c.name).sort()
+    ).toEqual(
       [
         "/attach",
         "/auth",
@@ -39,10 +43,26 @@ describe("guest policy blocklist (issue #120)", () => {
     );
   });
 
-  it("every blocked command is a slash command; the allowed list never overlaps it", () => {
-    for (const cmd of GUEST_BLOCKED_COMMANDS) expect(cmd.startsWith("/")).toBe(true);
-    for (const cmd of GUEST_ALLOWED_COMMANDS) {
-      expect(GUEST_BLOCKED_COMMANDS).not.toContain(cmd);
+  it("every registered command is a slash command and names are unique", () => {
+    for (const entry of COMMAND_REGISTRY) expect(entry.name.startsWith("/")).toBe(true);
+    expect(new Set(COMMAND_REGISTRY.map((c) => c.name)).size).toBe(COMMAND_REGISTRY.length);
+  });
+
+  it("registry audit events live in the AUDIT_EVENTS vocabulary, pinned for the sensitive three", () => {
+    const values = new Set<string>(Object.values(AUDIT_EVENTS));
+    for (const entry of COMMAND_REGISTRY) {
+      if (entry.auditEvent !== undefined) expect(values.has(entry.auditEvent), entry.name).toBe(true);
+    }
+    expect(commandPolicy("/bash")?.auditEvent).toBe(AUDIT_EVENTS.bashExec);
+    expect(commandPolicy("/bashstop")?.auditEvent).toBe(AUDIT_EVENTS.bashStop);
+    expect(commandPolicy("/reload")?.auditEvent).toBe(AUDIT_EVENTS.reload);
+    expect(commandPolicy("/help")).toBeUndefined();
+    expect(commandPolicy("/status")?.auditEvent).toBeUndefined();
+  });
+
+  it("the read-only documentation list never overlaps the blocked set", () => {
+    for (const cmd of GUEST_READ_ONLY_DOC) {
+      expect(commandPolicy(cmd)?.guest, cmd).toBeUndefined();
     }
   });
 
