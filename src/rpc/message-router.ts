@@ -17,8 +17,11 @@ import {
   extractTextFromMessage,
   formatToolCalls,
   hasToolCalls,
-  splitMessage,truncate 
+  splitMessage,
+  truncate,
+  truncateLine,
 } from "../formatting.js";
+
 import { t } from "../i18n/index.js";
 import { namespacedId } from "../identity.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
@@ -1450,8 +1453,7 @@ function logAgentEvent(event: AgentEventView, log: LeveledLogger): void {
 function summarizeArg(arg: unknown, max = 500): string {
   if (arg === undefined || arg === null) return "";
   if (typeof arg === "string") {
-    const s = arg.replace(/\s+/g, " ").trim();
-    return s.length > max ? `${s.slice(0, max)}…` : s;
+    return truncateLine(arg, max);
   }
   try {
     const s = JSON.stringify(arg);

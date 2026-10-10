@@ -28,6 +28,7 @@
  * cancelled:true response resolves the dialog to its default value.
  */
 
+import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import type { LeveledLogger } from "../logger.js";
@@ -57,20 +58,14 @@ export function extensionUiTimeoutMs(config: MsgBridgeConfig): number {
   return (config.extensionUiTimeoutMinutes ?? 10) * 60_000;
 }
 
-/** Collapse whitespace and bound the length of a question/notify text. */
-function oneLine(text: string, max: number): string {
-  const collapsed = text.replace(/\s+/g, " ").trim();
-  return collapsed.length > max ? `${collapsed.slice(0, max)}…` : collapsed;
-}
-
 /** The question message posted to the room (issue #54). The phrasing doubles
  *  as the user-facing protocol: reply content is the answer, the cancel word
  *  backs out (both 取消 and cancel accepted — i18n/parse). */
 export function extensionUIQuestionText(request: ExtensionUIRequestView): string {
-  const title = oneLine(request.title ?? t("xq.untitled"), 200);
+  const title = truncateLine(request.title ?? t("xq.untitled"), 200);
   switch (request.method) {
     case "confirm":
-      return `❓ ${title}\n${oneLine(request.message ?? "", 300)}\n${t("xq.confirm.how")}`;
+      return `❓ ${title}\n${truncateLine(request.message ?? "", 300)}\n${t("xq.confirm.how")}`;
     case "select": {
       const lines = (request.options ?? []).map((option, i) => `${i + 1}. ${option}`);
       return `❓ ${title}\n${lines.join("\n")}\n${t("xq.select.how")}`;
@@ -198,7 +193,7 @@ export class ExtensionQuestions {
         // Presentational: only warning/error reach the room, info stays in
         // the log — the room is not a dumping ground for progress chatter.
         const level = request.notifyType ?? "info";
-        const message = oneLine(request.message ?? "", 500);
+        const message = truncateLine(request.message ?? "", 500);
         if (level === "warning" || level === "error") {
           if (target) {
             const icon = level === "error" ? "🔴" : "⚠️";
@@ -246,7 +241,7 @@ export class ExtensionQuestions {
     const index = queue?.indexOf(entry) ?? -1;
     if (!queue || index === -1) return; // answered or cancelled in the meantime
     queue.splice(index, 1);
-    const title = oneLine(entry.request.title ?? t("xq.untitled"), 80);
+    const title = truncateLine(entry.request.title ?? t("xq.untitled"), 80);
     entry.log.info(`[extension-ui] 提问超时未答,已代答取消 (id ${entry.request.id})`);
     this.deps.respond(rpc, { id: entry.request.id, cancelled: true }).catch((err: unknown) => {
       entry.log.error(`[extension-ui] 超时代答回写失败 (id ${entry.request.id}): ${(err as Error).message}`);

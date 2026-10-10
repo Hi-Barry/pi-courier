@@ -27,12 +27,14 @@ export interface QuoteCache {
 export const MAX_ENTRIES_PER_ROOM = 50;
 
 /** Excerpt cap: enough context to identify a message, small enough for a prompt prefix. */
+
+import { truncateLine } from "./formatting.js";
+
 export const EXCERPT_MAX_CHARS = 200;
 
 /** Single-line, trimmed excerpt capped at EXCERPT_MAX_CHARS ("…" marks truncation). */
 export function toExcerpt(body: string, max = EXCERPT_MAX_CHARS): string {
-  const oneLine = body.replace(/\s+/g, " ").trim();
-  return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
+  return truncateLine(body, max);
 }
 
 /**

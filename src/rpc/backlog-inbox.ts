@@ -6,6 +6,7 @@
  * 同构:构造时注入回执/投递/审计出口,内部纯内存、不 import 传输层。
  */
 import { inboxMode } from "../config.js";
+import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { isExecuteInput, isIgnoreInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
@@ -34,8 +35,7 @@ export class BacklogInbox {
   /** 积压清单的一行预览:文本收成单行截断;非文本载荷与 📥 日志同形。 */
   private preview(msg: ExternalMessage): string {
     const raw = msg.payload.kind === "text" ? msg.payload.text : `[${msg.payload.kind}]`;
-    const oneLine = raw.replace(/\s+/g, " ").trim();
-    return oneLine.length > 120 ? `${oneLine.slice(0, 120)}…` : oneLine;
+    return truncateLine(raw);
   }
 
   /** backlogInbox 阶段入口:replayed 消息进缓冲(返回 true = 已处理);
