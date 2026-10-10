@@ -6,62 +6,11 @@
  * source labels (attachment header + quote prefix) as pure-function pins.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type AuditEntry } from "../src/audit/audit-log";
-import { ChallengeAuth } from "../src/auth/challenge-auth";
-import { ConfigStore } from "../src/config";
-import { withAttachmentPrefix, withQuotePrefix, createMessageRouter } from "../src/rpc/message-router";
-import { PmctlController } from "../src/rpc/pmctl-controller";
-import type { PiRpc } from "../src/rpc/pi-rpc";
-import type { ProjectManager } from "../src/rpc/project-manager";
-import type { RoomOps } from "../src/transports/interface";
-import type { ExternalMessage } from "../src/types";
+import { withAttachmentPrefix, withQuotePrefix } from "../src/rpc/message-router";
+import { makeMsg, makeRouterFixture } from "./helpers";
 
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: `m-${Math.random().toString(36).slice(2)}`,
-    timestamp: new Date(),
-    ...rest,
-  };
-}
-
-function makeRouter(auditLines: AuditEntry[]): { router: ReturnType<typeof createMessageRouter>; rpc: PiRpc } {
-  const prompt = vi.fn().mockResolvedValue(undefined);
-  const rpc = {
-    prompt,
-    getState: vi.fn().mockResolvedValue({ isStreaming: false, model: { id: "m" }, pendingMessageCount: 0 }),
-    label: undefined,
-    onEvent: vi.fn(),
-    onRestarted: vi.fn().mockReturnValue(() => {}),
-    bash: vi.fn().mockResolvedValue({ ok: true, text: "done" }),
-    requireClient: vi.fn().mockReturnValue({
-      abort: vi.fn().mockResolvedValue(undefined),
-      waitForIdle: vi.fn().mockResolvedValue(undefined),
-      send: vi.fn().mockResolvedValue({ success: true, data: { steering: ["排队一", "排队二"], followUp: [] } }),
-      newSession: vi.fn().mockResolvedValue({ cancelled: false }),
-      getState: vi.fn().mockResolvedValue({ isStreaming: false, model: { id: "m" }, pendingMessageCount: 0 }),
-    }),
-  } as unknown as PiRpc;
-  const projectManager = {
-    getRpcForRoom: vi.fn().mockReturnValue(rpc),
-    isProjectRoom: vi.fn().mockReturnValue(false),
-    labelForRoom: vi.fn().mockReturnValue(undefined),
-    isMultiProject: false,
-    allRpcs: vi.fn().mockReturnValue([rpc]),
-    roomForRpc: vi.fn().mockReturnValue(undefined),
-  } as unknown as ProjectManager;
-  const store = new ConfigStore({});
-  const auth = new ChallengeAuth(() => {}, () => {});
-  auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
-  const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
-  const pmctl = new PmctlController({ projectManager, roomOps, store });
+/** login 切片走逃生舱注入;其余装配全在共享工厂,不用的特性缺省即关。 */
+function makeRouter() {
   const login = {
     isPending: vi.fn().mockReturnValue(false),
     deliver: vi.fn().mockResolvedValue(false),
@@ -69,29 +18,12 @@ function makeRouter(auditLines: AuditEntry[]): { router: ReturnType<typeof creat
     logout: vi.fn().mockResolvedValue(undefined),
     startLogin: vi.fn().mockResolvedValue(undefined),
   };
-  const router = createMessageRouter({
-    projectManager,
-    auth,
-    sendReply: vi.fn().mockResolvedValue(undefined),
-    sendTyping: vi.fn(),
-    roomOps,
-    store,
-    pmctl,
-    login: login as never,
-    audit: {
-      append: (event: string, actor: string, chatId: string, detail?: string) =>
-        auditLines.push({ ts: Date.now(), event, actor, chatId, detail }),
-    } as never,
-  });
-  return { router, rpc };
+  return makeRouterFixture({ audit: true, login: login as never });
 }
 
 describe("audit wiring (issue #124)", () => {
-  let lines: AuditEntry[];
-
   beforeEach(() => {
     vi.useFakeTimers();
-    lines = [];
   });
 
   afterEach(() => {
@@ -100,7 +32,7 @@ describe("audit wiring (issue #124)", () => {
   });
 
   it("/trusted → trust.list; wrong pairing code → pairing.wrong", async () => {
-    const { router } = makeRouter(lines);
+    const { router, auditLines: lines } = makeRouter();
     await router.handleIncoming(makeMsg({ text: "/trusted" }));
     await router.handleIncoming(makeMsg({ userId: "@stranger:server", username: "stranger", text: "000000" }));
     expect(lines.map((l) => l.event)).toEqual(["trust.list", "pairing.wrong"]);
@@ -109,7 +41,7 @@ describe("audit wiring (issue #124)", () => {
   });
 
   it("`!ls` → bash.exec with the raw command as detail", async () => {
-    const { router } = makeRouter(lines);
+    const { router, auditLines: lines } = makeRouter();
     await router.handleIncoming(makeMsg({ text: "! ls -la" }));
     expect(lines).toHaveLength(1);
     expect(lines[0]!.event).toBe("bash.exec");
@@ -117,7 +49,7 @@ describe("audit wiring (issue #124)", () => {
   });
 
   it("/stop that really cleared → queue.clear with the count", async () => {
-    const { router, rpc } = makeRouter(lines);
+    const { router, rpc, auditLines: lines } = makeRouter();
     await router.handleIncoming(makeMsg({ messageId: "bind" }));
     router.handleEvent({ type: "queue_update", steering: ["排队一", "排队二"], followUp: [] }, rpc);
     await router.handleIncoming(makeMsg({ text: "/stop" }));
@@ -126,7 +58,7 @@ describe("audit wiring (issue #124)", () => {
   });
 
   it("执行 on offline backlog → backlog.execute with the count (#113 回填)", async () => {
-    const { router } = makeRouter(lines);
+    const { router, auditLines: lines } = makeRouter();
     await router.handleIncoming(makeMsg({ replayed: true, text: "积压甲" }));
     await vi.advanceTimersByTimeAsync(5_000);
     await router.handleIncoming(makeMsg({ text: "执行" }));
@@ -134,7 +66,7 @@ describe("audit wiring (issue #124)", () => {
   });
 
   it("/auth → login.flow; /pmctl rm → pmctl.rm; /reload → reload", async () => {
-    const { router } = makeRouter(lines);
+    const { router, auditLines: lines } = makeRouter();
     await router.handleIncoming(makeMsg({ text: "/auth" }));
     await router.handleIncoming(makeMsg({ text: "/pmctl rm proj-a" }));
     await router.handleIncoming(makeMsg({ text: "/reload" }));
@@ -143,7 +75,7 @@ describe("audit wiring (issue #124)", () => {
   });
 
   it("ordinary conversation leaves NO audit line", async () => {
-    const { router } = makeRouter(lines);
+    const { router, auditLines: lines } = makeRouter();
     await router.handleIncoming(makeMsg({ text: "普通聊天" }));
     expect(lines).toHaveLength(0);
   });
