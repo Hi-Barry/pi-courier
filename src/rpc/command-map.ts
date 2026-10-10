@@ -20,6 +20,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
+import { BANG_COMMAND } from "../command-registry.js";
 import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
@@ -108,7 +109,7 @@ export interface BangCommand {
  * 消息照常走 prompt 当普通文本,聊天里的感叹句永不误触。
  */
 export function parseBangCommand(text: string): BangCommand | null {
-  const match = /^([!！]{1,2})\s+(\S.*)$/.exec(text);
+  const match = BANG_COMMAND.exec(text);
   if (!match) return null;
   return { excluded: match[1]!.length === 2, command: match[2]!.trim() };
 }

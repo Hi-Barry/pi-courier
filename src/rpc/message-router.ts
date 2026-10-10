@@ -12,6 +12,7 @@ import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
+import { commandPolicy } from "../command-registry.js";
 import { type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
 import {
   extractTextFromMessage,
@@ -21,7 +22,6 @@ import {
   truncate,
   truncateLine,
 } from "../formatting.js";
-
 import { t } from "../i18n/index.js";
 import { namespacedId } from "../identity.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
@@ -986,13 +986,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             },
           });
           // 审计(issue #124):命令面按登记表落账 —— 只记敏感动作
-          //(/bash /bashstop /reload;清队走上面的 audit 缝,由命令层
-          // 按真实语义上报)。handled=false 的未识别斜杠不记。
+          //(登记表 auditEvent 位;清队走上面的 audit 缝,由命令层按真实
+          // 语义上报)。handled=false 的未识别斜杠不记。
           if (handled) {
             const cmdName = ctx.text.trim().split(/\s+/)[0]!.toLowerCase();
-            if (cmdName === "/bash") auditTrail(AUDIT_EVENTS.bashExec, ctx.msg, auditDetailOf(ctx.text));
-            else if (cmdName === "/bashstop") auditTrail(AUDIT_EVENTS.bashStop, ctx.msg, auditDetailOf(ctx.text));
-            else if (cmdName === "/reload") auditTrail(AUDIT_EVENTS.reload, ctx.msg, auditDetailOf(ctx.text));
+            const auditEvent = commandPolicy(cmdName)?.auditEvent;
+            if (auditEvent) auditTrail(auditEvent, ctx.msg, auditDetailOf(ctx.text));
           }
           return handled;
         } catch (err) {
