@@ -10,6 +10,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AUDIT_EVENTS, type AuditLog } from "../audit/audit-log.js";
 import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
+import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
 import { type ConfigStore, inboxMode, managementRoomId } from "../config.js";
 import {
@@ -710,7 +711,22 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       consumesLedger: false,
       needsRpc: false,
       // Unauthorized senders stop here, silently — same treatment as text.
-      handle: async (ctx) => !ctx.isAuthorized,
+      // 访客档(issue #120):名单内的人放行进管道,但禁用清单上的命令在此
+      // 硬拦 —— 回执礼貌说明 + 审计留痕(#124 的 guest.denied 事件)。
+      // 权限边界在桥,不靠模型自觉;房间模式(trusted-only 等)语义优先,
+      // 已在上面裁决,访客在 trusted-only 群里照旧门外。
+      handle: async (ctx) => {
+        if (!ctx.isAuthorized) return true;
+        if (auth.isGuestUser(ctx.msg.userId, ctx.msg.transport)) {
+          const verdict = guestCommandVerdict(ctx.text);
+          if (verdict.blocked) {
+            await sendReply(ctx.msg.chatId, ctx.msg.transport, t("guest.denied", { command: verdict.command }));
+            auditTrail(AUDIT_EVENTS.guestDenied, ctx.msg, `blocked command: ${verdict.command}`);
+            return true;
+          }
+        }
+        return false;
+      },
     },
     {
       name: "backlogAnswer",

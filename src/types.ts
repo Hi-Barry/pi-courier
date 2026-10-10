@@ -77,6 +77,9 @@ export interface MsgBridgeConfig {
   };
   auth?: {
     trustedUsers?: string[];
+    /** 访客档(issue #120):能对话、碰不了危险命令。MXID,格式与
+     *  trustedUsers 同;v1 手编配置 + 重启生效(与 projects 字段同策略)。 */
+    guestUsers?: string[];
     adminUserId?: string;
     channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
   };

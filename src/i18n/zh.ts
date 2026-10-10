@@ -175,6 +175,7 @@ const zh = {
   "router.attach.inject.sourced": "用户 {user} 在房间 {room} 发来附件(请用 read 工具查看):",
   "router.quote.prefix": "「引用自 @{user} 的历史消息:{excerpt}」",
   "audit.degraded": "⚠️ 审计日志不可用,服务继续运行但敏感动作暂无记录:{message}",
+  "guest.denied": "🚫 此命令需要信任用户权限:{command}",
   "router.attach.saved": "📎 附件已保存: {path}({bytes})\n下一条消息发送时会自动附上它。",
   "router.payload.unsupported": "🤷 暂不支持的消息类型({msgtype}),已忽略。文字、图片和文件都可以直接发给我。",
   "router.enable.usage": "用法: /enable <all|mentions|trusted-only>(本房间)",

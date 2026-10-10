@@ -40,6 +40,7 @@ export type ChallengeOutcome = "authenticated" | "expired" | "wrong" | "blocked"
 export class ChallengeAuth {
   private challenges = new Map<string, ChallengeData>();
   private trustedUsers = new Set<string>();
+  private guestUsers = new Set<string>();
   private channelAuth = new Map<string, ChannelAuth>();
   private blockedUsers = new Map<string, number>(); // userId -> unblock timestamp
   /** 错房配对提示的每(用户,对话)冷却(60s),防数字消息刷屏(spec #93 票3)。 */
@@ -56,11 +57,15 @@ export class ChallengeAuth {
    */
   loadFromConfig(config: {
     trustedUsers?: string[];
+    guestUsers?: string[];
     adminUserId?: string;
     channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
   }): void {
     if (config.trustedUsers) {
       this.trustedUsers = new Set(config.trustedUsers);
+    }
+    if (config.guestUsers) {
+      this.guestUsers = new Set(config.guestUsers);
     }
     if (config.adminUserId) {
       this.adminUserId = config.adminUserId;
@@ -75,11 +80,13 @@ export class ChallengeAuth {
    */
   exportConfig(): {
     trustedUsers: string[];
+    guestUsers: string[];
     adminUserId?: string;
     channels: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
   } {
     return {
       trustedUsers: Array.from(this.trustedUsers),
+      guestUsers: Array.from(this.guestUsers),
       adminUserId: this.adminUserId,
       channels: Object.fromEntries(this.channelAuth),
     };
@@ -111,7 +118,8 @@ export class ChallengeAuth {
       this.blockedUsers.delete(namespacedUserId);
     }
 
-    // DM: check trusted or initiate challenge
+    // DM: trusted → guest → challenge(issue #120:访客档直进,不触发配对,
+    // 也绝不顺手领走 admin 身份 —— 那是首个信任用户的专属逻辑)
     if (!isGroupChat) {
       if (this.trustedUsers.has(namespacedUserId)) {
         // Set as admin if first trusted user
@@ -119,6 +127,9 @@ export class ChallengeAuth {
           this.adminUserId = namespacedUserId;
           this.onNotify(`🔐 ${username} is now the admin`, "info");
         }
+        return true;
+      }
+      if (this.guestUsers.has(namespacedUserId)) {
         return true;
       }
 
@@ -150,6 +161,14 @@ export class ChallengeAuth {
   isTrustedUser(userId: string, transport?: string): boolean {
     const namespaced = namespacedId(userId, transport);
     return this.trustedUsers.has(namespaced);
+  }
+
+  /** Whether a user is in the guest list (per transport) — issue #120.
+   *  Guests chat but cannot touch the dangerous surface (the router's gate
+   *  enforces the guest-policy blocklist; this engine only classifies). */
+  isGuestUser(userId: string, transport?: string): boolean {
+    const namespaced = namespacedId(userId, transport);
+    return this.guestUsers.has(namespaced);
   }
 
   /** Whether this user is the admin (matching rule single-sourced in identity.ts). */
