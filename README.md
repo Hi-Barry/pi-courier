@@ -202,7 +202,7 @@ Since 0.1.39 sending mirrors pi's TUI. A plain text message is always sent with 
 - `/interrupt <text>` — idle: runs directly; mid-task: stops the current task and sends the new instruction
 - `/stop` — stop everything now, the TUI's Esc: queued messages are cleared too
 
-**What happens to the queue, stated up front**: since 0.3.8 `/stop` and `/interrupt` mirror the TUI's Esc — the queue is cleared **before** the abort, and the reply lists exactly which queued messages were dropped, so nothing disappears unseen. On a pi older than 0.84.4 (no `clear_queue` RPC) the old behaviour applies: the queue survives and fires on the **next** turn; the reply says so explicitly (`⚠️ N queued message(s) will take effect on the next turn:`).
+**What happens to the queue, stated up front**: since 0.3.8 `/stop` and `/interrupt` mirror the TUI's Esc — the queue is cleared **before** the abort, and the reply lists exactly which queued messages were dropped, so nothing disappears unseen. On a pi older than 0.84.4 (no `clear_queue` RPC) the old behaviour applies: the queue survives and fires on the **next** turn; the reply says so explicitly (`⚠️ N queued message(s) will take effect on the next turn:`). Since 0.5.0 even **involuntary** loss is visible: if the queue is non-empty when the subprocess restarts (/reload or a crash respawn), the bot proactively posts `⚠️ Subprocess restarted — N queued message(s) never ran` with the full list — a queue you cleared yourself via `/stop` never triggers the warning.
 
 ### Extension questions land in the room
 
@@ -286,7 +286,7 @@ Supported: `m.image` / `m.file` / `m.audio` / `m.video` / stickers. Images are h
 - answer `y` to "Enable multi-project mode?" during setup
 - or later send `/multiproject on` and restart with `pi-courier restart`
 
-> **Offline backlog note**: messages sent while the bot was down are dropped on restart (never executed retroactively) — resend anything important.
+> **Offline inbox** (since 0.5.0): messages sent while the bot was down are **no longer lost** — after a restart the bot settles them per room ("N message(s) arrived while offline" + the full list); reply **"execute"** to run them in order or **"ignore"** to discard (valid 10 minutes; silence counts as ignore). This is the default; set `inbox.mode: "auto"` to run them after a notice, or `"off"` to restore the old drop-quietly behaviour. Backlog from untrusted senders still goes through the normal gate — it never becomes a privilege bypass.
 
 `/multiproject` (trusted users): `on` / `off` (both take effect on restart); no args shows the current mode. The management-room / project-room mechanisms below only exist in multi-project mode.
 

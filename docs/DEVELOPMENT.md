@@ -207,11 +207,13 @@ pi 0.83.0 就绪。
 - 邀请目标由 router 以 transport 原生 MXID 传入(控制器不做前缀剥离)
 
 **`src/rpc/message-router.ts`** —— 核心接线(编排层;spec #99 票3/#104 起只做编排,提问机与管理房收养外迁)
-- 主管道是**显式的阶段管道**(spec #72 票3/C1):authorization → attachments → adminCommands → groupEnable → authorizationGate → multiproject → managementAdoption → roomBinding → pmctl → login → slashCommands → loginCapture → extensionCapture → prompt,共 14 个阶段;每阶段自述 preAuth(绕过授权门)/consumesLedger(消耗附件待处理清单——全管道唯一是 prompt)/needsRpc(触发 pi 进程懒解析),阶段表经 pipeline() 可直测
+- 主管道是**显式的阶段管道**(spec #72 票3/C1):authorization → attachments → adminCommands → groupEnable → authorizationGate → backlogAnswer → backlogInbox → multiproject → managementAdoption → roomBinding → pmctl → login → slashCommands → loginCapture → extensionCapture → prompt,共 16 个阶段;每阶段自述 preAuth(绕过授权门)/consumesLedger(消耗附件待处理清单——全管道唯一是 prompt)/needsRpc(触发 pi 进程懒解析),阶段表经 pipeline() 可直测
 - pi 进程为懒解析(spec #72 票3):只在真正需要的阶段(roomBinding 起)启动,管理命令族零 spawn
 - 附件消息在斜杠/挑战码解析之前截住(spec #66):待处理清单按"房间+发送者"记账,下一条真正发给 pi 的对话消息把附件绝对路径注入 prompt(`withAttachmentPrefix`)并清空 —— 唯一消耗点;管理命令/应答捕获天然不消耗;未授权者与文本同等静默
 - agent 事件流(`message_end` / `turn_end` / `agent_start`…)→ 回发到 Matrix;extension_ui 提问/应答经 `extension-questions.ts` 模块(注入 sendReply/应答写入口),auto_retry 与错误回发、steering/followUp 队列镜像也在事件路径上(spec #51;#54)
 - 回复按 RoomBinding 路由:每个 pi 进程绑定自己的回复目标(项目房间钉住、共享默认进程随最近一次 DM 提示刷新,完整对话轮结束后释放)——不存在进程级单槽
+- 离线收件箱(issue #113):transport 判定的 `replayed` 消息(离线积压)不直接执行——backlogAnswer 消费「执行/忽略」应答(双语,取消词也算忽略),backlogInbox 按房间缓冲并在首条积压后 5s(回放波收敛)或本房间首条实时消息到达时结算;confirm(默认)发征询、10 分钟超时默弃,auto 告知后按序执行,off 时 transport 根本不转发;门控(authorizationGate)先于缓冲——积压绝不构成越权旁路
+- 非自愿队列丢失回执(issue #115 阶段1):RpcTransientState 作废时镜像非空即回调 router,向该进程绑定房间发「N 条未执行」清单;`/stop` //interrupt 清队成功后镜像钉零(setQueueMirror),自己清的与崩溃丢的就此区分
 - typing 指示:`agent_start` / `turn_start` 触发 Matrix 输入中状态;管理房判定走 config 的 `managementRoomId` 派生、收养写走 `adoptManagementRoom`(spec #99/#102),收养品牌逻辑在 space.ts
 
 **`src/space.ts`** —— Element 空间组织视图(纯展示层)+ 托管房间置备/身份自愈
@@ -233,6 +235,7 @@ pi 0.83.0 就绪。
 - 模块底部纯函数区:`formatForMatrix`(出站渲染)、`shouldSkipEvent`(事件过滤,含 connectedAt 回放隔离)、`isGroupChatRoom`/`shouldPostJoinHint`(群/DM 判定与入群 enable 提示谓词);成员计数经缓存(不逐条消息打 API)
 - 消息翻译已抽为独立深模块 `matrix-events.ts`(spec #72 票2/C2):分类/提及剥离/引用摘录/附件编排全部在翻译器内,经注入端口(quoteCache/memberCount/attachments)直测;transport 只留 skip 过滤 + 端口接线 + 日志;入群提示文案在 management-room.ts(/enable 知识同侧)
 - 附件管道(spec #66):媒体事件经分类后走 `AttachmentStore` 下载落盘,转发携带绝对路径的 `ExternalMessage`(不触发 turn);m.sticker 事件类型经 `room.event` 监听接入(E2EE 房间收到的是解密后事件);`mediaSource` 是下载接缝的 Matrix 半边(明文 `downloadContent` v1 鉴权端点 / 加密 `crypto.decryptMedia`)
+- 离线积压判定(issue #113):`shouldSkipEvent` 的「stale」分类不改,「命中与否」在调用方——过了过滤器的实时事件即入已处理台账(`setEventLedger` 接缝注入,组合根接线);stale 且台账没见过 = 离线积压,受理记账后带 `replayed: true` 放行;m.notice 静默/编辑/无 body 三条铁律不因积压破例;台账本体在 `event-ledger.ts`(JSONL 追加 + 启动压实 7 天窗 + 首运 init 标记,坏行/读失败降级首运,永不抛);首运会话(freshStart)里 stale 一律维持丢弃——初始同步回放无法与真积压区分,宁丢不误
 - SDK 内部日志经 `logger.ts` 门面(初次同步期窗口滤掉两类已知良性错误,时点语义见 logger 条目)
 
 **`src/transports/matrix-client.ts`** —— Matrix client 端口 + 生产适配器(spec #99 票1/#100)
@@ -258,7 +261,7 @@ pi 0.83.0 就绪。
 - 无标签行与历史逐字节一致(单工程模式零变化)
 - `suppressLogLines`:本文件 docblock 是「为什么静音」策略唯一清单——①初次同步回放窗口(matrix.ts,盖 client.start() 时段的两类良性错误);②预期 miss 查询(matrix-rooms.ts `queryExpectedMiss`,窗口只盖单次调用);实现为引用计数式移除,同模式嵌套窗口各移除自己一份,内层关窗不误拆外层
 
-**`src/config.ts` 派生函数族**(spec #72 票4/C4;spec #99 票6/#102 补管理房间):effectiveInstanceName/effectiveWorkdir/attachmentsDirectory/attachmentsMaxMb/attachmentsMaxBytes/`managementRoomId`(哪一个是管理房间——公开语义单管理房,"取首个"是有意为之)/`adoptManagementRoom`(收养写侧,追加语义、幂等空 patch,可与其他字段合并为一次原子 update)——每条默认值只有一处解释,setup 向导与运行时同源;PI_CLI_PATH 经 loadConfig 纳入统一 env 覆盖链。
+**`src/config.ts` 派生函数族**(spec #72 票4/C4;spec #99 票6/#102 补管理房间;#113 补 inboxMode):effectiveInstanceName/effectiveWorkdir/attachmentsDirectory/attachmentsMaxMb/attachmentsMaxBytes/`managementRoomId`(哪一个是管理房间——公开语义单管理房,"取首个"是有意为之)/`adoptManagementRoom`(收养写侧,追加语义、幂等空 patch,可与其他字段合并为一次原子 update)/`inboxMode`(离线收件箱策略 confirm|auto|off,默认 confirm,手编错字归 confirm)——每条默认值只有一处解释,setup 向导与运行时同源;PI_CLI_PATH 经 loadConfig 纳入统一 env 覆盖链。
 
 **`src/identity.ts`**(spec #72 票5/C6)—— 用户身份单点:namespacedId(存储形式)/nativeMxid(Matrix 形式)/displayIdentity(/trusted 展示,沿用既有截断怪癖)/matchesTrustedEntry(/revoke 后缀规则)/matchesAdmin(存量双形式兼容,显式命名)。config.ts 的 nativeMxid 为再导出。
 
