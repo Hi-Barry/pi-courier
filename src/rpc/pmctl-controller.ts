@@ -24,7 +24,7 @@ import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
 import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
-import { provisionManagedRoom } from "../space.js";
+import { provisionManagedRoom } from "../space-topology.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
 

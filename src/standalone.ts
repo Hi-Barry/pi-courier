@@ -38,7 +38,7 @@ import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
 import { consumeQueueSnapshots, type QueueSnapshotEntry, QueueSnapshotStore } from "./rpc/queue-snapshots.js";
-import { ensureSpaceAndManagementRoom } from "./space.js";
+import { ensureSpaceAndManagementRoom } from "./space-topology.js";
 import { createStartupState, runStartupHeals } from "./startup-state.js";
 import { JsonStateFile } from "./state/json-file.js";
 import { AttachmentStore } from "./transports/attachments.js";

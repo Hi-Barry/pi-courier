@@ -285,11 +285,9 @@ describe('config 派生函数族 — 管理房间(spec #99 票6 / issue #102)', 
     });
   });
 
-  it('adoptManagementRoom: 追加语义 — 已有条目保持在首位不变', async () => {
+  it('adoptManagementRoom: 已有管理房时拒绝再写(架构候选4:不变量结构化,原 append 靠调用方纪律维持)', async () => {
     const { adoptManagementRoom } = await import('../src/config');
-    expect(adoptManagementRoom({ managementRooms: ['!a:server'] }, '!dm:server')).toEqual({
-      managementRooms: ['!a:server', '!dm:server'],
-    });
+    expect(adoptManagementRoom({ managementRooms: ['!a:server'] }, '!dm:server')).toEqual({});
   });
 
   it('adoptManagementRoom: 重复收养同一房间幂等 — 返回空 patch,不产生重复条目', async () => {

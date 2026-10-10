@@ -42,7 +42,7 @@ describe("provisionManagedRoom(票2:中途房 ≡ 自愈房)", () => {
     vi.doMock("os", homedirMock);
     vi.doMock("node:os", homedirMock);
     const config = await import("../src/config");
-    const space = await import("../src/space");
+    const space = await import("../src/space-topology");
     const pmctl = await import("../src/rpc/pmctl-controller");
     const spaceIdentity = await import("../src/space-identity");
     const loggerModule = await import("../src/logger");

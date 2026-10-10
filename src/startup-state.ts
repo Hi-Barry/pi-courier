@@ -14,12 +14,14 @@
  *    两态旗标从组合根闭包移入本模块,`allowAdoption()` 是唯一翻转口,
  *    router 经注入的查询只读。
  * 3. 启动自愈编排:`runStartupHeals` 自 space.ts 迁入(票4 预留),固定
- *    顺序 信任补权 → 房间身份 → bot 头像;三段深函数仍在 space.ts。
+ *    顺序 信任补权 → 房间身份 → bot 头像;三段深函数分住 power-heal.ts
+ *    与 room-branding.ts(架构候选4 自 space.ts 拆出)。
  */
 
 import { type ConfigStore, isSpaceMode, managementRoomId } from "./config.js";
 import { logger } from "./logger.js";
-import { healBotAvatar, healRoomIdentities, healTrustedPowerLevels } from "./space.js";
+import { healTrustedPowerLevels } from "./power-heal.js";
+import { healBotAvatar, healRoomIdentities } from "./room-branding.js";
 import type { RoomOps } from "./transports/interface.js";
 
 /** 组合根 sendReply 的形状(接线时由组合根交入)。 */
