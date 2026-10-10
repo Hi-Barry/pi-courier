@@ -34,7 +34,8 @@ describe("offline inbox settlement (issue #113)", () => {
     store: ConfigStore,
     prompt: ReturnType<typeof vi.fn>,
     trusted: string[] = ["matrix:@barry:server"],
-    channels: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }> = {}
+    channels: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }> = {},
+    transportsReady?: Promise<void>
   ) {
     const rpc = {
       prompt,
@@ -50,6 +51,8 @@ describe("offline inbox settlement (issue #113)", () => {
       sendReply: async (chatId: string, transport: string, text: string) => {
         replies.push({ chatId, transport, text });
       },
+      // #136 冻结信号经逃生舱透传;缺省(不传)= 已就绪,既有用例即旧语义钉。
+      ...(transportsReady ? { extra: { backlogTransportsReady: transportsReady } } : {}),
     });
     return fixture.router;
   }
@@ -119,6 +122,47 @@ describe("offline inbox settlement (issue #113)", () => {
     await router.handleIncoming(makeMsg({ text: "我回来了" }));
     expect(replies.some((r) => r.text.includes("1 条消息"))).toBe(true);
     expect(prompt).toHaveBeenCalledWith("我回来了"); // 实时消息照常处理
+  });
+
+  // ---- 结算冻结(#136 修法B):transport 连接阶段只缓冲不倒计时 -----------
+
+  function freezeSignal() {
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => (release = resolve));
+    return { ready, release };
+  }
+
+  it("冻结窗:未就绪只缓冲不倒计时,放行后补起 5s(#136 修法B)", async () => {
+    const signal = freezeSignal();
+    router = buildRouter(store, prompt, ["matrix:@barry:server"], {}, signal.ready);
+    await router.handleIncoming(backlog("冻结一号"));
+    await router.handleIncoming(backlog("冻结二号"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(replies).toEqual([]); // 旧代码此处已丢积压:定时器在未连接里开火
+    expect(prompt).not.toHaveBeenCalled();
+    signal.release();
+    await vi.advanceTimersByTimeAsync(0); // 放行回补定时器(微任务落定)
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(replies).toHaveLength(1);
+    expect(replies[0]!.text).toContain("2 条消息");
+    expect(replies[0]!.text).toContain("冻结一号");
+  });
+
+  it("冻结窗内实时消息照旧立即结算(能收即活着,只冻定时器)", async () => {
+    const signal = freezeSignal();
+    router = buildRouter(store, prompt, ["matrix:@barry:server"], {}, signal.ready);
+    await router.handleIncoming(backlog("冻结一"));
+    await router.handleIncoming(makeMsg({ text: "我回来了" }));
+    expect(replies.some((r) => r.text.includes("1 条消息"))).toBe(true);
+    expect(prompt).toHaveBeenCalledWith("我回来了");
+  });
+
+  it("冻结信号 reject 视同放行,不永久冻结", async () => {
+    router = buildRouter(store, prompt, ["matrix:@barry:server"], {}, Promise.reject(new Error("wiring bug")));
+    await router.handleIncoming(backlog("照样结算"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(replies).toHaveLength(1);
+    expect(replies[0]!.text).toContain("1 条消息");
   });
 
   it("unauthorized sender's backlog never buffers (no privilege bypass via replay)", async () => {

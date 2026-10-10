@@ -333,6 +333,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     sendReply(delivery.chatId, delivery.transport, delivery.text)
   );
 
+  // 离线积压结算冻结信号(#136 修法B):onMessage 在 connect() resolve 前
+  // 就接好,初始同步的 replayed 积压先于「transports connected」进缓冲,旧
+  // 5s 定时器会在未连接里开火、征询发不出去按忽略丢积压。信号在连接阶段
+  // 结束后统一放行(成功或已处理的失败分支都放 = 降级态回旧语义)。
+  let releaseBacklogSettle!: () => void;
+  const backlogTransportsReady = new Promise<void>((resolve) => {
+    releaseBacklogSettle = resolve;
+  });
+
   const router = createMessageRouter({
     projectManager,
     auth,
@@ -346,6 +355,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     reminders: reminderClock,
     queueSnapshots,
     audit: auditLog,
+    backlogTransportsReady,
   });
 
   // 房间消亡销账(issue #114/#117 后续):/pmctl rm 确认后清掉该房间的附件
@@ -394,6 +404,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       logger.warn("     解法:重跑 `pi-courier setup`,在\"保留现有 token?\"处输 n 换新 token(新设备=服务器干净)。");
     }
   }
+  // 连接阶段结束(成功或已处理的失败),放行离线积压结算(#136)。
+  releaseBacklogSettle();
 
   // ---- queue snapshot consumption (issue #115 阶段2) --------------------------
   // 服务级重启后的「未执行」回执此刻补发:上个进程欠的排队清单,逐项目房
