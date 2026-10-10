@@ -6,19 +6,13 @@
  *  - formatBashReply 的统一回帖形态
  */
 import { describe, expect, it, vi } from "vitest";
-import { ChallengeAuth } from "../src/auth/challenge-auth";
-import { ConfigStore } from "../src/config";
 import {
   createBashTracker,
   formatBashReply,
   parseBangCommand,
 } from "../src/rpc/command-map";
-import { createMessageRouter } from "../src/rpc/message-router";
-import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { BashResultView, PiRpc } from "../src/rpc/pi-rpc";
-import type { ProjectManager } from "../src/rpc/project-manager";
-import type { RoomOps } from "../src/transports/interface";
-import type { ExternalMessage } from "../src/types";
+import { makeMsg, makeRouterFixture } from "./helpers";
 
 describe("parseBangCommand — 触发规则", () => {
   it("半角 ! 加空格触发,结果写入上下文", () => {
@@ -94,27 +88,8 @@ describe("formatBashReply — 统一回帖形态", () => {
 });
 
 describe("bashBang 管道阶段", () => {
-  function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-    const { text = "hi", ...rest } = overrides;
-    return {
-      chatId: "!dm:server",
-      transport: "matrix",
-      userId: "@barry:server",
-      username: "barry",
-      payload: { kind: "text", text },
-      isGroupChat: false,
-      wasMentioned: false,
-      messageId: "m1",
-      timestamp: new Date(),
-      ...rest,
-    };
-  }
-
   function makeFixtures() {
     const replies: string[] = [];
-    const sendReply = async (_chatId: string, _transport: string, text: string) => {
-      replies.push(text);
-    };
     const prompt = vi.fn().mockResolvedValue(undefined);
     const bash = vi.fn();
     const abortBash = vi.fn();
@@ -125,19 +100,12 @@ describe("bashBang 管道阶段", () => {
       onEvent: vi.fn(),
       requireClient: () => ({ abortBash }),
     } as unknown as PiRpc;
-    const projectManager = {
-      getRpcForRoom: vi.fn().mockReturnValue(rpc),
-      isProjectRoom: vi.fn().mockReturnValue(false),
-      labelForRoom: vi.fn().mockReturnValue(undefined),
-      isMultiProject: false,
-      allRpcs: vi.fn().mockReturnValue([rpc]),
-    } as unknown as ProjectManager;
-    const store = new ConfigStore({});
-    const auth = new ChallengeAuth(() => {}, () => {});
-    auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
-    const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
-    const pmctl = new PmctlController({ projectManager, roomOps, store });
-    const router = createMessageRouter({ projectManager, auth, sendReply, sendTyping: vi.fn(), roomOps, store, pmctl });
+    const { router } = makeRouterFixture({
+      rpc,
+      sendReply: async (_chatId: string, _transport: string, text: string) => {
+        replies.push(text);
+      },
+    });
     return { router, prompt, bash, abortBash, replies };
   }
 

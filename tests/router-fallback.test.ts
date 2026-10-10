@@ -10,31 +10,10 @@
  * 每轮失败/成功各产生一条原生回复;降级回执与审计在此之上断言。
  */
 import { describe, expect, it, vi } from "vitest";
-import { AUDIT_EVENTS, type AuditEntry } from "../src/audit/audit-log";
-import { ChallengeAuth } from "../src/auth/challenge-auth";
+import { AUDIT_EVENTS } from "../src/audit/audit-log";
 import { ConfigStore } from "../src/config";
-import { createMessageRouter } from "../src/rpc/message-router";
-import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { PiRpc } from "../src/rpc/pi-rpc";
-import type { ProjectManager } from "../src/rpc/project-manager";
-import type { RoomOps } from "../src/transports/interface";
-import type { ExternalMessage } from "../src/types";
-
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: `m-${Math.random().toString(36).slice(2)}`,
-    timestamp: new Date(),
-    ...rest,
-  };
-}
+import { makeMsg, makeRouterFixture } from "./helpers";
 
 const failTurn = { type: "turn_end", message: { role: "assistant", content: [{ type: "text", text: "boom" }], stopReason: "error", errorMessage: "403" } };
 const okTurn = { type: "turn_end", message: { role: "assistant", content: [{ type: "text", text: "fine" }] } };
@@ -61,44 +40,23 @@ function makeFallbackRouter(options: {
       setModel,
     }),
   } as unknown as PiRpc;
-  const projectManager = {
-    getRpcForRoom: vi.fn().mockReturnValue(rpc),
-    isProjectRoom: vi.fn().mockReturnValue(false),
-    labelForRoom: vi.fn().mockReturnValue(undefined),
-    isMultiProject: false,
-    allRpcs: vi.fn().mockReturnValue([rpc]),
-    roomForRpc: vi.fn().mockReturnValue(undefined),
-    projectFallbacks: vi.fn().mockReturnValue(options.projectChain),
-  } as unknown as ProjectManager;
-  const store = new ConfigStore(options.globalChain ? { modelFallbacks: options.globalChain } : {});
-  const auth = new ChallengeAuth(() => {}, () => {});
-  auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
-  const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
-  const pmctl = new PmctlController({ projectManager, roomOps, store });
-  const sendReply = vi.fn().mockResolvedValue(undefined);
-  const auditLines: AuditEntry[] = [];
-  const router = createMessageRouter({
-    projectManager,
-    auth,
-    sendReply,
-    sendTyping: vi.fn(),
-    roomOps,
-    store,
-    pmctl,
-    audit: {
-      append: (event: string, actor: string, chatId: string, detail?: string) =>
-        auditLines.push({ ts: Date.now(), event, actor, chatId, detail }),
-    } as never,
+  const fixture = makeRouterFixture({
+    audit: true,
+    rpc,
+    store: new ConfigStore(options.globalChain ? { modelFallbacks: options.globalChain } : {}),
   });
+  // 本特性唯一要动的 PM 面:项目链覆盖全局链,mock 现场改在工厂的默认 PM 上。
+  const projectFallbacks = fixture.projectManager.projectFallbacks as ReturnType<typeof vi.fn>;
+  projectFallbacks.mockImplementation(() => options.projectChain);
   const failRound = async (): Promise<void> => {
-    await router.handleIncoming(makeMsg({ text: "再试一次" }));
-    router.handleEvent(failTurn, rpc);
+    await fixture.router.handleIncoming(makeMsg({ text: "再试一次" }));
+    fixture.router.handleEvent(failTurn, rpc);
   };
   const okRound = async (): Promise<void> => {
-    await router.handleIncoming(makeMsg({ text: "再来一轮" }));
-    router.handleEvent(okTurn, rpc);
+    await fixture.router.handleIncoming(makeMsg({ text: "再来一轮" }));
+    fixture.router.handleEvent(okTurn, rpc);
   };
-  return { router, rpc, sendReply, setModel, auditLines, projectFallbacks: projectManager.projectFallbacks as ReturnType<typeof vi.fn>, failRound, okRound };
+  return { sendReply: fixture.sendReply, setModel, auditLines: fixture.auditLines, projectFallbacks, failRound, okRound };
 }
 
 describe("model fallback chain (issue #121)", () => {

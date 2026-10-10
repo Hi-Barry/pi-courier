@@ -4,51 +4,19 @@
  * pinned here so future stages can't silently break the invariants.
  */
 import { describe, expect, it, vi } from "vitest";
-import { ChallengeAuth } from "../src/auth/challenge-auth";
-import { ConfigStore } from "../src/config";
-import { createMessageRouter } from "../src/rpc/message-router";
-import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { PiRpc } from "../src/rpc/pi-rpc";
-import type { ProjectManager } from "../src/rpc/project-manager";
-import type { RoomOps } from "../src/transports/interface";
-import type { ExternalMessage } from "../src/types";
-
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: "m1",
-    timestamp: new Date(),
-    ...rest,
-  };
-}
+import { makeMsg, makeRouterFixture } from "./helpers";
 
 function makeFixtures() {
   const replies: string[] = [];
-  const sendReply = async (_chatId: string, _transport: string, text: string) => {
-    replies.push(text);
-  };
   const prompt = vi.fn().mockResolvedValue(undefined);
   const rpc = { prompt, label: undefined, onEvent: vi.fn() } as unknown as PiRpc;
-  const projectManager = {
-    getRpcForRoom: vi.fn().mockReturnValue(rpc),
-    isProjectRoom: vi.fn().mockReturnValue(false),
-    labelForRoom: vi.fn().mockReturnValue(undefined),
-    isMultiProject: false,
-    allRpcs: vi.fn().mockReturnValue([rpc]),
-  } as unknown as ProjectManager;
-  const store = new ConfigStore({});
-  const auth = new ChallengeAuth(() => {}, () => {});
-  auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
-  const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
-  const pmctl = new PmctlController({ projectManager, roomOps, store });
-  const router = createMessageRouter({ projectManager, auth, sendReply, sendTyping: vi.fn(), roomOps, store, pmctl });
+  const { router, projectManager } = makeRouterFixture({
+    rpc,
+    sendReply: async (_chatId: string, _transport: string, text: string) => {
+      replies.push(text);
+    },
+  });
   return { router, prompt, replies, getRpcForRoom: projectManager.getRpcForRoom as ReturnType<typeof vi.fn> };
 }
 

@@ -7,37 +7,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChallengeAuth } from "../src/auth/challenge-auth";
-import { ConfigStore } from "../src/config";
 import {
   attachmentLedgerKey,
   attachmentSavedReply,
-  createMessageRouter,
   withAttachmentPrefix,
 } from "../src/rpc/message-router";
 import type { PersistedAttachmentEntry } from "../src/rpc/message-router";
-import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { PiRpc } from "../src/rpc/pi-rpc";
-import type { ProjectManager } from "../src/rpc/project-manager";
 import { JsonStateFile } from "../src/state/json-file";
-import type { RoomOps } from "../src/transports/interface";
-import type { ExternalMessage, MessageAttachment } from "../src/types";
-
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: "m1",
-    timestamp: new Date(),
-    ...rest,
-  };
-}
+import type { MessageAttachment } from "../src/types";
+import { makeMsg, makeRouterFixture } from "./helpers";
 
 const ATT: MessageAttachment = {
   path: "/home/u/.pi/pi-courier-attachments/room-1a2b/abc123def456-photo.png",
@@ -47,9 +26,6 @@ const ATT: MessageAttachment = {
 
 function makeFixtures(opts: { ledger?: JsonStateFile<PersistedAttachmentEntry[]> } = {}) {
   const replies: Array<{ chatId: string; transport: string; text: string }> = [];
-  const sendReply = async (chatId: string, transport: string, text: string) => {
-    replies.push({ chatId, transport, text });
-  };
   const prompt = vi.fn().mockResolvedValue(undefined);
   const rpc = {
     prompt,
@@ -57,31 +33,13 @@ function makeFixtures(opts: { ledger?: JsonStateFile<PersistedAttachmentEntry[]>
     label: undefined,
     onEvent: vi.fn(),
   } as unknown as PiRpc;
-  const projectManager = {
-    getRpcForRoom: vi.fn().mockReturnValue(rpc),
-    isProjectRoom: vi.fn().mockReturnValue(false),
-    labelForRoom: vi.fn().mockReturnValue(undefined),
-    isMultiProject: false,
-    allRpcs: vi.fn().mockReturnValue([rpc]),
-  } as unknown as ProjectManager;
-  const store = new ConfigStore({});
-  const auth = new ChallengeAuth(() => {}, () => {});
-  auth.loadFromConfig({
-    trustedUsers: ["matrix:@barry:server", "matrix:@carol:server"],
-    adminUserId: "matrix:@barry:server",
-    channels: {},
-  });
-  const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
-  const pmctl = new PmctlController({ projectManager, roomOps, store });
-  const router = createMessageRouter({
-    projectManager,
-    auth,
-    sendReply,
-    sendTyping: vi.fn(),
-    roomOps,
-    store,
-    pmctl,
-    ...(opts.ledger ? { attachmentsLedger: opts.ledger } : {}),
+  const { router } = makeRouterFixture({
+    rpc,
+    trusted: ["matrix:@barry:server", "matrix:@carol:server"],
+    sendReply: async (chatId: string, transport: string, text: string) => {
+      replies.push({ chatId, transport, text });
+    },
+    ...(opts.ledger ? { extra: { attachmentsLedger: opts.ledger } } : {}),
   });
   return { router, prompt, replies, lastReply: () => replies.at(-1)!.text };
 }

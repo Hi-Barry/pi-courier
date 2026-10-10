@@ -18,31 +18,11 @@
  * cancelled:true response resolves the dialog to its default value.
  */
 import { describe, expect, it, vi } from "vitest";
-import { ChallengeAuth } from "../src/auth/challenge-auth";
-import { ConfigStore } from "../src/config";
-import { createMessageRouter } from "../src/rpc/message-router";
 import type { ExtensionUIRequestView } from "../src/rpc/extension-questions";
-import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { ExtensionUIResponsePayload, PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
-import type { RoomOps } from "../src/transports/interface";
-import type { ExternalMessage } from "../src/types";
-
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: "m1",
-    timestamp: new Date(),
-    ...rest,
-  };
-}
+import { ConfigStore } from "../src/config";
+import { makeMsg, makeRouterFixture } from "./helpers";
 
 /** A confirm-shaped extension_ui_request (the wire shape per rpc-types.d.ts). */
 function uiRequest(id: string, overrides: Record<string, unknown> = {}): ExtensionUIRequestView {
@@ -65,9 +45,6 @@ function uiRequest(id: string, overrides: Record<string, unknown> = {}): Extensi
  */
 function makeFixtures(opts: { extensionUiTimeoutMinutes?: number } = {}) {
   const replies: Array<{ chatId: string; transport: string; text: string }> = [];
-  const sendReply = async (chatId: string, transport: string, text: string) => {
-    replies.push({ chatId, transport, text });
-  };
   const extensionResponses: ExtensionUIResponsePayload[] = [];
   const restartListeners = new Set<(r: unknown) => void>();
   const rpc = {
@@ -87,6 +64,7 @@ function makeFixtures(opts: { extensionUiTimeoutMinutes?: number } = {}) {
     requireClient: () => rpc,
     onEvent: vi.fn(),
   } as unknown as PiRpc;
+  // 本特性的 PM 面多出 /pmctl 注册族(registerProject 等),整体替换工厂默认件。
   const projectManager = {
     getRpcForRoom: vi.fn().mockReturnValue(rpc),
     isProjectRoom: vi.fn().mockReturnValue(false),
@@ -102,23 +80,14 @@ function makeFixtures(opts: { extensionUiTimeoutMinutes?: number } = {}) {
       ? { extensionUiTimeoutMinutes: opts.extensionUiTimeoutMinutes }
       : {}),
   });
-  const auth = new ChallengeAuth(
-    () => {},
-    () => {}
-  );
-  auth.loadFromConfig({
-    trustedUsers: ["matrix:@barry:server"],
-    adminUserId: "matrix:@barry:server",
-    channels: {},
+  const { router } = makeRouterFixture({
+    rpc,
+    projectManager,
+    store,
+    sendReply: async (chatId: string, transport: string, text: string) => {
+      replies.push({ chatId, transport, text });
+    },
   });
-  const sendTyping = vi.fn(async (_chatId: string, _transport: string): Promise<void> => {});
-  // Only getBotUserId can be reached in single-project mode; cast keeps the
-  // stub minimal (mirrors the roomOps shape in router-projects.test.ts).
-  const roomOps = {
-    getBotUserId: vi.fn().mockReturnValue("@bot:server"),
-  } as unknown as RoomOps;
-  const pmctl = new PmctlController({ projectManager, roomOps, store });
-  const router = createMessageRouter({ projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl });
   return { replies, extensionResponses, rpc, store, router };
 }
 

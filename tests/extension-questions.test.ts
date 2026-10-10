@@ -27,24 +27,9 @@ import {
 } from "../src/rpc/extension-questions";
 import type { ExtensionUIResponsePayload, PiRpc } from "../src/rpc/pi-rpc";
 import type { ExternalMessage, ReplyTarget } from "../src/types";
+import { makeMsg } from "./helpers";
 
 // --- fixtures -----------------------------------------------------------------
-
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: "m1",
-    timestamp: new Date(),
-    ...rest,
-  };
-}
 
 /** A confirm-shaped extension_ui_request (the wire shape per rpc-types.d.ts). */
 function uiRequest(id: string, overrides: Record<string, unknown> = {}): ExtensionUIRequestView {

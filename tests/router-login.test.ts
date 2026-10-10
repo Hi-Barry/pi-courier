@@ -9,32 +9,12 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { AuthInteraction, Credential, CredentialInfo } from "@earendil-works/pi-ai";
-import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { LoginManager, type LoginRuntime } from "../src/auth/headless-login";
 import { ConfigStore } from "../src/config";
-import { createMessageRouter } from "../src/rpc/message-router";
 import type { ExtensionUIRequestView } from "../src/rpc/extension-questions";
-import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { ExtensionUIResponsePayload, PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
-import type { RoomOps } from "../src/transports/interface";
-import type { ExternalMessage } from "../src/types";
-
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: "m1",
-    timestamp: new Date(),
-    ...rest,
-  };
-}
+import { makeMsg, makeRouterFixture } from "./helpers";
 
 function makeRpc(label: string | undefined, isStreaming = false, onExtensionResponse?: (payload: ExtensionUIResponsePayload) => void) {
   const prompt = vi.fn().mockResolvedValue(undefined);
@@ -81,6 +61,7 @@ function makeFixtures(opts: FixtureOptions = {}, runtime?: LoginRuntime) {
   const defaultRpc = dm.rpc;
   const busyRpc = busy.rpc;
   const allRpcs = [defaultRpc, busyRpc];
+  // 本特性的 PM 面多出 /pmctl 注册族,整体替换工厂默认件。
   const projectManager = {
     getRpcForRoom: vi.fn().mockReturnValue(defaultRpc),
     isProjectRoom: vi.fn().mockReturnValue(false),
@@ -93,21 +74,6 @@ function makeFixtures(opts: FixtureOptions = {}, runtime?: LoginRuntime) {
     allRpcs: vi.fn().mockReturnValue(allRpcs),
   } as unknown as ProjectManager;
   const store = new ConfigStore(opts.multiProject ? { multiProject: true, managementRooms: ["!mgmt:server"] } : {});
-  const auth = new ChallengeAuth(
-    () => {},
-    () => {}
-  );
-  auth.loadFromConfig({
-    trustedUsers: ["matrix:@barry:server", ...(opts.secondTrusted ? [opts.secondTrusted] : [])],
-    adminUserId: "matrix:@barry:server",
-    channels: {},
-  });
-  const sendTyping = vi.fn(async (_chatId: string, _transport: string): Promise<void> => {});
-  const roomOps = {
-    getBotUserId: vi.fn().mockReturnValue("@bot:server"),
-  } as unknown as RoomOps;
-  const pmctl = new PmctlController({ projectManager, roomOps, store });
-
   const login = new LoginManager({
     sendReply,
     allRpcs: () => allRpcs,
@@ -118,7 +84,14 @@ function makeFixtures(opts: FixtureOptions = {}, runtime?: LoginRuntime) {
         listCredentials: vi.fn(async () => [{ providerId: "anthropic", type: "oauth" }] as CredentialInfo[]),
       },
   });
-  const router = createMessageRouter({ projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl, login });
+  const { router, auth } = makeRouterFixture({
+    rpc: defaultRpc,
+    projectManager,
+    store,
+    sendReply,
+    trusted: ["matrix:@barry:server", ...(opts.secondTrusted ? [opts.secondTrusted] : [])],
+    login,
+  });
   const lastReply = () => replies.at(-1)!.text;
   const allText = () => replies.map((r) => r.text).join("\n");
   return {
