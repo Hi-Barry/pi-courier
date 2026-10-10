@@ -100,6 +100,9 @@ export interface MessageRouterDeps {
    *  The wiring points are pinned by tests via the shared AUDIT_EVENTS
    *  registry. Absent = zero auditing (tests/legacy deployments). */
   audit?: AuditLog;
+  /** 离线积压结算冻结信号(#136 修法B):装配根在 transport 连接阶段
+   *  结束(成功或已处理的失败)后 resolve。缺省 = 已就绪,旧语义。 */
+  backlogTransportsReady?: Promise<void>;
 }
 
 /** Disk shape of one pending-attachment entry (issue #114). An array of
@@ -476,6 +479,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 调用时才解引用 router(构造期 router 尚未存在,只在调用时求值,无 TDZ)。
   const inbox = new BacklogInbox({
     reply: sendReply,
+    // #136 修法B:结算定时器冻结到 transport 连接阶段结束(装配根注入,
+    // 连接 try/catch 后 resolve);缺省 = 已就绪(旧语义)。
+    transportsReady: deps.backlogTransportsReady,
     deliver: async (entries) => {
       for (const entry of entries) {
         const { replayed: _strip, ...realtime } = entry;
