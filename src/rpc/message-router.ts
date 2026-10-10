@@ -12,7 +12,7 @@ import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
-import { type ConfigStore, inboxMode, managementRoomId } from "../config.js";
+import { type ConfigStore, inboxMode, managementRoomId, recapOnNew } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -28,8 +28,7 @@ import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUser
 import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
-import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
-import {
+import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";import {
   type BashTracker,
   clearedQueuesView,
   createBashTracker,
@@ -45,6 +44,7 @@ import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
 import type { QueueSnapshotStore } from "./queue-snapshots.js";
+import { RECAP_MIN_TURNS, RecapBusyError, RecapEmptyError, recapCardTitle, recapCcPrefix, recapPromptText, renderRecapCard } from "./recap.js";
 import { RpcTransientState } from "./rpc-transient-state.js";
 import { extractUserText, type MirroredEntry, MirrorManager } from "./session-mirror.js";
 import { appendStatusFooter, collectStatusFooter } from "./status-footer.js";
@@ -302,6 +302,80 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     deps.audit?.append(event, namespacedId(msg.userId, msg.transport), msg.chatId, detail);
   };
   const auditDetailOf = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 120);
+
+  // 交接卡(issue #122):每进程「已完成对话轮」记账(/new //clear 换会话
+  // 归零)+ 在途捕获。忙拒保证同一时刻至多一个捕获在飞;/stop 打断会以
+  // 失败轮收场,捕获随之 reject,不会悬挂。
+  const recapTurns = new WeakMap<PiRpc, number>();
+  let recapCapture: { rpc: PiRpc; resolve: (text: string) => void; reject: (err: Error) => void } | undefined;
+
+  /** 向当前进程发总结 prompt 并等终答(turn_end 的最终文本)。 */
+  const captureRecapTurn = (rpc: PiRpc): Promise<string> =>
+    new Promise<string>((resolve, reject) => {
+      recapCapture = { rpc, resolve, reject };
+      rpc.prompt(recapPromptText()).catch((err: unknown) => {
+        if (recapCapture?.rpc === rpc) recapCapture = undefined;
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
+    });
+
+  /** 卡片投递:当前房间必发;多工程下有管理房且不同于本房间时抄送一份
+   *  「📋 <项目名> 交接卡」,沉淀为该项目的干活日志时间线。 */
+  const deliverRecapCard = async (rpc: PiRpc, body: string, origin: { chatId: string; transport: string }): Promise<void> => {
+    let context: string | null = null;
+    try {
+      context = (await collectStatusFooter(rpc)).context;
+    } catch {
+      // 上下文行现拉现用,缺就缺(卡片其余部分不受影响)
+    }
+    const state = await rpc.requireClient().getState().catch(() => undefined);
+    const sessionHint = state && typeof state.sessionId === "string" ? state.sessionId : undefined;
+    const project = projectManager.labelForRoom(origin.chatId);
+    const card = renderRecapCard({
+      title: recapCardTitle(sessionHint),
+      body,
+      project: project ?? undefined,
+      context,
+    });
+    // 卡片按普通回复同款分片:模型超字数(200 字是纪律不是硬约束)时,
+    // 超长单条会撞 Matrix 事件大小上限 —— 分片保证卡片一定送达。
+    const ccPrefix = project ? `${recapCcPrefix(project)}\n\n` : "";
+    for (const chunk of splitMessage(card, 4000)) {
+      await sendReply(origin.chatId, origin.transport, chunk);
+    }
+    const managementRoom = managementRoomId(store.get());
+    if (managementRoom && managementRoom !== origin.chatId) {
+      const ccBody = `${ccPrefix}${card}`;
+      for (const chunk of splitMessage(ccBody, 4000)) {
+        await sendReply(managementRoom, origin.transport, chunk);
+      }
+    }
+  };
+
+  /** /recap:忙碌拒绝在先(不与在跑任务争抢 steering 语义),空会话拒绝
+   *  其次(轮数不足没得总结),然后才是一次真实模型调用。 */
+  const runRecap = async (rpc: PiRpc, origin: { chatId: string; transport: string }): Promise<void> => {
+    const state = await rpc.requireClient().getState();
+    if (state.isStreaming) throw new RecapBusyError();
+    if ((recapTurns.get(rpc) ?? 0) < RECAP_MIN_TURNS) throw new RecapEmptyError();
+    const body = await captureRecapTurn(rpc);
+    await deliverRecapCard(rpc, body, origin);
+  };
+
+  /** /new //clear 前的自动出卡(recap.onNew 开 + 轮数达标)。任何失败只
+   *  warn —— 交接卡是锦上添花,永远不能变成 /new 的单点故障(钉点测试)。 */
+  const beforeNewRecap = async (rpc: PiRpc, origin: { chatId: string; transport: string }): Promise<void> => {
+    if (!recapOnNew(store.get())) return;
+    try {
+      const state = await rpc.requireClient().getState();
+      if (state.isStreaming) return;
+      if ((recapTurns.get(rpc) ?? 0) < RECAP_MIN_TURNS) return;
+      const body = await captureRecapTurn(rpc);
+      await deliverRecapCard(rpc, body, origin);
+    } catch (err) {
+      logger.warn(`recap before /new failed (continuing): ${(err as Error).message}`);
+    }
+  };
 
   // 待处理附件清单(issue #66 票1):按 房间+发送者 记账。消耗规则:该发送
   // 者在同一条管道里真正发给 pi 的下一条对话消息(prompt 唯一注入点)一次性
@@ -943,6 +1017,13 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             // 审计缝(issue #124):命令层只报「发生了什么」,落账仍在 router
             //(/stop //interrupt 的真实清队、/bash 的 shell 执行由此上报)。
             audit: (event, detail) => auditTrail(event, ctx.msg, detail),
+            // 交接卡(issue #122):/recap 与 /new 联动,均绑定本消息的房间
+            // 与进程;卡片投递(含管理房抄送)在 deliverRecapCard 内。
+            recap: {
+              run: () => runRecap(rpc, { chatId: ctx.msg.chatId, transport: ctx.msg.transport }),
+              beforeNew: () => beforeNewRecap(rpc, { chatId: ctx.msg.chatId, transport: ctx.msg.transport }),
+              onSwitched: () => recapTurns.set(rpc, 0),
+            },
             // /remind(issue #117):命令层不接触 chatId/userId —— 这里按本消息
             // 的房间与发起人预先绑定。
             reminders: deps.reminders
@@ -1216,8 +1297,21 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
 
       if (event.type === "turn_end") {
+        recapTurns.set(rpc, (recapTurns.get(rpc) ?? 0) + 1);
         if (!target) return;
         const turn = buildTurnReply(event.message as AssistantMessage, store.get().hideToolCalls);
+
+        // 交接卡捕获(issue #122):在途捕获命中本进程时,终答落卡 —— 工具
+        // 循环的中间轮继续等;卡片投递替代原生回复,总结文本不重复发房间。
+        if (recapCapture?.rpc === rpc) {
+          if (turn.pendingTools) return;
+          const capture = recapCapture;
+          recapCapture = undefined;
+          const body = turn.text?.trim();
+          if (body) capture.resolve(body);
+          else capture.reject(new RecapEmptyError());
+          return;
+        }
 
         // Reply summary at INFO level — the full conversation is also in pi's
         // session file.

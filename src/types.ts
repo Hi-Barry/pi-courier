@@ -75,6 +75,11 @@ export interface MsgBridgeConfig {
   inbox?: {
     mode?: "confirm" | "auto" | "off";
   };
+  /** 交接卡(issue #122):/new 前自动 TL;DR。onNew 默认关 —— 自动出卡是
+   *  一次真实模型调用,成本敏感用户零成本升级路径就是不开它。 */
+  recap?: {
+    onNew?: boolean;
+  };
   auth?: {
     trustedUsers?: string[];
     /** 访客档(issue #120):能对话、碰不了危险命令。MXID,格式与
