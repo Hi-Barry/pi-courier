@@ -46,6 +46,12 @@ export interface ExternalMessage {
   isGroupChat: boolean;
   /** Was the bot mentioned? (for group chats) */
   wasMentioned?: boolean;
+  /**
+   * 离线积压标记(issue #113 离线收件箱):true = 本条来自重启/断线窗口的
+   * 同步回放,且台账确认从未受理过。router 据此缓冲并征询,不直接执行。
+   * 只在 transport 的积压路径上置位;实时消息与「执行」后的再注入都不带。
+   */
+  replayed?: boolean;
   /** 载荷(spec #72 票1/C3):文本、附件、附件失败或不支持类型,四选一 */
   payload: MessagePayload;
 }
@@ -58,6 +64,16 @@ export interface MsgBridgeConfig {
     homeserverUrl: string;
     accessToken: string;
     encryption?: boolean;
+  };
+  /**
+   * 离线收件箱(issue #113):重启/断线窗口里收到的、台账确认没处理过的
+   * 消息怎么办。
+   * - "confirm"(默认):按房间汇总发征询,回「执行」按序处理 /「忽略」丢弃;
+   * - "auto":启动收敛后发一条告知,随即按序执行;
+   * - "off":行为与 0.4.0 逐字节一致(stale 一律丢弃,不查台账不征询)。
+   */
+  inbox?: {
+    mode?: "confirm" | "auto" | "off";
   };
   auth?: {
     trustedUsers?: string[];

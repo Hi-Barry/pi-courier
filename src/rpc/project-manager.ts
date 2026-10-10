@@ -112,6 +112,18 @@ export class ProjectManager {
     return [this.defaultRpc, ...this.projectRpcs.values()];
   }
 
+  /** Reverse lookup: the project room that owns this rpc (undefined = shared
+   *  default process or not started here). Drives the queue-snapshot sink
+   *  (issue #115 stage 2): persistence follows the stable room↔process map,
+   *  which single-project mode never populates — the conservative route
+   *  falls out of this lookup instead of a separate flag check. */
+  roomForRpc(rpc: PiRpc): string | undefined {
+    for (const [roomId, projectRpc] of this.projectRpcs) {
+      if (projectRpc === rpc) return roomId;
+    }
+    return undefined;
+  }
+
   private async getProjectRpc(roomId: string, entry: ProjectEntry): Promise<PiRpc> {
     const existing = this.projectRpcs.get(roomId);
     if (existing) {

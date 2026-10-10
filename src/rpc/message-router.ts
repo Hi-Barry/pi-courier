@@ -10,7 +10,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { LoginManager } from "../auth/headless-login.js";
-import { type ConfigStore, managementRoomId } from "../config.js";
+import { type ConfigStore, inboxMode, managementRoomId } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -18,6 +18,7 @@ import {
   splitMessage,truncate 
 } from "../formatting.js";
 import { t } from "../i18n/index.js";
+import { isExecuteInput, isIgnoreInput } from "../i18n/parse.js";
 import { namespacedId } from "../identity.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
 import type { ReminderController } from "../reminders/reminder-clock.js";
@@ -28,16 +29,20 @@ import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
 import {
   type BashTracker,
+  clearedQueuesView,
   createBashTracker,
   formatBashReply,
   handleSlashCommand,
   parseBangCommand,
+  type QueueSnapshot,
+  queueTotal,
   resolveSessionDir,
 } from "./command-map.js";
 import { ExtensionQuestions, type ExtensionUIRequestView, extensionUiTimeoutMs } from "./extension-questions.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
+import type { QueueSnapshotStore } from "./queue-snapshots.js";
 import { RpcTransientState } from "./rpc-transient-state.js";
 import { extractUserText, type MirroredEntry, MirrorManager } from "./session-mirror.js";
 import { appendStatusFooter, collectStatusFooter } from "./status-footer.js";
@@ -77,6 +82,13 @@ export interface MessageRouterDeps {
    *  message's room+sender before the command layer sees it. Absent =
    *  /remind replies unavailable. */
   reminders?: ReminderController;
+  /** Cross-process queue snapshot store (issue #115 stage 2): every mirror
+   *  change for a project-room process lands on disk, and the next service
+   *  start reports the lost queue (standalone wires the store + startup
+   *  consumption). Absent = no disk persistence; the single-project default
+   *  process is excluded inside the sink either way (conservative route —
+   *  its binding is a runtime DM and could misdeliver into a stale room). */
+  queueSnapshots?: QueueSnapshotStore;
 }
 
 /** Disk shape of one pending-attachment entry (issue #114). An array of
@@ -236,7 +248,38 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
   // 瞬态状态(spec #72 票6/C5):队列镜像 + 悬置提问,失效时机自治 ——
   // 状态模块订阅 PiRpc 的重启生命周期,不再有外借的 clearRpcState 扳机。
-  const transient = new RpcTransientState((rpc, handler) => rpc.onRestarted?.(handler));
+  // 非自愿队列丢失回执(issue #115 阶段1):作废时镜像非空 → 向该进程绑定
+  // 的房间发「N 条未执行」清单(渲染与 #112 的被清列表同款);绑定不存在
+  // (绑定前就重启的极端时序)只打日志,不抛。
+  // 跨进程快照落盘(issue #115 阶段2):镜像每次变化(含作废时的权威空)
+  // 经 persistQueueMirror 进/出磁盘;服务级重启后由 standalone 启动装载
+  // 补发。只覆盖项目进程(多工程保守路线):默认进程的绑定是运行时 DM,
+  // 还原到旧房间有过期误发风险 —— roomForRpc 查不到就整段跳过。
+  const persistQueueMirror = (rpc: PiRpc, snapshot: QueueSnapshot): void => {
+    const snapshots = deps.queueSnapshots;
+    if (!snapshots) return;
+    const roomId = projectManager.roomForRpc(rpc);
+    if (!roomId) return;
+    try {
+      snapshots.save(roomId, snapshot);
+    } catch (err) {
+      logger.warn(`queue snapshot persist failed (memory mirror stays authoritative): ${(err as Error).message}`);
+    }
+  };
+  const transient = new RpcTransientState(
+    (rpc, handler) => rpc.onRestarted?.(handler),
+    (rpc, snapshot) => {
+      const view = clearedQueuesView(snapshot);
+      if (!view) return;
+      const target = bindings.get(rpc)?.replyTarget;
+      if (!target) {
+        logger.warn(`queue lost on restart: ${view.count} message(s) had no bound room — notice dropped`);
+        return;
+      }
+      void sendReply(target.chatId, target.transport, t("queue.lost.notice", view));
+    },
+    persistQueueMirror
+  );
 
   // 待处理附件清单(issue #66 票1):按 房间+发送者 记账。消耗规则:该发送
   // 者在同一条管道里真正发给 pi 的下一条对话消息(prompt 唯一注入点)一次性
@@ -289,6 +332,100 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 在跑 bash 记账(/bashstop 的数据源):/bash 与 `!`/`!!` 共用一份,
   // 按 pi 进程记账,promise 落定自动销账(见 createBashTracker)。
   const bashTracker: BashTracker = createBashTracker();
+
+  // ---- 离线收件箱(issue #113):积压缓冲与结算 -----------------------------
+  // transport 只负责判定「这是离线积压」(stale + 台账没见过,带 replayed
+  // 标记);缓冲、征询与执行裁决都在 router —— 因为授权门控(静默群/未信任
+  // 发送者)只有这里有,积压绝不构成越权旁路。per-room 一套:缓冲、结算
+  // 计时器(首条积压后 5s,等回放波灌完)与 confirm 待答状态互不串房。
+  const BACKLOG_SETTLE_MS = 5_000;
+  const BACKLOG_CONFIRM_TIMEOUT_MS = 10 * 60_000;
+  const backlogBuffers = new Map<string, ExternalMessage[]>();
+  const backlogTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const backlogAwaiting = new Map<string, { entries: ExternalMessage[]; timer: ReturnType<typeof setTimeout> }>();
+
+  /** 积压清单的一行预览:文本收成单行截断;非文本载荷与 📥 日志同形。 */
+  const backlogPreview = (msg: ExternalMessage): string => {
+    const raw = msg.payload.kind === "text" ? msg.payload.text : `[${msg.payload.kind}]`;
+    const oneLine = raw.replace(/\s+/g, " ").trim();
+    return oneLine.length > 120 ? `${oneLine.slice(0, 120)}…` : oneLine;
+  };
+
+  const bufferBacklog = (msg: ExternalMessage): void => {
+    const buffer = backlogBuffers.get(msg.chatId) ?? [];
+    buffer.push(msg);
+    backlogBuffers.set(msg.chatId, buffer);
+    if (!backlogTimers.has(msg.chatId)) {
+      backlogTimers.set(
+        msg.chatId,
+        setTimeout(() => settleBacklog(msg.chatId), BACKLOG_SETTLE_MS)
+      );
+    }
+  };
+
+  /** 按到达序原样再注入(剥掉 replayed 标记 = 按实时消息走全管道:斜杠
+   *  命令、附件停车、prompt 各归其位)。router 变量在返回后才可用,这里
+   *  只在调用时解引用,无 TDZ 问题。 */
+  const deliverBacklog = async (entries: ExternalMessage[]): Promise<void> => {
+    for (const entry of entries) {
+      const { replayed: _strip, ...realtime } = entry;
+      await router.handleIncoming(realtime);
+    }
+  };
+
+  const settleBacklog = (chatId: string): void => {
+    const timer = backlogTimers.get(chatId);
+    if (timer) {
+      clearTimeout(timer);
+      backlogTimers.delete(chatId);
+    }
+    const entries = backlogBuffers.get(chatId);
+    if (!entries || entries.length === 0) return;
+    backlogBuffers.delete(chatId);
+    const lines = entries.map((e) => t("inbox.entry.line", { user: e.username, preview: backlogPreview(e) })).join("\n");
+    const transport = entries[0]!.transport;
+
+    if (inboxMode(store.get()) === "auto") {
+      // 告知后直接按序执行(部署者明确选择过;`!`/bash 类消息的惊吓风险
+      // 由部署者自担)。
+      void sendReply(chatId, transport, t("inbox.auto.notice", { count: entries.length, lines }))
+        .then(() => deliverBacklog(entries))
+        .catch((err: unknown) => logger.error(`backlog auto-delivery failed: ${(err as Error).message}`));
+      return;
+    }
+
+    // confirm(默认):汇总征询,「执行」按序处理 /「忽略」丢弃 / 超时视为
+    // 忽略。新积压波并入旧待答(重开一轮计时与征询,列表合并展示)。
+    const prior = backlogAwaiting.get(chatId);
+    if (prior) {
+      clearTimeout(prior.timer);
+      prior.entries.push(...entries);
+    }
+    const merged = prior?.entries ?? entries;
+    const mergedLines = merged
+      .map((e) => t("inbox.entry.line", { user: e.username, preview: backlogPreview(e) }))
+      .join("\n");
+    const confirmTimer = setTimeout(() => {
+      // 超时默认忽略:静默丢弃,不发补充通知(征询文案已写明规则)。
+      backlogAwaiting.delete(chatId);
+    }, BACKLOG_CONFIRM_TIMEOUT_MS);
+    backlogAwaiting.set(chatId, { entries: merged, timer: confirmTimer });
+    void sendReply(
+      chatId,
+      transport,
+      t("inbox.confirm.prompt", {
+        count: merged.length,
+        lines: mergedLines,
+        minutes: BACKLOG_CONFIRM_TIMEOUT_MS / 60_000,
+      })
+    ).catch((err: unknown) => {
+      // 征询发不出去(极端时序)等于没人能批准 —— 按忽略处理,积压不留悬案。
+      backlogAwaiting.delete(chatId);
+      clearTimeout(confirmTimer);
+      logger.warn(`backlog confirm prompt failed, backlog discarded: ${(err as Error).message}`);
+    });
+  };
+
 
   // Headless login (issue #55): /login /logout /auth + answer capture. The
   // default manager writes credentials straight to pi's auth.json via an
@@ -550,6 +687,54 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       handle: async (ctx) => !ctx.isAuthorized,
     },
     {
+      name: "backlogAnswer",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // 离线积压征询的应答消费(issue #113):房间有待答征询时,「执行/
+      // 忽略」在此截住(不得漏到 pi 当对话);其它输入照常走管道,征询
+      // 继续挂着等。授权已在上一阶段裁决 —— 未信任者的应答根本到不了这。
+      handle: async (ctx) => {
+        if (!ctx.text) return false;
+        const pending = backlogAwaiting.get(ctx.msg.chatId);
+        if (!pending) return false;
+        if (isExecuteInput(ctx.text)) {
+          backlogAwaiting.delete(ctx.msg.chatId);
+          clearTimeout(pending.timer);
+          const entries = pending.entries;
+          void deliverBacklog(entries).catch((err: unknown) =>
+            logger.error(`backlog delivery failed: ${(err as Error).message}`)
+          );
+          return true;
+        }
+        if (isIgnoreInput(ctx.text)) {
+          backlogAwaiting.delete(ctx.msg.chatId);
+          clearTimeout(pending.timer);
+          await sendReply(ctx.msg.chatId, ctx.msg.transport, t("inbox.ignored", { count: pending.entries.length }));
+          return true;
+        }
+        return false;
+      },
+    },
+    {
+      name: "backlogInbox",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // 离线积压缓冲(issue #113):replayed 消息不直接执行,按房间攒着,
+      // 首条积压后 5s(等回放波灌完)或本房间首条实时消息到达时结算。
+      // off 模式 transport 根本不转发积压;这里再挡一道(手喂消息的兜底)。
+      handle: async (ctx) => {
+        if (ctx.msg.replayed) {
+          if (inboxMode(store.get()) === "off") return false;
+          bufferBacklog(ctx.msg);
+          return true;
+        }
+        if (backlogBuffers.has(ctx.msg.chatId)) settleBacklog(ctx.msg.chatId);
+        return false;
+      },
+    },
+    {
       name: "multiproject",
       preAuth: false,
       consumesLedger: false,
@@ -699,6 +884,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             rpc,
             reply: async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText),
             queueView: () => transient.mirror(rpc),
+            setQueueMirror: (snapshot) => transient.setMirror(rpc, snapshot),
             allRpcs: () => projectManager.allRpcs(),
             bashTracker,
             // /remind(issue #117):命令层不接触 chatId/userId —— 这里按本消息
@@ -834,7 +1020,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     },
   ];
 
-  return {
+  const router: MessageRouter = {
     /** 管道阶段表:顺序即执行顺序(导航入口,直测面见 pipeline())。 */
     pipeline(): PipelineStageView[] {
       return stages.map(({ name, preAuth, consumesLedger, needsRpc }) => ({ name, preAuth, consumesLedger, needsRpc }));
@@ -1042,6 +1228,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
     },
   };
+  return router;
 }
 
 /** Compact one-line summary of a streamed delta event (thinking/text/tool deltas). */
