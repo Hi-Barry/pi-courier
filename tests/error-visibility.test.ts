@@ -1,21 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConfigStore } from "../src/config";
-import { ChallengeAuth } from "../src/auth/challenge-auth";
-import { buildTurnReply, createMessageRouter } from "../src/rpc/message-router";
-import { PmctlController } from "../src/rpc/pmctl-controller";
+import { buildTurnReply } from "../src/rpc/message-router";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
-import type { ExternalMessage } from "../src/types";
+import { makeMsg, makeRouterFixture } from "./helpers";
 
 /**
  * Error visibility (issue #52, spec #51 票1): failed turns and auto-retry
  * progress must reach the bound room instead of disappearing silently, while
  * aborted turns (/stop) must never look like errors. Fixture construction
- * mirrors makeFixtures in tests/router-projects.test.ts (real ChallengeAuth +
- * mock PiRpc + a replies collector). managementRooms is pre-seeded so the
- * management-room adoption path never runs — these tests go through
- * store.update() nowhere, hence never touch the real ~/.pi config.
+ * runs through the shared router factory (real ChallengeAuth + mock PiRpc +
+ * a replies collector). managementRooms is pre-seeded so the management-room
+ * adoption path never runs — these tests go through store.update() nowhere,
+ * hence never touch the real ~/.pi config.
  */
 
 /** Assistant-shaped message with the stop-reason fields pi actually sends. */
@@ -30,27 +28,8 @@ function assistantMessage(opts: { text?: string; stopReason?: string; errorMessa
   } as unknown as AssistantMessage;
 }
 
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: "m1",
-    timestamp: new Date(),
-    ...rest,
-  };
-}
-
 function makeFixtures(opts: { projectRoom?: boolean } = {}) {
   const replies: Array<{ chatId: string; transport: string; text: string }> = [];
-  const sendReply = async (chatId: string, transport: string, text: string) => {
-    replies.push({ chatId, transport, text });
-  };
   const rpc = {
     prompt: vi.fn().mockResolvedValue(undefined),
     onEvent: vi.fn(),
@@ -66,20 +45,15 @@ function makeFixtures(opts: { projectRoom?: boolean } = {}) {
     stopAll: vi.fn(),
   } as unknown as ProjectManager;
   // Pre-seeded managementRooms keep adoption (and its store.update disk write) off.
-  const store = new ConfigStore({ managementRooms: ["!dm:server"], projects: {}, multiProject: true });
-  const auth = new ChallengeAuth(
-    () => {},
-    () => {}
-  );
-  auth.loadFromConfig({
-    trustedUsers: ["matrix:@barry:server"],
-    adminUserId: "matrix:@barry:server",
-    channels: {},
+  const { router } = makeRouterFixture({
+    rpc,
+    projectManager,
+    store: new ConfigStore({ managementRooms: ["!dm:server"], projects: {}, multiProject: true }),
+    sendReply: async (chatId: string, transport: string, text: string) => {
+      replies.push({ chatId, transport, text });
+    },
   });
-  const sendTyping = vi.fn(async (_chatId: string, _transport: string): Promise<void> => {});
-  const pmctl = new PmctlController({ projectManager, store });
-  const router = createMessageRouter({ projectManager, auth, sendReply, sendTyping, store, pmctl });
-  return { replies, rpc, projectManager, router, sendTyping };
+  return { replies, rpc, projectManager, router };
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
