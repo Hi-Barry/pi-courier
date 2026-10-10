@@ -14,8 +14,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { AUDIT_EVENTS, AuditLog } from "./audit/audit-log.js";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
-import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, inboxMode, resolveLanguage } from "./config.js";
+import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, inboxMode, managementRoomId, resolveLanguage } from "./config.js";
 import { setLocale, t } from "./i18n/index.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
@@ -274,6 +275,20 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     new JsonStateFile<QueueSnapshotEntry[]>(path.join(stateDir, "queue-snapshots.json"), [])
   );
 
+  // ---- audit log (issue #124):敏感动作的追加式证据 ----------------------------
+  // audit.jsonl 只追加不改写(排查即证据),10MB 轮转留 2 份;写失败计数到
+  // 阈值向管理房告警一次(审计故障不放大成可用性故障,但一定可见)。启动
+  // 即写一行 bridge.start —— 顺带当可写性探针,写不进去启动横幅就报警。
+  const auditLog = new AuditLog(path.join(stateDir, "audit.jsonl"), {
+    onDegraded: (message) => {
+      const managementRoom = managementRoomId(store.get());
+      if (managementRoom) {
+        void sendReply(managementRoom, "matrix", t("audit.degraded", { message }));
+      }
+    },
+  });
+  auditLog.append(AUDIT_EVENTS.bridgeStart, "system", "", `pi-courier started (pid ${process.pid})`);
+
   // ---- reminders (issue #117):先落盘再跑,重启不丢 ---------------------------
   // 时钟句柄不跨进程:reminders.json 才是真相,start() 在 transports 连接后
   // 重装载并补起全部定时器,离线窗口过期的提醒立即补投(注明迟到)。
@@ -296,6 +311,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     attachmentsLedger,
     reminders: reminderClock,
     queueSnapshots,
+    audit: auditLog,
   });
 
   // 房间消亡销账(issue #114/#117 后续):/pmctl rm 确认后清掉该房间的附件

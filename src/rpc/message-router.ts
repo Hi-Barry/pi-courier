@@ -7,10 +7,12 @@
  */
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { AUDIT_EVENTS, type AuditLog } from "../audit/audit-log.js";
 import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
+import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
-import { type ConfigStore, inboxMode, managementRoomId } from "../config.js";
+import { type ConfigStore, inboxMode, managementRoomId, recapOnNew } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -26,8 +28,7 @@ import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUser
 import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
-import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
-import {
+import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";import {
   type BashTracker,
   clearedQueuesView,
   createBashTracker,
@@ -43,6 +44,7 @@ import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
 import type { QueueSnapshotStore } from "./queue-snapshots.js";
+import { RECAP_MIN_TURNS, RecapBusyError, RecapEmptyError, recapCardTitle, recapCcPrefix, recapPromptText, renderRecapCard } from "./recap.js";
 import { RpcTransientState } from "./rpc-transient-state.js";
 import { extractUserText, type MirroredEntry, MirrorManager } from "./session-mirror.js";
 import { appendStatusFooter, collectStatusFooter } from "./status-footer.js";
@@ -89,6 +91,10 @@ export interface MessageRouterDeps {
    *  process is excluded inside the sink either way (conservative route —
    *  its binding is a runtime DM and could misdeliver into a stale room). */
   queueSnapshots?: QueueSnapshotStore;
+  /** Audit log (issue #124): sensitive actions append one JSONL line each.
+   *  The wiring points are pinned by tests via the shared AUDIT_EVENTS
+   *  registry. Absent = zero auditing (tests/legacy deployments). */
+  audit?: AuditLog;
 }
 
 /** Disk shape of one pending-attachment entry (issue #114). An array of
@@ -197,31 +203,39 @@ export function buildTurnReply(
  */
 
 /**
- * Reply-quote prefix (issue #56 票5): when a message replies to a known
- * historical message, prepend a one-line excerpt so the agent can resolve
- * "这个"/"上面那个". Only the text sent to pi changes — slash-command
- * detection runs earlier on the raw text and stays untouched.
+ * Reply-quote prefix (issue #56 票5; #124 来源标注): when a message replies
+ * to a known historical message, prepend a labeled one-line excerpt so the
+ * agent can resolve "这个"/"上面那个" AND can tell third-party content
+ * (data) from live instructions — the quote says whose words these are.
+ * Only the text sent to pi changes — slash-command detection runs earlier
+ * on the raw text and stays untouched.
  */
 export function withQuotePrefix(
   text: string,
   quoted?: { username: string; excerpt: string }
 ): string {
   if (!quoted?.excerpt) return text;
-  return `「@${quoted.username}: ${quoted.excerpt}」\n${text}`;
+  return `${t("router.quote.prefix", { user: quoted.username, excerpt: quoted.excerpt })}\n${text}`;
 }
 
 /**
- * 附件路径注入(issue #66 票1):把待处理清单里的附件以绝对路径列表的形式
- * 放在用户原文前 — pi 按原生工作流用 read 工具查看文件(与 TUI 的 @路径
- * 一致)。纯函数,router 测试直接断言其输出。
+ * 附件路径注入(issue #66 票1;#124 来源标注):把待处理清单里的附件以绝对
+ * 路径列表的形式放在用户原文前 — pi 按原生工作流用 read 工具查看文件(与
+ * TUI 的 @路径 一致)。带来源时标注「谁在哪个房间发的」,让 agent(和人)
+ * 一眼分辨第三方内容与指令(纵深防御的廉价层)。纯函数,router 测试直接
+ * 断言其输出。
  */
 export function withAttachmentPrefix(
   text: string,
-  attachments?: MessageAttachment[]
+  attachments?: MessageAttachment[],
+  source?: { user: string; room: string }
 ): string {
   if (!attachments?.length) return text;
   const lines = attachments.map((a) => `- ${a.path}`);
-  return `${t("router.attach.inject")}\n${lines.join("\n")}\n\n${text}`;
+  const header = source
+    ? t("router.attach.inject.sourced", { user: source.user, room: source.room })
+    : t("router.attach.inject");
+  return `${header}\n${lines.join("\n")}\n\n${text}`;
 }
 
 /** 附件清单的记账键:房间 + 发送者(群聊里甲的图不被乙的消息消耗)。 */
@@ -280,6 +294,88 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     },
     persistQueueMirror
   );
+
+  // 审计 trails(issue #124):敏感动作的统一记账口 —— 谁在哪个房间干了什么。
+  // actor 取 namespaced 身份(与信任/管理员判定同键);detail 一行以内,
+  // 由调用点裁剪。未注入 = 零审计,行为与现状逐字节一致。
+  const auditTrail = (event: string, msg: ExternalMessage, detail?: string): void => {
+    deps.audit?.append(event, namespacedId(msg.userId, msg.transport), msg.chatId, detail);
+  };
+  const auditDetailOf = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 120);
+
+  // 交接卡(issue #122):每进程「已完成对话轮」记账(/new //clear 换会话
+  // 归零)+ 在途捕获。忙拒保证同一时刻至多一个捕获在飞;/stop 打断会以
+  // 失败轮收场,捕获随之 reject,不会悬挂。
+  const recapTurns = new WeakMap<PiRpc, number>();
+  let recapCapture: { rpc: PiRpc; resolve: (text: string) => void; reject: (err: Error) => void } | undefined;
+
+  /** 向当前进程发总结 prompt 并等终答(turn_end 的最终文本)。 */
+  const captureRecapTurn = (rpc: PiRpc): Promise<string> =>
+    new Promise<string>((resolve, reject) => {
+      recapCapture = { rpc, resolve, reject };
+      rpc.prompt(recapPromptText()).catch((err: unknown) => {
+        if (recapCapture?.rpc === rpc) recapCapture = undefined;
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
+    });
+
+  /** 卡片投递:当前房间必发;多工程下有管理房且不同于本房间时抄送一份
+   *  「📋 <项目名> 交接卡」,沉淀为该项目的干活日志时间线。 */
+  const deliverRecapCard = async (rpc: PiRpc, body: string, origin: { chatId: string; transport: string }): Promise<void> => {
+    let context: string | null = null;
+    try {
+      context = (await collectStatusFooter(rpc)).context;
+    } catch {
+      // 上下文行现拉现用,缺就缺(卡片其余部分不受影响)
+    }
+    const state = await rpc.requireClient().getState().catch(() => undefined);
+    const sessionHint = state && typeof state.sessionId === "string" ? state.sessionId : undefined;
+    const project = projectManager.labelForRoom(origin.chatId);
+    const card = renderRecapCard({
+      title: recapCardTitle(sessionHint),
+      body,
+      project: project ?? undefined,
+      context,
+    });
+    // 卡片按普通回复同款分片:模型超字数(200 字是纪律不是硬约束)时,
+    // 超长单条会撞 Matrix 事件大小上限 —— 分片保证卡片一定送达。
+    const ccPrefix = project ? `${recapCcPrefix(project)}\n\n` : "";
+    for (const chunk of splitMessage(card, 4000)) {
+      await sendReply(origin.chatId, origin.transport, chunk);
+    }
+    const managementRoom = managementRoomId(store.get());
+    if (managementRoom && managementRoom !== origin.chatId) {
+      const ccBody = `${ccPrefix}${card}`;
+      for (const chunk of splitMessage(ccBody, 4000)) {
+        await sendReply(managementRoom, origin.transport, chunk);
+      }
+    }
+  };
+
+  /** /recap:忙碌拒绝在先(不与在跑任务争抢 steering 语义),空会话拒绝
+   *  其次(轮数不足没得总结),然后才是一次真实模型调用。 */
+  const runRecap = async (rpc: PiRpc, origin: { chatId: string; transport: string }): Promise<void> => {
+    const state = await rpc.requireClient().getState();
+    if (state.isStreaming) throw new RecapBusyError();
+    if ((recapTurns.get(rpc) ?? 0) < RECAP_MIN_TURNS) throw new RecapEmptyError();
+    const body = await captureRecapTurn(rpc);
+    await deliverRecapCard(rpc, body, origin);
+  };
+
+  /** /new //clear 前的自动出卡(recap.onNew 开 + 轮数达标)。任何失败只
+   *  warn —— 交接卡是锦上添花,永远不能变成 /new 的单点故障(钉点测试)。 */
+  const beforeNewRecap = async (rpc: PiRpc, origin: { chatId: string; transport: string }): Promise<void> => {
+    if (!recapOnNew(store.get())) return;
+    try {
+      const state = await rpc.requireClient().getState();
+      if (state.isStreaming) return;
+      if ((recapTurns.get(rpc) ?? 0) < RECAP_MIN_TURNS) return;
+      const body = await captureRecapTurn(rpc);
+      await deliverRecapCard(rpc, body, origin);
+    } catch (err) {
+      logger.warn(`recap before /new failed (continuing): ${(err as Error).message}`);
+    }
+  };
 
   // 待处理附件清单(issue #66 票1):按 房间+发送者 记账。消耗规则:该发送
   // 者在同一条管道里真正发给 pi 的下一条对话消息(prompt 唯一注入点)一次性
@@ -602,6 +698,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           hideToolCalls: store.get().hideToolCalls,
         });
         if (!result.handled) return false;
+        // 审计(issue #124):纯模块裁决事件名,router 落账 —— 认证与信任
+        // 面(配对成败、/trusted、/revoke)在唯一入口处一次记全。
+        if (result.audit) {
+          auditTrail(result.audit.event, msg, result.audit.detail);
+        }
         for (const replyText of result.replies) {
           await sendReply(msg.chatId, msg.transport, replyText);
         }
@@ -684,7 +785,22 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       consumesLedger: false,
       needsRpc: false,
       // Unauthorized senders stop here, silently — same treatment as text.
-      handle: async (ctx) => !ctx.isAuthorized,
+      // 访客档(issue #120):名单内的人放行进管道,但禁用清单上的命令在此
+      // 硬拦 —— 回执礼貌说明 + 审计留痕(#124 的 guest.denied 事件)。
+      // 权限边界在桥,不靠模型自觉;房间模式(trusted-only 等)语义优先,
+      // 已在上面裁决,访客在 trusted-only 群里照旧门外。
+      handle: async (ctx) => {
+        if (!ctx.isAuthorized) return true;
+        if (auth.isGuestUser(ctx.msg.userId, ctx.msg.transport)) {
+          const verdict = guestCommandVerdict(ctx.text);
+          if (verdict.blocked) {
+            await sendReply(ctx.msg.chatId, ctx.msg.transport, t("guest.denied", { command: verdict.command }));
+            auditTrail(AUDIT_EVENTS.guestDenied, ctx.msg, `blocked command: ${verdict.command}`);
+            return true;
+          }
+        }
+        return false;
+      },
     },
     {
       name: "backlogAnswer",
@@ -702,6 +818,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           backlogAwaiting.delete(ctx.msg.chatId);
           clearTimeout(pending.timer);
           const entries = pending.entries;
+          // 审计(issue #124,#113 回填):离线积压批量执行是运行时突变 —
+          // 谁、在哪个房间、放行了几条,一行留痕。
+          auditTrail(AUDIT_EVENTS.backlogExecute, ctx.msg, `delivering ${entries.length} offline backlog message(s)`);
           void deliverBacklog(entries).catch((err: unknown) =>
             logger.error(`backlog delivery failed: ${(err as Error).message}`)
           );
@@ -820,8 +939,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // /pmctl family: gates + actions live in the controller. The invite
       // target arrives pre-resolved (transport-native MXID). No pi process
       // is started for management commands.
-      handle: async (ctx) =>
-        await pmctl.handle(ctx.text, { chatId: ctx.msg.chatId, senderMxid: ctx.msg.userId, isManagementRoom: ctx.isManagementRoom }, async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText)),
+      handle: async (ctx) => {
+        // 审计(issue #124):项目删除是最重的一刀,确认链的每一步都留痕
+        //(/pmctl rm 与其确认词都命中这里);其余子命令 v1 不记。
+        if (/^\/pmctl\s+rm(\s|$)/i.test(ctx.text.trim())) {
+          auditTrail(AUDIT_EVENTS.pmctlRemove, ctx.msg, auditDetailOf(ctx.text));
+        }
+        return await pmctl.handle(ctx.text, { chatId: ctx.msg.chatId, senderMxid: ctx.msg.userId, isManagementRoom: ctx.isManagementRoom }, async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText));
+      },
     },
     {
       name: "login",
@@ -834,6 +959,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       handle: async (ctx) => {
         const { msg, text } = ctx;
         if (!/^\/(login|logout|auth)(\s|$)/.test(text)) return false;
+        // 审计(issue #124):认证面 —— 放行与否都记(被拒的尝试更要留痕)。
+        auditTrail(AUDIT_EVENTS.loginFlow, msg, auditDetailOf(text));
         const loginRoomAllowed = ctx.multiProject
           ? ctx.isManagementRoom
           : !msg.isGroupChat;
@@ -887,6 +1014,16 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             setQueueMirror: (snapshot) => transient.setMirror(rpc, snapshot),
             allRpcs: () => projectManager.allRpcs(),
             bashTracker,
+            // 审计缝(issue #124):命令层只报「发生了什么」,落账仍在 router
+            //(/stop //interrupt 的真实清队、/bash 的 shell 执行由此上报)。
+            audit: (event, detail) => auditTrail(event, ctx.msg, detail),
+            // 交接卡(issue #122):/recap 与 /new 联动,均绑定本消息的房间
+            // 与进程;卡片投递(含管理房抄送)在 deliverRecapCard 内。
+            recap: {
+              run: () => runRecap(rpc, { chatId: ctx.msg.chatId, transport: ctx.msg.transport }),
+              beforeNew: () => beforeNewRecap(rpc, { chatId: ctx.msg.chatId, transport: ctx.msg.transport }),
+              onSwitched: () => recapTurns.set(rpc, 0),
+            },
             // /remind(issue #117):命令层不接触 chatId/userId —— 这里按本消息
             // 的房间与发起人预先绑定。
             reminders: deps.reminders
@@ -913,6 +1050,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
               currentSessionFile: async () => (await rpc.requireClient().getState()).sessionFile,
             },
           });
+          // 审计(issue #124):命令面按登记表落账 —— 只记敏感动作
+          //(/bash /bashstop /reload;清队走上面的 audit 缝,由命令层
+          // 按真实语义上报)。handled=false 的未识别斜杠不记。
+          if (handled) {
+            const cmdName = ctx.text.trim().split(/\s+/)[0]!.toLowerCase();
+            if (cmdName === "/bash") auditTrail(AUDIT_EVENTS.bashExec, ctx.msg, auditDetailOf(ctx.text));
+            else if (cmdName === "/bashstop") auditTrail(AUDIT_EVENTS.bashStop, ctx.msg, auditDetailOf(ctx.text));
+            else if (cmdName === "/reload") auditTrail(AUDIT_EVENTS.reload, ctx.msg, auditDetailOf(ctx.text));
+          }
           return handled;
         } catch (err) {
           await sendReply(ctx.msg.chatId, ctx.msg.transport, t("cmd.generic.error", { message: (err as Error).message }));
@@ -932,6 +1078,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         const bang = parseBangCommand(ctx.text);
         if (!bang) return false;
         const rpc = await ctx.roomRpc();
+        // 审计(issue #124):shell 快捷执行是危险面的正门,进出都留痕。
+        auditTrail(AUDIT_EVENTS.bashExec, ctx.msg, `${bang.excluded ? "!!" : "!"} ${bang.command}`);
         const release = bashTracker.track(rpc, bang.command);
         void sendReply(
           ctx.msg.chatId,
@@ -1007,7 +1155,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           const carried = pendingAttachments.get(key);
           const pending = carried?.length ? carried : undefined;
           const quoted = ctx.msg.payload.kind === "text" ? ctx.msg.payload.quoted : undefined;
-          await rpc.prompt(withAttachmentPrefix(withQuotePrefix(ctx.text, quoted), pending));
+          // 来源标注(issue #124):附件与引用进 prompt 时带「谁发的」——
+          // 第三方内容以数据身份入上下文,不冒充指令。
+          await rpc.prompt(
+            withAttachmentPrefix(withQuotePrefix(ctx.text, quoted), pending, {
+              user: ctx.msg.userId,
+              room: ctx.msg.chatId,
+            })
+          );
           pendingAttachments.delete(key);
           parkedAt.delete(key);
           persistLedger();
@@ -1142,8 +1297,21 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
 
       if (event.type === "turn_end") {
+        recapTurns.set(rpc, (recapTurns.get(rpc) ?? 0) + 1);
         if (!target) return;
         const turn = buildTurnReply(event.message as AssistantMessage, store.get().hideToolCalls);
+
+        // 交接卡捕获(issue #122):在途捕获命中本进程时,终答落卡 —— 工具
+        // 循环的中间轮继续等;卡片投递替代原生回复,总结文本不重复发房间。
+        if (recapCapture?.rpc === rpc) {
+          if (turn.pendingTools) return;
+          const capture = recapCapture;
+          recapCapture = undefined;
+          const body = turn.text?.trim();
+          if (body) capture.resolve(body);
+          else capture.reject(new RecapEmptyError());
+          return;
+        }
 
         // Reply summary at INFO level — the full conversation is also in pi's
         // session file.

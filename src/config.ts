@@ -203,6 +203,12 @@ export function inboxMode(cfg: MsgBridgeConfig): InboxMode {
   return mode === "auto" || mode === "off" ? mode : "confirm";
 }
 
+/** 交接卡 /new 联动(issue #122):默认关 —— 自动出卡是一次真实模型调用,
+ *  显式 /recap 永远可用。 */
+export function recapOnNew(cfg: MsgBridgeConfig): boolean {
+  return cfg.recap?.onNew === true;
+}
+
 /** 收养写侧(与 managementRoomId 同族):把 chatId 追加到管理房列表尾部 ——
  *  收养第一个成功授权的 DM(router 收养路径)与空间自建管理房(space ensure,
  *  进入时列表必为空,追加与单元素写等价)共用这一个写入解释。幂等:重复

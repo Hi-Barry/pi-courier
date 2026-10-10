@@ -25,6 +25,7 @@ import { formatReminderTime, parseReminderTime } from "../reminders/reminder-par
 import type { ReminderEntry } from "../reminders/reminder-store.js";
 import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
 import { upstreamClearQueueSend } from "./pi-rpc.js";
+import { RecapBusyError, RecapEmptyError } from "./recap.js";
 
 /** Mirror of the upstream steering/followUp queues (router's queue_update view). */
 export interface QueueSnapshot {
@@ -43,6 +44,18 @@ export interface SlashCommandContext {
    *  清掉的队列若只等上游 queue_update 推送归零,推送与重启生命周期之间的
    *  竞态会让「自己清的」误触发队列丢失回执。Absence = 不钉(测试场景)。 */
   setQueueMirror?: (snapshot: QueueSnapshot) => void;
+  /** 审计缝(issue #124):命令层只按真实语义上报「发生了什么」(如 /stop
+   *  实际清掉几条),落账仍在 router。Absence = 不上报(测试场景)。 */
+  audit?: (event: string, detail?: string) => void;
+  /** 交接卡(issue #122):/recap 显式生成;/new //clear 前的自动出卡
+   *  (recap.onNew 开 + 轮数达标才动)。卡片投递(含多工程管理房抄送)在
+   *  router 侧;这里只见类型化错误(忙/空)与重置记账的钩子。Absence =
+   *  能力未装配,不吞命令(落回 pi,未知命令得到正常报错)。 */
+  recap?: {
+    run: () => Promise<void>;
+    beforeNew: () => Promise<void>;
+    onSwitched: () => void;
+  };
   /** Every rpc of this instance (default + started project rpcs) — enables
    *  `/reload all` (issue #55). Absent = /reload stays single-process. */
   allRpcs?: () => PiRpc[];
@@ -408,6 +421,8 @@ export async function handleSlashCommand(
   const { rpc, reply, queueView, setQueueMirror } = ctx;
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return false;
+  // 命令名(审计详情用):/stop 与 /abort 的别名同语义,如实上报触发词。
+  const commandWord = trimmed.split(/\s+/)[0]!.toLowerCase();
 
   const spaceIndex = trimmed.indexOf(" ");
   const name = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
@@ -416,8 +431,27 @@ export async function handleSlashCommand(
   try {
     switch (name) {
       // --- Session lifecycle -------------------------------------------------
+      case "/recap": {
+        // 交接卡(issue #122):先「生成中」回执再等卡片,两段式(/bash 先例)。
+        // 忙碌/空会话以类型化错误抛出,这里转人话;其余错误透传信息。
+        if (!ctx.recap) return false;
+        await reply(t("cmd.recap.generating"));
+        try {
+          await ctx.recap.run();
+        } catch (err) {
+          if (err instanceof RecapBusyError) await reply(t("cmd.recap.busy"));
+          else if (err instanceof RecapEmptyError) await reply(t("cmd.recap.empty"));
+          else await reply(t("cmd.generic.error", { message: (err as Error).message }));
+        }
+        return true;
+      }
+
       case "/new":
       case "/clear": {
+        // /new 联动(issue #122):旧会话被清掉「之前」出卡 —— 生成失败在
+        // beforeNew 内部吞掉(warn),绝不阻塞换会话。失败不吞换会话的
+        // 钉点测试在 recap 集成里。
+        await ctx.recap?.beforeNew();
         const { cancelled } = await rpc.requireClient().newSession();
         await reply(cancelled ? t("cmd.new.cancelled") : t("cmd.new.ok"));
         if (!cancelled) {
@@ -427,6 +461,7 @@ export async function handleSlashCommand(
             ctx.sessionMirror.rebase(await ctx.sessionMirror.currentSessionFile());
             await reply(t("cmd.new.mirrorHint"));
           }
+          ctx.recap?.onSwitched(); // 轮数记账归零:新会话的 /recap 从零数起
         }
         return true;
       }
@@ -462,7 +497,13 @@ export async function handleSlashCommand(
         await rpc.requireClient().abort();
         // 清队成功 = 上游权威为空:镜像立即钉零,不等 queue_update 推送 ——
         // 推送与重启生命周期赛跑时会误触发「队列丢失」回执(issue #115)。
-        if (cleared) setQueueMirror?.({ steering: [], followUp: [] });
+        if (cleared) {
+          setQueueMirror?.({ steering: [], followUp: [] });
+          // 审计(issue #124,#115 回填):队列清理是运行时突变 —— 命令层
+          // 按真实语义上报(实际清掉的条数),router 落账。
+          const clearedCount = cleared ? cleared.steering.length + cleared.followUp.length : 0;
+          ctx.audit?.("queue.clear", `${commandWord} cleared ${clearedCount} queued message(s)`);
+        }
         const view = cleared ? clearedQueuesView(cleared) : null;
         if (view) {
           await reply(t("cmd.stop.cleared", view));

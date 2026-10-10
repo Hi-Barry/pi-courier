@@ -50,6 +50,10 @@ export interface AdminCommandResult {
   replies: string[];
   notifications: AdminNotification[];
   effects: AdminEffect[];
+  /** 审计裁决(issue #124):纯模块认定「这发生了什么」,router 落账 ——
+   *  认证与信任面(配对成败、/trusted、/revoke)在唯一入口处记全。
+   *  Absence = 该动作不进审计。 */
+  audit?: { event: string; detail?: string };
 }
 
 function handled(result: Omit<AdminCommandResult, "handled">): AdminCommandResult {
@@ -85,6 +89,7 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
               { kind: "spaceInvite", userId: input.userId, transport: input.transport },
               { kind: "managementRoomInvite", userId: input.userId, transport: input.transport },
             ],
+            audit: { event: "pairing.success", detail: `${displayIdentity(namespacedUserId)} passed the pairing challenge` },
           });
         case "expired":
           return handled({
@@ -97,12 +102,14 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
             replies: ["🚫 Too many failed attempts. Blocked for 5 minutes."],
             notifications: [],
             effects: [],
+            audit: { event: "pairing.blocked", detail: `${displayIdentity(namespacedUserId)} blocked after 3 failed codes` },
           });
         case "wrong":
           return handled({
             replies: [`❌ Wrong code. ${auth.attemptsLeft(namespacedUserId)} attempts remaining.`],
             notifications: [],
             effects: [],
+            audit: { event: "pairing.wrong", detail: `${displayIdentity(namespacedUserId)} entered a wrong code (${auth.attemptsLeft(namespacedUserId)} left)` },
           });
         case "none":
           // A 6-digit message with no pairing in flight: most likely the user
@@ -173,6 +180,7 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
         replies: [`Trusted users (${snapshot.trustedUsers.length}):\n${trusted || "None"}`],
         notifications: [],
         effects: [],
+        audit: { event: "trust.list", detail: `listed ${snapshot.trustedUsers.length} trusted user(s)` },
       });
     }
 
@@ -213,12 +221,14 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
           replies: [`🔓 Revoked trust for ${revokeId}`],
           notifications: [{ message: `Revoked: ${revokeId}`, level: "warning" }],
           effects,
+          audit: { event: "trust.revoke", detail: `revoked trust for ${removed ?? revokeId}` },
         });
       }
       return handled({
         replies: [`❌ User ${revokeId} not found in trusted users`],
         notifications: [],
         effects: [],
+        audit: { event: "trust.revoke", detail: `revoke missed: ${revokeId} not in trusted users` },
       });
     }
 

@@ -215,11 +215,20 @@ pi 0.83.0 就绪。
 - 离线收件箱(issue #113):transport 判定的 `replayed` 消息(离线积压)不直接执行——backlogAnswer 消费「执行/忽略」应答(双语,取消词也算忽略),backlogInbox 按房间缓冲并在首条积压后 5s(回放波收敛)或本房间首条实时消息到达时结算;confirm(默认)发征询、10 分钟超时默弃,auto 告知后按序执行,off 时 transport 根本不转发;门控(authorizationGate)先于缓冲——积压绝不构成越权旁路
 - 非自愿队列丢失回执(issue #115 阶段1):RpcTransientState 作废时镜像非空即回调 router,向该进程绑定房间发「N 条未执行」清单;`/stop` //interrupt 清队成功后镜像钉零(setQueueMirror),自己清的与崩溃丢的就此区分
 - 队列快照落盘(issue #115 阶段2):RpcTransientState 的镜像变更钩子把每次变化(含作废时的权威空)经 `persistQueueMirror` 写进 `queue-snapshots.json`——只覆盖项目进程(`roomForRpc` 反查不到即跳过,单工程保守路线);服务级重启后 `consumeQueueSnapshots` 在 Matrix 连接就绪时逐项目房补发「服务重启,队列中 N 条未执行」、发完即清(consume-once,单房失败仅 warn 不重试;矩阵未连上则整段跳过,条目留给下次成功启动)
+- 访客档门控(issue #120):authorizationGate 扩为「未授权拦 → 访客验单」——名单内放行,禁用清单命中的命令在**任何执行之前**硬拦(回执 `guest.denied` + 审计留痕);禁用清单纯模块 `src/auth/guest-policy.ts`(快照钉点,bang 判定与 command-map 的 parseBangCommand 等价性由测试钉住——运行时 import 会成 auth→rpc→auth 环);房间模式(trusted-only)语义优先,已在 authorization 阶段裁决
+- 交接卡(issue #122):SlashCommandContext 的 `recap` 缝(run/beforeNew/onSwitched)——/recap 忙拒(isStreaming)与空会话拒(轮数 <2)以类型化错误抛给命令层转人话;生成 = 向当前进程发总结 prompt 并在 turn_end 捕获终答(卡片替代原生回复不重复刷屏;卡片按 splitMessage 分片);/new //clear 前的自动出卡(recap.onNew 默认关)失败只 warn 绝不阻塞;多工程下抄送管理房(项目名前缀);轮数记账 WeakMap,换会话归零
+- 审计 trails(issue #124):`auditTrail` 统一记账口,八处接线(配对成败/trusted/revoke 经 admin-commands 纯模块返回的 `audit` 裁决字段;`!` `/bash` `/bashstop` `/reload` 按 slashCommands/bashBang 的命令名;`/login` 家族;`/pmctl rm`;queue.clear 走命令层的 audit 缝按真实语义上报;backlog.execute 在 执行 放行处)——登记表 `AUDIT_EVENTS` 集中常量,漏登记=快照测试红
 - typing 指示:`agent_start` / `turn_start` 触发 Matrix 输入中状态;管理房判定走 config 的 `managementRoomId` 派生、收养写走 `adoptManagementRoom`(spec #99/#102),收养品牌逻辑在 space.ts
 
 **`src/rpc/queue-snapshots.ts`** —— 队列快照存储 + 启动消费(issue #115 阶段2)
 - `QueueSnapshotStore` 包在 JsonStateFile 上:按房间 replace-or-insert,空快照=移除(队列在任何活进程都不存在了,下次启动不得复活成丢失报告),残缺条目装载时静默跳过(与附件账本同一降级契约)
 - `consumeQueueSnapshots`:一条一房一通知(措辞用 `queue.lost.service.notice`,与阶段 1 的「子进程重启」区分),非项目房条目直接丢弃;send 直连 transport(失败抛错可见),单房失败 warn 后条目照清——快照是死亡进程的报告,不是投递承诺
+
+**`src/audit/audit-log.ts`** —— 审计日志(issue #124):audit.jsonl 只追加(排查即证据),单行 JSON(ts/event/actor/chatId/detail),appendFileSync 0600;10MB 轮转(current→.1→.2,旧档 rename 顶替);写失败连续计数,达阈值向管理房告警一次后重新武装(审计故障可见但不刷屏、不放大成可用性故障);`AUDIT_EVENTS` 事件登记表集中常量,快照测试钉住。standalone 启动即写 bridge.start(兼可写性探针)
+
+**`src/auth/guest-policy.ts`** —— 访客禁用清单(issue #120):GUEST_BLOCKED_COMMANDS 常量 + `guestCommandVerdict` 纯函数(shell bang 与斜杠命令的裁决);票面清单之外按「危险即禁」补 /multiproject /attach /detach;自持 bang 正则的原因与等价性钉点见模块头
+
+**`src/rpc/recap.ts`** —— 交接卡纯函数(issue #122):renderRecapCard(标题/正文/项目前缀/上下文行)+ recapCardTitle(本地时间+会话短标识)+ recapPromptText(总结指令,i18n)+ RecapBusyError/RecapEmptyError 类型化拒绝;捕获与投递的编排(router 的 turn_end 捕获、管理房抄送、分片)在 message-router
 
 **`src/space.ts`** —— Element 空间组织视图(纯展示层)+ 托管房间置备/身份自愈
 - 启动期 ensure:懒创建私有空间 `π <实例名>` + 空间内 bot 自建管理房间,幂等锚点为 config 的 `space.roomId` / `managementRoomId` 派生(spec #99/#102)
