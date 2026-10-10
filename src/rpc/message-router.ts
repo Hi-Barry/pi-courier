@@ -12,7 +12,7 @@ import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
-import { type ConfigStore, inboxMode, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
+import { type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -20,7 +20,6 @@ import {
   splitMessage,truncate 
 } from "../formatting.js";
 import { t } from "../i18n/index.js";
-import { isExecuteInput, isIgnoreInput } from "../i18n/parse.js";
 import { namespacedId } from "../identity.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
 import type { ReminderController } from "../reminders/reminder-clock.js";
@@ -28,7 +27,9 @@ import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUser
 import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
-import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";import {
+import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
+import { BacklogInbox } from "./backlog-inbox.js";
+import {
   type BashTracker,
   clearedQueuesView,
   createBashTracker,
@@ -39,12 +40,12 @@ import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.j
   resolveSessionDir,
 } from "./command-map.js";
 import { ExtensionQuestions, type ExtensionUIRequestView, extensionUiTimeoutMs } from "./extension-questions.js";
-import { nextFallbackTarget } from "./model-switch.js";
+import { FallbackStreak, MODEL_FALLBACK_THRESHOLD, nextFallbackTarget } from "./model-switch.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
 import type { QueueSnapshotStore } from "./queue-snapshots.js";
-import { RECAP_MIN_TURNS, RecapBusyError, RecapEmptyError, recapCardTitle, recapCcPrefix, recapPromptText, renderRecapCard } from "./recap.js";
+import { RECAP_MIN_TURNS, RecapBusyError, RecapEmptyError, RecapLedger, recapCardTitle, recapCcPrefix, renderRecapCard } from "./recap.js";
 import { RpcTransientState } from "./rpc-transient-state.js";
 import { extractUserText, type MirroredEntry, MirrorManager } from "./session-mirror.js";
 import { appendStatusFooter, collectStatusFooter } from "./status-footer.js";
@@ -303,20 +304,13 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   };
   const auditDetailOf = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 120);
 
-  // 模型降级链(issue #121):同一进程连续 N 轮彻底失败(stopReason=error,
-  // pi 的 auto-retry 已耗尽或未开)→ 沿链自动 setModel,房间回执 + 审计。
+  // 模型降级链(issue #121):连败记账与耗尽提示的「只提示一次」都在
+  // FallbackStreak(model-switch.ts);这里只编排链解析、切换与回执/审计。
   // 项目房用项目链,其余走全局链;链空 = 功能关,行为与旧版逐字节一致。
-  // 成功轮即清零;链走完只提示一次,绝不循环。计数仅在内存 —— 进程重启
-  // 归零可接受(重启本身常已排除瞬时故障)。
-  const MODEL_FALLBACK_THRESHOLD = 2;
-  const fallbackRuns = new WeakMap<PiRpc, { failures: number; exhaustedNotified: boolean }>();
+  const fallbackStreak = new FallbackStreak();
 
   const runFallback = async (rpc: PiRpc, origin: { chatId: string; transport: string }): Promise<void> => {
-    const run = fallbackRuns.get(rpc) ?? { failures: 0, exhaustedNotified: false };
-    run.failures += 1;
-    fallbackRuns.set(rpc, run);
-    if (run.failures < MODEL_FALLBACK_THRESHOLD) return;
-    run.failures = 0; // 重新武装:切换后的新模型要再连败 N 轮才推进下一跳
+    if (!fallbackStreak.recordFailure(rpc)) return;
     const chain = projectManager.projectFallbacks(origin.chatId) ?? modelFallbackChain(store.get());
     if (chain.length === 0) return;
     let current: { provider?: string; id?: string } | undefined;
@@ -328,8 +322,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     const from = current?.provider ? `${current.provider}/${current.id}` : "?";
     const next = nextFallbackTarget(chain, current);
     if (!next) {
-      if (!run.exhaustedNotified) {
-        run.exhaustedNotified = true;
+      if (fallbackStreak.markExhaustedNotified(rpc)) {
         await sendReply(
           origin.chatId,
           origin.transport,
@@ -358,21 +351,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     );
   };
 
-  // 交接卡(issue #122):每进程「已完成对话轮」记账(/new //clear 换会话
-  // 归零)+ 在途捕获。忙拒保证同一时刻至多一个捕获在飞;/stop 打断会以
-  // 失败轮收场,捕获随之 reject,不会悬挂。
-  const recapTurns = new WeakMap<PiRpc, number>();
-  let recapCapture: { rpc: PiRpc; resolve: (text: string) => void; reject: (err: Error) => void } | undefined;
-
-  /** 向当前进程发总结 prompt 并等终答(turn_end 的最终文本)。 */
-  const captureRecapTurn = (rpc: PiRpc): Promise<string> =>
-    new Promise<string>((resolve, reject) => {
-      recapCapture = { rpc, resolve, reject };
-      rpc.prompt(recapPromptText()).catch((err: unknown) => {
-        if (recapCapture?.rpc === rpc) recapCapture = undefined;
-        reject(err instanceof Error ? err : new Error(String(err)));
-      });
-    });
+  // 交接卡(issue #122):轮数记账与在途捕获槽都在 RecapLedger(recap.ts);
+  // 这里只编排门控(忙拒/空会话)、投递与 /new 联动。
+  const recapLedger = new RecapLedger();
 
   /** 卡片投递:当前房间必发;多工程下有管理房且不同于本房间时抄送一份
    *  「📋 <项目名> 交接卡」,沉淀为该项目的干活日志时间线。 */
@@ -412,8 +393,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const runRecap = async (rpc: PiRpc, origin: { chatId: string; transport: string }): Promise<void> => {
     const state = await rpc.requireClient().getState();
     if (state.isStreaming) throw new RecapBusyError();
-    if ((recapTurns.get(rpc) ?? 0) < RECAP_MIN_TURNS) throw new RecapEmptyError();
-    const body = await captureRecapTurn(rpc);
+    if (recapLedger.count(rpc) < RECAP_MIN_TURNS) throw new RecapEmptyError();
+    const body = await recapLedger.startCapture(rpc);
     await deliverRecapCard(rpc, body, origin);
   };
 
@@ -424,8 +405,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     try {
       const state = await rpc.requireClient().getState();
       if (state.isStreaming) return;
-      if ((recapTurns.get(rpc) ?? 0) < RECAP_MIN_TURNS) return;
-      const body = await captureRecapTurn(rpc);
+      if (recapLedger.count(rpc) < RECAP_MIN_TURNS) return;
+      const body = await recapLedger.startCapture(rpc);
       await deliverRecapCard(rpc, body, origin);
     } catch (err) {
       logger.warn(`recap before /new failed (continuing): ${(err as Error).message}`);
@@ -484,98 +465,22 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 按 pi 进程记账,promise 落定自动销账(见 createBashTracker)。
   const bashTracker: BashTracker = createBashTracker();
 
-  // ---- 离线收件箱(issue #113):积压缓冲与结算 -----------------------------
+  // ---- 离线收件箱(issue #113):状态与结算语义在 BacklogInbox module -------
   // transport 只负责判定「这是离线积压」(stale + 台账没见过,带 replayed
-  // 标记);缓冲、征询与执行裁决都在 router —— 因为授权门控(静默群/未信任
-  // 发送者)只有这里有,积压绝不构成越权旁路。per-room 一套:缓冲、结算
-  // 计时器(首条积压后 5s,等回放波灌完)与 confirm 待答状态互不串房。
-  const BACKLOG_SETTLE_MS = 5_000;
-  const BACKLOG_CONFIRM_TIMEOUT_MS = 10 * 60_000;
-  const backlogBuffers = new Map<string, ExternalMessage[]>();
-  const backlogTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const backlogAwaiting = new Map<string, { entries: ExternalMessage[]; timer: ReturnType<typeof setTimeout> }>();
-
-  /** 积压清单的一行预览:文本收成单行截断;非文本载荷与 📥 日志同形。 */
-  const backlogPreview = (msg: ExternalMessage): string => {
-    const raw = msg.payload.kind === "text" ? msg.payload.text : `[${msg.payload.kind}]`;
-    const oneLine = raw.replace(/\s+/g, " ").trim();
-    return oneLine.length > 120 ? `${oneLine.slice(0, 120)}…` : oneLine;
-  };
-
-  const bufferBacklog = (msg: ExternalMessage): void => {
-    const buffer = backlogBuffers.get(msg.chatId) ?? [];
-    buffer.push(msg);
-    backlogBuffers.set(msg.chatId, buffer);
-    if (!backlogTimers.has(msg.chatId)) {
-      backlogTimers.set(
-        msg.chatId,
-        setTimeout(() => settleBacklog(msg.chatId), BACKLOG_SETTLE_MS)
-      );
-    }
-  };
-
-  /** 按到达序原样再注入(剥掉 replayed 标记 = 按实时消息走全管道:斜杠
-   *  命令、附件停车、prompt 各归其位)。router 变量在返回后才可用,这里
-   *  只在调用时解引用,无 TDZ 问题。 */
-  const deliverBacklog = async (entries: ExternalMessage[]): Promise<void> => {
-    for (const entry of entries) {
-      const { replayed: _strip, ...realtime } = entry;
-      await router.handleIncoming(realtime);
-    }
-  };
-
-  const settleBacklog = (chatId: string): void => {
-    const timer = backlogTimers.get(chatId);
-    if (timer) {
-      clearTimeout(timer);
-      backlogTimers.delete(chatId);
-    }
-    const entries = backlogBuffers.get(chatId);
-    if (!entries || entries.length === 0) return;
-    backlogBuffers.delete(chatId);
-    const lines = entries.map((e) => t("inbox.entry.line", { user: e.username, preview: backlogPreview(e) })).join("\n");
-    const transport = entries[0]!.transport;
-
-    if (inboxMode(store.get()) === "auto") {
-      // 告知后直接按序执行(部署者明确选择过;`!`/bash 类消息的惊吓风险
-      // 由部署者自担)。
-      void sendReply(chatId, transport, t("inbox.auto.notice", { count: entries.length, lines }))
-        .then(() => deliverBacklog(entries))
-        .catch((err: unknown) => logger.error(`backlog auto-delivery failed: ${(err as Error).message}`));
-      return;
-    }
-
-    // confirm(默认):汇总征询,「执行」按序处理 /「忽略」丢弃 / 超时视为
-    // 忽略。新积压波并入旧待答(重开一轮计时与征询,列表合并展示)。
-    const prior = backlogAwaiting.get(chatId);
-    if (prior) {
-      clearTimeout(prior.timer);
-      prior.entries.push(...entries);
-    }
-    const merged = prior?.entries ?? entries;
-    const mergedLines = merged
-      .map((e) => t("inbox.entry.line", { user: e.username, preview: backlogPreview(e) }))
-      .join("\n");
-    const confirmTimer = setTimeout(() => {
-      // 超时默认忽略:静默丢弃,不发补充通知(征询文案已写明规则)。
-      backlogAwaiting.delete(chatId);
-    }, BACKLOG_CONFIRM_TIMEOUT_MS);
-    backlogAwaiting.set(chatId, { entries: merged, timer: confirmTimer });
-    void sendReply(
-      chatId,
-      transport,
-      t("inbox.confirm.prompt", {
-        count: merged.length,
-        lines: mergedLines,
-        minutes: BACKLOG_CONFIRM_TIMEOUT_MS / 60_000,
-      })
-    ).catch((err: unknown) => {
-      // 征询发不出去(极端时序)等于没人能批准 —— 按忽略处理,积压不留悬案。
-      backlogAwaiting.delete(chatId);
-      clearTimeout(confirmTimer);
-      logger.warn(`backlog confirm prompt failed, backlog discarded: ${(err as Error).message}`);
-    });
-  };
+  // 标记);缓冲、征询与执行裁决都在模块里。授权门控仍归管道:两个积压阶段
+  // 都跑在授权裁决之后,未信任者的积压与应答根本到不了这里。deliver 回调在
+  // 调用时才解引用 router(构造期 router 尚未存在,只在调用时求值,无 TDZ)。
+  const inbox = new BacklogInbox({
+    reply: sendReply,
+    deliver: async (entries) => {
+      for (const entry of entries) {
+        const { replayed: _strip, ...realtime } = entry;
+        await router.handleIncoming(realtime);
+      }
+    },
+    config: () => store.get(),
+    onExecute: (msg, count) => auditTrail(AUDIT_EVENTS.backlogExecute, msg, `delivering ${count} offline backlog message(s)`),
+  });
 
 
   // Headless login (issue #55): /login /logout /auth + answer capture. The
@@ -867,27 +772,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // 继续挂着等。授权已在上一阶段裁决 —— 未信任者的应答根本到不了这。
       handle: async (ctx) => {
         if (!ctx.text) return false;
-        const pending = backlogAwaiting.get(ctx.msg.chatId);
-        if (!pending) return false;
-        if (isExecuteInput(ctx.text)) {
-          backlogAwaiting.delete(ctx.msg.chatId);
-          clearTimeout(pending.timer);
-          const entries = pending.entries;
-          // 审计(issue #124,#113 回填):离线积压批量执行是运行时突变 —
-          // 谁、在哪个房间、放行了几条,一行留痕。
-          auditTrail(AUDIT_EVENTS.backlogExecute, ctx.msg, `delivering ${entries.length} offline backlog message(s)`);
-          void deliverBacklog(entries).catch((err: unknown) =>
-            logger.error(`backlog delivery failed: ${(err as Error).message}`)
-          );
-          return true;
-        }
-        if (isIgnoreInput(ctx.text)) {
-          backlogAwaiting.delete(ctx.msg.chatId);
-          clearTimeout(pending.timer);
-          await sendReply(ctx.msg.chatId, ctx.msg.transport, t("inbox.ignored", { count: pending.entries.length }));
-          return true;
-        }
-        return false;
+        return inbox.answer(ctx.text, ctx.msg);
       },
     },
     {
@@ -898,15 +783,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // 离线积压缓冲(issue #113):replayed 消息不直接执行,按房间攒着,
       // 首条积压后 5s(等回放波灌完)或本房间首条实时消息到达时结算。
       // off 模式 transport 根本不转发积压;这里再挡一道(手喂消息的兜底)。
-      handle: async (ctx) => {
-        if (ctx.msg.replayed) {
-          if (inboxMode(store.get()) === "off") return false;
-          bufferBacklog(ctx.msg);
-          return true;
-        }
-        if (backlogBuffers.has(ctx.msg.chatId)) settleBacklog(ctx.msg.chatId);
-        return false;
-      },
+      handle: async (ctx) => inbox.accept(ctx.msg),
     },
     {
       name: "multiproject",
@@ -1077,7 +954,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             recap: {
               run: () => runRecap(rpc, { chatId: ctx.msg.chatId, transport: ctx.msg.transport }),
               beforeNew: () => beforeNewRecap(rpc, { chatId: ctx.msg.chatId, transport: ctx.msg.transport }),
-              onSwitched: () => recapTurns.set(rpc, 0),
+              onSwitched: () => recapLedger.reset(rpc),
             },
             // /remind(issue #117):命令层不接触 chatId/userId —— 这里按本消息
             // 的房间与发起人预先绑定。
@@ -1352,7 +1229,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
 
       if (event.type === "turn_end") {
-        recapTurns.set(rpc, (recapTurns.get(rpc) ?? 0) + 1);
+        recapLedger.increment(rpc);
         if (!target) return;
         // 连败计数(issue #121):彻底失败的轮喂计数,其余轮次清零(工具
         // 循环的中间轮也算成功 —— 模型还在干活,故障 streak 不该跨过它)。
@@ -1360,21 +1237,13 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         if ((event.message as AssistantMessage | undefined)?.stopReason === "error") {
           void runFallback(rpc, target);
         } else {
-          fallbackRuns.delete(rpc);
+          fallbackStreak.clear(rpc);
         }
         const turn = buildTurnReply(event.message as AssistantMessage, store.get().hideToolCalls);
 
         // 交接卡捕获(issue #122):在途捕获命中本进程时,终答落卡 —— 工具
         // 循环的中间轮继续等;卡片投递替代原生回复,总结文本不重复发房间。
-        if (recapCapture?.rpc === rpc) {
-          if (turn.pendingTools) return;
-          const capture = recapCapture;
-          recapCapture = undefined;
-          const body = turn.text?.trim();
-          if (body) capture.resolve(body);
-          else capture.reject(new RecapEmptyError());
-          return;
-        }
+        if (recapLedger.settleCapture(rpc, turn) !== "none") return;
 
         // Reply summary at INFO level — the full conversation is also in pi's
         // session file.

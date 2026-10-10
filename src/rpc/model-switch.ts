@@ -51,3 +51,39 @@ export function nextFallbackTarget(
   }
   return undefined;
 }
+
+/** 触发自动切换所需的连续彻底失败轮数(stopReason=error,pi 的 auto-retry
+ *  已耗尽或未开)。 */
+export const MODEL_FALLBACK_THRESHOLD = 2;
+
+/** 降级链连败记账(issue #121):每进程一份,内存即权威 —— 重启归零可接受
+ *  (重启本身常已排除瞬时故障)。阈值判定与「链耗尽只提示一次」都在这里;
+ *  链解析、切换与回执 I/O 归调用方。成功(或任何非 error)轮 clear() 清零
+ *  并重武装耗尽提示。 */
+export class FallbackStreak {
+  private runs = new WeakMap<PiRpc, { failures: number; exhaustedNotified: boolean }>();
+
+  /** 失败轮喂入:达到阈值 → true(记账已重置,该推进下一跳了);未到 →
+   *  false(保持静默,继续数)。 */
+  recordFailure(rpc: PiRpc): boolean {
+    const run = this.runs.get(rpc) ?? { failures: 0, exhaustedNotified: false };
+    run.failures += 1;
+    this.runs.set(rpc, run);
+    if (run.failures < MODEL_FALLBACK_THRESHOLD) return false;
+    run.failures = 0; // 重新武装:切换后的新模型要再连败 N 轮才推进下一跳
+    return true;
+  }
+
+  /** 链已走完时调用:true = 该发一次耗尽提示(此后同一条 streak 静默)。 */
+  markExhaustedNotified(rpc: PiRpc): boolean {
+    const run = this.runs.get(rpc);
+    if (!run || run.exhaustedNotified) return false;
+    run.exhaustedNotified = true;
+    return true;
+  }
+
+  /** 成功(或任何非 error)轮:整条 streak 清零,耗尽提示重新武装。 */
+  clear(rpc: PiRpc): void {
+    this.runs.delete(rpc);
+  }
+}
