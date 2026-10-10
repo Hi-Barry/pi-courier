@@ -6,35 +6,19 @@ import { ConfigStore } from "../src/config";
 import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { handleAdminCommand } from "../src/auth/admin-commands";
 import { logger } from "../src/logger";
-import { buildTurnReply } from "../src/rpc/message-router";
+import { buildTurnReply, createMessageRouter } from "../src/rpc/message-router";
 import { clearedQueuesView } from "../src/rpc/command-map";
 import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { createMessageRouter } from "../src/rpc/message-router";
-import { captureConsole } from "./helpers";
+import { captureConsole, makeMsg, makeRouterFixture } from "./helpers";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
+import type { RoomOps } from "../src/transports/interface";
 import type { ExternalMessage } from "../src/types";
 
 /** Minimal assistant-shaped message for turn_end events. */
 function textMessage(text: string): AssistantMessage {
   return { content: [{ type: "text", text }] } as unknown as AssistantMessage;
-}
-
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string; quoted?: { username: string; excerpt: string } } = {}): ExternalMessage {
-  const { text = "hi", quoted, ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text, ...(quoted && { quoted }) },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: "m1",
-    timestamp: new Date(),
-    ...rest,
-  };
 }
 
 /**
@@ -123,9 +107,20 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     getBotUserId: vi.fn().mockReturnValue("@bot:server"),
     encryptionAvailable: true,
   };
-  const pmctl = new PmctlController({ projectManager, roomOps, store });
-  const makeRouter = () =>
-    createMessageRouter({ projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl, managementRoomAdoptionAllowed: opts.managementRoomAdoptionAllowed });
+  const fixture = makeRouterFixture({
+    rpc,
+    projectManager,
+    store,
+    auth,
+    roomOps: roomOps as unknown as RoomOps,
+    sendReply,
+    extra: {
+      sendTyping,
+      ...(opts.managementRoomAdoptionAllowed ? { managementRoomAdoptionAllowed: opts.managementRoomAdoptionAllowed } : {}),
+    },
+  });
+  // 同一批 fake 上开全新 router 实例(管道内状态互不串台),装配单点在工厂。
+  const makeRouter = () => createMessageRouter(fixture.deps);
   return {
     codeBox,
     replies,
@@ -136,7 +131,7 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     auth,
     roomOps,
     store,
-    pmctl,
+    pmctl: fixture.pmctl,
     makeRouter,
   };
 }

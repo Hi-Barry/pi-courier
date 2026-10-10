@@ -31,15 +31,18 @@ export function captureConsole(): string[] {
   return lines;
 }
 
-/** One inbound Matrix-shaped message; overrides win, ids are unique by default. */
-export function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
+/** One inbound Matrix-shaped message; overrides win, ids are unique by default.
+ *  `quoted` is the text-payload shorthand from the ExternalMessage type. */
+export function makeMsg(
+  overrides: Partial<ExternalMessage> & { text?: string; quoted?: { username: string; excerpt: string } } = {}
+): ExternalMessage {
+  const { text = "hi", quoted, ...rest } = overrides;
   return {
     chatId: "!dm:server",
     transport: "matrix",
     userId: "@barry:server",
     username: "barry",
-    payload: { kind: "text", text },
+    payload: { kind: "text", text, ...(quoted && { quoted }) },
     isGroupChat: false,
     wasMentioned: false,
     messageId: `m-${Math.random().toString(36).slice(2)}`,
@@ -82,6 +85,8 @@ export interface RouterFixtureOptions {
   projectManager?: ProjectManager;
   /** 逃生舱:整体替换默认 auth(三档名单/自定义 admin 等场景);缺省 = barry 单信任。 */
   auth?: ChallengeAuth;
+  /** 逃生舱:整体替换最小 roomOps stub(全量 18 字段等场景)。 */
+  roomOps?: RoomOps;
   /** 缺省 vi.fn;传自定义实现时被包成 vi.fn(闭包捕获照常工作)。 */
   sendReply?: (chatId: string, transport: string, text: string) => Promise<void>;
   /** true → 注入 auditLines 记录器;缺省不注入 = 零审计(生产 Absent 语义)。 */
@@ -94,6 +99,8 @@ export interface RouterFixtureOptions {
 
 export interface RouterFixture {
   router: MessageRouter;
+  /** 工厂装配的完整 deps——要在同一批 fake 上开第二个 router 实例时复用。 */
+  deps: MessageRouterDeps;
   rpc: PiRpc;
   projectManager: ProjectManager;
   store: ConfigStore;
@@ -128,11 +135,11 @@ export function makeRouterFixture(options: RouterFixtureOptions = {}): RouterFix
       channels: options.channels ?? {},
     });
   }
-  const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
+  const roomOps = options.roomOps ?? ({ getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps);
   const pmctl = new PmctlController({ projectManager, roomOps, store });
   const sendReply = vi.fn(options.sendReply ?? (async () => {}));
   const auditLines: AuditEntry[] = [];
-  const router = createMessageRouter({
+  const deps: MessageRouterDeps = {
     projectManager,
     auth,
     sendReply,
@@ -150,6 +157,6 @@ export function makeRouterFixture(options: RouterFixtureOptions = {}): RouterFix
         }
       : {}),
     ...options.extra,
-  });
-  return { router, rpc, projectManager, store, auth, roomOps, pmctl, sendReply, auditLines };
+  };
+  return { router: createMessageRouter(deps), deps, rpc, projectManager, store, auth, roomOps, pmctl, sendReply, auditLines };
 }
