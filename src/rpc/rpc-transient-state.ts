@@ -26,13 +26,20 @@ export type RestartSubscription = (rpc: PiRpc, handler: (rpc: PiRpc) => void) =>
  *  让 router 向绑定房间发「N 条未执行」清单。回调抛错不影响作废本身。 */
 export type QueueLostHook = (rpc: PiRpc, snapshot: QueueSnapshot) => void;
 
+/** 镜像变更落盘钩子(issue #115 阶段2):setMirror 与 invalidate 都触发,
+ *  invalidate 以权威空快照触发 —— 磁盘永远反映「活进程还欠着什么」,
+ *  服务级重启后由启动装载补发回执。/stop 钉零与崩溃作废都走这里,
+ *  「自己清的/已作废的」不会在下次服务启动被误报。 */
+export type MirrorChangedHook = (rpc: PiRpc, snapshot: QueueSnapshot) => void;
+
 export class RpcTransientState {
   private mirrors = new WeakMap<PiRpc, QueueSnapshot>();
   private watched = new WeakSet<PiRpc>();
 
   constructor(
     private subscribeRestart: RestartSubscription,
-    private onQueueLost?: QueueLostHook
+    private onQueueLost?: QueueLostHook,
+    private onMirrorChanged?: MirrorChangedHook
   ) {}
 
   private watch(rpc: PiRpc): void {
@@ -55,6 +62,7 @@ export class RpcTransientState {
       }
     }
     this.mirrors.delete(rpc);
+    this.notifyMirrorChanged(rpc, { steering: [], followUp: [] });
   }
 
   /** Live steering/followUp queue mirror (refreshed by queue_update events).
@@ -67,5 +75,16 @@ export class RpcTransientState {
   setMirror(rpc: PiRpc, snapshot: QueueSnapshot): void {
     this.watch(rpc);
     this.mirrors.set(rpc, snapshot);
+    this.notifyMirrorChanged(rpc, snapshot);
+  }
+
+  /** 落盘钩子的唯一出口:setMirror 与 invalidate(权威空)都经此触发;
+   *  抛错只吞掉那一次落盘,镜像与作废语义照常。 */
+  private notifyMirrorChanged(rpc: PiRpc, snapshot: QueueSnapshot): void {
+    try {
+      this.onMirrorChanged?.(rpc, snapshot);
+    } catch {
+      // 落盘失败不影响镜像本身(内存仍是权威)
+    }
   }
 }

@@ -26,6 +26,7 @@ import { createMessageRouter, type PersistedAttachmentEntry } from "./rpc/messag
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
+import { consumeQueueSnapshots, type QueueSnapshotEntry, QueueSnapshotStore } from "./rpc/queue-snapshots.js";
 import { ensureSpaceAndManagementRoom } from "./space.js";
 import { createStartupState, runStartupHeals } from "./startup-state.js";
 import { JsonStateFile } from "./state/json-file.js";
@@ -264,6 +265,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const eventLedger = new FileEventLedger(path.join(stateDir, "event-ledger.jsonl"));
   matrix?.setEventLedger(eventLedger, inboxMode(config));
 
+  // ---- queue snapshots (issue #115 阶段2):队列镜像的磁盘半边 ------------------
+  // 镜像每次变化(经 router 注入的落盘缝)进/出 queue-snapshots.json;服务级
+  // 重启后由下方启动消费补发「未执行」回执。只覆盖多工程项目房 —— 项目房↔
+  // 进程映射在 config 里跨重启稳定;单工程默认进程绑运行时 DM,还原会误发
+  // 旧房间,按票面保守路线整段不做。
+  const queueSnapshots = new QueueSnapshotStore(
+    new JsonStateFile<QueueSnapshotEntry[]>(path.join(stateDir, "queue-snapshots.json"), [])
+  );
+
   // ---- reminders (issue #117):先落盘再跑,重启不丢 ---------------------------
   // 时钟句柄不跨进程:reminders.json 才是真相,start() 在 transports 连接后
   // 重装载并补起全部定时器,离线窗口过期的提醒立即补投(注明迟到)。
@@ -285,6 +295,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     managementRoomAdoptionAllowed: () => startup.managementRoomAdoptionAllowed(),
     attachmentsLedger,
     reminders: reminderClock,
+    queueSnapshots,
   });
 
   // 房间消亡销账(issue #114/#117 后续):/pmctl rm 确认后清掉该房间的附件
@@ -293,6 +304,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   pmctl.onRoomRemoved = (roomId) => {
     const attachments = router.purgeRoomAttachments(roomId);
     const reminders = reminderClock.purgeRoom(roomId);
+    // 队列快照同批销账(issue #115 阶段2):项目没了,「未执行」报告无人可投。
+    queueSnapshots.remove(roomId);
     if (attachments + reminders > 0) {
       logger.info(`purged room state after project removal: ${attachments} attachment(s), ${reminders} reminder(s)`);
     }
@@ -330,6 +343,20 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       logger.warn("   → 服务器端 device 的 one-time key 记账与本地不一致。");
       logger.warn("     解法:重跑 `pi-courier setup`,在\"保留现有 token?\"处输 n 换新 token(新设备=服务器干净)。");
     }
+  }
+
+  // ---- queue snapshot consumption (issue #115 阶段2) --------------------------
+  // 服务级重启后的「未执行」回执此刻补发:上个进程欠的排队清单,逐项目房
+  // 一条,发完即清(consume-once)。矩阵没连上就整段跳过 —— 条目留给下次
+  // 成功启动,连接级故障不许销毁报告;send 直连 transport(失败抛错可见),
+  // 单房失败仅 warn 且条目照清:快照是死亡进程的报告,不是投递承诺。
+  if (matrix?.isConnected) {
+    await consumeQueueSnapshots(queueSnapshots, {
+      isProjectRoom: (roomId) => projectManager.isProjectRoom(roomId),
+      send: (roomId, text) => matrix.sendMessage(roomId, text),
+    }).catch((err: unknown) => {
+      logger.warn(`queue snapshot consumption failed: ${(err as Error).message}`);
+    });
   }
 
   // ---- space ensure -----------------------------------------------------------

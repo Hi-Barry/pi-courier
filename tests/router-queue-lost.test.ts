@@ -130,3 +130,111 @@ describe("queue lost notice on subprocess restart (issue #115 stage 1)", () => {
     expect(replies).toHaveLength(0);
   });
 });
+
+describe("queue snapshot persistence through the router (issue #115 stage 2)", () => {
+  let replies: Array<{ chatId: string; transport: string; text: string }>;
+  let restartHooks: Array<(rpc: PiRpc) => void>;
+  let defaultRpc: PiRpc;
+  let projectRpc: PiRpc;
+  let saved: Array<{ roomId: string; snapshot: unknown }>;
+  let router: ReturnType<typeof createMessageRouter>;
+
+  beforeEach(() => {
+    replies = [];
+    restartHooks = [];
+    saved = [];
+    const makeRpc = (label?: string): PiRpc =>
+      ({
+        prompt: vi.fn().mockResolvedValue(undefined),
+        getState: vi.fn().mockResolvedValue({ isStreaming: false, model: { id: "m" }, pendingMessageCount: 0 }),
+        label,
+        onEvent: vi.fn(),
+        onRestarted: vi.fn((hook: (rpc: PiRpc) => void) => {
+          restartHooks.push(hook);
+          return () => {};
+        }),
+        requireClient: vi.fn().mockReturnValue({
+          abort: vi.fn().mockResolvedValue(undefined),
+          waitForIdle: vi.fn().mockResolvedValue(undefined),
+          send: vi.fn().mockResolvedValue({ success: true, data: { steering: ["排队一"], followUp: [] } }),
+        }),
+      }) as unknown as PiRpc;
+    defaultRpc = makeRpc();
+    projectRpc = makeRpc("proj-a");
+    const projectManager = {
+      getRpcForRoom: vi.fn((roomId: string) => (roomId === "!proj:s" ? projectRpc : defaultRpc)),
+      isProjectRoom: vi.fn((roomId: string) => roomId === "!proj:s"),
+      labelForRoom: vi.fn((roomId: string) => (roomId === "!proj:s" ? "proj-a" : undefined)),
+      roomForRpc: vi.fn((rpc: PiRpc) => (rpc === projectRpc ? "!proj:s" : undefined)),
+      isMultiProject: true,
+      allRpcs: vi.fn().mockReturnValue([defaultRpc, projectRpc]),
+    } as unknown as ProjectManager;
+    const store = new ConfigStore({});
+    const auth = new ChallengeAuth(() => {}, () => {});
+    auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
+    const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
+    const pmctl = new PmctlController({ projectManager, roomOps, store });
+    router = createMessageRouter({
+      projectManager,
+      auth,
+      sendReply: async (chatId, transport, text) => {
+        replies.push({ chatId, transport, text });
+      },
+      sendTyping: vi.fn(),
+      roomOps,
+      store,
+      pmctl,
+      // 存储缝用假件记账(save/remove 的盘上语义归 queue-snapshots.test.ts)
+      queueSnapshots: {
+        save: (roomId: string, snapshot: unknown) => {
+          saved.push({ roomId, snapshot });
+        },
+      } as never,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const restart = (): void => {
+    for (const hook of restartHooks) hook(projectRpc);
+  };
+
+  it("queue_update on a project rpc → snapshot saved under the project room", async () => {
+    await router.handleIncoming(makeMsg({ chatId: "!proj:s", messageId: "bind" }));
+    router.handleEvent({ type: "queue_update", steering: ["先查日志"], followUp: ["再补测试"] }, projectRpc);
+    expect(saved).toEqual([
+      { roomId: "!proj:s", snapshot: { steering: ["先查日志"], followUp: ["再补测试"] } },
+    ]);
+  });
+
+  it("queue_update draining to empty → empty snapshot saved (store removes the entry)", async () => {
+    await router.handleIncoming(makeMsg({ chatId: "!proj:s", messageId: "bind" }));
+    router.handleEvent({ type: "queue_update", steering: ["排队中"], followUp: [] }, projectRpc);
+    router.handleEvent({ type: "queue_update", steering: [], followUp: [] }, projectRpc);
+    expect(saved[1]).toEqual({ roomId: "!proj:s", snapshot: { steering: [], followUp: [] } });
+  });
+
+  it("/stop's pin-to-empty reaches the store (self-cleared never survives a restart)", async () => {
+    await router.handleIncoming(makeMsg({ chatId: "!proj:s", messageId: "bind" }));
+    router.handleEvent({ type: "queue_update", steering: ["排队一"], followUp: [] }, projectRpc);
+    await router.handleIncoming(makeMsg({ chatId: "!proj:s", messageId: "stop", text: "/stop" }));
+    expect(saved.at(-1)).toEqual({ roomId: "!proj:s", snapshot: { steering: [], followUp: [] } });
+  });
+
+  it("project-process restart → stage-1 notice AND empty snapshot (no double report next service start)", async () => {
+    await router.handleIncoming(makeMsg({ chatId: "!proj:s", messageId: "bind" }));
+    router.handleEvent({ type: "queue_update", steering: ["排队一", "排队二"], followUp: [] }, projectRpc);
+    restart();
+    expect(replies[0].chatId).toBe("!proj:s");
+    expect(replies[0].text).toContain("2 条消息未执行");
+    expect(saved.at(-1)).toEqual({ roomId: "!proj:s", snapshot: { steering: [], followUp: [] } });
+  });
+
+  it("the default process is never persisted (single-project conservative route)", async () => {
+    await router.handleIncoming(makeMsg({ chatId: "!dm:server", messageId: "bind" }));
+    router.handleEvent({ type: "queue_update", steering: ["默认进程的队列"], followUp: [] }, defaultRpc);
+    expect(saved).toEqual([]);
+  });
+});

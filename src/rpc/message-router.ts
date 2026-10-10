@@ -34,12 +34,15 @@ import {
   formatBashReply,
   handleSlashCommand,
   parseBangCommand,
+  type QueueSnapshot,
+  queueTotal,
   resolveSessionDir,
 } from "./command-map.js";
 import { ExtensionQuestions, type ExtensionUIRequestView, extensionUiTimeoutMs } from "./extension-questions.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
+import type { QueueSnapshotStore } from "./queue-snapshots.js";
 import { RpcTransientState } from "./rpc-transient-state.js";
 import { extractUserText, type MirroredEntry, MirrorManager } from "./session-mirror.js";
 import { appendStatusFooter, collectStatusFooter } from "./status-footer.js";
@@ -79,6 +82,13 @@ export interface MessageRouterDeps {
    *  message's room+sender before the command layer sees it. Absent =
    *  /remind replies unavailable. */
   reminders?: ReminderController;
+  /** Cross-process queue snapshot store (issue #115 stage 2): every mirror
+   *  change for a project-room process lands on disk, and the next service
+   *  start reports the lost queue (standalone wires the store + startup
+   *  consumption). Absent = no disk persistence; the single-project default
+   *  process is excluded inside the sink either way (conservative route —
+   *  its binding is a runtime DM and could misdeliver into a stale room). */
+  queueSnapshots?: QueueSnapshotStore;
 }
 
 /** Disk shape of one pending-attachment entry (issue #114). An array of
@@ -241,6 +251,21 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 非自愿队列丢失回执(issue #115 阶段1):作废时镜像非空 → 向该进程绑定
   // 的房间发「N 条未执行」清单(渲染与 #112 的被清列表同款);绑定不存在
   // (绑定前就重启的极端时序)只打日志,不抛。
+  // 跨进程快照落盘(issue #115 阶段2):镜像每次变化(含作废时的权威空)
+  // 经 persistQueueMirror 进/出磁盘;服务级重启后由 standalone 启动装载
+  // 补发。只覆盖项目进程(多工程保守路线):默认进程的绑定是运行时 DM,
+  // 还原到旧房间有过期误发风险 —— roomForRpc 查不到就整段跳过。
+  const persistQueueMirror = (rpc: PiRpc, snapshot: QueueSnapshot): void => {
+    const snapshots = deps.queueSnapshots;
+    if (!snapshots) return;
+    const roomId = projectManager.roomForRpc(rpc);
+    if (!roomId) return;
+    try {
+      snapshots.save(roomId, snapshot);
+    } catch (err) {
+      logger.warn(`queue snapshot persist failed (memory mirror stays authoritative): ${(err as Error).message}`);
+    }
+  };
   const transient = new RpcTransientState(
     (rpc, handler) => rpc.onRestarted?.(handler),
     (rpc, snapshot) => {
@@ -252,7 +277,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         return;
       }
       void sendReply(target.chatId, target.transport, t("queue.lost.notice", view));
-    }
+    },
+    persistQueueMirror
   );
 
   // 待处理附件清单(issue #66 票1):按 房间+发送者 记账。消耗规则:该发送

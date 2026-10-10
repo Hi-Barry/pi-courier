@@ -108,3 +108,28 @@ describe("ProjectManager project-process labels + lifecycle logs", () => {
     expect(stopped).toContain("[ai-api]");
   });
 });
+
+describe("ProjectManager.roomForRpc (issue #115 stage 2)", () => {
+  it("resolves the owning project room; the shared default never maps", async () => {
+    const { pm, defaultRpc } = makePM({ "!a:s": { name: "ai-api", workdir: "/w/ai" } });
+    expect(pm.roomForRpc(defaultRpc)).toBeUndefined(); // 默认进程:不落盘
+    const rpc = await pm.getRpcForRoom("!a:s");
+    expect(pm.roomForRpc(rpc)).toBe("!a:s");
+    expect(pm.roomForRpc(fakeRpc() as unknown as PiRpc)).toBeUndefined(); // 陌生进程
+  });
+
+  it("single-project mode never maps (conservative route falls out of the lookup)", async () => {
+    const { pm, defaultRpc } = makePM({ "!a:s": { workdir: "/w/ai" } }, false);
+    const rpc = await pm.getRpcForRoom("!a:s");
+    expect(rpc).toBe(defaultRpc); // 单工程一切皆默认进程
+    expect(pm.roomForRpc(rpc)).toBeUndefined();
+  });
+
+  it("drops the mapping on rm — the removed process stops persisting", async () => {
+    const { pm } = makePM({ "!a:s": { workdir: "/w/ai" } });
+    const rpc = await pm.getRpcForRoom("!a:s");
+    expect(pm.roomForRpc(rpc)).toBe("!a:s");
+    await pm.removeProject("!a:s");
+    expect(pm.roomForRpc(rpc)).toBeUndefined();
+  });
+});

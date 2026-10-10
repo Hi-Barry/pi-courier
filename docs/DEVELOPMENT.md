@@ -214,7 +214,12 @@ pi 0.83.0 就绪。
 - 回复按 RoomBinding 路由:每个 pi 进程绑定自己的回复目标(项目房间钉住、共享默认进程随最近一次 DM 提示刷新,完整对话轮结束后释放)——不存在进程级单槽
 - 离线收件箱(issue #113):transport 判定的 `replayed` 消息(离线积压)不直接执行——backlogAnswer 消费「执行/忽略」应答(双语,取消词也算忽略),backlogInbox 按房间缓冲并在首条积压后 5s(回放波收敛)或本房间首条实时消息到达时结算;confirm(默认)发征询、10 分钟超时默弃,auto 告知后按序执行,off 时 transport 根本不转发;门控(authorizationGate)先于缓冲——积压绝不构成越权旁路
 - 非自愿队列丢失回执(issue #115 阶段1):RpcTransientState 作废时镜像非空即回调 router,向该进程绑定房间发「N 条未执行」清单;`/stop` //interrupt 清队成功后镜像钉零(setQueueMirror),自己清的与崩溃丢的就此区分
+- 队列快照落盘(issue #115 阶段2):RpcTransientState 的镜像变更钩子把每次变化(含作废时的权威空)经 `persistQueueMirror` 写进 `queue-snapshots.json`——只覆盖项目进程(`roomForRpc` 反查不到即跳过,单工程保守路线);服务级重启后 `consumeQueueSnapshots` 在 Matrix 连接就绪时逐项目房补发「服务重启,队列中 N 条未执行」、发完即清(consume-once,单房失败仅 warn 不重试;矩阵未连上则整段跳过,条目留给下次成功启动)
 - typing 指示:`agent_start` / `turn_start` 触发 Matrix 输入中状态;管理房判定走 config 的 `managementRoomId` 派生、收养写走 `adoptManagementRoom`(spec #99/#102),收养品牌逻辑在 space.ts
+
+**`src/rpc/queue-snapshots.ts`** —— 队列快照存储 + 启动消费(issue #115 阶段2)
+- `QueueSnapshotStore` 包在 JsonStateFile 上:按房间 replace-or-insert,空快照=移除(队列在任何活进程都不存在了,下次启动不得复活成丢失报告),残缺条目装载时静默跳过(与附件账本同一降级契约)
+- `consumeQueueSnapshots`:一条一房一通知(措辞用 `queue.lost.service.notice`,与阶段 1 的「子进程重启」区分),非项目房条目直接丢弃;send 直连 transport(失败抛错可见),单房失败 warn 后条目照清——快照是死亡进程的报告,不是投递承诺
 
 **`src/space.ts`** —— Element 空间组织视图(纯展示层)+ 托管房间置备/身份自愈
 - 启动期 ensure:懒创建私有空间 `π <实例名>` + 空间内 bot 自建管理房间,幂等锚点为 config 的 `space.roomId` / `managementRoomId` 派生(spec #99/#102)
