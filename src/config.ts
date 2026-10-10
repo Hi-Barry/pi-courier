@@ -299,11 +299,12 @@ export function presetProblems(cfg: MsgBridgeConfig): PresetProblem[] {
   return problems;
 }
 
-/** 收养写侧(与 managementRoomId 同族):把 chatId 追加到管理房列表尾部 ——
- *  收养第一个成功授权的 DM(router 收养路径)与空间自建管理房(space ensure,
- *  进入时列表必为空,追加与单元素写等价)共用这一个写入解释。幂等:重复
- *  收养同一房间返回空 patch,不产生重复条目。返回 patch 形状,供
- *  store.update 直接消费,也可展开后与其它字段合并为一次原子 update。 */
+/** 收养写侧(与 managementRoomId 同族):收养第一个成功授权的 DM(router
+ *  收养路径)与空间自建管理房(space ensure)共用这一个写入解释 —— 语义
+ *  委托 management-room.ts 的 adoptManagementRoomPatch(架构候选4):已有
+ *  管理房返回空 patch 拒绝再写,空列表写单元素。幂等:重复收养同一房间
+ *  返回空 patch。返回 patch 形状,供 store.update 直接消费,也可展开后与
+ *  其它字段合并为一次原子 update。 */
 export function adoptManagementRoom(cfg: MsgBridgeConfig, chatId: string): Partial<MsgBridgeConfig> {
   return adoptManagementRoomPatch(cfg.managementRooms, chatId);
 }

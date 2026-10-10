@@ -35,7 +35,7 @@ describe("space ensure", () => {
     const config = await import("../src/config");
     const space = await import("../src/space-topology");
     // The dynamically imported graph holds its own logger instance — return
-    // it so warn-spies observe the same object space.ts writes through.
+    // it so warn-spies observe the same object the space modules write through.
     const loggerModule = await import("../src/logger");
     // resetModules 重建了 i18n 模块图 —— 全局 setup 的 zh 锚要重新落上。
     const i18n = await import("../src/i18n/index");

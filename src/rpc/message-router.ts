@@ -680,7 +680,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             store.update({ hideToolCalls: effect.value });
           } else if (effect.kind === "spaceInvite" && roomOps) {
             // Trust just granted (challenge passed): invite into the
-            // organizational space — fire-once, best-effort (see space.ts).
+            // organizational space — fire-once, best-effort (see space-topology.ts).
             await inviteUserToSpaceOnce(
               roomOps,
               store,
