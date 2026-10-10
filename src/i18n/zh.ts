@@ -68,6 +68,7 @@ const zh = {
   "cmd.stop.cleared": "🛑 已停止,并清掉 {count} 条排队消息:\n{lines}",
   "cmd.interrupt.cleared": "🧹 已清掉 {count} 条排队消息(不再执行):\n{lines}",
   "cmd.queue.clearUnsupported": "⚠️ 上游 pi 版本过旧(<0.84.4),不支持清队,队列保留:",
+  "queue.lost.notice": "⚠️ 子进程重启,队列中 {count} 条消息未执行:\n{lines}",
   "cmd.queue.enqueued": "📥 已排队:不打断当前任务,将在空闲后自动执行。",
   "cmd.interrupt.usage": "用法: /interrupt <新指令> — 打断当前任务并立即下发新指令。",
   "cmd.interrupt.idle": "▶️ 当前没有运行中的任务,已直接下发新指令。",

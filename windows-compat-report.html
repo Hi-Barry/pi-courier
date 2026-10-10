@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi-courier 跨平台（Windows）适配评估报告 · 2026-10-10</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --ink: #1c2330;
+    --ink-2: #4a5568;
+    --ink-3: #7a869a;
+    --line: #e3e7ee;
+    --brand: #2456d6;
+    --brand-soft: #eaf0ff;
+    --ok: #12855f;
+    --ok-soft: #e5f6ef;
+    --warn: #b96a00;
+    --warn-soft: #fdf3e2;
+    --bad: #c0392b;
+    --bad-soft: #fdecea;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    font-size: 15.5px;
+    line-height: 1.75;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 20px 80px; }
+
+  header.hero {
+    background: linear-gradient(135deg, #14224a 0%, #2456d6 78%, #3d74f0 100%);
+    color: #fff;
+    padding: 52px 20px 44px;
+    margin-bottom: 34px;
+  }
+  .hero-inner { max-width: 980px; margin: 0 auto; }
+  .hero h1 { margin: 0 0 10px; font-size: 27px; letter-spacing: .5px; }
+  .hero .sub { color: #c8d6f8; font-size: 14.5px; }
+  .hero .sub code { background: rgba(255,255,255,.14); padding: 1px 7px; border-radius: 5px; font-family: var(--mono); font-size: 13px; }
+  .verdict {
+    margin-top: 24px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+  }
+  .verdict .cell {
+    background: rgba(255,255,255,.10);
+    border: 1px solid rgba(255,255,255,.22);
+    border-radius: 12px;
+    padding: 14px 18px;
+  }
+  .verdict .k { font-size: 12.5px; color: #b9c9f2; letter-spacing: 1px; }
+  .verdict .v { font-size: 17px; font-weight: 650; margin-top: 2px; }
+
+  h2 {
+    font-size: 20px;
+    margin: 46px 0 6px;
+    padding-left: 12px;
+    border-left: 4px solid var(--brand);
+    line-height: 1.4;
+  }
+  h2 + .lead { color: var(--ink-2); margin: 0 0 18px; font-size: 14.5px; }
+  h3 { font-size: 16.5px; margin: 28px 0 10px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 22px 26px;
+    margin: 16px 0;
+  }
+
+  /* 结论速览 */
+  .conclusion { border-left: 5px solid var(--brand); }
+  .conclusion p { margin: 8px 0; }
+  .conclusion .big { font-size: 16.5px; font-weight: 650; }
+
+  /* 路线卡片 */
+  .routes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .route { position: relative; display: flex; flex-direction: column; }
+  .route .tag {
+    position: absolute; top: -11px; right: 16px;
+    font-size: 12px; font-weight: 700; letter-spacing: 1px;
+    padding: 2px 12px; border-radius: 999px; color: #fff;
+  }
+  .route .tag.rec { background: var(--ok); }
+  .route .tag.alt { background: var(--brand); }
+  .route .tag.adv { background: var(--warn); }
+  .route h3 { margin-top: 2px; }
+  .route .score { font-size: 13px; color: var(--ink-3); margin-bottom: 8px; }
+  .score b { color: var(--ink); font-size: 15px; }
+  .route ul { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 14px; }
+  .route li { margin: 4px 0; }
+  .route .step { margin-top: 12px; background: var(--bg); border-radius: 9px; padding: 10px 14px; font-family: var(--mono); font-size: 12.3px; white-space: pre-wrap; word-break: break-all; color: var(--ink-2); }
+
+  /* 表格 */
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; background: var(--card); font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 9px 12px; text-align: left; vertical-align: top; }
+  th { background: #eef1f7; font-weight: 650; white-space: nowrap; }
+  tr:nth-child(even) td { background: #fbfcfe; }
+
+  /* 严重度徽章 */
+  .sev { display: inline-block; font-size: 12px; font-weight: 700; padding: 1px 10px; border-radius: 999px; white-space: nowrap; }
+  .sev.blocker { background: var(--bad-soft); color: var(--bad); }
+  .sev.degrade { background: var(--warn-soft); color: var(--warn); }
+  .sev.minor { background: #edf0f5; color: var(--ink-2); }
+  .sev.pass { background: var(--ok-soft); color: var(--ok); }
+
+  code { font-family: var(--mono); font-size: .88em; background: #eef1f6; padding: 1px 6px; border-radius: 5px; word-break: break-all; }
+  .card code, td code { background: #eef1f6; }
+  .ref { font-family: var(--mono); font-size: 12.3px; color: var(--ink-3); }
+
+  /* 发现条目 */
+  .finding { border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; margin: 12px 0; background: var(--card); }
+  .finding .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .finding .head b { font-size: 15.5px; }
+  .finding p { margin: 8px 0 4px; color: var(--ink-2); font-size: 14.3px; }
+  .finding .fix { margin: 8px 0 0; font-size: 14px; }
+  .finding .fix b { color: var(--ok); }
+
+  .goodlist { padding-left: 0; list-style: none; margin: 0; }
+  .goodlist li { padding: 9px 0 9px 34px; position: relative; border-bottom: 1px dashed var(--line); color: var(--ink-2); font-size: 14.3px; }
+  .goodlist li:last-child { border-bottom: none; }
+  .goodlist li::before { content: "✓"; position: absolute; left: 8px; top: 8px; color: var(--ok); font-weight: 800; }
+  .goodlist b { color: var(--ink); }
+
+  .note {
+    background: var(--brand-soft);
+    border: 1px solid #c9d8fb;
+    border-radius: 12px;
+    padding: 14px 18px;
+    font-size: 14.3px;
+    color: #23366b;
+    margin: 14px 0;
+  }
+  .note b { color: var(--brand); }
+
+  footer { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 12.8px; }
+  @media print {
+    body { background: #fff; }
+    header.hero { padding: 30px 20px; }
+    .card, .finding, table { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-inner">
+    <h1>pi-courier 跨平台（Windows）适配评估报告</h1>
+    <div class="sub">评估基准：<code>v0.4.0</code>（master @ 66c6b6e）· 评估日期：2026-10-10 · 结论性质：静态代码走读 + 上游依赖核查，<b>未做 Windows 真机验证</b> · 本报告不改任何代码</div>
+    <div class="verdict">
+      <div class="cell"><div class="k">核心桥（standalone）</div><div class="v">基本跨平台 ✅</div></div>
+      <div class="cell"><div class="k">服务管理 / 自动更新</div><div class="v">仅 Linux ❌</div></div>
+      <div class="cell"><div class="k">最省心路线</div><div class="v">WSL2（同构复用）</div></div>
+      <div class="cell"><div class="k">原生适配改造量</div><div class="v">小（约 100 行内）</div></div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<!-- ============================================================ -->
+<h2>一、结论速览</h2>
+<div class="card conclusion">
+  <p class="big">一句话结论：<span style="color:var(--brand)">在 Windows 上「跑起来」大概率没问题，「管起来」（服务化、自动更新）目前是 Linux 专属</span>。</p>
+  <p>① 桥本体（<code>src/standalone.ts</code> 及其依赖链）几乎全部使用跨平台 Node API：<code>os.homedir()</code> + <code>path.join</code> 构路径、无硬编码 POSIX 绝对路径、无 Unix shell 依赖、附件文件名清洗天然避开 Windows 保留名。E2EE 原生库的安装脚本甚至已经预埋了 win32 分支。</p>
+  <p>② 卡点集中在<b>外围工具链</b>：<code>npm run build</code> 里的 <code>rm -rf</code>、<code>pi-courier enable/update</code> 硬绑 systemd 与 <code>spawnSync("npm")</code>、找 pi 用的 <code>which</code> 命令——这些在 Windows 上要么直接失败，要么退化为「巧合可用」。</p>
+  <p>③ 你的使用形态（桥跑在哪都行、Matrix 客户端本来就不挑设备）下，<b>WSL2 路线可以零成本复用现有 Linux 部署经验</b>；如果坚持原生，需要的代码改动很小，但属于「没人验证过的第一批用户」。</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>三条落地路线对比</h2>
+<p class="lead">按推荐顺序排列。评分含义：10 = 与现有 Linux 部署完全同体验；3 = 能跑但体验残缺。</p>
+
+<div class="routes">
+  <div class="card route">
+    <span class="tag rec">推荐</span>
+    <h3>路线 A：WSL2</h3>
+    <div class="score">综合评分 <b>9 / 10</b> · 改造量 <b>0</b></div>
+    <ul>
+      <li>桥 + pi 全部跑在 WSL2 的 Linux 里，与现有部署<b>100% 同构</b>：systemd user 服务（WSL2 已支持 systemd）、<code>pi-courier enable/update</code>、journalctl 全部照旧可用。</li>
+      <li>踩坑经验、文档、部署脚本直接复用，无新风险面。</li>
+      <li>代价：多一层轻量虚拟机；开机自启需要在 Windows 启动项里拉一条 <code>wsl</code> 命令（任务计划程序即可）。</li>
+    </ul>
+    <div class="step">wsl --install -d Ubuntu
+# 进入 WSL 后与 Linux 完全一致：
+npm install -g pi-courier && pi-courier setup && pi-courier enable
+# Windows 侧自启：任务计划程序 → 登录时执行
+#   wsl -d Ubuntu -u barry --exec systemctl --user start pi-courier</div>
+  </div>
+
+  <div class="card route">
+    <span class="tag alt">次选</span>
+    <h3>路线 B：Docker Desktop</h3>
+    <div class="score">综合评分 <b>8.5 / 10</b> · 改造量 <b>0</b></div>
+    <ul>
+      <li>仓库自带 <code>deploy/docker/</code>（Dockerfile + docker-compose + entrypoint），容器内是 <code>node:24-slim</code> Linux，所有 Windows 兼容性问题整体消失。</li>
+      <li>适合「Windows 机器只是个宿主」的用法；数据（配置、会话、附件）走挂载卷。</li>
+      <li>代价：依赖 Docker Desktop（商业使用注意授权）；改配置要进容器或改挂载文件。</li>
+    </ul>
+    <div class="step"># Windows 上装好 Docker Desktop 后：
+cd deploy/docker
+docker compose up -d</div>
+  </div>
+
+  <div class="card route">
+    <span class="tag adv">激进</span>
+    <h3>路线 C：Windows 原生（Node 直跑）</h3>
+    <div class="score">综合评分 <b>5.5 / 10</b> · 改造量 <b>小（详见第四节）</b></div>
+    <ul>
+      <li>核心链路（Matrix 收发、pi RPC、附件、提醒、多工程路由）<b>大概率能跑通</b>，本报告第三节逐条给出证据。</li>
+      <li>但要接受：<code>enable/start/stop/update</code> 等服务管理命令全部不可用；自启要自己用任务计划程序或 NSSM 拉 <code>pi-courier run</code>；可能撞上权限误报警告与 pi 的 Windows 安装毛刺。</li>
+      <li>适合：喜欢原生、愿意当第一批验证用户的场景。下方命令是「能跑的最低配置」。</li>
+    </ul>
+    <div class="step"># 需要 Node ≥ 22.19（pi 1.0 硬约束，桥有引擎门禁会给人话报错）
+npm install -g pi-courier          # peer 依赖会自动带上 pi
+pi-courier setup                   # 配置向导（readline，跨平台 ✓）
+pi-courier run                     # 前台运行
+# 自启：任务计划程序 / NSSM 包一份 "node ... pi-courier run"</div>
+  </div>
+</div>
+
+<div class="note"><b>建议：</b>如果 Windows 那台机器只是想「随时随地都能用上 pi」，选 A（WSL2）——它不是妥协，而是把现有整套部署原样搬过去；只有当你明确需要桥进程与 Windows 工程目录直接交互（比如要操作 <code>C:\</code> 下的项目文件、调用 Windows 工具链）时，原生（C）才有不可替代的价值，届时可以先做第四节那份小改造清单再上。</div>
+
+<!-- ============================================================ -->
+<h2>二、能力矩阵：每个功能在 Windows 上会怎样</h2>
+<p class="lead">「原生可用性」指路线 C（Windows 原生 Node 直跑）下的预期表现。</p>
+<table>
+  <tr><th>功能面</th><th>原生可用性</th><th>说明与证据</th></tr>
+  <tr>
+    <td>配置向导 <code>pi-courier setup</code></td>
+    <td><span class="sev pass">可用</span></td>
+    <td>readline 交互，跨平台。配置写 <code>os.homedir()\.pi\pi-courier.json</code>（<span class="ref">src/config.ts:8</span>）。0600 权限位在 NTFS 上被静默忽略——但 Windows 用户目录本身有 ACL 保护，token 不因此暴露给其他本地用户。</td>
+  </tr>
+  <tr>
+    <td>前台运行 <code>pi-courier run</code> / Matrix 收发</td>
+    <td><span class="sev pass">可用</span></td>
+    <td>主链路纯 Node API：矩阵 SDK（matrix-bot-sdk）是纯 JS；无 Unix socket、无 shell 调用。Ctrl+C 优雅退出可用（SIGINT）。</td>
+  </tr>
+  <tr>
+    <td>pi 子进程拉起（RPC）</td>
+    <td><span class="sev degrade">大概率可用，有一处硬伤</span></td>
+    <td>上游 <code>RpcClient</code> 用 <code>spawn("node", [cliPath])</code> 直接跑 js 文件（<span class="ref">pi-coding-agent/dist/modes/rpc/rpc-client.js:42</span>），绕开了 <code>.cmd</code> 垫片这个大坑。但桥这边找 pi 用的是 <code>execFileSync("which", ["pi"])</code>（<span class="ref">src/rpc/pi-rpc.ts:240</span>）——Windows 没有 <code>which</code>，会抛 ENOENT，然后落到 <code>import.meta.resolve</code> 兜底（peer 依赖通常已随 <code>npm i -g</code> 装在同一棵 node_modules 里）→ 属于「巧合可用」；全局另装的 pi 必须手工设 <code>PI_CLI_PATH</code> 指向 <code>…\@earendil-works\pi-coding-agent\dist\cli.js</code>（指 .cmd 垫片无效）。</td>
+  </tr>
+  <tr>
+    <td>E2EE 加密房间</td>
+    <td><span class="sev pass">可用</span></td>
+    <td><code>scripts/ensure-crypto-native.mjs:73</code> 已预埋 <code>matrix-sdk-crypto.win32-x64-msvc</code> 命名；sha256 校验/本地缓存逻辑平台无关。你生产实例本来关着 E2EE，更无碍。</td>
+  </tr>
+  <tr>
+    <td>附件收发落盘</td>
+    <td><span class="sev pass">可用</span></td>
+    <td>文件名清洗剥离控制字符/路径分隔符/<code>..</code>，且强制 12 位哈希前缀（<span class="ref">src/transports/attachments.ts:37</span>），天然不可能命中 CON/PRN/NUL 等 Windows 保留设备名。目录用 <code>path.join</code>。</td>
+  </tr>
+  <tr>
+    <td>多工程 /pmctl（建/迁/删项目房间）</td>
+    <td><span class="sev pass">可用</span></td>
+    <td>路径解析 <code>~/</code> 展开基于 <code>os.homedir()</code>（<span class="ref">src/rpc/pmctl-controller.ts:146</span>），默认工程根 <code>~\Projects</code> 约定成立；文件操作只有 mkdir/unlink，无 shell。</td>
+  </tr>
+  <tr>
+    <td><code>!</code> / <code>!!</code> / <code>/bash</code>（远程跑 shell 命令）</td>
+    <td><span class="sev degrade">取决于 pi 的 shell 配置</span></td>
+    <td>命令由 pi 子进程执行（<code>rpc.bash</code>，<span class="ref">src/rpc/message-router.ts:755</span>），不是桥自己跑。pi 自带 bash 工具 + 原生 PowerShell 工具，Windows 上 bash 工具需要 Git Bash 一类的 shell 在 PATH（pi 的 shell 路径可配置）。</td>
+  </tr>
+  <tr>
+    <td>systemd 服务族 <code>enable/start/stop/restart/status/logs</code></td>
+    <td><span class="sev blocker">不可用</span></td>
+    <td>硬编码 systemd user unit + systemctl/journalctl（<span class="ref">src/cli.ts:96-126, 173-178</span>）。Windows 替代品：任务计划程序、NSSM、WinSW，包 <code>pi-courier run</code> 即可。</td>
+  </tr>
+  <tr>
+    <td><code>pi-courier update</code>（自更新）</td>
+    <td><span class="sev blocker">不可用</span></td>
+    <td><code>spawnSync("npm", …)</code> 无 <code>shell:true</code>——Windows 上 npm 是 npm.cmd，Node ≥ 20.12 起 spawn .cmd 不带 shell 直接抛 EINVAL（<span class="ref">src/cli.ts:314</span>）；且整个流程首尾都串着 systemctl。Windows 上手动 <code>npm i -g pi-courier@latest</code> 即可替代。</td>
+  </tr>
+  <tr>
+    <td>构建 <code>npm run build</code>（仅源码部署需要）</td>
+    <td><span class="sev degrade">需绕行</span></td>
+    <td><code>rm -rf dist</code>（<span class="ref">package.json:20,24</span>）在 cmd 下不存在。绕行：用 npm 发布包（免构建）；或 <code>npm config set script-shell "C:\Program Files\Git\bin\bash.exe"</code>；或手动 <code>rmdir /s /q dist &amp;&amp; npx tsc</code>。</td>
+  </tr>
+  <tr>
+    <td>优雅关停（服务停止/进程被杀）</td>
+    <td><span class="sev degrade">降级</span></td>
+    <td>监听 SIGTERM/SIGINT（<span class="ref">src/standalone.ts:377</span>）；Windows 上 taskkill/服务停止走 TerminateProcess，SIGTERM handler 不会触发 → <code>rpc.stop()</code>、断开 Matrix、清锁文件可能跳过。兜底：PID 锁有陈锁探测（<code>process.kill(pid,0)</code>，Windows 语义可用，<span class="ref">src/lock.ts:36-40</span>），重启可自愈。</td>
+  </tr>
+  <tr>
+    <td>配置文件权限自检</td>
+    <td><span class="sev minor">可能误报</span></td>
+    <td>用 <code>stats.mode &amp; 0o777</code> 判断 0600（<span class="ref">src/config.ts:20-22</span>）；NTFS 上 mode 值无 POSIX 含义，可能每次启动打一条 "insecure permissions" 警告——吓人但不影响功能。</td>
+  </tr>
+  <tr>
+    <td>排障提示文案</td>
+    <td><span class="sev minor">文案失配</span></td>
+    <td>如 E2EE 故障解法直接写 <code>rm -rf ~/.pi/…</code>（<span class="ref">src/standalone.ts:320</span>），Windows 用户照抄会失败（应类比 <code>Remove-Item -Recurse</code>）。纯文案问题。</td>
+  </tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>三、上下游证据（为什么敢说「核心能跑」）</h2>
+<div class="card">
+  <h3 style="margin-top:0">本仓库侧：跨平台卫生做得好的地方</h3>
+  <ul class="goodlist">
+    <li><b>路径全部走 <code>path.join</code> + <code>os.homedir()</code></b>：配置、PID 锁、Matrix 存储、状态目录、附件目录无一硬编码 POSIX 绝对路径；src/ 下 grep 不到 <code>path.posix</code>，也没有 <code>/usr /var /etc</code> 字面量（仅 i18n 文案与测试里有）。</li>
+    <li><b>零 Unix shell 依赖</b>：src/ 运行时代码没有任何 <code>sh -c</code>/<code>bash -c</code>/<code>xdg-open</code>/<code>/tmp</code> 直用；仅有的 <code>spawnSync</code> 都在 CLI 的 systemd/npm 管理命令里。</li>
+    <li><b>E2EE 安装脚本预埋 win32</b>：<code>ensure-crypto-native.mjs</code> 的平台命名函数三分支（win32/darwin/linux×gnu/musl）齐全，下载、校验、缓存全部平台无关。</li>
+    <li><b>引擎门禁是人话报错</b>：pi 1.0 要求 Node ≥ 22.19，桥在动态 import 之前用 <code>assertPiEngineSupported</code> 拦截（<span class="ref">src/rpc/pi-rpc.ts:307</span>），Node 版本不对时不会让你看一堆 SyntaxError。</li>
+    <li><b>状态落盘/提醒/引用缓存</b>全部是普通文件读写（先落盘再跑、原子写），平台无关。</li>
+  </ul>
+
+  <h3>上游侧：pi 本体对 Windows 的态度</h3>
+  <table>
+    <tr><th>事实</th><th>出处</th></tr>
+    <tr><td>官方宣称支持 macOS / Linux / Windows 三平台，文档含专门的 Windows Setup 指南</td><td>pi.dev Quickstart（联网核查，2026-10-10）</td></tr>
+    <tr><td>带原生 PowerShell 工具（<code>createPowerShellTool</code> / <code>createLocalPowerShellOperations</code>），代码内多处 <code>process.platform === "win32"</code> 分支（config 路径、print-mode 信号注册跳过 SIGHUP 等）</td><td><span class="ref">pi-coding-agent dist（本机 node_modules 实查）</span></td></tr>
+    <tr><td>RpcClient 以 <code>spawn("node", [cliPath])</code> 拉起子进程——跑的是 .js 文件本体，规避 Windows <code>.cmd</code> 垫片 spawn 限制</td><td><span class="ref">dist/modes/rpc/rpc-client.js:42</span></td></tr>
+    <tr><td>停止子进程用 <code>kill("SIGTERM")</code> + 1 秒后 SIGKILL——Windows 上映射为无条件终止，不影响 RPC 正常性</td><td><span class="ref">同上 stop() 实现</span></td></tr>
+    <tr><td>风险点：社区有「Windows 11 全局装 pi 后找不到 node_modules」的安装 issue（2026-05，Node 26.1 仍复现）——原生装 pi 可能碰毛刺</td><td>GitHub issue（联网核查）</td></tr>
+  </table>
+</div>
+
+<!-- ============================================================ -->
+<h2>四、若决定做 Windows 原生支持：改造清单（仅供决策，本次未动代码）</h2>
+<p class="lead">按性价比排序，前五项合计约 60–100 行，够一个 0.4.x/0.5.0 小版本。</p>
+<table>
+  <tr><th>#</th><th>改动</th><th>位置</th><th>量级</th><th>风险</th></tr>
+  <tr><td>1</td><td><code>rm -rf dist</code> 换跨平台删除（<code>node -e "fs.rmSync(...)"</code> 或 rimraf）</td><td><span class="ref">package.json scripts</span></td><td>1–2 行</td><td>无</td></tr>
+  <tr><td>2</td><td>pi 定位：先走 <code>import.meta.resolve</code> 兜底（Windows 优先），<code>which</code> 分支仅在 POSIX 用（或换 <code>where</code>）</td><td><span class="ref">src/rpc/pi-rpc.ts:236-269</span></td><td>~10 行</td><td>低（有测试 <span class="ref">tests/pi-rpc-cliresolve.test.ts</span> 可扩）</td></tr>
+  <tr><td>3</td><td>权限自检按 win32 跳过</td><td><span class="ref">src/config.ts:20-22</span></td><td>3 行</td><td>无</td></tr>
+  <tr><td>4</td><td><code>spawnSync("npm"/"git")</code> 在 win32 加 <code>shell:true</code>（参数全是常量，无注入面）或文档声明 update 不支持 Windows</td><td><span class="ref">src/cli.ts:314,330</span></td><td>~6 行</td><td>低</td></tr>
+  <tr><td>5</td><td>排障文案按平台给删除命令（i18n 两份各加一条）</td><td><span class="ref">src/standalone.ts:320 等</span></td><td>几行</td><td>无</td></tr>
+  <tr><td>6</td><td>服务管理：Windows 上 <code>enable</code> 给出明确「不支持 + 任务计划/NSSM 指引」而非裸报错；或实现任务计划 XML 安装器</td><td><span class="ref">src/cli.ts 服务族</span></td><td>中（指引 30 行 / 完整实现另立项）</td><td>低/中</td></tr>
+  <tr><td>7</td><td>README 双语加 Windows 章节（三路线 + 已知限制）</td><td><span class="ref">README.md / README.zh-CN.md</span></td><td>文档</td><td>无</td></tr>
+  <tr><td>8</td><td>CI 补 windows-latest 跑测试（vitest/tmpdir 用法基本跨平台，仅一处字面 <code>/tmp</code> 断言需调）</td><td><span class="ref">tests/pmctl-controller.test.ts:34 等</span></td><td>CI 配置</td><td>低</td></tr>
+</table>
+
+<div class="note"><b>改造之外最大的不确定项不是代码，是上游 pi 在 Windows 的安装体验</b>（上面表格里的社区 issue）。如果动手，建议顺序：先在 Windows 真机手动把「pi 能对话」跑通，再装 pi-courier——pi 不通，桥改造得再好也没意义。</div>
+
+<footer>
+  评估人：ZCode（静态走读）· 评估范围：src/ 全量 + scripts/ + package.json + deploy/ + 上游 @earendil-works/pi-coding-agent（node_modules 实查 v1.0）· 局限：未做 Windows 真机运行验证，「大概率可用」均基于 API 语义与上游代码证据推断 ·
+  外部来源：<a href="https://pi.dev">pi.dev Quickstart</a> · GitHub（pi Windows 安装 issue，2026-05）
+</footer>
+
+</div>
+</body>
+</html>

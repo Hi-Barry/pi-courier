@@ -39,6 +39,10 @@ export interface SlashCommandContext {
   /** Live queue snapshot maintained by the router (queue_update mirror).
    *  Absent/undefined entries mean "no queue seen yet" = empty. */
   queueView?: () => QueueSnapshot | undefined;
+  /** 清队成功后把镜像钉成权威空(issue #115 阶段1):/stop //interrupt 自己
+   *  清掉的队列若只等上游 queue_update 推送归零,推送与重启生命周期之间的
+   *  竞态会让「自己清的」误触发队列丢失回执。Absence = 不钉(测试场景)。 */
+  setQueueMirror?: (snapshot: QueueSnapshot) => void;
   /** Every rpc of this instance (default + started project rpcs) — enables
    *  `/reload all` (issue #55). Absent = /reload stays single-process. */
   allRpcs?: () => PiRpc[];
@@ -401,7 +405,7 @@ export async function handleSlashCommand(
   text: string,
   ctx: SlashCommandContext
 ): Promise<boolean> {
-  const { rpc, reply, queueView } = ctx;
+  const { rpc, reply, queueView, setQueueMirror } = ctx;
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return false;
 
@@ -456,6 +460,9 @@ export async function handleSlashCommand(
           }
         }
         await rpc.requireClient().abort();
+        // 清队成功 = 上游权威为空:镜像立即钉零,不等 queue_update 推送 ——
+        // 推送与重启生命周期赛跑时会误触发「队列丢失」回执(issue #115)。
+        if (cleared) setQueueMirror?.({ steering: [], followUp: [] });
         const view = cleared ? clearedQueuesView(cleared) : null;
         if (view) {
           await reply(t("cmd.stop.cleared", view));
@@ -565,6 +572,8 @@ export async function handleSlashCommand(
         await rpc.requireClient().abort();
         await rpc.requireClient().waitForIdle();
         await rpc.prompt(args);
+        // 与 /stop 同款钉零(issue #115):清队成功后不等 queue_update 推送。
+        if (cleared) setQueueMirror?.({ steering: [], followUp: [] });
         const view = cleared ? clearedQueuesView(cleared) : null;
         if (view) {
           await reply(`${t("cmd.interrupt.done")}\n${t("cmd.interrupt.cleared", view)}`);

@@ -28,6 +28,7 @@ import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
 import {
   type BashTracker,
+  clearedQueuesView,
   createBashTracker,
   formatBashReply,
   handleSlashCommand,
@@ -236,7 +237,22 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
   // 瞬态状态(spec #72 票6/C5):队列镜像 + 悬置提问,失效时机自治 ——
   // 状态模块订阅 PiRpc 的重启生命周期,不再有外借的 clearRpcState 扳机。
-  const transient = new RpcTransientState((rpc, handler) => rpc.onRestarted?.(handler));
+  // 非自愿队列丢失回执(issue #115 阶段1):作废时镜像非空 → 向该进程绑定
+  // 的房间发「N 条未执行」清单(渲染与 #112 的被清列表同款);绑定不存在
+  // (绑定前就重启的极端时序)只打日志,不抛。
+  const transient = new RpcTransientState(
+    (rpc, handler) => rpc.onRestarted?.(handler),
+    (rpc, snapshot) => {
+      const view = clearedQueuesView(snapshot);
+      if (!view) return;
+      const target = bindings.get(rpc)?.replyTarget;
+      if (!target) {
+        logger.warn(`queue lost on restart: ${view.count} message(s) had no bound room — notice dropped`);
+        return;
+      }
+      void sendReply(target.chatId, target.transport, t("queue.lost.notice", view));
+    }
+  );
 
   // 待处理附件清单(issue #66 票1):按 房间+发送者 记账。消耗规则:该发送
   // 者在同一条管道里真正发给 pi 的下一条对话消息(prompt 唯一注入点)一次性
@@ -699,6 +715,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             rpc,
             reply: async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText),
             queueView: () => transient.mirror(rpc),
+            setQueueMirror: (snapshot) => transient.setMirror(rpc, snapshot),
             allRpcs: () => projectManager.allRpcs(),
             bashTracker,
             // /remind(issue #117):命令层不接触 chatId/userId —— 这里按本消息
