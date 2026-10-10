@@ -204,6 +204,12 @@ Since 0.1.39 sending mirrors pi's TUI. A plain text message is always sent with 
 
 **What happens to the queue, stated up front**: since 0.3.8 `/stop` and `/interrupt` mirror the TUI's Esc — the queue is cleared **before** the abort, and the reply lists exactly which queued messages were dropped, so nothing disappears unseen. On a pi older than 0.84.4 (no `clear_queue` RPC) the old behaviour applies: the queue survives and fires on the **next** turn; the reply says so explicitly (`⚠️ N queued message(s) will take effect on the next turn:`). Since 0.5.0 even **involuntary** loss is visible: if the queue is non-empty when the subprocess restarts (/reload or a crash respawn), the bot proactively posts `⚠️ Subprocess restarted — N queued message(s) never ran` with the full list — a queue you cleared yourself via `/stop` never triggers the warning. Service-level restarts (systemd/machine) are covered too, for **project rooms in multi-project mode**: the snapshot lives in `~/.pi/pi-courier-state/queue-snapshots.json`, and the next start posts `⚠️ Service restarted — N queued message(s) never ran` per project room before wiping it (a queue already reported by `/reload` is never reported twice; the single-project default process is out of scope — its room binding is a runtime DM).
 
+### Session handoff cards: /recap
+
+`/recap` asks the current session to summarize itself — goal, what got done, what's left, in ≤5 bullets — and posts a `📋 Handoff card` right in the room, so `/new` stops being an act of amnesia. `/recap` refuses honestly when there's nothing to summarize (fewer than two completed turns) or when a task is still running (it never races a live task with steering semantics). In multi-project mode the card is also copied to the management room as `📋 <project> handoff card (project log)` — a running "what has this project been doing" timeline.
+
+Want cards automatically before `/new` (and `/clear`) wipes a session? Set `recap.onNew: true` by hand (not in the setup wizard), then `pi-courier restart`. It's **off by default** because every card is a real model call (a few hundred tokens); generation failure never blocks `/new` — the card is a bonus, never a dependency.
+
 ### Extension questions land in the room
 
 When an extension asks you something (confirm / select / input / editor dialogs over RPC), the bot posts the question as a chat message — your next plain reply IS the answer:
@@ -258,14 +264,14 @@ Gate: admin + management room only (single-project mode: your DM with the bot). 
 
 ### Replying to an earlier message
 
-Reply (Matrix reply) to an earlier **user** message — e.g. one of your own long prompts — and send the new instruction: a one-line excerpt (≈200 chars) of the referenced text is prepended to the prompt, so references like "这个" ("this one") or "the one above" resolve for the agent. The excerpt cache is per-room, in-memory, 50 most recent messages; the bot's own replies are not cached, and quotes that miss (too old, or from before a restart) are silently ignored — the message just goes out without the prefix.
+Reply (Matrix reply) to an earlier **user** message — e.g. one of your own long prompts — and send the new instruction: a one-line excerpt (≈200 chars) of the referenced text is prepended to the prompt, framed as `「Quoted from @user's earlier message: …」` so the agent can tell third-party content from live instructions. The excerpt cache is per-room, in-memory, 50 most recent messages; the bot's own replies are not cached, and quotes that miss (too old, or from before a restart) are silently ignored — the message just goes out without the prefix.
 
 ### Sending images and files to the agent
 
 Just **paste or send files** in Element — the bot saves them first, the agent reads them after:
 
 1. Paste an image (or send a file) → the bot replies `📎 Attachment saved: <absolute path>` and does **not** wake the agent;
-2. Send a text instruction next → the path is prepended to the prompt automatically, and the agent reads it with its `read` tool (same workflow as pi TUI's `@path`), combining the attachment with your instruction.
+2. Send a text instruction next → the path is prepended to the prompt automatically, and the agent reads it with its `read` tool (same workflow as pi TUI's `@path`), combining the attachment with your instruction. The injected header names the source (`Attachment(s) from @user in room <room>`) so the agent always knows whose files those are.
 
 Supported: `m.image` / `m.file` / `m.audio` / `m.video` / stickers. Images are handed to the vision model by pi (its `read` pipeline downscales large images before the model call, per pi's own source); audio/video can't be ingested by models directly, but the agent can process them with bash/ffmpeg. Limits and details:
 
@@ -276,6 +282,19 @@ Supported: `m.image` / `m.file` / `m.audio` / `m.video` / stickers. Images are h
 - Unsupported types (e.g. location) get a polite notice; if the model itself lacks vision, pi will say so — that's the model, not the bridge
 
 **Group chats**: rooms with **more than 2 members** are silent by default — the bot posts a one-time hint when invited, then answers nothing until enabled. **Enable without the room ID**: send `/enable <all|mentions|trusted-only>` right in the group (trusted users only, defaults to `trusted-only`), or in a DM with `/enable <roomId> <mode>` (or add it during `setup`). Two-person rooms (you + the bot) answer automatically. Room IDs look like `!xxx:server`.
+
+### Guest access: chat without the keys
+
+Sharing the bot with teammates doesn't have to mean sharing admin power. List guests by hand in `auth.guestUsers` (MXIDs in the same `matrix:@user:server` form as `trustedUsers`; takes effect on restart), and they get a middle tier:
+
+- **Guests can** chat, send attachments, use read-only commands (`/help` `/status` `/cost` `/models` `/queue` …) in DMs and in groups enabled for everyone;
+- **Guests cannot** touch the dangerous surface — the bridge rejects it **before** anything runs, with a polite `🚫 This command requires trusted-user permission: <command>`: shell execution (`!` `!!` `/bash` `/bashstop`), project management (`/pmctl*`), auth (`/login` `/logout` `/auth`), lifecycle (`/reload` `/stop` `/interrupt` `/enable` `/disable` `/switch` `/multiproject`), the trust list (`/trusted` `/revoke` `/toggletools`), proactive sends (`/remind`) and session mirror (`/attach` `/detach`);
+- Every denial is logged to the audit trail (see below); the boundary is the bridge, not the model's manners — though note the honest limit: a guest's *conversation* can still drive the agent's own tools (pi has no per-session tool switch; that's upstream territory);
+- Room modes keep their semantics: a `trusted-only` group keeps guests outside entirely (mode first, tier second), and guests never trigger the pairing challenge — pre-listed, they just chat.
+
+### Audit trail: sensitive actions leave a trace
+
+Every sensitive action appends one JSONL line to `~/.pi/pi-courier-state/audit.jsonl` (0600, append-only): who, when, what, in which room — pairing successes and failures, `/trusted` //revoke`, bash execution (`!`, `!!`, `/bash`), `/pmctl rm`, `/login` family, `/reload`, queue clears and offline-backlog batch executions, plus every guest denial. The file rotates at 10 MB (two rotated siblings kept); if the file becomes unwritable the service keeps running but warns the management room — an audit outage is visible, never fatal. As a second hardening layer, attachments and reply-quotes enter the prompt with their source labeled (see the sections above), so third-party content arrives as data, not as instructions.
 
 ### Single-project vs multi-project mode
 
