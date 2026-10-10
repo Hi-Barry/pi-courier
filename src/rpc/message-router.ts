@@ -39,7 +39,7 @@ import { BacklogInbox } from "./backlog-inbox.js";import {
   resolveSessionDir,
 } from "./command-map.js";
 import { ExtensionQuestions, type ExtensionUIRequestView, extensionUiTimeoutMs } from "./extension-questions.js";
-import { nextFallbackTarget } from "./model-switch.js";
+import { FallbackStreak, MODEL_FALLBACK_THRESHOLD, nextFallbackTarget } from "./model-switch.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
@@ -303,20 +303,13 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   };
   const auditDetailOf = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 120);
 
-  // 模型降级链(issue #121):同一进程连续 N 轮彻底失败(stopReason=error,
-  // pi 的 auto-retry 已耗尽或未开)→ 沿链自动 setModel,房间回执 + 审计。
+  // 模型降级链(issue #121):连败记账与耗尽提示的「只提示一次」都在
+  // FallbackStreak(model-switch.ts);这里只编排链解析、切换与回执/审计。
   // 项目房用项目链,其余走全局链;链空 = 功能关,行为与旧版逐字节一致。
-  // 成功轮即清零;链走完只提示一次,绝不循环。计数仅在内存 —— 进程重启
-  // 归零可接受(重启本身常已排除瞬时故障)。
-  const MODEL_FALLBACK_THRESHOLD = 2;
-  const fallbackRuns = new WeakMap<PiRpc, { failures: number; exhaustedNotified: boolean }>();
+  const fallbackStreak = new FallbackStreak();
 
   const runFallback = async (rpc: PiRpc, origin: { chatId: string; transport: string }): Promise<void> => {
-    const run = fallbackRuns.get(rpc) ?? { failures: 0, exhaustedNotified: false };
-    run.failures += 1;
-    fallbackRuns.set(rpc, run);
-    if (run.failures < MODEL_FALLBACK_THRESHOLD) return;
-    run.failures = 0; // 重新武装:切换后的新模型要再连败 N 轮才推进下一跳
+    if (!fallbackStreak.recordFailure(rpc)) return;
     const chain = projectManager.projectFallbacks(origin.chatId) ?? modelFallbackChain(store.get());
     if (chain.length === 0) return;
     let current: { provider?: string; id?: string } | undefined;
@@ -328,8 +321,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     const from = current?.provider ? `${current.provider}/${current.id}` : "?";
     const next = nextFallbackTarget(chain, current);
     if (!next) {
-      if (!run.exhaustedNotified) {
-        run.exhaustedNotified = true;
+      if (fallbackStreak.markExhaustedNotified(rpc)) {
         await sendReply(
           origin.chatId,
           origin.transport,
@@ -1256,7 +1248,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         if ((event.message as AssistantMessage | undefined)?.stopReason === "error") {
           void runFallback(rpc, target);
         } else {
-          fallbackRuns.delete(rpc);
+          fallbackStreak.clear(rpc);
         }
         const turn = buildTurnReply(event.message as AssistantMessage, store.get().hideToolCalls);
 
