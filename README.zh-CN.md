@@ -251,6 +251,22 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 
 某一轮调用失败(用量耗尽、认证过期、provider 不可达……)会通知房间:`❌ 本轮失败: <原因>`。自动重试全程可见 —— 每次重试发 `⚠️ 调用失败,正在重试 n/N`,重试耗尽后发最终错误。用户主动 `/stop` 不会触发错误通知。
 
+### 模型降级链:连续失败自动切备用
+
+一家 provider 抽风不该把任务卡死在一个坏模型上。在 `pi-courier.json` 里配一条链(重启生效):
+
+```json
+"modelFallbacks": ["zai/glm-5.3", "deepseek/deepseek-v4-flash"]
+```
+
+当**同一个 pi 进程连续 2 轮彻底失败**(那时 pi 自己的 auto-retry 早已耗尽),桥会自动切到链上下一条,并在房间明说:`⚠️ 连续 2 轮失败,已自动切换模型: <旧> → <新>。provider 恢复后发 /model <旧> 可切回` —— 同时审计日志记一行 `model.fallback`。规则:
+
+- 任何一轮成功即清零计数;下一次连败沿链**向后**推进,绝不回头。
+- 链走完只发**一次** `❌ … 降级链已走完` 提示,之后照常报错 —— **不循环**,提示也不重复轰炸。
+- **不做自动切回**:provider 恢复后自己发 `/model <旧>` 切回(回执里写明了)。
+- 项目房可用 `projects[].fallbacks` 配自己的链,**项目链优先于全局链**(见下方"每项目预设")。
+- 不配置 = 行为与旧版逐字节一致。格式坏掉的条目启动时警告并跳过。
+
 ### 聊天里登录 provider:`/login`
 
 不用开终端也能(重新)登录 provider:
@@ -334,9 +350,15 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 - **手动配置**也可以:直接编辑 `pi-courier.json` 加 `projects` 映射(配置在启动时装载一次 —— 手动编辑后需重启服务生效):
   ```json
   "projects": {
-    "!房间ID:服务器": { "workdir": "/home/你/Projects/myapp" }
+    "!房间ID:服务器": {
+      "workdir": "/home/你/Projects/api",
+      "model": "deepseek/deepseek-v4-flash",
+      "thinkingLevel": "high",
+      "fallbacks": ["zai/glm-5.3"]
+    }
   }
   ```
+- **每项目预设**(0.7.0 起;`model` / `thinkingLevel` / `fallbacks`,全部可选):每个项目记住自己的默认模型与思考级别 —— A 项目用便宜快模型,B 项目用强推理模型,换项目干活零重设。进程在每次启动**和每次 `/reload`** 后应用一次(房间一行 `📋 项目预设已应用: …`)。预设是**开机默认,不是锁定**:之后手动 `/model`、`/thinking` 照常生效,直到下一次重启回到预设。应用失败绝不阻塞进程 —— 一行警告,然后手动设置兜底。思考级别取值:`off minimal low medium high xhigh max`;`model` 与 `/model` 参数同语法 `provider/id`(裸 id 按可用模型列表解析)。`fallbacks` 是该项目的降级链(见上方"模型降级链")—— 项目链优先于全局链。`/pmctl show` 会展示项目预设。
 - 每个项目房间的 pi 进程按需懒启动(约 300MB/项目),会话存于 `<workdir>/.pi-session`,重启后各项目会话独立恢复。
 
 ### TUI ↔ Matrix 会话镜像(双端同步)

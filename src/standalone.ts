@@ -16,7 +16,16 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { AUDIT_EVENTS, AuditLog } from "./audit/audit-log.js";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
-import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, inboxMode, managementRoomId, resolveLanguage } from "./config.js";
+import {
+  attachmentsDirectory,
+  attachmentsMaxBytes,
+  ConfigStore,
+  inboxMode,
+  managementRoomId,
+  presetProblems,
+  resolveLanguage,
+  THINKING_LEVELS,
+} from "./config.js";
 import { setLocale, t } from "./i18n/index.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
@@ -100,6 +109,23 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
 
   const args = parseArgs(argv);
+  // 项目预设与降级链的启动校验(issue #119/#121):只提示不拦截 —— 坏条目
+  // 在应用/切换时被跳过,绝不让一条手编错误挡住进程启动。
+  for (const problem of presetProblems(store.get())) {
+    if (problem.code === "modelRef") {
+      logger.warn(t("startup.preset.badModelRef", { path: problem.path, value: problem.value ?? "" }));
+    } else if (problem.code === "thinkingLevel") {
+      logger.warn(
+        t("startup.preset.badThinkingLevel", {
+          path: problem.path,
+          value: problem.value ?? "",
+          allowed: THINKING_LEVELS.join(", "),
+        })
+      );
+    } else {
+      logger.warn(t("startup.preset.badFallbacksList", { path: problem.path }));
+    }
+  }
   const workdir = await resolveWorkdir(args.workdir, store, undefined, (wd) =>
     logger.info(`工作目录: ${wd}(已保存到 ~/.pi/pi-courier.json,改配置后重启即生效)`)
   );
@@ -204,6 +230,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     },
     store,
     multiProject: store.get().multiProject === true,
+    // 项目预设回执(issue #119):应用/失败各一行,发进项目房。sendReply
+    // 声明在下方 —— 与 onRoomEvent → router 同款闭包次序,调用只发生在
+    // 进程启动之后,构造期从不触及。
+    notifyRoom: (roomId, text) => {
+      void sendReply(roomId, "matrix", text);
+    },
   });
 
   // ---- message routing ------------------------------------------------------

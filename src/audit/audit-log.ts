@@ -45,6 +45,7 @@ export const AUDIT_EVENTS = {
   queueClear: "queue.clear",
   backlogExecute: "backlog.execute",
   guestDenied: "guest.denied",
+  modelFallback: "model.fallback",
 } as const;
 
 export interface AuditLogOptions {

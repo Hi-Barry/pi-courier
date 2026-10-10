@@ -208,6 +208,17 @@ const en: Record<MessageKey, string> = {
   "router.rpc.startFailed": "❌ Could not start the pi process: {message}",
   "router.retry.inProgress": "⚠️ Call failed, retrying {attempt}/{max}: {error}",
   "router.retry.exhausted": "❌ Auto-retry exhausted: {error}",
+  "router.fallback.switched":
+    "⚠️ {count} consecutive failed turns — switched the model automatically: {from} → {to}. Send /model {from} to switch back once the provider recovers.",
+  "router.fallback.exhausted":
+    "❌ {count} consecutive failed turns — the fallback chain ({chain}) is exhausted, no more automatic switching. Pick a model manually via /model.",
+  "router.fallback.switchFailed":
+    "⚠️ {count} consecutive failed turns — the automatic switch to {to} failed: {message}. Use /model to switch manually.",
+  "router.preset.applied": "📋 Project presets applied: {items}",
+  "router.preset.failed": "⚠️ Failed to apply project presets: {message} (the process is ready — set /model and /thinking manually)",
+  "startup.preset.badModelRef": "⚠️ Config {path}: \"{value}\" is not a valid provider/id reference — the entry will be skipped",
+  "startup.preset.badThinkingLevel": "⚠️ Config {path}: \"{value}\" is not a valid thinking level (one of: {allowed})",
+  "startup.preset.badFallbacksList": "⚠️ Config {path}: expected an array of strings — the field is ignored",
   "router.extensionError": "⚠️ Extension error ({path}): {error}",
 
   // ── mirror (TUI ↔ Matrix session mirror, session-mirror.ts / router) ──
@@ -327,7 +338,8 @@ const en: Record<MessageKey, string> = {
   "pmctl.show.usage": "Usage: /pmctl show <project name|room ID>",
   "pmctl.notFound": "❌ Project not found: {target} (use /pmctl list)",
   "pmctl.show.ok":
-    "📁 Project: {name}\n• room: {room}\n• workdir: {workdir}\n• status: {status}\n• session: {session}",
+    "📁 Project: {name}\n• room: {room}\n• workdir: {workdir}\n• status: {status}\n• session: {session}\n• presets: {presets}",
+  "pmctl.show.noPresets": "none (follows the global defaults)",
   "pmctl.rm.usage": "Usage: /pmctl rm <project name|room ID>",
   "pmctl.rm.cancelled": "✅ Delete cancelled",
   "pmctl.rm.nothingPending": "No pending delete confirmation",

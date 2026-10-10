@@ -12,7 +12,7 @@ import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
-import { type ConfigStore, inboxMode, managementRoomId, recapOnNew } from "../config.js";
+import { type ConfigStore, inboxMode, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -36,10 +36,10 @@ import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.j
   handleSlashCommand,
   parseBangCommand,
   type QueueSnapshot,
-  queueTotal,
   resolveSessionDir,
 } from "./command-map.js";
 import { ExtensionQuestions, type ExtensionUIRequestView, extensionUiTimeoutMs } from "./extension-questions.js";
+import { nextFallbackTarget } from "./model-switch.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
@@ -302,6 +302,61 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     deps.audit?.append(event, namespacedId(msg.userId, msg.transport), msg.chatId, detail);
   };
   const auditDetailOf = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 120);
+
+  // 模型降级链(issue #121):同一进程连续 N 轮彻底失败(stopReason=error,
+  // pi 的 auto-retry 已耗尽或未开)→ 沿链自动 setModel,房间回执 + 审计。
+  // 项目房用项目链,其余走全局链;链空 = 功能关,行为与旧版逐字节一致。
+  // 成功轮即清零;链走完只提示一次,绝不循环。计数仅在内存 —— 进程重启
+  // 归零可接受(重启本身常已排除瞬时故障)。
+  const MODEL_FALLBACK_THRESHOLD = 2;
+  const fallbackRuns = new WeakMap<PiRpc, { failures: number; exhaustedNotified: boolean }>();
+
+  const runFallback = async (rpc: PiRpc, origin: { chatId: string; transport: string }): Promise<void> => {
+    const run = fallbackRuns.get(rpc) ?? { failures: 0, exhaustedNotified: false };
+    run.failures += 1;
+    fallbackRuns.set(rpc, run);
+    if (run.failures < MODEL_FALLBACK_THRESHOLD) return;
+    run.failures = 0; // 重新武装:切换后的新模型要再连败 N 轮才推进下一跳
+    const chain = projectManager.projectFallbacks(origin.chatId) ?? modelFallbackChain(store.get());
+    if (chain.length === 0) return;
+    let current: { provider?: string; id?: string } | undefined;
+    try {
+      current = (await rpc.requireClient().getState()).model;
+    } catch {
+      return; // 进程已不可用,无从切换 —— 失败回执走正常路径呈现
+    }
+    const from = current?.provider ? `${current.provider}/${current.id}` : "?";
+    const next = nextFallbackTarget(chain, current);
+    if (!next) {
+      if (!run.exhaustedNotified) {
+        run.exhaustedNotified = true;
+        await sendReply(
+          origin.chatId,
+          origin.transport,
+          t("router.fallback.exhausted", { count: MODEL_FALLBACK_THRESHOLD, chain: chain.join(" → ") })
+        );
+      }
+      return;
+    }
+    const to = `${next.provider}/${next.id}`;
+    try {
+      await rpc.requireClient().setModel(next.provider, next.id);
+    } catch (err) {
+      await sendReply(
+        origin.chatId,
+        origin.transport,
+        t("router.fallback.switchFailed", { count: MODEL_FALLBACK_THRESHOLD, to, message: (err as Error).message })
+      );
+      return;
+    }
+    await sendReply(origin.chatId, origin.transport, t("router.fallback.switched", { count: MODEL_FALLBACK_THRESHOLD, from, to }));
+    deps.audit?.append(
+      AUDIT_EVENTS.modelFallback,
+      "system",
+      origin.chatId,
+      `${from} → ${to} after ${MODEL_FALLBACK_THRESHOLD} consecutive failed turn(s)`
+    );
+  };
 
   // 交接卡(issue #122):每进程「已完成对话轮」记账(/new //clear 换会话
   // 归零)+ 在途捕获。忙拒保证同一时刻至多一个捕获在飞;/stop 打断会以
@@ -1299,6 +1354,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       if (event.type === "turn_end") {
         recapTurns.set(rpc, (recapTurns.get(rpc) ?? 0) + 1);
         if (!target) return;
+        // 连败计数(issue #121):彻底失败的轮喂计数,其余轮次清零(工具
+        // 循环的中间轮也算成功 —— 模型还在干活,故障 streak 不该跨过它)。
+        // 自动切换的回执与失败回复同房间送达;交接卡捕获轮同样计数。
+        if ((event.message as AssistantMessage | undefined)?.stopReason === "error") {
+          void runFallback(rpc, target);
+        } else {
+          fallbackRuns.delete(rpc);
+        }
         const turn = buildTurnReply(event.message as AssistantMessage, store.get().hideToolCalls);
 
         // 交接卡捕获(issue #122):在途捕获命中本进程时,终答落卡 —— 工具

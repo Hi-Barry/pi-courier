@@ -209,6 +209,93 @@ export function recapOnNew(cfg: MsgBridgeConfig): boolean {
   return cfg.recap?.onNew === true;
 }
 
+// ── 模型预设与降级链(issues #119 / #121)────────────────────────────
+// 语法单一解释:provider/id 引用、思考级别取值、链条目归一,配置校验、
+// 预设应用、降级切换三方共用,永不各写一份。
+
+/** pi 的思考级别全集(pi-agent-core ThinkingLevel,2026-10 核对)。 */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/** 严格的 `provider/id` 引用解析:斜杠必须有且两侧非空。配置校验与降级链
+ *  目标选择用严格版;预设应用与 /model 命令走宽容路径(裸 id 按可用列表解析)。 */
+export function parseModelRef(ref: string): { provider: string; id: string } | undefined {
+  const slash = ref.indexOf("/");
+  if (slash <= 0 || slash === ref.length - 1) return undefined;
+  return { provider: ref.slice(0, slash), id: ref.slice(slash + 1) };
+}
+
+/** 模型引用列表归一:trim、去空、去重、保持顺序。降级链(全局与项目)
+ *  共用 —— 手编配置里的杂散空白和重复条目在这里一次清干净。 */
+export function normalizeModelRefList(list: unknown): string[] {
+  if (!Array.isArray(list)) return [];
+  const out: string[] = [];
+  for (const item of list) {
+    if (typeof item !== "string") continue;
+    const ref = item.trim();
+    if (ref && !out.includes(ref)) out.push(ref);
+  }
+  return out;
+}
+
+/** 全局降级链(issue #121):缺省/空 = 功能关。项目链覆盖见 ProjectManager
+ *  的 projectFallbacks(取值顺序:项目链 > 全局链)。 */
+export function modelFallbackChain(cfg: MsgBridgeConfig): string[] {
+  return normalizeModelRefList(cfg.modelFallbacks);
+}
+
+/** 项目条目的降级链(已归一);undefined = 该项目未覆盖(用全局链)。 */
+export function projectFallbackChain(entry: { fallbacks?: string[] } | undefined): string[] | undefined {
+  if (!entry?.fallbacks) return undefined;
+  return normalizeModelRefList(entry.fallbacks);
+}
+
+/** 启动校验(issue #119/#121)的结构化问题:code 供 i18n,值原样携带。 */
+export interface PresetProblem {
+  /** 配置路径,如 `projects.!roomId:model`、`modelFallbacks[1]` */
+  path: string;
+  code: "modelRef" | "thinkingLevel" | "fallbacksList";
+  /** 原始值(展示用) */
+  value?: string;
+}
+
+/** 预设/降级链字段的启动校验:只检查新字段,未知字段容忍(向前兼容)。
+ *  返回空数组 = 合法。校验是提示不是拦截 —— 坏条目在应用/切换时被跳过,
+ *  绝不让一条手编错误挡住进程启动。 */
+export function presetProblems(cfg: MsgBridgeConfig): PresetProblem[] {
+  const problems: PresetProblem[] = [];
+  for (const [roomId, entry] of Object.entries(cfg.projects ?? {})) {
+    const model = entry.model?.trim();
+    if (model && !parseModelRef(model)) {
+      problems.push({ path: `projects.${roomId}:model`, code: "modelRef", value: model });
+    }
+    const level = entry.thinkingLevel?.trim();
+    if (level && !(THINKING_LEVELS as readonly string[]).includes(level)) {
+      problems.push({ path: `projects.${roomId}:thinkingLevel`, code: "thinkingLevel", value: level });
+    }
+    const fallbacks = normalizeModelRefList(entry.fallbacks);
+    if (entry.fallbacks !== undefined && !Array.isArray(entry.fallbacks)) {
+      problems.push({ path: `projects.${roomId}:fallbacks`, code: "fallbacksList" });
+    } else {
+      for (const ref of fallbacks) {
+        if (!parseModelRef(ref)) {
+          problems.push({ path: `projects.${roomId}:fallbacks`, code: "modelRef", value: ref });
+        }
+      }
+    }
+  }
+  const chain = modelFallbackChain(cfg);
+  if (cfg.modelFallbacks !== undefined && !Array.isArray(cfg.modelFallbacks)) {
+    problems.push({ path: "modelFallbacks", code: "fallbacksList" });
+  } else {
+    for (const ref of chain) {
+      if (!parseModelRef(ref)) {
+        problems.push({ path: "modelFallbacks", code: "modelRef", value: ref });
+      }
+    }
+  }
+  return problems;
+}
+
 /** 收养写侧(与 managementRoomId 同族):把 chatId 追加到管理房列表尾部 ——
  *  收养第一个成功授权的 DM(router 收养路径)与空间自建管理房(space ensure,
  *  进入时列表必为空,追加与单元素写等价)共用这一个写入解释。幂等:重复
