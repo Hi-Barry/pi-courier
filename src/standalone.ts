@@ -15,7 +15,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
-import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, resolveLanguage } from "./config.js";
+import { attachmentsDirectory, attachmentsMaxBytes, ConfigStore, inboxMode, resolveLanguage } from "./config.js";
 import { setLocale, t } from "./i18n/index.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
@@ -29,6 +29,7 @@ import { ProjectManager } from "./rpc/project-manager.js";
 import { ensureSpaceAndManagementRoom } from "./space.js";
 import { createStartupState, runStartupHeals } from "./startup-state.js";
 import { JsonStateFile } from "./state/json-file.js";
+import { FileEventLedger } from "./transports/event-ledger.js";
 import { AttachmentStore } from "./transports/attachments.js";
 import type { RoomOps } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
@@ -255,6 +256,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     path.join(stateDir, "pending-attachments.json"),
     []
   );
+
+  // ---- offline inbox (issue #113):已处理事件台账 -----------------------------
+  // JSONL 追加 + 启动压实(7 天窗);首运会话(freshStart)里 stale 维持全丢,
+  // 自第二个会话起「stale 且台账没见过」= 离线积压。模式来自 config 派生,
+  // off = 与旧版逐字节一致。transport 在装配后回填(与附件仓库同一接缝)。
+  const eventLedger = new FileEventLedger(path.join(stateDir, "event-ledger.jsonl"));
+  matrix?.setEventLedger(eventLedger, inboxMode(config));
 
   // ---- reminders (issue #117):先落盘再跑,重启不丢 ---------------------------
   // 时钟句柄不跨进程:reminders.json 才是真相,start() 在 transports 连接后

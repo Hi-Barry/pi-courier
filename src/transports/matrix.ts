@@ -14,6 +14,8 @@ import {
 } from "./matrix-client.js";
 import { createEventTranslator, isMediaContent, type MediaEventContent } from "./matrix-events.js";
 import { MatrixRoomOps } from "./matrix-rooms.js";
+import type { EventLedger } from "./event-ledger.js";
+import type { InboxMode } from "../config.js";
 
 /**
  * Matrix transport provider using matrix-bot-sdk
@@ -74,6 +76,21 @@ export class MatrixProvider {
    */
   setAttachmentStore(store: AttachmentStore): void {
     this.attachments = store;
+  }
+
+  private eventLedger?: EventLedger;
+  private inbox: InboxMode = "confirm";
+
+  /**
+   * Wire the processed-event ledger (issue #113) after construction — same
+   * seam as setAttachmentStore: the composition root creates both ends.
+   * Absent ledger (tests) = stale events keep the legacy drop behaviour.
+   * `mode` is the config derivation (inboxMode); "off" skips the lookup
+   * entirely (byte-identical to pre-#113 releases).
+   */
+  setEventLedger(ledger: EventLedger | undefined, mode: InboxMode): void {
+    this.eventLedger = ledger;
+    this.inbox = mode;
   }
 
   get isConnected(): boolean {
@@ -259,7 +276,31 @@ export class MatrixProvider {
     // Pure filter — module-bottom pure function (own messages, stale
     // replay, unjoined rooms, m.notice silence, edits).
     const skipReason = shouldSkipEvent(event, this.botUserId, this.connectedAt, this.joinedRooms, roomId);
-    if (skipReason) return;
+    if (skipReason) {
+      // 离线积压(issue #113):stale 且台账确认从未受理 = 桥不在线的窗口里
+      // 真收到的消息。受理记账后照常走翻译管道,带 replayed 标记交给 router
+      // 征询;台账见过(历史回放)与首运会话(初始同步无法区分)维持丢弃。
+      if (this.isBacklogCandidate(event, skipReason)) {
+        const eventId = event.event_id as string;
+        logger.info(`offline backlog accepted: ${eventId} (${roomId})`);
+        this.eventLedger!.record(eventId);
+        const outcome = await this.translator.translate(roomId, event);
+        if (outcome.info) logger.info(outcome.info);
+        if (outcome.warn) logger.warn(outcome.warn);
+        if (outcome.message) {
+          outcome.message.replayed = true;
+          this.messageHandler?.(outcome.message);
+        }
+      }
+      return;
+    }
+
+    // 受理即记账(issue #113 的另一半):实时路径的每一件也必须入台账 ——
+    // 否则重启后的同步回放里,「已处理过的历史」与「真积压」无从区分,
+    // 全会被误判成积压而重复执行。记账在翻译之前:过了过滤器就算受理。
+    if (this.eventLedger && typeof event.event_id === "string" && event.event_id) {
+      this.eventLedger.record(event.event_id);
+    }
 
     // Translation (spec #72 票2/C2): classification, mention stripping, quote
     // bookkeeping and attachment persistence live in the translator module;
@@ -268,6 +309,31 @@ export class MatrixProvider {
     if (outcome.info) logger.info(outcome.info);
     if (outcome.warn) logger.warn(outcome.warn);
     if (outcome.message) this.messageHandler?.(outcome.message);
+  }
+
+  /**
+   * issue #113:「stale」事件何时算离线积压候选 —— 台账已装配且非首运会话
+   * (freshStart 挡住全新部署/升级首启的初始同步回放)、inbox 模式要处理
+   * 积压、事件 id 形态合法、且台账里没见过。分类裁决仍归 shouldSkipEvent,
+   * 「命中与否」的裁决在调用方(本函数)。
+   */
+  private isBacklogCandidate(event: {
+    event_id?: unknown;
+    content?: { msgtype?: unknown; body?: unknown; "m.new_content"?: unknown };
+  }, skipReason: string): boolean {
+    if (skipReason !== "stale") return false;
+    if (this.inbox === "off") return false;
+    const ledger = this.eventLedger;
+    if (!ledger || ledger.freshStart) return false;
+    // 三条既有静默策略不因积压破例:其它服务的 m.notice(防 bot 循环)、
+    // 编辑事件、无 body 的非文本——都不算积压候选。
+    const content = event.content;
+    if (content?.msgtype === "m.notice") return false;
+    if (typeof content?.body !== "string" || !content.body) return false;
+    if (content["m.new_content"]) return false;
+    const eventId = event.event_id;
+    if (typeof eventId !== "string" || !eventId) return false;
+    return !ledger.seen(eventId);
   }
 
   /** Cached member-count lookup shared by the text and media pipelines. */

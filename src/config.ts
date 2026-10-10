@@ -193,6 +193,16 @@ export function managementRoomId(cfg: MsgBridgeConfig): string | undefined {
   return cfg.managementRooms?.[0];
 }
 
+/** 离线收件箱策略(issue #113):confirm(默认,征询后执行)/ auto(告知后
+ *  直接执行)/ off(与旧版逐字节一致)。手编配置的白名单归一:不认识的值
+ *  当 confirm,与"缺省"同形 —— 错字不升级为惊吓行为。 */
+export type InboxMode = "confirm" | "auto" | "off";
+
+export function inboxMode(cfg: MsgBridgeConfig): InboxMode {
+  const mode = cfg.inbox?.mode;
+  return mode === "auto" || mode === "off" ? mode : "confirm";
+}
+
 /** 收养写侧(与 managementRoomId 同族):把 chatId 追加到管理房列表尾部 ——
  *  收养第一个成功授权的 DM(router 收养路径)与空间自建管理房(space ensure,
  *  进入时列表必为空,追加与单元素写等价)共用这一个写入解释。幂等:重复
