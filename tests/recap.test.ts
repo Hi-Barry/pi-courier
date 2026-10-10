@@ -5,15 +5,10 @@
  * the management-room CC in multi-project mode.
  */
 import { describe, expect, it, vi } from "vitest";
-import { ChallengeAuth } from "../src/auth/challenge-auth";
-import { ConfigStore } from "../src/config";
-import { createMessageRouter } from "../src/rpc/message-router";
-import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { PiRpc } from "../src/rpc/pi-rpc";
-import type { ProjectManager } from "../src/rpc/project-manager";
 import { recapCardTitle, recapCcPrefix, recapPromptText, renderRecapCard } from "../src/rpc/recap";
-import type { RoomOps } from "../src/transports/interface";
-import type { ExternalMessage } from "../src/types";
+import { ConfigStore } from "../src/config";
+import { makeMsg, makeRouterFixture } from "./helpers";
 
 describe("recap card rendering (issue #122)", () => {
   it("plain card: header, body, optional context line", () => {
@@ -40,22 +35,6 @@ describe("recap card rendering (issue #122)", () => {
     expect(recapPromptText()).toContain("5 个要点");
   });
 });
-
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: "@barry:server",
-    username: "barry",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: `m-${Math.random().toString(36).slice(2)}`,
-    timestamp: new Date(),
-    ...rest,
-  };
-}
 
 /** turn_end 事件的最小 AssistantMessage 形状(文本轮,无工具调用)。 */
 const turnEnd = (text: string) => ({
@@ -85,33 +64,18 @@ function makeFixture(options: FixtureOptions = {}) {
       newSession,
     }),
   } as unknown as PiRpc;
-  const projectManager = {
-    getRpcForRoom: vi.fn().mockReturnValue(rpc),
-    isProjectRoom: vi.fn().mockReturnValue(false),
-    labelForRoom: vi.fn().mockReturnValue(options.projectLabel),
-    isMultiProject: false,
-    allRpcs: vi.fn().mockReturnValue([rpc]),
-    roomForRpc: vi.fn().mockReturnValue(undefined),
-  } as unknown as ProjectManager;
-  const store = new ConfigStore({
-    ...(options.onNew ? { recap: { onNew: true } } : {}),
-    ...(options.managementRooms ? { managementRooms: options.managementRooms } : {}),
-  });
-  const auth = new ChallengeAuth(() => {}, () => {});
-  auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
-  const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
-  const pmctl = new PmctlController({ projectManager, roomOps, store });
-  const router = createMessageRouter({
-    projectManager,
-    auth,
-    sendReply: async (chatId, transport, text) => {
+  const { router, projectManager } = makeRouterFixture({
+    rpc,
+    store: new ConfigStore({
+      ...(options.onNew ? { recap: { onNew: true } } : {}),
+      ...(options.managementRooms ? { managementRooms: options.managementRooms } : {}),
+    }),
+    sendReply: async (chatId: string, transport: string, text: string) => {
       replies.push({ chatId, transport, text });
     },
-    sendTyping: vi.fn(),
-    roomOps,
-    store,
-    pmctl,
   });
+  // 本特性唯一要动的 PM 面:项目标签(labelForRoom),mock 现场改在工厂的默认 PM 上。
+  (projectManager.labelForRoom as ReturnType<typeof vi.fn>).mockReturnValue(options.projectLabel);
   /** 把进程喂到「已完成 N 轮」:直接灌 N 个文本 turn_end。 */
   const seedTurns = (count: number): void => {
     for (let i = 0; i < count; i += 1) router.handleEvent(turnEnd(`第 ${i + 1} 轮回答`), rpc);

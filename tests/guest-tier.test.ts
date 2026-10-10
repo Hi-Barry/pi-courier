@@ -5,15 +5,9 @@
  * never get a challenge), and the trusted-only room mode overriding tiers.
  */
 import { describe, expect, it, vi } from "vitest";
-import { type AuditEntry } from "../src/audit/audit-log";
 import { ChallengeAuth } from "../src/auth/challenge-auth";
-import { ConfigStore } from "../src/config";
-import { createMessageRouter } from "../src/rpc/message-router";
-import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { PiRpc } from "../src/rpc/pi-rpc";
-import type { ProjectManager } from "../src/rpc/project-manager";
-import type { RoomOps } from "../src/transports/interface";
-import type { ExternalMessage } from "../src/types";
+import { makeMsg, makeRouterFixture } from "./helpers";
 
 const ADMIN = "@admin:server";
 const TRUSTED = "@trusted:server";
@@ -31,25 +25,8 @@ function makeAuth(channels: Record<string, { enabled: boolean; mode: "all" | "me
   return auth;
 }
 
-function makeMsg(overrides: Partial<ExternalMessage> & { text?: string } = {}): ExternalMessage {
-  const { text = "hi", ...rest } = overrides;
-  return {
-    chatId: "!dm:server",
-    transport: "matrix",
-    userId: TRUSTED,
-    username: "trusted",
-    payload: { kind: "text", text },
-    isGroupChat: false,
-    wasMentioned: false,
-    messageId: `m-${Math.random().toString(36).slice(2)}`,
-    timestamp: new Date(),
-    ...rest,
-  };
-}
-
 function makeRouter(
   auth: ChallengeAuth,
-  auditLines: AuditEntry[],
   prompt: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined)
 ) {
   const rpc = {
@@ -64,34 +41,16 @@ function makeRouter(
       send: vi.fn().mockResolvedValue({ success: true, data: { steering: [], followUp: [] } }),
     }),
   } as unknown as PiRpc;
-  const projectManager = {
-    getRpcForRoom: vi.fn().mockReturnValue(rpc),
-    isProjectRoom: vi.fn().mockReturnValue(false),
-    labelForRoom: vi.fn().mockReturnValue(undefined),
-    isMultiProject: false,
-    allRpcs: vi.fn().mockReturnValue([rpc]),
-    roomForRpc: vi.fn().mockReturnValue(undefined),
-  } as unknown as ProjectManager;
-  const store = new ConfigStore({});
-  const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
-  const pmctl = new PmctlController({ projectManager, roomOps, store });
   const replies: Array<{ chatId: string; text: string }> = [];
-  const router = createMessageRouter({
-    projectManager,
+  const { router, auditLines } = makeRouterFixture({
     auth,
-    sendReply: async (chatId, _transport, text) => {
+    audit: true,
+    rpc,
+    sendReply: async (chatId: string, _transport: string, text: string) => {
       replies.push({ chatId, text });
     },
-    sendTyping: vi.fn(),
-    roomOps,
-    store,
-    pmctl,
-    audit: {
-      append: (event: string, actor: string, chatId: string, detail?: string) =>
-        auditLines.push({ ts: Date.now(), event, actor, chatId, detail }),
-    } as never,
   });
-  return { router, rpc, prompt, replies };
+  return { router, prompt, replies, auditLines };
 }
 
 describe("four-tier authorization matrix (issue #120)", () => {
@@ -101,8 +60,7 @@ describe("four-tier authorization matrix (issue #120)", () => {
     ["guest", GUEST, "! ls", "denied"],
     ["untrusted", STRANGER, "! ls", "silence"],
   ])("%s runs `!ls` → %s", async (_tier, userId, text, expectation) => {
-    const lines: AuditEntry[] = [];
-    const { router, prompt, replies } = makeRouter(makeAuth(), lines);
+    const { router, prompt, replies, auditLines: lines } = makeRouter(makeAuth());
     await router.handleIncoming(makeMsg({ userId, username: userId.slice(1), text }));
     if (expectation === "bash") {
       // bash 路径:不进 prompt,也绝无拒绝回执
@@ -128,16 +86,14 @@ describe("four-tier authorization matrix (issue #120)", () => {
     ["/reload"],
     ["/attach some-id"],
   ])("guest touching %s is denied and audited", async (text) => {
-    const lines: AuditEntry[] = [];
-    const { router, prompt } = makeRouter(makeAuth(), lines);
+    const { router, prompt, auditLines: lines } = makeRouter(makeAuth());
     await router.handleIncoming(makeMsg({ userId: GUEST, username: "guest", text }));
     expect(prompt).not.toHaveBeenCalled();
     expect(lines.filter((l) => l.event === "guest.denied")).toHaveLength(1);
   });
 
   it("guest conversation and read-only commands flow normally", async () => {
-    const lines: AuditEntry[] = [];
-    const { router, prompt } = makeRouter(makeAuth(), lines);
+    const { router, prompt, auditLines: lines } = makeRouter(makeAuth());
     await router.handleIncoming(makeMsg({ userId: GUEST, username: "guest", text: "这个报错怎么解?" }));
     await router.handleIncoming(makeMsg({ userId: GUEST, username: "guest", text: "/status" }));
     await router.handleIncoming(makeMsg({ userId: GUEST, username: "guest", text: "/cost" }));
@@ -169,10 +125,8 @@ describe("four-tier authorization matrix (issue #120)", () => {
   });
 
   it("trusted-only rooms keep guests outside (mode first, tier second)", async () => {
-    const lines: AuditEntry[] = [];
-    const { router, prompt, replies } = makeRouter(
-      makeAuth({ "!group:server": { enabled: true, mode: "trusted-only" } }),
-      lines
+    const { router, prompt, replies, auditLines: lines } = makeRouter(
+      makeAuth({ "!group:server": { enabled: true, mode: "trusted-only" } })
     );
     await router.handleIncoming(
       makeMsg({ userId: GUEST, username: "guest", chatId: "!group:server", isGroupChat: true, wasMentioned: true, text: "我能进吗" })
@@ -183,8 +137,7 @@ describe("four-tier authorization matrix (issue #120)", () => {
   });
 
   it("guests chat in an all-mode group like any member", async () => {
-    const lines: AuditEntry[] = [];
-    const { router, prompt } = makeRouter(makeAuth({ "!group:server": { enabled: true, mode: "all" } }), lines);
+    const { router, prompt, auditLines: lines } = makeRouter(makeAuth({ "!group:server": { enabled: true, mode: "all" } }));
     await router.handleIncoming(
       makeMsg({ userId: GUEST, username: "guest", chatId: "!group:server", isGroupChat: true, wasMentioned: true, text: "大家好" })
     );
@@ -193,8 +146,7 @@ describe("four-tier authorization matrix (issue #120)", () => {
   });
 
   it("guest verdict receipts go back to the guest's own room", async () => {
-    const lines: AuditEntry[] = [];
-    const { router, replies } = makeRouter(makeAuth(), lines);
+    const { router, replies, auditLines: lines } = makeRouter(makeAuth());
     await router.handleIncoming(makeMsg({ userId: GUEST, username: "guest", chatId: "!guest-dm:server", text: "/stop" }));
     expect(replies[0]?.chatId).toBe("!guest-dm:server");
     expect(lines[0]?.chatId).toBe("!guest-dm:server");

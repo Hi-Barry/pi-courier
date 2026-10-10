@@ -80,6 +80,8 @@ export interface RouterFixtureOptions {
   rpc?: PiRpc;
   /** 逃生舱:整体替换默认 fake ProjectManager(per-room 分派、多进程场景)。 */
   projectManager?: ProjectManager;
+  /** 逃生舱:整体替换默认 auth(三档名单/自定义 admin 等场景);缺省 = barry 单信任。 */
+  auth?: ChallengeAuth;
   /** 缺省 vi.fn;传自定义实现时被包成 vi.fn(闭包捕获照常工作)。 */
   sendReply?: (chatId: string, transport: string, text: string) => Promise<void>;
   /** true → 注入 auditLines 记录器;缺省不注入 = 零审计(生产 Absent 语义)。 */
@@ -118,12 +120,14 @@ export function makeRouterFixture(options: RouterFixtureOptions = {}): RouterFix
       projectFallbacks: vi.fn().mockReturnValue(undefined),
     } as unknown as ProjectManager);
   const store = options.store ?? new ConfigStore({});
-  const auth = new ChallengeAuth(() => {}, () => {});
-  auth.loadFromConfig({
-    trustedUsers: options.trusted ?? ["matrix:@barry:server"],
-    adminUserId: "matrix:@barry:server",
-    channels: options.channels ?? {},
-  });
+  const auth = options.auth ?? new ChallengeAuth(() => {}, () => {});
+  if (!options.auth) {
+    auth.loadFromConfig({
+      trustedUsers: options.trusted ?? ["matrix:@barry:server"],
+      adminUserId: "matrix:@barry:server",
+      channels: options.channels ?? {},
+    });
+  }
   const roomOps = { getBotUserId: vi.fn().mockReturnValue("@bot:server") } as unknown as RoomOps;
   const pmctl = new PmctlController({ projectManager, roomOps, store });
   const sendReply = vi.fn(options.sendReply ?? (async () => {}));
