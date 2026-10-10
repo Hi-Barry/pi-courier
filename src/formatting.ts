@@ -44,10 +44,11 @@ export function formatToolCalls(message: AssistantMessage): string {
 
 /**
  * Collapse to one line and bound the length, "…" marking truncation — the
- * single home of the "queue entry / audit preview / excerpt" shape. Distinct
+ * single home of the "queue entry / excerpt / arg summary" shape. Distinct
  * from truncate() below: that one bounds a string as-is (no whitespace
  * collapse, ASCII dots); this one is for showing arbitrary multi-line text
- * as one bounded chat line.
+ * as one bounded chat line. The router's audit detail deliberately does NOT
+ * use this (it truncates without an ellipsis marker — audit lines stay raw).
  */
 export function truncateLine(text: string, max = 120): string {
   const oneLine = text.replace(/\s+/g, " ").trim();

@@ -27,6 +27,7 @@ export interface QuoteCache {
 export const MAX_ENTRIES_PER_ROOM = 50;
 
 /** Excerpt cap: enough context to identify a message, small enough for a prompt prefix. */
+
 import { truncateLine } from "./formatting.js";
 
 export const EXCERPT_MAX_CHARS = 200;
