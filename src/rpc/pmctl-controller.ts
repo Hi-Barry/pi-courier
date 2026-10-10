@@ -14,7 +14,12 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
-import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName } from "../config.js";
+import {
+  activeSpaceRoomId,
+  type ConfigStore,
+  effectiveInstanceName,
+  projectFallbackChain,
+} from "../config.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
@@ -251,6 +256,13 @@ export class PmctlController {
     }
     const [roomId, entry] = found;
     const pm = this.opts.projectManager;
+    // 项目预设(issue #119):有什么展示什么,key=value 一行;全空注明
+    // 跟随全局默认 —— 预设是"开机默认",与 /model 手动切换互不干扰。
+    const presets = [
+      entry.model?.trim() ? `model=${entry.model.trim()}` : undefined,
+      entry.thinkingLevel?.trim() ? `thinking=${entry.thinkingLevel.trim()}` : undefined,
+      projectFallbackChain(entry)?.length ? `fallbacks=${projectFallbackChain(entry)!.join(" → ")}` : undefined,
+    ].filter((p): p is string => !!p);
     await reply(
       t("pmctl.show.ok", {
         name: projectLabelOf(entry),
@@ -258,6 +270,7 @@ export class PmctlController {
         workdir: entry.workdir,
         status: pm.isRunning(roomId) ? t("pmctl.statusRunning") : t("pmctl.statusLazy"),
         session: `${entry.workdir}/.pi-session`,
+        presets: presets.join(" · ") || t("pmctl.show.noPresets"),
       })
     );
   }

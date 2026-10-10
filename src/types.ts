@@ -123,7 +123,14 @@ export interface MsgBridgeConfig {
    * 每个映射的房间独立跑一个 pi 进程(独立 cwd/会话/bash 环境)。
    * 未映射的私聊(DM/管理房间)走默认 workdir。
    */
-  projects?: Record<string, { name?: string; workdir: string }>;
+  projects?: Record<string, ProjectConfig>;
+  /**
+   * 模型降级链(issue #121):连续 N 轮 turn 彻底失败(pi auto-retry 耗尽后
+   * 仍 error,默认 2)时按序自动切换的备用模型,`provider/id` 形式(与
+   * /model 参数同语法)。空/缺省 = 功能关,行为与旧版逐字节一致。
+   * 项目房可用 projects[].fallbacks 覆盖全局链(项目链优先)。
+   */
+  modelFallbacks?: string[];
   /**
    * 已初始化为"项目管理"房间的 DM 房间 ID 列表(幂等标记,
    * 避免重启后重复改名/重复发送使用说明)。
@@ -184,6 +191,22 @@ export interface MsgBridgeConfig {
     /** 单个附件大小上限(MB) */
     maxMb?: number;
   };
+}
+
+/**
+ * 项目条目(issue #119):workdir 之外,项目可记住自己的运行时默认值。
+ * 预设只在进程(懒)启动/重启握手完成后应用一次 —— "开机默认,不是锁定",
+ * 此后的 /model、/thinking 手动切换不受干扰,直到下一次重启回到预设。
+ */
+export interface ProjectConfig {
+  name?: string;
+  workdir: string;
+  /** 预设模型,`provider/id`(与 /model 参数同语法;裸 id 按可用模型列表解析) */
+  model?: string;
+  /** 预设思考级别:off|minimal|low|medium|high|xhigh|max(缺省回落全局现状) */
+  thinkingLevel?: string;
+  /** 项目降级链(issue #121):覆盖全局 modelFallbacks;条目须为 `provider/id` */
+  fallbacks?: string[];
 }
 
 /** @see MsgBridgeConfig.space */

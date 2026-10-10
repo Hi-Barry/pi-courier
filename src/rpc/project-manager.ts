@@ -10,16 +10,18 @@
  */
 
 import * as path from "node:path";
-import type { RpcEventListener } from "@earendil-works/pi-coding-agent";
-import type { ConfigStore } from "../config.js";
+import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
+import { type ConfigStore, projectFallbackChain } from "../config.js";
+import { t } from "../i18n/index.js";
 import { logger } from "../logger.js";
 import { projectLabelOf } from "../project-labels.js";
+import type { ProjectConfig } from "../types.js";
+import { setModelByRef } from "./model-switch.js";
 import { PiRpc, type PiRpcOptions } from "./pi-rpc.js";
 
-export interface ProjectEntry {
-  name?: string;
-  workdir: string;
-}
+/** 项目条目(issue #119):形状与校验单一来源于 types.ProjectConfig ——
+ *  配置层与本模块永不漂移。 */
+export type ProjectEntry = ProjectConfig;
 
 export interface ProjectManagerOptions {
   /** Shared default PiRpc (management room / default workdir). */
@@ -34,6 +36,9 @@ export interface ProjectManagerOptions {
   store: ConfigStore;
   /** PiRpc constructor seam (tests inject fakes; production uses `new PiRpc`). */
   rpcFactory?: (options: PiRpcOptions) => PiRpc;
+  /** 项目房单行提示(issue #119:预设应用/失败回执)。组合根接线到
+   *  sendReply;缺省 = 静默(测试与无传输部署)。 */
+  notifyRoom?: (roomId: string, text: string) => void;
 }
 
 export class ProjectManager {
@@ -43,6 +48,7 @@ export class ProjectManager {
   private multiProject: boolean;
   private store: ConfigStore;
   private newRpc: (options: PiRpcOptions) => PiRpc;
+  private notifyRoom: (roomId: string, text: string) => void;
   /** roomId -> PiRpc for project rooms (lazily started). */
   private projectRpcs = new Map<string, PiRpc>();
 
@@ -53,6 +59,7 @@ export class ProjectManager {
     this.multiProject = opts.multiProject === true;
     this.store = opts.store;
     this.newRpc = opts.rpcFactory ?? ((options) => new PiRpc(options));
+    this.notifyRoom = opts.notifyRoom ?? (() => {});
   }
 
   /** Current projects mapping (roomId -> entry) — in-memory, no disk read. */
@@ -152,12 +159,54 @@ export class ProjectManager {
     };
     rpc.onEvent(listener);
 
+    // 项目预设(issue #119):/reload、登录重启等 restart() 路径握手完成后
+    // 重新应用 —— 预设是"开机默认",重启即回到预设(手动切换只活到重启)。
+    rpc.onRestarted?.((restarted) => {
+      void this.applyPresets(roomId, restarted);
+    });
+
     this.projectRpcs.set(roomId, rpc);
     // Lazy start: spawn the pi process and wait for the handshake. PiRpc.start
     // is idempotent, so subsequent calls reuse the running process.
     logger.withLabel(label).info(`🚀 项目 pi 进程启动: ${entry.workdir}`);
     await rpc.start();
+    await this.applyPresets(roomId, rpc);
     return rpc;
+  }
+
+  /** 项目房覆盖的降级链(issue #121,已归一):undefined = 未配置,用全局链。 */
+  projectFallbacks(roomId: string): string[] | undefined {
+    return projectFallbackChain(this.projectMap()[roomId]);
+  }
+
+  /** 应用项目预设(issue #119):进程(懒)启动/重启握手完成后各一次。
+   *  失败绝不阻塞进程就绪 —— warn 加房间一行提示,用户 /model 手动兜底;
+   *  成功也回执一行,让"重启后预设还在"看得见。条目在应用时现读现用:
+   *  重启回调里的 entry 引用可能是旧的,配置以 store 当前值为准。 */
+  private async applyPresets(roomId: string, rpc: PiRpc): Promise<void> {
+    const entry = this.projectMap()[roomId];
+    if (!entry) return;
+    const label = projectLabelOf(entry);
+    const model = entry.model?.trim();
+    const level = entry.thinkingLevel?.trim();
+    if (!model && !level) return;
+    const applied: string[] = [];
+    try {
+      if (model) {
+        const resolved = await setModelByRef(rpc, model);
+        applied.push(`model ${resolved.provider}/${resolved.id}`);
+      }
+      if (level) {
+        await rpc.requireClient().setThinkingLevel(level as Parameters<RpcClient["setThinkingLevel"]>[0]);
+        applied.push(`thinking ${level}`);
+      }
+    } catch (err) {
+      logger.withLabel(label).warn(`⚠️ 项目预设应用失败: ${(err as Error).message}`);
+      this.notifyRoom(roomId, t("router.preset.failed", { message: (err as Error).message }));
+      return;
+    }
+    logger.withLabel(label).info(`📋 项目预设已应用: ${applied.join(", ")}`);
+    this.notifyRoom(roomId, t("router.preset.applied", { items: applied.join(", ") }));
   }
 
   /** Single write path for the projects map: copy, mutate, persist. */

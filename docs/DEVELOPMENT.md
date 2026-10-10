@@ -218,6 +218,7 @@ pi 0.83.0 就绪。
 - 访客档门控(issue #120):authorizationGate 扩为「未授权拦 → 访客验单」——名单内放行,禁用清单命中的命令在**任何执行之前**硬拦(回执 `guest.denied` + 审计留痕);禁用清单纯模块 `src/auth/guest-policy.ts`(快照钉点,bang 判定与 command-map 的 parseBangCommand 等价性由测试钉住——运行时 import 会成 auth→rpc→auth 环);房间模式(trusted-only)语义优先,已在 authorization 阶段裁决
 - 交接卡(issue #122):SlashCommandContext 的 `recap` 缝(run/beforeNew/onSwitched)——/recap 忙拒(isStreaming)与空会话拒(轮数 <2)以类型化错误抛给命令层转人话;生成 = 向当前进程发总结 prompt 并在 turn_end 捕获终答(卡片替代原生回复不重复刷屏;卡片按 splitMessage 分片);/new //clear 前的自动出卡(recap.onNew 默认关)失败只 warn 绝不阻塞;多工程下抄送管理房(项目名前缀);轮数记账 WeakMap,换会话归零
 - 审计 trails(issue #124):`auditTrail` 统一记账口,八处接线(配对成败/trusted/revoke 经 admin-commands 纯模块返回的 `audit` 裁决字段;`!` `/bash` `/bashstop` `/reload` 按 slashCommands/bashBang 的命令名;`/login` 家族;`/pmctl rm`;queue.clear 走命令层的 audit 缝按真实语义上报;backlog.execute 在 执行 放行处)——登记表 `AUDIT_EVENTS` 集中常量,漏登记=快照测试红
+- 模型降级链(issue #121):turn_end 的 `stopReason==="error"` 喂 per-rpc 连败计数(其余轮次清零,工具循环中间轮算成功),连败 2 轮触发自动 `setModel` 沿链推进(项目房 `projectFallbacks` > 全局 `modelFallbackChain`,链空=功能关逐字节回归);回执带 from→to 与手动切回提示,审计 `model.fallback`(actor=system);链耗尽只提示一次(exhaustedNotified,成功轮重武装);切换失败(setModel 抛)发切换失败回执不计审计;计数 WeakMap 仅内存,重启归零可接受
 - typing 指示:`agent_start` / `turn_start` 触发 Matrix 输入中状态;管理房判定走 config 的 `managementRoomId` 派生、收养写走 `adoptManagementRoom`(spec #99/#102),收养品牌逻辑在 space.ts
 
 **`src/rpc/queue-snapshots.ts`** —— 队列快照存储 + 启动消费(issue #115 阶段2)
@@ -229,6 +230,8 @@ pi 0.83.0 就绪。
 **`src/auth/guest-policy.ts`** —— 访客禁用清单(issue #120):GUEST_BLOCKED_COMMANDS 常量 + `guestCommandVerdict` 纯函数(shell bang 与斜杠命令的裁决);票面清单之外按「危险即禁」补 /multiproject /attach /detach;自持 bang 正则的原因与等价性钉点见模块头
 
 **`src/rpc/recap.ts`** —— 交接卡纯函数(issue #122):renderRecapCard(标题/正文/项目前缀/上下文行)+ recapCardTitle(本地时间+会话短标识)+ recapPromptText(总结指令,i18n)+ RecapBusyError/RecapEmptyError 类型化拒绝;捕获与投递的编排(router 的 turn_end 捕获、管理房抄送、分片)在 message-router
+
+**`src/rpc/model-switch.ts`** —— 模型切换原语(issues #119/#121):setModelByRef(`provider/id` 直用,裸 id 按可用列表精确→子串解析,与 /model 语义一致)与 nextFallbackTarget(链上当前模型**之后**第一条不等于当前的目标,只进不退,坏条目跳过,undefined=链耗尽);/model 命令、项目预设、降级切换三方共用这一个解释,永不漂移
 
 **`src/space.ts`** —— Element 空间组织视图(纯展示层)+ 托管房间置备/身份自愈
 - 启动期 ensure:懒创建私有空间 `π <实例名>` + 空间内 bot 自建管理房间,幂等锚点为 config 的 `space.roomId` / `managementRoomId` 派生(spec #99/#102)

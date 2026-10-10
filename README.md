@@ -251,6 +251,22 @@ Notes:
 
 A failed turn (usage exhausted, auth expired, provider unreachable…) tells the room: `❌ Turn failed: <reason>`. Auto-retries are visible too — `⚠️ Call failed, retrying n/N` per attempt, and the final error once retries are exhausted. A manual `/stop` never produces error notices.
 
+### Model fallback chain: automatic failover on repeated failures
+
+One provider staying down shouldn't strand your task on a broken model. Add a chain in `pi-courier.json` (restart to apply):
+
+```json
+"modelFallbacks": ["zai/glm-5.3", "deepseek/deepseek-v4-flash"]
+```
+
+When the **same pi process fails 2 turns in a row** (pi's own auto-retry already exhausted by then), the bridge switches to the next chain entry by itself and tells the room: `⚠️ 2 consecutive failed turns — switched the model automatically: <from> → <to>. Send /model <from> to switch back` — plus one `model.fallback` line in the audit log. Rules of the road:
+
+- A successful turn resets the failure count; the next streak advances to the following entry, never backwards.
+- Chain exhausted → one `❌ … fallback chain exhausted` notice and normal error replies afterwards — **no looping**, and the notice does not repeat either.
+- **No automatic switch-back** by design: once the provider recovers, `/model <from>` returns you (the receipt names it).
+- Project rooms can carry their own chain via `projects[].fallbacks` — it takes priority over the global one (see per-project presets below).
+- No config → byte-for-byte the old behaviour. Malformed entries are warned about at startup and skipped.
+
 ### Provider login from chat: `/login`
 
 No shell needed to (re-)login a provider:
@@ -334,9 +350,15 @@ One bot account can serve multiple projects — each project gets its own privat
 - Manual setup is also possible: edit `pi-courier.json` and add a `projects` map (config is loaded once at startup — restart the service after manual edits):
   ```json
   "projects": {
-    "!roomid:server": { "workdir": "/home/you/Projects/myapp" }
+    "!roomid:server": {
+      "workdir": "/home/you/Projects/api",
+      "model": "deepseek/deepseek-v4-flash",
+      "thinkingLevel": "high",
+      "fallbacks": ["zai/glm-5.3"]
+    }
   }
   ```
+- **Per-project presets** (since 0.7.0; `model` / `thinkingLevel` / `fallbacks`, all optional): each project remembers its own default model and thinking level — project A on a cheap fast model, project B on a strong reasoner, zero re-setup when you switch rooms. The process applies them once after every start **and** every `/reload` (one `📋 Project presets applied: …` line in the room). A preset is a **start-up default, not a lock**: manual `/model` / `/thinking` win afterwards and stay until the next restart returns you to the preset. Application failures never block the process — one warning line, then set things by hand. Levels: `off minimal low medium high xhigh max`; `model` uses the same `provider/id` form as `/model` (a bare id is resolved against the available-models list). `fallbacks` is that project's failover chain (see "Model fallback chain" above) — project chain wins over the global one. `/pmctl show` displays a project's presets.
 - Each project room lazily starts its own pi process (~300MB RAM each) with `--session-dir <workdir>/.pi-session`, so sessions survive restarts per project.
 
 ### TUI ↔ Matrix session mirror (two-way sync)
