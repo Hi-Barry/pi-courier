@@ -1,13 +1,14 @@
 /**
- * 命令登记表(架构候选3):每条斜杠命令的策略位——访客档语义与敏感审计
- * 面——集中一处,新增命令登记一次,router 的审计接线与 guest-policy 的
- * 清单都由此派生,不再各自手工维护。纯数据 + 纯函数、零 import:auth 与
- * rpc 两侧都能安全依赖(command-map 因引用 admin-commands 与 auth 相连,
- * 当年 guest-policy 只好复制正则靠快照钉等价——本模块落地后创可贴退役)。
+ * 命令登记表(架构候选3):**受限命令**的策略位——访客禁用与敏感审计面
+ * ——集中一处,router 的审计接线与 guest-policy 的裁决都由此派生,新增
+ * 命令登记一次。纯数据 + 纯函数、零 import:auth 与 rpc 两侧都能安全依赖
+ * (command-map 因引用 admin-commands 与 auth 相连,当年 guest-policy 只好
+ * 复制正则靠快照钉等价——本模块落地后创可贴退役)。
  *
  * 语义备忘:
- *  - guest 档「blocked」= 桥侧硬拦(guest.denied 回执 + 审计);未登记的
- *    命令默认放行,放行清单(guest-policy 的文档化语义)不含判定逻辑。
+ *  - 本表只登记需要「blocked」的命令;/abort=/stop 这类别名各自成条
+ *    (裁决按输入词命中,回执礼貌)。未登记的命令默认放行——放行侧是
+ *    文档化语义、无判定逻辑,只读命令清单见下方 GUEST_READ_ONLY_DOC。
  *    加新命令先问:访客碰它会不会影响共享状态?会就登记 blocked。
  *  - auditEvent 只记「命令本身即敏感动作」的面(/bash /bashstop /reload);
  *    清队等由命令层按真实语义上报的走 router 的 audit 缝,不经本表。
@@ -61,6 +62,20 @@ export const COMMAND_REGISTRY: readonly CommandPolicy[] = [
   // 会话镜像(访客禁:动共享会话)
   { name: "/attach", guest: "blocked" },
   { name: "/detach", guest: "blocked" },
+];
+
+/** 只读命令清单(纯文档,无判定语义:未登记命令一律默认放行)。快照测试
+ *  钉住;/find(#118)与 /recap(#122)这类只读命令落地即在此列。 */
+export const GUEST_READ_ONLY_DOC: readonly string[] = [
+  "/help",
+  "/status",
+  "/cost",
+  "/models",
+  "/sessions",
+  "/last",
+  "/queue",
+  "/find",
+  "/recap",
 ];
 
 /** 查表:命令主名(小写含斜杠)→ 策略位;未登记返回 undefined(默认放行、

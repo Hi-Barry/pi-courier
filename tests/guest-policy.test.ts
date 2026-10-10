@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { AUDIT_EVENTS } from "../src/audit/audit-log";
 import { guestCommandVerdict } from "../src/auth/guest-policy";
-import { COMMAND_REGISTRY, commandPolicy } from "../src/command-registry";
+import { COMMAND_REGISTRY, commandPolicy, GUEST_READ_ONLY_DOC } from "../src/command-registry";
 import { parseBangCommand } from "../src/rpc/command-map";
 
 describe("guest policy blocklist (issue #120)", () => {
@@ -56,9 +56,14 @@ describe("guest policy blocklist (issue #120)", () => {
     expect(commandPolicy("/bash")?.auditEvent).toBe(AUDIT_EVENTS.bashExec);
     expect(commandPolicy("/bashstop")?.auditEvent).toBe(AUDIT_EVENTS.bashStop);
     expect(commandPolicy("/reload")?.auditEvent).toBe(AUDIT_EVENTS.reload);
-    // 只读命令不落账:登记表里 guest 未禁的条目不允许带审计位之外的意外
     expect(commandPolicy("/help")).toBeUndefined();
     expect(commandPolicy("/status")?.auditEvent).toBeUndefined();
+  });
+
+  it("the read-only documentation list never overlaps the blocked set", () => {
+    for (const cmd of GUEST_READ_ONLY_DOC) {
+      expect(commandPolicy(cmd)?.guest, cmd).toBeUndefined();
+    }
   });
 
   it("dangerous commands are blocked with the exact trigger word", () => {

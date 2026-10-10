@@ -2,8 +2,8 @@ import { BANG_COMMAND, commandPolicy } from "../command-registry.js";
 
 /**
  * Guest policy (issue #120): what a guest may not do. Pure module — one
- * verdict function over the command registry (架构候选3:snapshot-pinned by
- * tests so a new dangerous command that forgets to register there turns a
+ * verdict function over the command registry (架构候选3). Snapshot-pinned
+ * by tests: a new dangerous command that forgets to register there turns a
  * test red.
  *
  * The boundary is the bridge-side surface only: guests chat freely (their
