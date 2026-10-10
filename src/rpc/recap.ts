@@ -14,6 +14,7 @@
  */
 
 import { t } from "../i18n/index.js";
+import type { PiRpc } from "./pi-rpc.js";
 
 /** 触发门槛:至少这么多「已完成对话轮」才值得出卡(/new 自动出卡同阈)。 */
 export const RECAP_MIN_TURNS = 2;
@@ -72,4 +73,54 @@ export function recapCardTitle(sessionHint?: string, now: Date = new Date()): st
 /** 管理房抄送前缀(多工程):`📋 <项目名> 交接卡`。 */
 export function recapCcPrefix(project: string): string {
   return t("recap.cc.prefix", { project });
+}
+
+/** 交接卡的每进程记账(issue #122):「已完成对话轮」计数 + 在途捕获槽。
+ *  忙拒保证同一时刻至多一个捕获在飞;/stop 打断会以失败轮收场,捕获随之
+ *  reject,不会悬挂;换会话(/new //clear)reset() 归零。状态与生命周期
+ *  单点持有,router 只编排投递与门控。 */
+export class RecapLedger {
+  private turns = new WeakMap<PiRpc, number>();
+  private capture: { rpc: PiRpc; resolve: (text: string) => void; reject: (err: Error) => void } | undefined;
+
+  count(rpc: PiRpc): number {
+    return this.turns.get(rpc) ?? 0;
+  }
+
+  /** turn_end 计一轮。 */
+  increment(rpc: PiRpc): void {
+    this.turns.set(rpc, this.count(rpc) + 1);
+  }
+
+  /** 换会话(/new //clear)归零:交接卡总结的是「当前会话」,旧账不作数。 */
+  reset(rpc: PiRpc): void {
+    this.turns.set(rpc, 0);
+  }
+
+  /** 发总结 prompt 并等终答(turn_end 的最终文本)。prompt 发送失败即撤销
+   *  捕获并 reject,捕获槽不留悬案。 */
+  startCapture(rpc: PiRpc): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      this.capture = { rpc, resolve, reject };
+      rpc.prompt(recapPromptText()).catch((err: unknown) => {
+        if (this.capture?.rpc === rpc) this.capture = undefined;
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
+    });
+  }
+
+  /** turn_end 结算在途捕获:"none" = 不涉及本进程,调用方走正常回复路径;
+   *  "wait" = 工具循环中间轮,捕获保持继续等;"settled" = 已按终答文本
+   *  resolve(空文本 reject RecapEmptyError)——卡片投递替代原生回复,
+   *  总结文本不重复发房间。 */
+  settleCapture(rpc: PiRpc, turn: { text?: string | null; pendingTools: boolean }): "none" | "wait" | "settled" {
+    if (this.capture?.rpc !== rpc) return "none";
+    if (turn.pendingTools) return "wait";
+    const capture = this.capture;
+    this.capture = undefined;
+    const body = turn.text?.trim();
+    if (body) capture.resolve(body);
+    else capture.reject(new RecapEmptyError());
+    return "settled";
+  }
 }

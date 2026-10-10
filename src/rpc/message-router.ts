@@ -44,7 +44,7 @@ import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
 import type { ProjectManager } from "./project-manager.js";
 import type { QueueSnapshotStore } from "./queue-snapshots.js";
-import { RECAP_MIN_TURNS, RecapBusyError, RecapEmptyError, recapCardTitle, recapCcPrefix, recapPromptText, renderRecapCard } from "./recap.js";
+import { RECAP_MIN_TURNS, RecapBusyError, RecapEmptyError, RecapLedger, recapCardTitle, recapCcPrefix, renderRecapCard } from "./recap.js";
 import { RpcTransientState } from "./rpc-transient-state.js";
 import { extractUserText, type MirroredEntry, MirrorManager } from "./session-mirror.js";
 import { appendStatusFooter, collectStatusFooter } from "./status-footer.js";
@@ -350,21 +350,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     );
   };
 
-  // 交接卡(issue #122):每进程「已完成对话轮」记账(/new //clear 换会话
-  // 归零)+ 在途捕获。忙拒保证同一时刻至多一个捕获在飞;/stop 打断会以
-  // 失败轮收场,捕获随之 reject,不会悬挂。
-  const recapTurns = new WeakMap<PiRpc, number>();
-  let recapCapture: { rpc: PiRpc; resolve: (text: string) => void; reject: (err: Error) => void } | undefined;
-
-  /** 向当前进程发总结 prompt 并等终答(turn_end 的最终文本)。 */
-  const captureRecapTurn = (rpc: PiRpc): Promise<string> =>
-    new Promise<string>((resolve, reject) => {
-      recapCapture = { rpc, resolve, reject };
-      rpc.prompt(recapPromptText()).catch((err: unknown) => {
-        if (recapCapture?.rpc === rpc) recapCapture = undefined;
-        reject(err instanceof Error ? err : new Error(String(err)));
-      });
-    });
+  // 交接卡(issue #122):轮数记账与在途捕获槽都在 RecapLedger(recap.ts);
+  // 这里只编排门控(忙拒/空会话)、投递与 /new 联动。
+  const recapLedger = new RecapLedger();
 
   /** 卡片投递:当前房间必发;多工程下有管理房且不同于本房间时抄送一份
    *  「📋 <项目名> 交接卡」,沉淀为该项目的干活日志时间线。 */
@@ -404,8 +392,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const runRecap = async (rpc: PiRpc, origin: { chatId: string; transport: string }): Promise<void> => {
     const state = await rpc.requireClient().getState();
     if (state.isStreaming) throw new RecapBusyError();
-    if ((recapTurns.get(rpc) ?? 0) < RECAP_MIN_TURNS) throw new RecapEmptyError();
-    const body = await captureRecapTurn(rpc);
+    if (recapLedger.count(rpc) < RECAP_MIN_TURNS) throw new RecapEmptyError();
+    const body = await recapLedger.startCapture(rpc);
     await deliverRecapCard(rpc, body, origin);
   };
 
@@ -416,8 +404,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     try {
       const state = await rpc.requireClient().getState();
       if (state.isStreaming) return;
-      if ((recapTurns.get(rpc) ?? 0) < RECAP_MIN_TURNS) return;
-      const body = await captureRecapTurn(rpc);
+      if (recapLedger.count(rpc) < RECAP_MIN_TURNS) return;
+      const body = await recapLedger.startCapture(rpc);
       await deliverRecapCard(rpc, body, origin);
     } catch (err) {
       logger.warn(`recap before /new failed (continuing): ${(err as Error).message}`);
@@ -965,7 +953,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             recap: {
               run: () => runRecap(rpc, { chatId: ctx.msg.chatId, transport: ctx.msg.transport }),
               beforeNew: () => beforeNewRecap(rpc, { chatId: ctx.msg.chatId, transport: ctx.msg.transport }),
-              onSwitched: () => recapTurns.set(rpc, 0),
+              onSwitched: () => recapLedger.reset(rpc),
             },
             // /remind(issue #117):命令层不接触 chatId/userId —— 这里按本消息
             // 的房间与发起人预先绑定。
@@ -1240,7 +1228,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
 
       if (event.type === "turn_end") {
-        recapTurns.set(rpc, (recapTurns.get(rpc) ?? 0) + 1);
+        recapLedger.increment(rpc);
         if (!target) return;
         // 连败计数(issue #121):彻底失败的轮喂计数,其余轮次清零(工具
         // 循环的中间轮也算成功 —— 模型还在干活,故障 streak 不该跨过它)。
@@ -1254,15 +1242,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
         // 交接卡捕获(issue #122):在途捕获命中本进程时,终答落卡 —— 工具
         // 循环的中间轮继续等;卡片投递替代原生回复,总结文本不重复发房间。
-        if (recapCapture?.rpc === rpc) {
-          if (turn.pendingTools) return;
-          const capture = recapCapture;
-          recapCapture = undefined;
-          const body = turn.text?.trim();
-          if (body) capture.resolve(body);
-          else capture.reject(new RecapEmptyError());
-          return;
-        }
+        if (recapLedger.settleCapture(rpc, turn) !== "none") return;
 
         // Reply summary at INFO level — the full conversation is also in pi's
         // session file.
