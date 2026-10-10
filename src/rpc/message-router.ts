@@ -12,7 +12,7 @@ import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
-import { type ConfigStore, inboxMode, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
+import { type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -20,7 +20,6 @@ import {
   splitMessage,truncate 
 } from "../formatting.js";
 import { t } from "../i18n/index.js";
-import { isExecuteInput, isIgnoreInput } from "../i18n/parse.js";
 import { namespacedId } from "../identity.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
 import type { ReminderController } from "../reminders/reminder-clock.js";
@@ -28,7 +27,8 @@ import { demoteTrustedUserEverywhere, inviteUserToManagementRoomOnce, inviteUser
 import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
-import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";import {
+import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
+import { BacklogInbox } from "./backlog-inbox.js";import {
   type BashTracker,
   clearedQueuesView,
   createBashTracker,
@@ -484,98 +484,22 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 按 pi 进程记账,promise 落定自动销账(见 createBashTracker)。
   const bashTracker: BashTracker = createBashTracker();
 
-  // ---- 离线收件箱(issue #113):积压缓冲与结算 -----------------------------
+  // ---- 离线收件箱(issue #113):状态与结算语义在 BacklogInbox module -------
   // transport 只负责判定「这是离线积压」(stale + 台账没见过,带 replayed
-  // 标记);缓冲、征询与执行裁决都在 router —— 因为授权门控(静默群/未信任
-  // 发送者)只有这里有,积压绝不构成越权旁路。per-room 一套:缓冲、结算
-  // 计时器(首条积压后 5s,等回放波灌完)与 confirm 待答状态互不串房。
-  const BACKLOG_SETTLE_MS = 5_000;
-  const BACKLOG_CONFIRM_TIMEOUT_MS = 10 * 60_000;
-  const backlogBuffers = new Map<string, ExternalMessage[]>();
-  const backlogTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const backlogAwaiting = new Map<string, { entries: ExternalMessage[]; timer: ReturnType<typeof setTimeout> }>();
-
-  /** 积压清单的一行预览:文本收成单行截断;非文本载荷与 📥 日志同形。 */
-  const backlogPreview = (msg: ExternalMessage): string => {
-    const raw = msg.payload.kind === "text" ? msg.payload.text : `[${msg.payload.kind}]`;
-    const oneLine = raw.replace(/\s+/g, " ").trim();
-    return oneLine.length > 120 ? `${oneLine.slice(0, 120)}…` : oneLine;
-  };
-
-  const bufferBacklog = (msg: ExternalMessage): void => {
-    const buffer = backlogBuffers.get(msg.chatId) ?? [];
-    buffer.push(msg);
-    backlogBuffers.set(msg.chatId, buffer);
-    if (!backlogTimers.has(msg.chatId)) {
-      backlogTimers.set(
-        msg.chatId,
-        setTimeout(() => settleBacklog(msg.chatId), BACKLOG_SETTLE_MS)
-      );
-    }
-  };
-
-  /** 按到达序原样再注入(剥掉 replayed 标记 = 按实时消息走全管道:斜杠
-   *  命令、附件停车、prompt 各归其位)。router 变量在返回后才可用,这里
-   *  只在调用时解引用,无 TDZ 问题。 */
-  const deliverBacklog = async (entries: ExternalMessage[]): Promise<void> => {
-    for (const entry of entries) {
-      const { replayed: _strip, ...realtime } = entry;
-      await router.handleIncoming(realtime);
-    }
-  };
-
-  const settleBacklog = (chatId: string): void => {
-    const timer = backlogTimers.get(chatId);
-    if (timer) {
-      clearTimeout(timer);
-      backlogTimers.delete(chatId);
-    }
-    const entries = backlogBuffers.get(chatId);
-    if (!entries || entries.length === 0) return;
-    backlogBuffers.delete(chatId);
-    const lines = entries.map((e) => t("inbox.entry.line", { user: e.username, preview: backlogPreview(e) })).join("\n");
-    const transport = entries[0]!.transport;
-
-    if (inboxMode(store.get()) === "auto") {
-      // 告知后直接按序执行(部署者明确选择过;`!`/bash 类消息的惊吓风险
-      // 由部署者自担)。
-      void sendReply(chatId, transport, t("inbox.auto.notice", { count: entries.length, lines }))
-        .then(() => deliverBacklog(entries))
-        .catch((err: unknown) => logger.error(`backlog auto-delivery failed: ${(err as Error).message}`));
-      return;
-    }
-
-    // confirm(默认):汇总征询,「执行」按序处理 /「忽略」丢弃 / 超时视为
-    // 忽略。新积压波并入旧待答(重开一轮计时与征询,列表合并展示)。
-    const prior = backlogAwaiting.get(chatId);
-    if (prior) {
-      clearTimeout(prior.timer);
-      prior.entries.push(...entries);
-    }
-    const merged = prior?.entries ?? entries;
-    const mergedLines = merged
-      .map((e) => t("inbox.entry.line", { user: e.username, preview: backlogPreview(e) }))
-      .join("\n");
-    const confirmTimer = setTimeout(() => {
-      // 超时默认忽略:静默丢弃,不发补充通知(征询文案已写明规则)。
-      backlogAwaiting.delete(chatId);
-    }, BACKLOG_CONFIRM_TIMEOUT_MS);
-    backlogAwaiting.set(chatId, { entries: merged, timer: confirmTimer });
-    void sendReply(
-      chatId,
-      transport,
-      t("inbox.confirm.prompt", {
-        count: merged.length,
-        lines: mergedLines,
-        minutes: BACKLOG_CONFIRM_TIMEOUT_MS / 60_000,
-      })
-    ).catch((err: unknown) => {
-      // 征询发不出去(极端时序)等于没人能批准 —— 按忽略处理,积压不留悬案。
-      backlogAwaiting.delete(chatId);
-      clearTimeout(confirmTimer);
-      logger.warn(`backlog confirm prompt failed, backlog discarded: ${(err as Error).message}`);
-    });
-  };
+  // 标记);缓冲、征询与执行裁决都在模块里。授权门控仍归管道:两个积压阶段
+  // 都跑在授权裁决之后,未信任者的积压与应答根本到不了这里。deliver 回调在
+  // 调用时才解引用 router(构造期 router 尚未存在,只在调用时求值,无 TDZ)。
+  const inbox = new BacklogInbox({
+    reply: sendReply,
+    deliver: async (entries) => {
+      for (const entry of entries) {
+        const { replayed: _strip, ...realtime } = entry;
+        await router.handleIncoming(realtime);
+      }
+    },
+    config: () => store.get(),
+    onExecute: (msg, count) => auditTrail(AUDIT_EVENTS.backlogExecute, msg, `delivering ${count} offline backlog message(s)`),
+  });
 
 
   // Headless login (issue #55): /login /logout /auth + answer capture. The
@@ -867,27 +791,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // 继续挂着等。授权已在上一阶段裁决 —— 未信任者的应答根本到不了这。
       handle: async (ctx) => {
         if (!ctx.text) return false;
-        const pending = backlogAwaiting.get(ctx.msg.chatId);
-        if (!pending) return false;
-        if (isExecuteInput(ctx.text)) {
-          backlogAwaiting.delete(ctx.msg.chatId);
-          clearTimeout(pending.timer);
-          const entries = pending.entries;
-          // 审计(issue #124,#113 回填):离线积压批量执行是运行时突变 —
-          // 谁、在哪个房间、放行了几条,一行留痕。
-          auditTrail(AUDIT_EVENTS.backlogExecute, ctx.msg, `delivering ${entries.length} offline backlog message(s)`);
-          void deliverBacklog(entries).catch((err: unknown) =>
-            logger.error(`backlog delivery failed: ${(err as Error).message}`)
-          );
-          return true;
-        }
-        if (isIgnoreInput(ctx.text)) {
-          backlogAwaiting.delete(ctx.msg.chatId);
-          clearTimeout(pending.timer);
-          await sendReply(ctx.msg.chatId, ctx.msg.transport, t("inbox.ignored", { count: pending.entries.length }));
-          return true;
-        }
-        return false;
+        return inbox.answer(ctx.text, ctx.msg);
       },
     },
     {
@@ -898,15 +802,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // 离线积压缓冲(issue #113):replayed 消息不直接执行,按房间攒着,
       // 首条积压后 5s(等回放波灌完)或本房间首条实时消息到达时结算。
       // off 模式 transport 根本不转发积压;这里再挡一道(手喂消息的兜底)。
-      handle: async (ctx) => {
-        if (ctx.msg.replayed) {
-          if (inboxMode(store.get()) === "off") return false;
-          bufferBacklog(ctx.msg);
-          return true;
-        }
-        if (backlogBuffers.has(ctx.msg.chatId)) settleBacklog(ctx.msg.chatId);
-        return false;
-      },
+      handle: async (ctx) => inbox.accept(ctx.msg),
     },
     {
       name: "multiproject",
