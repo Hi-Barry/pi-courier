@@ -20,6 +20,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
+import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
 import type { ReminderEntry } from "../reminders/reminder-store.js";
@@ -176,12 +177,6 @@ export function formatBashReply(command: string, result: BashResultView, exclude
   return `$ ${command}${suffix}\n\`\`\`\n${output || t("common.noOutput")}\n\`\`\`\n${t("common.exitCode", { code: result.exitCode })}`;
 }
 
-/** Collapse a queue entry to one bounded line for chat display. */
-function truncateLine(text: string, max = 120): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
-}
-
 /** Total queued messages in a snapshot (0 when absent). */
 export function queueTotal(snapshot: QueueSnapshot | undefined): number {
   return (snapshot?.steering.length ?? 0) + (snapshot?.followUp.length ?? 0);
@@ -290,6 +285,31 @@ export function formatReloadAllResult(result: ReloadAllResult): string {
  *  pendingMessageCount cross-check runs on the EMPTY path too: a mirror that
  *  looks empty only because queue_update events were missed must not read as
  *  "queue is empty" when upstream still holds pending messages. */
+/** /stop 与 //interrupt 共用的清队段(issue #112 + #115):快照 → 上游清队
+ *  (旧上游拒清即 clearFailed)→ 钉零。清队成功 = 上游权威为空,镜像立即
+ *  归零,不等 queue_update 推送 —— 推送与重启生命周期赛跑时会误触发
+ *  「队列丢失」回执;钉零不必等 abort/prompt,清队成功后到达的推送只会
+ *  报告空态。module 内部缝:回执文案(stop.* vs interrupt.*)与后续动作
+ *  (审计 / waitForIdle+prompt)归各 case。 */
+async function clearQueuesBeforeAbort(
+  rpc: PiRpc,
+  queueView: (() => QueueSnapshot | undefined) | undefined,
+  setQueueMirror: ((snapshot: QueueSnapshot) => void) | undefined
+): Promise<{ snapshot: QueueSnapshot | undefined; cleared: UpstreamQueues | undefined; clearFailed: boolean }> {
+  const snapshot = queueView?.();
+  let cleared: UpstreamQueues | undefined;
+  let clearFailed = false;
+  if (queueTotal(snapshot) > 0) {
+    try {
+      cleared = await upstreamClearQueueSend(rpc.requireClient());
+    } catch {
+      clearFailed = true;
+    }
+  }
+  if (cleared) setQueueMirror?.({ steering: [], followUp: [] });
+  return { snapshot, cleared, clearFailed };
+}
+
 async function replyQueueView(rpc: PiRpc, snapshot: QueueSnapshot | undefined, reply: (text: string) => Promise<void>): Promise<void> {
   const steering = snapshot?.steering ?? [];
   const followUp = snapshot?.followUp ?? [];
@@ -484,24 +504,12 @@ export async function handleSlashCommand(
         // report exactly what was dropped. Old upstreams (<0.84.4) reject
         // clear_queue → fall back to the spec #51 behaviour: abort only, and
         // warn that the queue survives.
-        const snapshot = queueView?.();
-        let cleared: UpstreamQueues | undefined;
-        let clearFailed = false;
-        if (queueTotal(snapshot) > 0) {
-          try {
-            cleared = await upstreamClearQueueSend(rpc.requireClient());
-          } catch {
-            clearFailed = true;
-          }
-        }
+        const { snapshot, cleared, clearFailed } = await clearQueuesBeforeAbort(rpc, queueView, setQueueMirror);
         await rpc.requireClient().abort();
-        // 清队成功 = 上游权威为空:镜像立即钉零,不等 queue_update 推送 ——
-        // 推送与重启生命周期赛跑时会误触发「队列丢失」回执(issue #115)。
+        // 审计(issue #124,#115 回填):队列清理是运行时突变 —— 命令层
+        // 按真实语义上报(实际清掉的条数),router 落账。
         if (cleared) {
-          setQueueMirror?.({ steering: [], followUp: [] });
-          // 审计(issue #124,#115 回填):队列清理是运行时突变 —— 命令层
-          // 按真实语义上报(实际清掉的条数),router 落账。
-          const clearedCount = cleared ? cleared.steering.length + cleared.followUp.length : 0;
+          const clearedCount = cleared.steering.length + cleared.followUp.length;
           ctx.audit?.("queue.clear", `${commandWord} cleared ${clearedCount} queued message(s)`);
         }
         const view = cleared ? clearedQueuesView(cleared) : null;
@@ -597,24 +605,12 @@ export async function handleSlashCommand(
           await reply(t("cmd.interrupt.idle"));
           return true;
         }
-        // Same clear-first order as /stop (issue #112): queued messages must
-        // not fire after the abort+waitForIdle, and the dropped ones are
-        // reported. Old upstreams fall back to abort-only + queue warning.
-        const snapshot = queueView?.();
-        let cleared: UpstreamQueues | undefined;
-        let clearFailed = false;
-        if (queueTotal(snapshot) > 0) {
-          try {
-            cleared = await upstreamClearQueueSend(rpc.requireClient());
-          } catch {
-            clearFailed = true;
-          }
-        }
+        // Same clear-first order as /stop (issue #112) — the mechanics (and
+        // the #115 pin-to-empty) live in clearQueuesBeforeAbort.
+        const { snapshot, cleared, clearFailed } = await clearQueuesBeforeAbort(rpc, queueView, setQueueMirror);
         await rpc.requireClient().abort();
         await rpc.requireClient().waitForIdle();
         await rpc.prompt(args);
-        // 与 /stop 同款钉零(issue #115):清队成功后不等 queue_update 推送。
-        if (cleared) setQueueMirror?.({ steering: [], followUp: [] });
         const view = cleared ? clearedQueuesView(cleared) : null;
         if (view) {
           await reply(`${t("cmd.interrupt.done")}\n${t("cmd.interrupt.cleared", view)}`);

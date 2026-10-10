@@ -26,6 +26,7 @@ import {
   resolveLanguage,
   THINKING_LEVELS,
 } from "./config.js";
+import { truncateLine } from "./formatting.js";
 import { setLocale, t } from "./i18n/index.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
@@ -249,8 +250,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       if (!provider) throw new Error(`Transport ${transport} not found`);
       if (!provider.isConnected) throw new Error(`Transport ${transport} not connected`);
       await provider.sendMessage(chatId, text);
-      const short = text.replace(/\s+/g, " ").trim();
-      logger.withLabel(projectManager.labelForRoom(chatId)).debug(`📤 [${transport}] ${short.slice(0, 500)}${short.length > 500 ? "…" : ""}`);
+      logger
+        .withLabel(projectManager.labelForRoom(chatId))
+        .debug(`📤 [${transport}] ${truncateLine(text, 500)}`);
     } catch (err) {
       logger.error(`发送失败 (${transport}): ${(err as Error).message}`);
     }
