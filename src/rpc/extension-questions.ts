@@ -188,8 +188,8 @@ export class ExtensionQuestions {
         entry.timer.unref?.();
         this.queue(rpc).push(entry);
         this.deps.sendReply(target.chatId, target.transport, extensionUIQuestionText(request)).catch((err: unknown) => {
-          log.warn(`[xq] 问题卡片发送失败(用户看不到这道题): ${errorMessage(err)}`);
-        });
+        logger.warn(`[xq] 问题卡片发送失败(用户看不到这道题): ${errorMessage(err)}`);
+      });
         log.debug(`[extension-ui] ${request.method} 提问已发往房间 (id ${request.id})`);
         return;
       }
@@ -202,8 +202,8 @@ export class ExtensionQuestions {
           if (target) {
             const icon = level === "error" ? "🔴" : "⚠️";
             this.deps.sendReply(target.chatId, target.transport, `${icon} ${t("xq.notify", { message })}`).catch((err: unknown) => {
-            log.warn(`[xq] 问题通知发送失败: ${errorMessage(err)}`);
-          });
+          logger.warn(`[xq] 问题通知发送失败: ${errorMessage(err)}`);
+        });
           } else {
             log.warn(`[extension-ui] 扩展通知(${level},无绑定房间): ${message}`);
           }

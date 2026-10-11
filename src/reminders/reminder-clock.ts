@@ -129,6 +129,8 @@ export class ReminderClock implements ReminderController {
     // 单飞守卫(审计稳定性批 票17):上一轮 tick 还在慢投递时,新触发的
     // tick 让位并重新排程 —— 既不叠着跑重复投递,也不让定时链断掉。
     if (this.ticking) {
+      // 重入是异常态(慢投复盖到下一次触发),必须可见(审计稳定性批 票17)
+      logger.warn("[reminders] tick re-entered while a delivery is still in flight — skipped and re-armed");
       this.arm();
       return;
     }

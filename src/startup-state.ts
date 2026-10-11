@@ -75,7 +75,12 @@ export function createStartupState(deps: StartupStateDeps): StartupState {
   const drain = async (): Promise<void> => {
     // 单飞守卫(审计稳定性批 票17):在途 drain 会在每轮 while 复查 pending,
     // 新推送项由它接管;两个 drain 并发会对同一 pending[0] 双发。
-    if (draining) return;
+    if (draining) {
+      // 在途 drain 每轮复查 pending,新推送项由它接管 —— 属设计内正常路径,
+      // debug 留痕即可(审计稳定性批 票17)。
+      logger.debug("[startup] drain already in flight — new notice handed over to it");
+      return;
+    }
     draining = true;
     try {
       while (sink && pending.length > 0) {

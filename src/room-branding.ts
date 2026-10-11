@@ -9,6 +9,7 @@
  */
 
 import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName, isSpaceMode, managementRoomId } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { logger } from "./logger.js";
 import {
   AVATAR_SET_VERSION,
@@ -67,7 +68,14 @@ async function migrateAvatarSet(
 ): Promise<void> {
   const rebrand = bookedAvatarVersion(cfg, set) < AVATAR_SET_VERSION[set];
   const allOk = await run(rebrand);
-  if (rebrand && allOk) store.update(avatarVersionMarker(set));
+  if (rebrand && allOk) {
+    try {
+      store.update(avatarVersionMarker(set));
+    } catch (err) {
+      // 记账失败 = 下次启动整组重新品牌化,必须留痕(审计稳定性批 票12 评审修复)
+      logger.warn(`[identity] ${set} 头像版本记账失败(下次启动将重刷): ${errorMessage(err)}`);
+    }
+  }
 }
 
 /** Startup identity self-heal: brand the managed rooms with the short space

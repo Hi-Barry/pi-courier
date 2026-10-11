@@ -18,6 +18,7 @@ import {
   nativeMxid,
   saveConfig,
 } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { detectSystemLanguage } from "./i18n/detect.js";
 import type { Locale } from "./i18n/index.js";
 import { setLocale, t } from "./i18n/index.js";
@@ -155,7 +156,7 @@ async function matrixLogin(
 async function matrixWhoami(homeserver: string, accessToken: string): Promise<string> {
   const url = `${homeserver.replace(/\/$/, "")}/_matrix/client/v3/account/whoami`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-  if (!res.ok) throw new Error(t("setup.token.whoamiFailed", { status: res.status }));
+  if (!res.ok) throw new Error(t("setup.token.verifyKeptFailed", { status: res.status }));
   const data = (await res.json()) as { user_id?: string };
   return data.user_id ?? "unknown";
 }
@@ -263,7 +264,12 @@ export async function runSetup(): Promise<void> {
       const keep = ((await ask(t("setup.token.keep"))).trim() || "y").toLowerCase();
       if (keep === "y") {
         accessToken = existingToken;
-        botUserId = await matrixWhoami(homeserver, accessToken).catch(() => "unknown");
+        botUserId = await matrixWhoami(homeserver, accessToken).catch((err: unknown) => {
+          // 令牌校验失败仍按用户选择保留,但必须可见 —— 否则过期令牌照写
+          // 配置,启动后才炸(审计稳定性批 票12 评审修复)。
+          console.warn(t("setup.token.verifyKeptFailed", { message: errorMessage(err) }));
+          return "unknown";
+        });
         console.log(t("setup.token.kept", { user: botUserId }));
       } else {
         ({ accessToken, botUserId } = await acquireToken(ask, homeserver, deviceId));

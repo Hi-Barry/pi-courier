@@ -246,7 +246,8 @@ const zh = {
     "**Bridge 管理命令**: `/help`(本帮助)、`/trusted`、`/revoke`、`/channels`、`/enable`、`/disable`、`/toggletools`\n" +
     "**认证**: 首次私聊 bot → bot 终端与管理房间会显示 6 位验证码 → 在收到提示的那个聊天里输入验证码即成为信任用户(第一个信任用户 = 管理员)。群聊由信任用户在群里发 `/enable <模式>` 启用。",
   "auth.pairing.noPendingHint": "ℹ️ 没有进行中的配对。如需配对,请先私信 bot,收到 6 位配对码后回复即可。",
-  "auth.challenge.promptFailed": "⚠️ 配对提示发送失败({message})—— 请手动把配对码 {code} 转告对方。",
+  "setup.token.verifyKeptFailed": "⚠️ 保留的令牌校验失败({message})—— 仍按原样保留;若启动后登录异常请重跑 pi-courier setup。",
+"auth.challenge.promptFailed": "⚠️ 配对提示发送失败({message})—— 请手动把配对码 {code} 转告对方。",
   "auth.challenge.prompt": "🔐 请输入 bot 管理员提供的 6 位配对码 —— 就在本聊天里发送。\n⏱️ 2 分钟内有效。",
   "login.noProviders": "没有可登录的 provider。",
   "login.authenticated": "✅ 已认证({types})",

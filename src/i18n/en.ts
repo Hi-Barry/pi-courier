@@ -253,7 +253,8 @@ const en: Record<MessageKey, string> = {
     "**Pairing**: DM the bot for the first time → a 6-digit code appears in the bot's terminal and the management room → enter it in the chat where you received the prompt to become a trusted user (the first trusted user = admin). Group chats are enabled by a trusted user sending `/enable <mode>` in the group.",
   "auth.pairing.noPendingHint":
     "ℹ️ No pairing in progress. To pair, DM the bot first; you will receive a 6-digit code — reply with it here.",
-  "auth.challenge.promptFailed":
+  "setup.token.verifyKeptFailed": "⚠️ Could not verify the kept token ({message}) — kept as-is; re-run `pi-courier setup` if login fails at startup.",
+"auth.challenge.promptFailed":
     "⚠️ Pairing prompt could not be sent ({message}) — please relay the code {code} to the user manually.",
   "auth.challenge.prompt":
     "🔐 Please enter the 6-digit code provided by the bot admin — here in this chat.\n⏱️ Expires in 2 minutes.",

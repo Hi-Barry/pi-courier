@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { logger } from "../src/logger";
 import { ReminderClock, type ReminderDelivery } from "../src/reminders/reminder-clock";
 import { ReminderStore, type ReminderEntry } from "../src/reminders/reminder-store";
 import { JsonStateFile } from "../src/state/json-file";
@@ -52,6 +53,26 @@ describe("ReminderClock (issue #117)", () => {
     }, lateCap !== undefined ? { lateCap } : {});
     return { store, clock };
   };
+
+  it("reminder store load drops malformed disk entries with a warning (audit stability batch 票17)", () => {
+    writeFileSync(
+      file,
+      JSON.stringify([
+        { id: "ok1", chatId: "!r:s", transport: "matrix", userId: "u", username: "barry", text: "喝茶", dueAt: BASE + DAY, createdAt: BASE },
+        { id: 42, chatId: "!r:s", transport: "matrix", userId: "u", username: "barry", text: "坏id", dueAt: BASE + DAY, createdAt: BASE },
+        { id: "ok2", chatId: "!r:s", transport: "matrix", userId: "u", username: "barry", text: "坏时间", dueAt: "明天", createdAt: BASE },
+        null,
+      ]),
+      "utf8",
+    );
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const store = new ReminderStore(new JsonStateFile<ReminderEntry[]>(file, []));
+    store.load();
+    const warnText = String(warnSpy.mock.calls[0]?.[0] ?? "");
+    warnSpy.mockRestore();
+    expect(store.list().map((e) => e.id)).toEqual(["ok1"]);
+    expect(warnText).toContain("malformed");
+  });
 
   it("single-flight: a re-entrant tick while a slow delivery is in flight skips and re-arms (audit stability batch 票17)", async () => {
     let release!: () => void;

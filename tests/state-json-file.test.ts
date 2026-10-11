@@ -78,6 +78,19 @@ describe("JsonStateFile (issue #114)", () => {
     expect(new JsonStateFile<Array<{ id: string }>>(file2, []).load()).toEqual([]);
   });
 
+  it("interleaved saves from two instances of the same file always leave valid JSON (audit stability batch 票15)", () => {
+    const file = fresh();
+    const a = new JsonStateFile<{ n: number }>(file, { n: 0 });
+    const b = new JsonStateFile<{ n: number }>(file, { n: 0 });
+    a.save({ n: 1 });
+    b.save({ n: 2 });
+    a.save({ n: 3 });
+    // 两次 save 共用同一 pid 临时名 → 第二次 save 先清掉第一次的 tmp 再写,
+    // 串行交错后正式位永远是完整 JSON(跨进程靠 pid 不同天然隔离)。
+    expect(a.load()).toEqual({ n: 3 });
+    expect(existsSync(`${file}.${process.pid}.tmp`)).toBe(false);
+  });
+
   it("save uses a PID-suffixed tmp and ignores a stale fixed-name tmp (audit stability batch 票15)", () => {
     const file = fresh();
     // Leftover from the old fixed-name scheme, full of garbage.
