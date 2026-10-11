@@ -35,6 +35,8 @@ function createPrompter(): {
   ask: (prompt: string, opts?: { silent?: boolean }) => Promise<string>;
   close: () => void;
 } {
+  // Exported below for tests — the piped-mode race (audit critical) is
+  // pinned against a fake stdin in tests/setup-prompter.test.ts.
   if (stdin.isTTY) {
     const rl = createInterface({ input: stdin, output: stdout });
     // Each ask registers a `close` listener; the wizard makes a handful of
@@ -87,23 +89,27 @@ function createPrompter(): {
     };
   }
 
-  // Piped mode: read everything up front, then consume line by line
+  // Piped mode: read everything up front, then consume line by line.
+  // `ask` waits for EOF before consuming — resolving on first data (the old
+  // `data.length > 0` guard) raced the `end` handler and returned an empty
+  // answer for the very first question (audit critical fix).
   let data = "";
+  let ended = false;
+  const lines: string[] = [];
   stdin.setEncoding("utf-8");
   stdin.on("data", (chunk) => {
     data += chunk as string;
   });
-  const lines: string[] = [];
   stdin.on("end", () => {
     lines.push(...data.split("\n"));
+    ended = true;
   });
   return {
     ask: async (prompt: string) => {
       process.stdout.write(prompt);
-      await new Promise((resolve) => {
-        if (lines.length > 0 || data.length > 0) resolve(undefined);
-        else stdin.once("end", () => resolve(undefined));
-      });
+      if (!ended) {
+        await new Promise<void>((resolve) => stdin.once("end", () => resolve()));
+      }
       return lines.shift()?.trim() ?? "";
     },
     close: () => {
@@ -112,6 +118,8 @@ function createPrompter(): {
     },
   };
 }
+
+export { createPrompter };
 
 async function matrixLogin(
   homeserver: string,
