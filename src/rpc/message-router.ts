@@ -22,6 +22,7 @@ import {
   truncate,
   truncateLine,
 } from "../formatting.js";
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { namespacedId } from "../identity.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";
@@ -1108,8 +1109,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           parkedAt.delete(key);
           persistLedger();
         } catch (err) {
-          if (err === RPC_ABORT) throw err;
-          await sendReply(ctx.msg.chatId, ctx.msg.transport, t("router.prompt.failed", { message: (err as Error).message }));
+          // rpc 已在此前 roomRpc() 解析,本段不可能产生 RPC_ABORT(审计工程批 票20)
+          await sendReply(ctx.msg.chatId, ctx.msg.transport, t("router.prompt.failed", { message: errorMessage(err) }));
         }
         return true;
       },

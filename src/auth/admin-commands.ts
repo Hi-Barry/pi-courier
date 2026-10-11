@@ -123,8 +123,6 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
             });
           }
           return { handled: false, replies: [], notifications: [], effects: [] };
-        default:
-          return { handled: false, replies: [], notifications: [], effects: [] };
       }
     }
     return { handled: false, replies: [], notifications: [], effects: [] };

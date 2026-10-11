@@ -353,7 +353,9 @@ export class LoginManager {
       await this.deps.sendReply(chatId, entry.transport, answer.hint);
       return true;
     }
-    if (answer.kind === "cancel") return true; // unreachable: cancel handled above
+    // cancel 已在 deliver 入口处理,此分支不可达;保留它只为类型收窄
+    // (parseLoginAnswer 的返回联合含 cancel —— 审计工程批 票20 评注修正)
+    if (answer.kind === "cancel") return true;
     current.submit(answer.value);
     return true;
   }

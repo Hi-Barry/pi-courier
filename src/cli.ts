@@ -253,8 +253,8 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
     }
     return;
   }
-  const cmd = ["systemctl", "--user", action, SERVICE_NAME];
-  const { status, stderr } = spawnSystemctlUser(cmd.slice(2));
+  // spawnSystemctlUser 自带 systemctl --user 前缀,这里只传其余参数
+  const { status, stderr } = spawnSystemctlUser([action, SERVICE_NAME]);
   if (status !== 0) {
     printBusHint(stderr);
     process.exit(status);

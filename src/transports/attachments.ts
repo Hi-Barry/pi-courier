@@ -16,6 +16,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 
 // ─── 附件输入(issue #66)────────────────────────────────────────
@@ -159,8 +160,9 @@ export class AttachmentStore {
         data = await withTimeout(this.source.downloadPlaintext(mxcKey));
       }
     } catch (err) {
-      if (err instanceof AttachmentTooLargeError) throw err;
-      throw new AttachmentDownloadError((err as Error).message);
+      // 下载源不会抛 TooLarge(大小预检在 try 外),无需类型分流;
+      // 非 Error 拒绝也要可读(审计工程批 票20/24)。
+      throw new AttachmentDownloadError(errorMessage(err));
     }
 
     // Re-check against REAL bytes — info.size is a hint, servers lie.

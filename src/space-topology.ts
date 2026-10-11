@@ -167,8 +167,8 @@ export async function maybeInitManagementRoom(
 ): Promise<void> {
   const cfg = store.get();
   const existing = managementRoomId(cfg);
-  if (existing === msg.chatId) return; // already the management room
-  if (existing !== undefined) return; // a management room already exists — never brand another
+  // 已有管理房(含本房间即管理房)一律不再品牌化另一个(两守卫合并:审计工程批 票20)
+  if (existing !== undefined) return;
   try {
     const instanceName = effectiveInstanceName(cfg);
     const botAccount = roomOps.getBotUserId() ?? t("common.unknownAccount");
