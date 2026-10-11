@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { execFile } from 'child_process';
+import { fileURLToPath } from 'url';
 
 describe('lock', () => {
   let tmpDir: string;
@@ -130,4 +132,97 @@ describe('lock', () => {
     acquireLock();
     expect(existsSync(join(tmpDir, '.pi'))).toBe(true);
   });
+
+  it('does not steal a lock whose owner is alive but unprobeable (EPERM)', async () => {
+    const piDir = join(tmpDir, '.pi');
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, 'pi-courier.lock'), '424242:other-owner');
+
+    const err: NodeJS.ErrnoException = new Error('Operation not permitted');
+    err.code = 'EPERM';
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw err;
+    });
+    try {
+      const { acquireLock } = await importLock(tmpDir);
+      expect(acquireLock()).toBe(false);
+      // The other owner's claim is untouched — no silent takeover.
+      expect(readFileSync(join(piDir, 'pi-courier.lock'), 'utf-8')).toBe('424242:other-owner');
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it('takes over a corrupt lock file (no valid ownership claim)', async () => {
+    const piDir = join(tmpDir, '.pi');
+    mkdirSync(piDir, { recursive: true });
+    for (const corrupt of ['', 'garbage-without-colon', 'not-a-number:owner']) {
+      writeFileSync(join(piDir, 'pi-courier.lock'), corrupt);
+      const { acquireLock } = await importLock(tmpDir);
+      expect(acquireLock(), `corrupt=${JSON.stringify(corrupt)}`).toBe(true);
+      const { releaseLock } = await importLock(tmpDir);
+      releaseLock();
+    }
+  });
+
+  it('fails closed when lock file mechanics fail (no silent double instance)', async () => {
+    // .pi exists as a regular FILE → mkdirSync/writeFileSync throw.
+    writeFileSync(join(tmpDir, '.pi'), 'not a directory');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { acquireLock } = await importLock(tmpDir);
+      expect(acquireLock()).toBe(false);
+      expect(g.__msgBridgeConnected).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('release is a safe no-op when the lock file is corrupt', async () => {
+    const { acquireLock, releaseLock } = await importLock(tmpDir);
+    expect(acquireLock()).toBe(true);
+    // Corrupt the file behind the holder's back, then release: no crash, no
+    // unlink (ownership can no longer be verified).
+    writeFileSync(join(tmpDir, '.pi', 'pi-courier.lock'), 'corrupt');
+    expect(() => releaseLock()).not.toThrow();
+    expect(g.__msgBridgeConnected).toBe(false);
+  });
+
+  it('exactly one cross-process contender wins the race', async () => {
+    const lockModuleUrl = fileURLToPath(new URL('../src/lock.ts', import.meta.url));
+    const runner = join(tmpDir, 'contender.mjs');
+    // Winner holds the lock and stays alive (the contender process IS the
+    // liveness guarantee — an exited holder is stale by design); losers
+    // report immediately after seeing a live owner.
+    writeFileSync(
+      runner,
+      `import(${JSON.stringify(lockModuleUrl)}).then(async (m) => {
+        if (m.acquireLock()) {
+          process.stdout.write("W");
+          await new Promise((r) => setTimeout(r, 2000));
+          m.releaseLock();
+        } else {
+          process.stdout.write("L");
+        }
+      });`
+    );
+    const contenders = 6;
+    const results = await Promise.all(
+      Array.from({ length: contenders }, () =>
+        new Promise<string>((resolve, reject) => {
+          execFile(
+            process.execPath,
+            [runner],
+            // os.homedir() follows $HOME on Linux — point the contender's
+            // lock dir at the temp dir, never at the real ~/.pi.
+            { env: { ...process.env, HOME: tmpDir } },
+            (err, stdout) => (err ? reject(err) : resolve(String(stdout)))
+          );
+        })
+      )
+    );
+    expect(results.filter((r) => r === 'W')).toHaveLength(1);
+    expect(results.filter((r) => r === 'L')).toHaveLength(contenders - 1);
+  }, 15000);
 });
