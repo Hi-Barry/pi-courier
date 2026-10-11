@@ -101,10 +101,14 @@ export function saveConfig(config: MsgBridgeConfig): void {
     fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+  // mode only applies when the file is CREATED — a pre-existing file (e.g.
+  // written loose by an older version) keeps whatever it had. Enforce the
+  // documented 0600/0700 contract explicitly.
   try {
+    fs.chmodSync(CONFIG_PATH, 0o600);
     fs.chmodSync(CONFIG_DIR, 0o700);
   } catch (err) {
-    console.warn("Failed to set directory permissions:", err);
+    console.warn("Failed to set config file permissions:", err);
   }
 }
 
@@ -333,9 +337,16 @@ export class ConfigStore {
     return this.config;
   }
 
-  /** Shallow-merge a patch into the in-memory config and persist it. */
+  /** Shallow-merge a patch into the in-memory config and persist it.
+   *  Persist failure never throws into the message pipeline: the in-memory
+   *  copy stays authoritative and the next successful update re-persists
+   *  (setup's direct saveConfig call still fails loudly on purpose). */
   update(patch: Partial<MsgBridgeConfig>): void {
     this.config = { ...this.config, ...patch };
-    saveConfig(this.config);
+    try {
+      saveConfig(this.config);
+    } catch (err) {
+      console.warn(`config persist failed (memory copy stays authoritative): ${(err as Error).message}`);
+    }
   }
 }

@@ -336,6 +336,28 @@ export function verifyDownloadedBinding(nodePath, manifestKey, manifest) {
 }
 
 /**
+ * Shared handling for the manifest-mismatch verdict at both verify call sites
+ * (fresh download and pre-existing binding): a binary that fails its manifest
+ * check must never load — delete it and degrade. Returns the degraded result.
+ */
+function rejectUnverifiedBinding(nodePath, key, check, source) {
+  // Never load an unverified native binary. Delete and degrade.
+  try {
+    rmSync(nodePath, { force: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`${LOG_PREFIX} could not delete the unverified binding: ${message}`);
+  }
+  console.warn(
+    `${LOG_PREFIX} ${source} crypto binding ${key} FAILED sha256 verification ` +
+      `(expected ${check.expected}, observed ${check.observed}) — file deleted, ` +
+      `continuing WITHOUT native E2EE crypto (the bridge still runs, encrypted ` +
+      `rooms will be unreadable). Possible tampering or upstream asset change.`
+  );
+  return { ok: false, reason: "hash-mismatch", verified: "rejected" };
+}
+
+/**
  * Orchestration. All inputs are injectable so tests run in temp dirs; the
  * no-argument call keeps the exact pre-cache behaviour contract:
  * `{ok, downloaded, reason?}` with failures warned, never thrown.
@@ -364,10 +386,45 @@ export function ensureCryptoNative(options = {}) {
     return { ok: false, reason: "crypto-package-not-found" };
   }
 
-  if (!isNativeBindingMissing(cryptoDir, basename)) {
-    // Already present (either downloaded once, or platform unsupported).
-    // Deliberately no post-hoc verification of an existing binding.
+  if (basename === null) {
+    // Platform we don't recognise — nothing to download or verify.
     return { ok: true, downloaded: false };
+  }
+
+  if (!isNativeBindingMissing(cryptoDir, basename)) {
+    // Already present (downloaded once, or a prior install). Post-hoc
+    // verification (audit fix): the manifest is the integrity anchor, so an
+    // existing binding gets the same verdict a fresh download would — a
+    // tampered file must never load. Unlisted versions stay TOFU + warn,
+    // matching the cache path: fail-closed here would break installs that
+    // merely lag the manifest.
+    const nodePath = `${cryptoDir}/${basename}.node`;
+    const version = readCryptoPackageVersion(cryptoDir);
+    const key = version !== null ? `${version}/${basename}` : null;
+    let check;
+    try {
+      // key may be null (unreadable version file) — manifestLookup treats
+      // that as unlisted, i.e. the same TOFU path as a lagging manifest.
+      check = verifyDownloadedBinding(nodePath, key, readManifest(manifestPath));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `${LOG_PREFIX} could not verify existing crypto binding (${nodePath}): ${message} — ` +
+          `continuing without it (E2EE may be unavailable).`
+      );
+      return { ok: false, reason: "verify-failed" };
+    }
+    if (check.verdict === "manifest-mismatch") {
+      return rejectUnverifiedBinding(nodePath, key, check, "existing");
+    }
+    if (check.verdict === "manifest-miss" && key !== null) {
+      manifestNag(key, check.observed);
+    }
+    return {
+      ok: true,
+      downloaded: false,
+      verified: check.verdict === "manifest-match" ? "manifest" : "tofu",
+    };
   }
 
   const version = readCryptoPackageVersion(cryptoDir);
@@ -432,20 +489,7 @@ export function ensureCryptoNative(options = {}) {
   }
 
   if (check.verdict === "manifest-mismatch") {
-    // Never load an unverified native binary. Delete and degrade.
-    try {
-      rmSync(nodePath, { force: true });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn(`${LOG_PREFIX} could not delete the unverified binding: ${message}`);
-    }
-    console.warn(
-      `${LOG_PREFIX} downloaded crypto binding ${key} FAILED sha256 verification ` +
-        `(expected ${check.expected}, observed ${check.observed}) — file deleted, ` +
-        `continuing WITHOUT native E2EE crypto (the bridge still runs, encrypted ` +
-        `rooms will be unreadable). Possible tampering or upstream asset change.`
-    );
-    return { ok: false, reason: "hash-mismatch", verified: "rejected" };
+    return rejectUnverifiedBinding(nodePath, key, check, "downloaded");
   }
 
   if (check.verdict === "manifest-miss" && key !== null) {

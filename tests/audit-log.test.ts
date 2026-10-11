@@ -50,6 +50,22 @@ describe("AuditLog (issue #124)", () => {
     expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 
+  it("tightens a pre-existing loose audit file/dir on first append (audit batch 1 票8)", () => {
+    ({ dir } = tmpFile());
+    const file = join(dir, "audit.jsonl");
+    writeFileSync(file, "old\n", { mode: 0o644 });
+    chmodSync(dir, 0o755);
+
+    new AuditLog(file).append("reload", "matrix:@u:s", "!room:s");
+
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    // Old evidence preserved, new line appended.
+    const lines = readFileSync(file, "utf8").trim().split("\n");
+    expect(lines[0]).toBe("old");
+    expect(lines).toHaveLength(2);
+  });
+
   it("rotates by size: current → .1 → .2, the oldest falls off", () => {
     ({ dir } = tmpFile());
     const file = join(dir, "audit.jsonl");

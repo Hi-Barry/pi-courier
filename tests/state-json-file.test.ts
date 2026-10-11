@@ -6,7 +6,7 @@
  * 0600/0700 permissions, missing directories auto-created.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonStateFile } from "../src/state/json-file";
@@ -37,6 +37,21 @@ describe("JsonStateFile (issue #114)", () => {
     const state = new JsonStateFile<Array<{ id: string }>>(file, []);
     state.save([{ id: "a" }, { id: "b" }]);
     expect(new JsonStateFile<Array<{ id: string }>>(file, []).load()).toEqual([{ id: "a" }, { id: "b" }]);
+  });
+
+  it("tightens pre-existing loose file/dir permissions on save (audit batch 1 票8)", () => {
+    dir = tmpDir();
+    const file = join(dir, "state.json");
+    writeFileSync(file, "{}", { mode: 0o644 });
+    chmodSync(dir, 0o755);
+    expect(statSync(file).mode & 0o777).toBe(0o644);
+
+    const state = new JsonStateFile<{ a: number }>(file, { a: 0 });
+    state.save({ a: 1 });
+
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(state.load()).toEqual({ a: 1 });
   });
 
   it("missing file quietly returns the fallback (first run)", () => {

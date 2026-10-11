@@ -20,15 +20,24 @@ describe("guest policy blocklist (issue #120)", () => {
         "/attach",
         "/auth",
         "/abort",
+        "/autocompact",
+        "/autoretry",
         "/bash",
         "/bashstop",
+        "/clear",
+        "/compact",
+        "/cyclemodel",
+        "/cyclethinking",
         "/detach",
         "/disable",
         "/enable",
         "/interrupt",
         "/login",
         "/logout",
+        "/model",
         "/multiproject",
+        "/name",
+        "/new",
         "/newproject",
         "/pmctl",
         "/projects",
@@ -37,6 +46,7 @@ describe("guest policy blocklist (issue #120)", () => {
         "/revoke",
         "/stop",
         "/switch",
+        "/thinking",
         "/toggletools",
         "/trusted",
       ].sort()
@@ -71,6 +81,31 @@ describe("guest policy blocklist (issue #120)", () => {
       const verdict = guestCommandVerdict(cmd);
       expect(verdict.blocked, cmd).toBe(true);
       expect(verdict.command, cmd).toBe(cmd.trim().split(/\s+/)[0]!.toLowerCase());
+    }
+  });
+
+  it("session-state commands are guest-blocked regardless of case or padding (audit batch 1 票4)", () => {
+    for (const cmd of ["/new", "/clear", "/compact", "/model gpt-x", "/thinking", "/cyclemodel", "/cyclethinking", "/autocompact", "/autoretry", "/name 新名字"]) {
+      expect(guestCommandVerdict(cmd).blocked, cmd).toBe(true);
+    }
+    // Un-normalized inputs: the verdict layer already lowercased historically;
+    // the pin is that the registry lookup itself is self-defensive.
+    for (const raw of ["/NEW", "  /clear  ", "/Model", "/NAME x"]) {
+      expect(guestCommandVerdict(raw).blocked, raw).toBe(true);
+    }
+    expect(commandPolicy("/NEW")?.guest).toBe("blocked");
+    expect(commandPolicy("  /new ")?.guest).toBe("blocked");
+  });
+
+  it("registered session-state commands stay available to non-guests (audit batch 1 票4)", () => {
+    // The guest verdict is the ONLY consumer that treats guest === "blocked"
+    // as a denial; the router's slash path for non-guests never consults the
+    // registry for permission — registration blocks guests, nobody else.
+    // Structural pin: the ten commands live in the registry (snapshot above)
+    // and are NOT demoted from the read-only doc.
+    for (const cmd of ["/new", "/clear", "/compact", "/model", "/thinking", "/cyclemodel", "/cyclethinking", "/autocompact", "/autoretry", "/name"]) {
+      expect(GUEST_READ_ONLY_DOC, cmd).not.toContain(cmd);
+      expect(commandPolicy(cmd)?.guest, cmd).toBe("blocked");
     }
   });
 

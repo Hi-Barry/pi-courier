@@ -316,15 +316,12 @@ describe("MatrixProvider 事件接线", () => {
     expect(received).toHaveLength(1);
   });
 
-  it("成员数缺失且查询失败时按 DM 兜底(成员数按 2,不剥离提及)", async () => {
+  it("成员数缺失且查询持续失败时 fail-closed 按群处理(重试一次后仍失败,审计批1票10)", async () => {
+    const getJoinedRoomMembers = vi.fn(async () => {
+      throw new Error("M_LIMIT_EXCEEDED");
+    });
     const { provider, clients } = makeProvider({
-      queue: [
-        fakeMatrixClient({
-          getJoinedRoomMembers: vi.fn(async () => {
-            throw new Error("M_LIMIT_EXCEEDED");
-          }),
-        }),
-      ],
+      queue: [fakeMatrixClient({ getJoinedRoomMembers })],
     });
     await provider.connect(); // 播种阶段取成员失败 → roomMemberCount 无值
     const client = clients[0];
@@ -333,8 +330,34 @@ describe("MatrixProvider 事件接线", () => {
 
     client.emit("room.message", ROOM, textEvent(ALICE, "@bot:server 你好"));
     await until(() => received.length === 1);
-    expect(received[0].wasMentioned).toBe(false); // 群聊判定为否 → DM 兜底
-    expect(received[0].payload.kind === "text" && received[0].payload.text).toBe("@bot:server 你好");
+    // fail-closed:分类为群 → 文本里的 @bot:server 计入提及
+    expect(received[0].wasMentioned).toBe(true);
+    // 重试语义:本条消息内共尝试两次,失败结果不缓存(下条消息还会再试)
+    expect(getJoinedRoomMembers.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("成员数查询瞬时失败重试一次即成功时按真实结果分类(审计批1票10)", async () => {
+    const realMembers = [BOT, "@a:server", "@b:server", "@c:server"];
+    const getJoinedRoomMembers = vi
+      .fn<(roomId: string) => Promise<string[]>>()
+      .mockRejectedValueOnce(new Error("blip"))
+      .mockResolvedValue(realMembers);
+    const { provider, clients } = makeProvider({
+      queue: [fakeMatrixClient({ getJoinedRoomMembers })],
+    });
+    await provider.connect();
+    const client = clients[0];
+    const { received, wire } = collectMessages();
+    wire(provider);
+
+    client.emit("room.message", ROOM, textEvent(ALICE, "普通群聊消息"));
+    await until(() => received.length === 1);
+    expect(received[0].wasMentioned).toBe(false); // 4 人群,未提及
+    // 重试成功后按真实成员数缓存,后续不再查询
+    const callsAfterFirst = getJoinedRoomMembers.mock.calls.length;
+    client.emit("room.message", ROOM, textEvent(ALICE, "第二条"));
+    await until(() => received.length === 2);
+    expect(getJoinedRoomMembers.mock.calls.length).toBe(callsAfterFirst);
   });
 
   it("roomOps.leaveRoom 经 onLeftRoom 清除 provider 的房间缓存", async () => {

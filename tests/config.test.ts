@@ -91,6 +91,36 @@ describe('config', () => {
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
+  it('tightens a pre-existing loose config file to 600 (audit batch 1 票8)', async () => {
+    mkdirSync(join(tmpDir, '.pi'), { recursive: true });
+    const configPath = join(tmpDir, '.pi', 'pi-courier.json');
+    writeFileSync(configPath, '{"legacy": true}', { mode: 0o644 });
+    expect(statSync(configPath).mode & 0o777).toBe(0o644);
+
+    const { saveConfig } = await importConfig();
+    saveConfig({ debug: true });
+
+    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+    expect(statSync(join(tmpDir, '.pi')).mode & 0o777).toBe(0o700);
+  });
+
+  it('ConfigStore.update survives an injected persist failure without throwing (audit batch 1 票8)', async () => {
+    // .pi exists as a regular FILE → saveConfig's writeFileSync throws.
+    writeFileSync(join(tmpDir, '.pi'), 'not a directory');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const { ConfigStore } = await importConfig();
+      const store = new ConfigStore({ debug: true });
+      expect(() => store.update({ logLevel: 'debug' })).not.toThrow();
+      // The in-memory copy stays authoritative despite the disk failure.
+      expect(store.get().logLevel).toBe('debug');
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('env vars override file values for the same transport', async () => {
     const { loadConfig, saveConfig } = await importConfig();
 

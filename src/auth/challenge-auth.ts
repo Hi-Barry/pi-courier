@@ -10,6 +10,7 @@
  * config store.
  */
 
+import { randomInt } from "node:crypto";
 import { t } from "../i18n/index.js";
 import { matchesAdmin, matchesTrustedEntry, namespacedId } from "../identity.js";
 
@@ -310,9 +311,10 @@ export class ChallengeAuth {
   }
 
   /**
-   * Generate a random 6-digit code
+   * Generate a random 6-digit code. CSPRNG-backed: the code is the only
+   * secret gating pairing, so a predictable source is not acceptable here.
    */
   private generateCode(): string {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    return randomInt(100000, 1000000).toString();
   }
 }

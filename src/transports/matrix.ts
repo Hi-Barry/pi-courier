@@ -336,19 +336,37 @@ export class MatrixProvider {
     return !ledger.seen(eventId);
   }
 
-  /** Cached member-count lookup shared by the text and media pipelines. */
+  /** Fail-closed stand-in member count for rooms whose live lookup failed
+   *  twice: isGroupChatRoom(3) is true, so mention gating stays on. Deliberate
+   *  coupling to isGroupChatRoom's "> 2" threshold — keep the two in sync. */
+  private static readonly FAIL_CLOSED_MEMBER_COUNT = 3;
+
+  /** Cached member-count lookup shared by the text and media pipelines.
+   *  One retry for transient API blips; if the lookup still fails, fail
+   *  CLOSED — assume a group so mention gating applies. The old DM default
+   *  let group traffic bypass mention/authorization on transient failures
+   *  (audit fix). Successful lookups are cached; failures are not, so the
+   *  next event retries. */
   private async resolveIsGroupChat(roomId: string): Promise<boolean> {
     let memberCount = this.roomMemberCount.get(roomId);
     if (memberCount === undefined) {
-      try {
-        const members = await this.client!.getJoinedRoomMembers(roomId);
-        memberCount = members.length;
+      for (let attempt = 0; attempt < 2 && memberCount === undefined; attempt += 1) {
+        try {
+          memberCount = (await this.client!.getJoinedRoomMembers(roomId)).length;
+        } catch {
+          memberCount = undefined;
+        }
+      }
+      if (memberCount !== undefined) {
         this.roomMemberCount.set(roomId, memberCount);
-      } catch {
-        memberCount = 2; // Default to DM if we can't check
+      } else {
+        logger.warn(
+          `[Matrix] member count lookup failed twice for ${roomId} — failing closed as a group chat (repeats until the lookup recovers)`
+        );
       }
     }
-    return isGroupChatRoom(memberCount);
+    // Unresolvable count → assume group, never default to DM.
+    return isGroupChatRoom(memberCount ?? MatrixProvider.FAIL_CLOSED_MEMBER_COUNT);
   }
 
   /**

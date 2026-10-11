@@ -31,10 +31,13 @@ export function displayIdentity(namespaced: string): string {
 /**
  * 信任账本匹配(/revoke 的统一规则):完整条目精确匹配优先;未命中时,
  * 允许裸 ID(无 transport 前缀的 telegram ID 或 /trusted 展示的 native MXID)
- * 以 ":<id>" 后缀匹配一个条目。suffix 匹配是有名字的规则,不是猜。
+ * 匹配条目的 native 段(transport 前缀之后的完整 ID)。比较按完整段对齐,
+ * 不是任意后缀 — 短输入(如裸 homeserver 段)不构成撤销凭据。
  */
 export function matchesTrustedEntry(revokeId: string, entry: string): boolean {
-  return entry === revokeId || entry.endsWith(`:${revokeId}`);
+  if (entry === revokeId) return true;
+  const sep = entry.indexOf(":");
+  return sep !== -1 && entry.slice(sep + 1) === revokeId;
 }
 
 /**

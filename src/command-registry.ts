@@ -62,6 +62,18 @@ export const COMMAND_REGISTRY: readonly CommandPolicy[] = [
   // 会话镜像(访客禁:动共享会话)
   { name: "/attach", guest: "blocked" },
   { name: "/detach", guest: "blocked" },
+  // 会话与代理状态(访客禁:全部动共享会话/代理运行状态,#156 按表头
+  // 既定登记规则补齐;这些命令由 pi 会话侧消费,桥只拦访客)
+  { name: "/new", guest: "blocked" },
+  { name: "/clear", guest: "blocked" },
+  { name: "/compact", guest: "blocked" },
+  { name: "/model", guest: "blocked" },
+  { name: "/thinking", guest: "blocked" },
+  { name: "/cyclemodel", guest: "blocked" },
+  { name: "/cyclethinking", guest: "blocked" },
+  { name: "/autocompact", guest: "blocked" },
+  { name: "/autoretry", guest: "blocked" },
+  { name: "/name", guest: "blocked" },
 ];
 
 /** 只读命令清单(纯文档,无判定语义:未登记命令一律默认放行)。快照测试
@@ -79,7 +91,9 @@ export const GUEST_READ_ONLY_DOC: readonly string[] = [
 ];
 
 /** 查表:命令主名(小写含斜杠)→ 策略位;未登记返回 undefined(默认放行、
- *  不审计)。 */
+ *  不审计)。入参自防御归一化(去空白 + 小写):本函数是访客黑名单的
+ *  判定底座,调用方忘记归一化也不能变成 fail-open 面。 */
 export function commandPolicy(name: string): CommandPolicy | undefined {
-  return COMMAND_REGISTRY.find((c) => c.name === name);
+  const normalized = name.trim().toLowerCase();
+  return COMMAND_REGISTRY.find((c) => c.name === normalized);
 }

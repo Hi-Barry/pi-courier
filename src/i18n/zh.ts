@@ -335,6 +335,7 @@ const zh = {
   "pmctl.leaveReason": "项目已删除",
   "pmctl.rm.confirm": "⚠️ 确认删除项目「{name}」?\n\n再次发送 `/pmctl rm {name}` 确认删除。\n确认后我会停止进程并主动退出该房间。\n(发送 `/pmctl rm cancel` 取消)",
   "pmctl.mv.usage": "用法: /pmctl mv <项目名|房间ID> <新路径>(相对路径基于工程根)",
+  "pmctl.pathEscape": "❌ 路径逃出工程根:{path}\n请用工程根内的名字;确实要指到别处,请给绝对路径或以 ~/ 开头的路径",
   "pmctl.mv.done": "🚚 项目「{name}」已迁移\n• 新工作目录: {workdir}\n• 会话将重新开始(旧会话保留在旧目录 .pi-session)",
   "pmctl.rename.usage": "用法: /pmctl rename <项目名|房间ID> <新名称>",
   "pmctl.rename.ok": "✏️ 项目已重命名为「{name}」",

@@ -146,13 +146,19 @@ export class PmctlController {
 
   /** Resolve a project path: `~`/`~/` expands to the home directory;
    *  absolute as-is; relative against the project root (config.workdir) —
-   *  `/pmctl new myapp myapp` lands in ~/Projects/myapp. */
-  private resolveProjectPath(p: string): string {
+   *  `/pmctl new myapp myapp` lands in ~/Projects/myapp. A relative path
+   *  that escapes the root after normalization returns null (guard-rail
+   *  against typos registering a project anywhere; not a security boundary
+   *  — /pmctl is management-room-only, and ~/ + absolute stay first-class). */
+  private resolveProjectPath(p: string): string | null {
     if (p === "~") return os.homedir();
     if (p.startsWith("~/")) p = path.join(os.homedir(), p.slice(2));
     if (p.startsWith("/")) return p;
     const root = this.opts.store.get().workdir ?? path.join(os.homedir(), "Projects");
-    return path.join(root, p);
+    const resolved = path.resolve(root, p);
+    const rel = path.relative(root, resolved);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
+    return resolved;
   }
 
   private instanceName(): string {
@@ -179,6 +185,10 @@ export class PmctlController {
     }
     // Path is optional: default to <project root>/<name>.
     const resolvedWorkdir = workdirArg ? this.resolveProjectPath(workdirArg) : this.resolveProjectPath(pname);
+    if (resolvedWorkdir === null) {
+      await reply(t("pmctl.pathEscape", { path: workdirArg ?? pname }));
+      return;
+    }
     // The project name becomes the log label (spec #34): validate before any
     // side effects — a rejected name must not create a room or register.
     const labelError = validateProjectLabel(pname, this.currentLabels());
@@ -345,6 +355,10 @@ export class PmctlController {
       return;
     }
     const resolvedWorkdir = this.resolveProjectPath(newWorkdir);
+    if (resolvedWorkdir === null) {
+      await reply(t("pmctl.pathEscape", { path: newWorkdir }));
+      return;
+    }
     const found = this.findProject(target);
     if (!found) {
       await reply(t("pmctl.notFound", { target }));

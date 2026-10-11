@@ -22,6 +22,24 @@ import {
 import { logger } from "../logger.js";
 import type { EncryptedMediaFile } from "./attachments.js";
 
+/** Safe message extraction: string rejections pass through; null/undefined
+ *  rejections render as a readable placeholder instead of "undefined". */
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err === undefined || err === null) return "(no error value)";
+  return String(err);
+}
+
+/** Whether the error is the expected "native crypto binding failed to load"
+ *  failure (missing download, ABI mismatch, unsupported loader). */
+function isNativeLoadFailure(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  if (code === "MODULE_NOT_FOUND" || code === "ERR_DLOPEN_FAILED") return true;
+  return /matrix-sdk-crypto|\.node\b|dlopen|cannot find module|dynamic loading|incompatible architecture|load error/i.test(
+    errorMessage(err)
+  );
+}
+
 /** The crypto half of the client — present only when the Rust crypto stack
  *  loaded successfully at connect time; its presence gates E2EE features. */
 export interface MatrixClientCrypto {
@@ -98,9 +116,11 @@ export type MatrixClientFactory = (config: MatrixClientConfig) => MatrixClientPo
  * - Crypto: RustSdkCryptoStorageProvider at ~/.pi/pi-courier-matrix-crypto
  *   (native Rust, SQLite on disk) when encryption is enabled. Crypto state
  *   persists across restarts — same device, same keys; the device must be
- *   verified once from another Matrix client (Element, etc). Construction
- *   failure degrades gracefully to a crypto-less client (warn only) — the
- *   port's absent `crypto` member is the deployment-wide E2EE verdict.
+ *   verified once from another Matrix client (Element, etc). A native-load
+ *   failure degrades to a crypto-less client (error-level log); any other
+ *   construction failure propagates — silent degradation is reserved for
+ *   the one expected failure, not for misconfiguration. The port's absent
+ *   `crypto` member is the deployment-wide E2EE verdict.
  */
 export function createMatrixClient(config: MatrixClientConfig): MatrixClientPort {
   const storagePath = path.join(os.homedir(), ".pi", "pi-courier-matrix-store.json");
@@ -113,7 +133,15 @@ export function createMatrixClient(config: MatrixClientConfig): MatrixClientPort
       cryptoProvider = new RustSdkCryptoStorageProvider(cryptoStorePath, RustSdkCryptoStoreType.Sqlite);
       logger.info("[Matrix] E2EE crypto storage enabled (Rust/SQLite)");
     } catch (err) {
-      logger.warn("[Matrix] E2EE crypto not available, continuing without encryption:", (err as Error).message);
+      // Degrade ONLY on the expected failure — the native binding failing to
+      // load (missing download, ABI mismatch). Anything else is a deployment
+      // problem that must fail loudly instead of silently turning E2EE off
+      // while the owner believes the bot is encrypted (audit fix).
+      if (isNativeLoadFailure(err)) {
+        logger.error("[Matrix] E2EE crypto native binding failed to load, continuing WITHOUT encryption:", errorMessage(err));
+      } else {
+        throw err;
+      }
     }
   }
 
