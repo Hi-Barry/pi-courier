@@ -161,7 +161,8 @@ export class AttachmentStore {
         data = await withTimeout(this.source.downloadPlaintext(mxcKey));
       }
     } catch (err) {
-      if (err instanceof AttachmentTooLargeError) throw err;
+      // 下载源不会抛 TooLarge(大小预检在 try 外),无需类型分流;
+      // 非 Error 拒绝也要可读(审计工程批 票20/24)。
       throw new AttachmentDownloadError(errorMessage(err));
     }
 

@@ -16,6 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { errorMessage } from "../errors.js";
 import { logger } from "../logger.js";
 
 /** 台账保留窗:只回答「最近见过没有」,更久的历史没有查询价值。 */
@@ -65,7 +66,7 @@ export class FileEventLedger implements EventLedger {
     this.seenIds.add(eventId);
     const line = JSON.stringify({ id: eventId, ts: Date.now() }) + "\n";
     appendFile(this.filePath, line).catch((err: unknown) => {
-      logger.warn(`event ledger append failed (memory stays authoritative): ${(err as Error).message}`);
+      logger.warn(`event ledger append failed (memory stays authoritative): ${errorMessage(err)}`);
     });
   }
 
@@ -76,7 +77,7 @@ export class FileEventLedger implements EventLedger {
     try {
       raw = readFileSync(this.filePath, "utf8");
     } catch (err: unknown) {
-      logger.warn(`event ledger unreadable, treating this session as first run: ${(err as Error).message}`);
+      logger.warn(`event ledger unreadable, treating this session as first run: ${errorMessage(err)}`);
       return null;
     }
     // 零字节/纯空白文件 = 从未完整写过的台账,与「文件不存在」同语义:
@@ -123,7 +124,7 @@ export class FileEventLedger implements EventLedger {
       writeFileSync(tmp, lines.join("\n") + "\n", { mode: 0o600 });
       renameSync(tmp, this.filePath);
     } catch (err: unknown) {
-      logger.warn(`event ledger compaction failed (continuing with loaded state): ${(err as Error).message}`);
+      logger.warn(`event ledger compaction failed (continuing with loaded state): ${errorMessage(err)}`);
     }
     if (dropped > 0) {
       logger.info(`event ledger compacted: dropped ${dropped} record(s) older than the retention window`);
@@ -136,7 +137,7 @@ export class FileEventLedger implements EventLedger {
       mkdirSync(dirname(this.filePath), { recursive: true });
       writeFileSync(this.filePath, JSON.stringify({ init: Date.now() }) + "\n", { mode: 0o600 });
     } catch (err: unknown) {
-      logger.warn(`event ledger init write failed: ${(err as Error).message}`);
+      logger.warn(`event ledger init write failed: ${errorMessage(err)}`);
     }
   }
 }

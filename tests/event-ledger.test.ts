@@ -18,7 +18,10 @@ describe("FileEventLedger (issue #113)", () => {
     file = join(dir, "event-ledger.jsonl");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // record() 的 appendFile 是 fire-and-forget:先给落盘一个窗口再清目录,
+    // 否则异步写入会撞上 rmSync(ENOTEMPTY 竞态,审计批3 合并时实测)。
+    await new Promise((r) => setTimeout(r, 25));
     rmSync(dir, { recursive: true, force: true });
   });
 

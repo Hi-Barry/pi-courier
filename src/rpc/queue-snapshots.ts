@@ -104,19 +104,23 @@ export async function consumeQueueSnapshots(
   const entries = store.loadValid();
   if (entries.length === 0) return 0;
   let sent = 0;
-  for (const entry of entries) {
-    if (!consumer.isProjectRoom(entry.roomId)) continue;
+  // 房间之间相互独立,并行投递(原逐房串行白等 —— 审计工程批 票22);
+  // 单房失败照旧只丢该房并留痕。
+  await Promise.all(
+    entries.map(async (entry) => {
+    if (!consumer.isProjectRoom(entry.roomId)) return;
     const view = clearedQueuesView(entry.snapshot);
-    if (!view) continue;
+    if (!view) return;
     try {
       await consumer.send(entry.roomId, t("queue.lost.service.notice", view));
       sent += 1;
       const ageMin = Math.max(0, Math.round((Date.now() - entry.at) / 60_000));
       logger.info(`queue lost notice sent to ${entry.roomId} (snapshot ${ageMin} min old, ${view.count} message(s))`);
-    } catch (err) {
-      logger.warn(`queue lost notice failed for ${entry.roomId} — entry dropped: ${errorMessage(err)}`);
-    }
-  }
+      } catch (err) {
+        logger.warn(`queue lost notice failed for ${entry.roomId} — entry dropped: ${errorMessage(err)}`);
+      }
+    })
+  );
   store.clear();
   if (sent > 0) {
     logger.info(`queue snapshot consumption done: ${sent} notice(s) sent after service restart`);

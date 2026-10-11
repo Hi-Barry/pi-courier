@@ -10,6 +10,7 @@
  * Cache misses are a normal, silent downgrade — quotes are best-effort context.
  */
 
+import { truncateLine } from "./formatting.js";
 /** A cleaned one-line excerpt of a quoted message plus its sender. */
 export interface QuoteEntry {
   username: string;
@@ -27,9 +28,6 @@ export interface QuoteCache {
 export const MAX_ENTRIES_PER_ROOM = 50;
 
 /** Excerpt cap: enough context to identify a message, small enough for a prompt prefix. */
-
-import { truncateLine } from "./formatting.js";
-
 export const EXCERPT_MAX_CHARS = 200;
 
 /** Single-line, trimmed excerpt capped at EXCERPT_MAX_CHARS ("…" marks truncation). */
@@ -65,3 +63,4 @@ export function createQuoteCache(): QuoteCache {
     },
   };
 }
+

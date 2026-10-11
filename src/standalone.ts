@@ -11,7 +11,6 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { AUDIT_EVENTS, AuditLog } from "./audit/audit-log.js";
@@ -19,6 +18,7 @@ import { ChallengeAuth } from "./auth/challenge-auth.js";
 import {
   attachmentsDirectory,
   attachmentsMaxBytes,
+  CONFIG_DIR,
   ConfigStore,
   inboxMode,
   managementRoomId,
@@ -26,6 +26,7 @@ import {
   resolveLanguage,
   THINKING_LEVELS,
 } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { truncateLine } from "./formatting.js";
 import { setLocale, t } from "./i18n/index.js";
 import { acquireLock, releaseLock } from "./lock.js";
@@ -254,7 +255,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         .withLabel(projectManager.labelForRoom(chatId))
         .debug(`📤 [${transport}] ${truncateLine(text, 500)}`);
     } catch (err) {
-      logger.error(`发送失败 (${transport}): ${(err as Error).message}`);
+      logger.error(`发送失败 (${transport}): ${errorMessage(err)}`);
     }
   };
   // Silent no-op when the transport is missing/disconnected (typing is best-effort).
@@ -282,11 +283,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // ---- durable state (issue #114) --------------------------------------------
   // ~/.pi/pi-courier-state/(0700)收桥的派生状态文件:磁盘是备份,内存是热路径。
   // 配置(pi-courier.json)、Matrix SDK 存储、PID 锁各归 ~/.pi 原位,不迁。
-  const stateDir = path.join(os.homedir(), ".pi", "pi-courier-state");
+  const stateDir = path.join(CONFIG_DIR, "pi-courier-state");
   try {
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   } catch (err) {
-    logger.warn(`state dir unavailable (state files degrade to in-memory): ${(err as Error).message}`);
+    logger.warn(`state dir unavailable (state files degrade to in-memory): ${errorMessage(err)}`);
   }
   const attachmentsLedger = new JsonStateFile<PersistedAttachmentEntry[]>(
     path.join(stateDir, "pending-attachments.json"),
@@ -373,11 +374,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   matrix?.onMessage((msg) => {
     router.handleIncoming(msg).catch((err) => {
-      logger.error("❌ message handling error:", (err as Error).message);
+      logger.error("❌ message handling error:", errorMessage(err));
     });
   });
   matrix?.onError((err) => {
-    logger.error(`❌ ${matrix.type} error:`, (err as Error).message);
+    logger.error(`❌ ${matrix.type} error:`, errorMessage(err));
   });
 
   // ---- agent events → replies ------------------------------------------------
@@ -388,14 +389,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // ---- startup ----------------------------------------------------------------
   try {
     await matrix?.connect().catch((err: unknown) => {
-      throw new Error(`matrix connection failed: ${(err as Error).message}`);
+      throw new Error(`matrix connection failed: ${errorMessage(err)}`);
     });
     logger.info(`✅ transports connected: matrix=${matrix?.isConnected ? "up" : "down"}`);
   } catch (err) {
-    logger.warn("⚠️ some transports failed to connect:", (err as Error).message);
+    logger.warn("⚠️ some transports failed to connect:", errorMessage(err));
     // Friendly diagnostics for the two common E2EE/device-state failures so
     // users get the fix instead of a raw stack trace.
-    const msg = (err as Error).message ?? "";
+    const msg = errorMessage(err);
     if (msg.includes("M_BAD_JSON") && msg.includes("device_id")) {
       logger.warn("   → 本地加密存储与 token 的设备身份不一致(换过 token / 重登过)。");
       logger.warn("     解法:删除加密存储后重启 — rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart");
@@ -417,7 +418,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       isProjectRoom: (roomId) => projectManager.isProjectRoom(roomId),
       send: (roomId, text) => matrix.sendMessage(roomId, text),
     }).catch((err: unknown) => {
-      logger.warn(`queue snapshot consumption failed: ${(err as Error).message}`);
+      logger.warn(`queue snapshot consumption failed: ${errorMessage(err)}`);
     });
   }
 
@@ -428,7 +429,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // 提醒时钟也在此刻启动(issue #117):迟到补投要走 sendReply,必须等
   // transport 连接落定 —— 早发必被"未连接"吞掉,提醒就真丢了。
   await reminderClock.start().catch((err: unknown) => {
-    logger.warn(`reminder clock failed to start: ${(err as Error).message}`);
+    logger.warn(`reminder clock failed to start: ${errorMessage(err)}`);
   });
   if (roomOps) {
     const spaceResult = await ensureSpaceAndManagementRoom({ roomOps, store, sendReply });
@@ -454,7 +455,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const state = await rpc.requireClient().getState();
     logger.info(`✅ pi RPC connected (model: ${state.model?.id ?? "unknown"}, session: ${state.sessionId ?? "?"})`);
   } catch (err) {
-    logger.error("[bridge] failed to start pi RPC:", (err as Error).message);
+    logger.error("[bridge] failed to start pi RPC:", errorMessage(err));
     await disconnectAll();
     releaseLock();
     process.exit(1);

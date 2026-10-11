@@ -20,6 +20,7 @@ import {
   effectiveInstanceName,
   projectFallbackChain,
 } from "../config.js";
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
@@ -27,6 +28,7 @@ import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
 import { provisionManagedRoom } from "../space-topology.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
+import { PROJECT_SESSION_DIR } from "./project-manager.js";
 
 export interface PmctlCall {
   /** Room the command came from (also the pending-rm confirmation key). */
@@ -60,7 +62,9 @@ function splitFirst(s: string): [string, string] {
   return sp === -1 ? [s.trim(), ""] : [s.slice(0, sp).trim(), s.slice(sp + 1).trim()];
 }
 
-const RM_CONFIRM_WINDOW_MS = 60_000;
+/** /pmctl rm 确认窗(单一持有,i18n 文案插值引用 —— 审计工程批 票19)。 */
+export const RM_CONFIRM_WINDOW_MS = 60_000;
+const RM_CONFIRM_WINDOW_SECONDS = RM_CONFIRM_WINDOW_MS / 1000;
 
 export class PmctlController {
   private pendingRm = new Map<string, PendingRm>();
@@ -224,7 +228,7 @@ export class PmctlController {
         t("pmctl.new.ok", { name: pname, room: provision.roomId, workdir: resolvedWorkdir, notes })
       );
     } catch (err) {
-      await reply(t("pmctl.new.failed", { message: (err as Error).message }));
+      await reply(t("pmctl.new.failed", { message: errorMessage(err) }));
     }
   }
 
@@ -250,7 +254,12 @@ export class PmctlController {
   /** Resolve a user-supplied target ("name" or room ID) to a project,
    *  matching against the same labels the log filter uses (projectLabelOf). */
   private findProject(target: string): [string, ProjectEntry] | undefined {
-    return this.opts.projectManager.listProjects().find(([roomId, p]) => projectLabelOf(p) === target || roomId === target);
+    // 标签匹配大小写不敏感(与登记校验/日志过滤口径一致 —— 审计工程批 票21)
+    // 与 validateProjectLabel 的唯一性口径对齐(NFKC 归一 + 折叠 —— 审计工程批 票21)
+    const targetLower = target.normalize("NFKC").toLowerCase();
+    return this.opts.projectManager
+      .listProjects()
+      .find(([roomId, p]) => projectLabelOf(p).toLowerCase() === targetLower || roomId === target);
   }
 
   private async show(rest: string, reply: Reply): Promise<void> {
@@ -279,7 +288,7 @@ export class PmctlController {
         room: roomId,
         workdir: entry.workdir,
         status: pm.isRunning(roomId) ? t("pmctl.statusRunning") : t("pmctl.statusLazy"),
-        session: `${entry.workdir}/.pi-session`,
+        session: `${entry.workdir}/${PROJECT_SESSION_DIR}`,
         presets: presets.join(" · ") || t("pmctl.show.noPresets"),
       })
     );
@@ -308,7 +317,7 @@ export class PmctlController {
     const pending = this.pendingRm.get(call.chatId);
     if (pending && Date.now() - pending.ts > RM_CONFIRM_WINDOW_MS) {
       this.pendingRm.delete(call.chatId); // expired — treat as a fresh rm
-      await reply(t("pmctl.rm.expired"));
+      await reply(t("pmctl.rm.expired", { seconds: RM_CONFIRM_WINDOW_SECONDS }));
     }
     // Only the exact room armed for THIS chat confirms — a stale or
     // different-room pending entry can never delete the wrong project.
@@ -321,7 +330,7 @@ export class PmctlController {
         try {
           await this.onRoomRemoved(roomId);
         } catch (err) {
-          logger.warn(`room-death purge failed (entries expire via TTL): ${(err as Error).message}`);
+          logger.warn(`room-death purge failed (entries expire via TTL): ${errorMessage(err)}`);
         }
       }
       await reply(t("pmctl.rm.done", { name: projectLabelOf(entry), workdir: entry.workdir }));
@@ -333,13 +342,13 @@ export class PmctlController {
         try {
           await roomOps.removeRoomFromSpace(spaceRoomId, roomId);
         } catch (err) {
-          await reply(t("pmctl.rm.unlinkFailed", { message: (err as Error).message }));
+          await reply(t("pmctl.rm.unlinkFailed", { message: errorMessage(err) }));
         }
       }
       try {
         await roomOps.leaveRoom(roomId, t("pmctl.leaveReason"));
       } catch (err) {
-        await reply(t("pmctl.rm.leaveFailed", { message: (err as Error).message }));
+        await reply(t("pmctl.rm.leaveFailed", { message: errorMessage(err) }));
       }
       return;
     }
@@ -366,7 +375,7 @@ export class PmctlController {
     }
     const [roomId, entry] = found;
     await this.opts.projectManager.updateProjectWorkdir(roomId, resolvedWorkdir);
-    await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir }));
+    await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir, sessionDir: PROJECT_SESSION_DIR }));
   }
 
   private async rename(rest: string, reply: Reply, roomOps: RoomOps): Promise<void> {
@@ -401,7 +410,7 @@ export class PmctlController {
       await roomOps.setRoomName(roomId, newName);
       await reply(renamed);
     } catch (err) {
-      await reply(`${renamed}${t("pmctl.rename.roomFailed", { message: (err as Error).message })}`);
+      await reply(`${renamed}${t("pmctl.rename.roomFailed", { message: errorMessage(err) })}`);
     }
   }
 }

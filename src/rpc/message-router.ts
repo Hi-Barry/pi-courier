@@ -14,6 +14,7 @@ import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
 import { commandPolicy } from "../command-registry.js";
 import { type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
+import { errorMessage } from "../errors.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -285,7 +286,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     try {
       snapshots.save(roomId, snapshot);
     } catch (err) {
-      logger.warn(`queue snapshot persist failed (memory mirror stays authoritative): ${(err as Error).message}`);
+      logger.warn(`queue snapshot persist failed (memory mirror stays authoritative): ${errorMessage(err)}`);
     }
   };
   const transient = new RpcTransientState(
@@ -345,7 +346,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       await sendReply(
         origin.chatId,
         origin.transport,
-        t("router.fallback.switchFailed", { count: MODEL_FALLBACK_THRESHOLD, to, message: (err as Error).message })
+        t("router.fallback.switchFailed", { count: MODEL_FALLBACK_THRESHOLD, to, message: errorMessage(err) })
       );
       return;
     }
@@ -416,7 +417,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       const body = await recapLedger.startCapture(rpc);
       await deliverRecapCard(rpc, body, origin);
     } catch (err) {
-      logger.warn(`recap before /new failed (continuing): ${(err as Error).message}`);
+      logger.warn(`recap before /new failed (continuing): ${errorMessage(err)}`);
     }
   };
 
@@ -727,7 +728,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // run BEFORE authorization (unenabled rooms are not authorized).
       handle: async (ctx) => {
         const { msg, text } = ctx;
-        if (!msg.isGroupChat || !text.startsWith("/enable")) return false;
+        if (!msg.isGroupChat || !/^\/enable(\s|$)/i.test(text)) return false;
         const isTrusted = auth.isTrustedUser(msg.userId, msg.transport);
         if (!isTrusted) return false;
         const parts = text.split(/\s+/);
@@ -804,7 +805,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // takes effect on restart. Trusted users may toggle.
       handle: async (ctx) => {
         const { msg, text } = ctx;
-        if (!text.startsWith("/multiproject")) return false;
+        if (!/^\/multiproject(\s|$)/i.test(text)) return false;
         const isTrusted = auth.isTrustedUser(msg.userId, msg.transport);
         if (!isTrusted) {
           await sendReply(msg.chatId, msg.transport, t("router.multiproject.forbidden"));
@@ -1002,7 +1003,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           }
           return handled;
         } catch (err) {
-          await sendReply(ctx.msg.chatId, ctx.msg.transport, t("cmd.generic.error", { message: (err as Error).message }));
+          await sendReply(ctx.msg.chatId, ctx.msg.transport, t("cmd.generic.error", { message: errorMessage(err) }));
           return true;
         }
       },
@@ -1030,7 +1031,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         rpc.bash(bang.command, { excludeFromContext: bang.excluded })
           .then((result) => sendReply(ctx.msg.chatId, ctx.msg.transport, formatBashReply(bang.command, result, bang.excluded)))
           .catch((err: unknown) =>
-            sendReply(ctx.msg.chatId, ctx.msg.transport, t("cmd.bash.error", { message: (err as Error).message }))
+            sendReply(ctx.msg.chatId, ctx.msg.transport, t("cmd.bash.error", { message: errorMessage(err) }))
           )
           .catch(() => {})
           .finally(release);
@@ -1108,8 +1109,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           parkedAt.delete(key);
           persistLedger();
         } catch (err) {
-          if (err === RPC_ABORT) throw err;
-          await sendReply(ctx.msg.chatId, ctx.msg.transport, t("router.prompt.failed", { message: (err as Error).message }));
+          // rpc 已在此前 roomRpc() 解析,本段不可能产生 RPC_ABORT(审计工程批 票20)
+          await sendReply(ctx.msg.chatId, ctx.msg.transport, t("router.prompt.failed", { message: errorMessage(err) }));
         }
         return true;
       },
@@ -1180,7 +1181,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             );
             return rpc;
           }).catch((err: unknown) => {
-            void sendReply(msg.chatId, msg.transport, t("router.rpc.startFailed", { message: (err as Error).message }));
+            void sendReply(msg.chatId, msg.transport, t("router.rpc.startFailed", { message: errorMessage(err) }));
             throw RPC_ABORT;
           });
           return rpcOnce;

@@ -39,6 +39,11 @@ export type ChallengeOutcome = "authenticated" | "expired" | "wrong" | "blocked"
  */
 
 
+/** 配对码尝试上限与封禁窗(单一持有:admin-commands 的展示文案从这里取,
+ *  审计工程批 票19)。 */
+export const MAX_PAIRING_ATTEMPTS = 3;
+export const PAIRING_BLOCK_MINUTES = 5;
+
 export class ChallengeAuth {
   private challenges = new Map<string, ChallengeData>();
   private trustedUsers = new Set<string>();
@@ -234,10 +239,10 @@ export class ChallengeAuth {
 
     // Wrong code
     challenge.attempts++;
-    if (challenge.attempts >= 3) {
+    if (challenge.attempts >= MAX_PAIRING_ATTEMPTS) {
       this.challenges.delete(namespacedUserId);
-      this.blockedUsers.set(namespacedUserId, Date.now() + 5 * 60 * 1000); // 5 min block
-      this.onNotify(`🚫 ${challenge.username} blocked (3 failed attempts)`, "warning");
+      this.blockedUsers.set(namespacedUserId, Date.now() + PAIRING_BLOCK_MINUTES * 60 * 1000);
+      this.onNotify(`🚫 ${challenge.username} blocked (${MAX_PAIRING_ATTEMPTS} failed attempts)`, "warning");
       return "blocked";
     }
 

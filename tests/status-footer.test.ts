@@ -117,6 +117,24 @@ describe("collectStatusFooter", () => {
     await expect(collectStatusFooter(rpc)).resolves.toEqual({ cwd: null, context: "?/1.0M", model: "m" });
   });
 
+  it("empty-string cwd is treated as absent (audit engineering batch 票23)", async () => {
+    const rpc = { cwd: "", requireClient: () => ({ getState: async () => ({}), getSessionStats: async () => ({}) }) } as unknown as PiRpc;
+    await expect(collectStatusFooter(rpc)).resolves.toMatchObject({ cwd: null });
+  });
+
+  it("999500+ rounds into the M scale instead of showing 1000k (audit engineering batch 票23)", async () => {
+    const rpc = {
+      cwd: "/w",
+      requireClient: () => ({
+        getState: async () => ({ model: { id: "m" } }),
+        getSessionStats: async () => ({ contextUsage: { percent: 50, contextWindow: 999_600 } }),
+      }),
+    } as unknown as PiRpc;
+    const info = await collectStatusFooter(rpc);
+    expect(info.context).toContain("1.0M");
+    expect(info.context).not.toContain("1000k");
+  });
+
   it("a rpc without requireClient yields all-null segments and never throws", async () => {
     const rpc = {} as unknown as PiRpc;
     await expect(collectStatusFooter(rpc)).resolves.toEqual({ cwd: null, context: null, model: null });

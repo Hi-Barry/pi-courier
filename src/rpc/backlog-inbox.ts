@@ -12,6 +12,7 @@
  * 活着,「有缓冲则立即结算」的路径不受闸管制。
  */
 import { inboxMode } from "../config.js";
+import { errorMessage } from "../errors.js";
 import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { isExecuteInput, isIgnoreInput } from "../i18n/parse.js";
@@ -82,7 +83,7 @@ export class BacklogInbox {
       this.options.onExecute?.(msg, pending.entries.length);
       void this.options
         .deliver(pending.entries)
-        .catch((err: unknown) => logger.error(`backlog delivery failed: ${(err as Error).message}`));
+        .catch((err: unknown) => logger.error(`backlog delivery failed: ${errorMessage(err)}`));
       return true;
     }
     if (isIgnoreInput(text)) {
@@ -153,7 +154,7 @@ export class BacklogInbox {
       void this.options
         .reply(chatId, transport, t("inbox.auto.notice", { count: entries.length, lines }))
         .then(() => this.options.deliver(entries))
-        .catch((err: unknown) => logger.error(`backlog auto-delivery failed: ${(err as Error).message}`));
+        .catch((err: unknown) => logger.error(`backlog auto-delivery failed: ${errorMessage(err)}`));
       return;
     }
 
@@ -183,7 +184,7 @@ export class BacklogInbox {
         // 征询发不出去(极端时序)等于没人能批准 —— 按忽略处理,积压不留悬案。
         this.awaiting.delete(chatId);
         clearTimeout(confirmTimer);
-        logger.warn(`backlog confirm prompt failed, backlog discarded: ${(err as Error).message}`);
+        logger.warn(`backlog confirm prompt failed, backlog discarded: ${errorMessage(err)}`);
       });
   }
 }

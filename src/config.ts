@@ -6,7 +6,8 @@ import type { Locale } from "./i18n/index.js";
 import { adoptManagementRoomPatch } from "./management-room.js";
 import type { MsgBridgeConfig } from "./types.js";
 
-const CONFIG_DIR = path.join(os.homedir(), ".pi");
+/** 桥的配置目录 ~/.pi(单一持有:Matrix 客户端存储路径等从这里取 —— 审计工程批 票19)。 */
+export const CONFIG_DIR = path.join(os.homedir(), ".pi");
 const CONFIG_PATH = path.join(CONFIG_DIR, "pi-courier.json");
 
 /** Nested map fields whose entries are dereferenced downstream — a hand-edited
@@ -172,7 +173,7 @@ export function effectiveWorkdir(cfg: MsgBridgeConfig): string {
 
 /** 附件保存根目录(spec #66):默认与 ~/.pi 下其他 pi-courier-* 状态文件平齐。 */
 export function attachmentsDirectory(cfg: MsgBridgeConfig): string {
-  return cfg.attachments?.directory ?? path.join(os.homedir(), ".pi", "pi-courier-attachments");
+  return cfg.attachments?.directory ?? path.join(CONFIG_DIR, "pi-courier-attachments");
 }
 
 /** 单个附件上限(MB):默认 10。 */

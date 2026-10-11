@@ -7,13 +7,15 @@
  *  - namespaced（存储形式）: "matrix:@user:server" — trustedUsers/adminUserId/
  *    powerElevatedUsers 等配置账本统一用它区分不同 transport 下的同 ID。
  *  - native（Matrix API 形式）: "@user:server" — 房间成员/邀请/权力等级操作。
- *  - display（展示形式）: "@user (matrix)" — /trusted 输出(注意:沿用既有
- *    截断行为,MXID 的 homeserver 段不展示;改动属行为变化,不在纯重构范围)。
+ *  - display（展示形式）: "@user:server (matrix)" — /trusted 输出;完整保留
+ *    homeserver 段(旧实现的截断是文档化怪癖,审计工程批 票21 修正)。
  */
 
-/** 存储形式:按 transport 加命名空间前缀。 */
+/** 存储形式:按 transport 加命名空间前缀;已是该前缀形式则幂等返回
+ *  (重复叠加会让同用户出现两个账本身份 —— 审计工程批 票23)。 */
 export function namespacedId(userId: string, transport?: string): string {
-  return transport ? `${transport}:${userId}` : userId;
+  if (!transport) return userId;
+  return userId.startsWith(`${transport}:`) ? userId : `${transport}:${userId}`;
 }
 
 /** native 形式:剥掉 transport 前缀(Matrix API 消费);无前缀形式原样返回。 */
@@ -21,11 +23,12 @@ export function nativeMxid(namespaced: string): string {
   return namespaced.startsWith("matrix:") ? namespaced.slice("matrix:".length) : namespaced;
 }
 
-/** 展示形式:/trusted 输出。与历史实现逐字一致 — 已知怪癖:MXID 的
- *  homeserver 段被截断(不属本 spec 的行为变化范围)。 */
+/** 展示形式:/trusted 输出。已知 transport 前缀 → 完整 native ID(含
+ *  homeserver 段;旧实现的截断是文档化怪癖,审计工程批 票21 修正);
+ *  非命名空间形式(裸 MXID)原样返回。 */
 export function displayIdentity(namespaced: string): string {
-  const [transport, uid] = namespaced.split(":");
-  return uid ? `${uid} (${transport})` : namespaced;
+  const m = /^(matrix|telegram):(.+)$/.exec(namespaced);
+  return m ? `${m[2]} (${m[1]})` : namespaced;
 }
 
 /**

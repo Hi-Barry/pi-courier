@@ -71,23 +71,25 @@ export function truncate(str: string, maxLen: number): string {
  * Split long messages into chunks, breaking at newlines when possible.
  */
 export function splitMessage(text: string, maxLen: number): string[] {
-  if (text.length <= maxLen) return [text];
+  // maxLen ≤ 0 会让 while 永不推进(死循环)—— 钳到 1(审计工程批 票23)
+  const safeMax = Math.max(1, maxLen);
+  if (text.length <= safeMax) return [text];
 
   const chunks: string[] = [];
   let remaining = text;
 
   while (remaining.length > 0) {
-    if (remaining.length <= maxLen) {
+    if (remaining.length <= safeMax) {
       chunks.push(remaining);
       break;
     }
 
-    let breakAt = remaining.lastIndexOf("\n", maxLen);
-    if (breakAt < maxLen * 0.5) {
-      breakAt = remaining.lastIndexOf(" ", maxLen);
+    let breakAt = remaining.lastIndexOf("\n", safeMax);
+    if (breakAt < safeMax * 0.5) {
+      breakAt = remaining.lastIndexOf(" ", safeMax);
     }
-    if (breakAt < maxLen * 0.3) {
-      breakAt = maxLen;
+    if (breakAt < safeMax * 0.3) {
+      breakAt = safeMax;
     }
 
     chunks.push(remaining.substring(0, breakAt));

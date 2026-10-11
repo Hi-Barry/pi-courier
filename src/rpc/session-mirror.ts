@@ -443,7 +443,7 @@ export class MirrorManager {
       mirror.clearDirty();
       return { kind: "relayed" };
     } catch (err) {
-      return { kind: "failed", message: (err as Error).message };
+      return { kind: "failed", message: errorMessage(err) };
     }
   }
 }

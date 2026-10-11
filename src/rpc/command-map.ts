@@ -16,15 +16,16 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
 import { BANG_COMMAND } from "../command-registry.js";
+import { CONFIG_DIR } from "../config.js";
+import { errorMessage } from "../errors.js";
 import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
-import type { ReminderEntry } from "../reminders/reminder-store.js";
+import { MAX_REMINDERS_PER_ROOM, type ReminderEntry } from "../reminders/reminder-store.js";
 import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
 import { upstreamClearQueueSend } from "./pi-rpc.js";
 import { RecapBusyError, RecapEmptyError } from "./recap.js";
@@ -383,7 +384,7 @@ export function listSessions(dir: string): SessionSummary[] {
 
 /** The session dir a process scans: its own --session-dir, else pi's default. */
 export function resolveSessionDir(rpc: PiRpc): string {
-  return rpc.sessionDir ?? path.join(os.homedir(), ".pi", "agent", "sessions");
+  return rpc.sessionDir ?? path.join(CONFIG_DIR, "agent", "sessions");
 }
 
 /**
@@ -445,7 +446,9 @@ export async function handleSlashCommand(
   const commandWord = trimmed.split(/\s+/)[0]!.toLowerCase();
 
   const spaceIndex = trimmed.indexOf(" ");
-  const name = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
+  // 分发键统一小写:/Stop /Help 这类大写输入此前会落 default 被当普通
+  // 文本转发(审计工程批 票21;命令大小写不敏感与登记表/裁决口径一致)。
+  const name = (spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex)).toLowerCase();
   const args = (spaceIndex === -1 ? "" : trimmed.slice(spaceIndex + 1)).trim();
 
   try {
@@ -461,7 +464,7 @@ export async function handleSlashCommand(
         } catch (err) {
           if (err instanceof RecapBusyError) await reply(t("cmd.recap.busy"));
           else if (err instanceof RecapEmptyError) await reply(t("cmd.recap.empty"));
-          else await reply(t("cmd.generic.error", { message: (err as Error).message }));
+          else await reply(t("cmd.generic.error", { message: errorMessage(err) }));
         }
         return true;
       }
@@ -577,7 +580,7 @@ export async function handleSlashCommand(
           return true;
         }
         if (!ctx.reminders.add(text, dueAt)) {
-          await reply(t("cmd.remind.limit"));
+          await reply(t("cmd.remind.limit", { max: MAX_REMINDERS_PER_ROOM }));
           return true;
         }
         await reply(t("cmd.remind.ok", { when: formatReminderTime(dueAt), text }));
@@ -756,7 +759,7 @@ export async function handleSlashCommand(
           const state = await rpc.requireClient().getState();
           await reply(t("cmd.reload.ok", { model: state.model?.id ?? "unknown" }));
         } catch (err) {
-          await reply(t("cmd.reload.failed", { message: (err as Error).message }));
+          await reply(t("cmd.reload.failed", { message: errorMessage(err) }));
         }
         return true;
       }
@@ -780,7 +783,10 @@ export async function handleSlashCommand(
         if (!parsed.provider) {
           // Bare id — try to find a matching model and use its provider
           const models = await rpc.requireClient().getAvailableModels();
-          const match = models.find((m) => m.id.includes(parsed.modelId));
+          // 精确 id 优先,子串兜底 —— 防 glm-5.3 误切 glm-5.3-air(审计工程批 票21)
+          const match =
+            models.find((m) => m.id === parsed.modelId) ??
+            models.find((m) => m.id.includes(parsed.modelId));
           if (!match) {
             await reply(t("cmd.model.notFound", { id: parsed.modelId }));
             return true;
@@ -905,7 +911,7 @@ export async function handleSlashCommand(
       }
     }
   } catch (err) {
-    await reply(t("cmd.generic.error", { message: (err as Error).message }));
+    await reply(t("cmd.generic.error", { message: errorMessage(err) }));
     return true;
   }
 }

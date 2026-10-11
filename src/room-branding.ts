@@ -106,7 +106,7 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
       logger.info(`[identity] 空间名已迁移: ${name} → ${renamed}`);
     }
   } catch (err) {
-    logger.warn(`[identity] 空间改名检查失败(跳过,下次启动自动重试): ${spaceId}: ${(err as Error).message}`);
+    logger.warn(`[identity] 空间改名检查失败(跳过,下次启动自动重试): ${spaceId}: ${errorMessage(err)}`);
   }
 
   // Avatars: three per-set pools (spec #84) — the space picks from the
@@ -126,7 +126,7 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
       if (result === "rebranded") logger.info(`[identity] ${label}头像已升级为新风格: ${file}`);
       return true;
     } catch (err) {
-      logger.warn(`[identity] ${label}(${roomId})头像设置失败(跳过,下次启动自动重试): ${(err as Error).message}`);
+      logger.warn(`[identity] ${label}(${roomId})头像设置失败(跳过,下次启动自动重试): ${errorMessage(err)}`);
       return false;
     }
   };
@@ -148,13 +148,13 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
     });
   }
   await migrateAvatarSet(store, cfg, "room", async (rebrand) => {
-    let allOk = true;
-    for (const target of roomTargets) {
-      // A failed room warns here (with its label) and keeps the ROOM set
-      // pending; the space set has already booked independently above.
-      if (!(await brandRoom(target.roomId, target.file, target.label, rebrand))) allOk = false;
-    }
-    return allOk;
+    // 目标房间相互独立,并行品牌化;单房失败照旧留痕并让该组保持待重刷
+    // (审计工程批 票22)。
+    // brandRoom 自带逐目标容错(warn + false),并行只是省时
+    const results = await Promise.all(
+      roomTargets.map((target) => brandRoom(target.roomId, target.file, target.label, rebrand)),
+    );
+    return results.every(Boolean);
   });
 }
 
@@ -186,7 +186,7 @@ export async function healBotAvatar(roomOps: RoomOps, store: ConfigStore): Promi
     } catch (err) {
       // Failed set: stay pending so the next start retries the whole agent
       // migration — the marker is only ever booked on a confirmed success.
-      logger.warn(`[identity] bot 头像设置失败(跳过,下次启动自动重试): ${(err as Error).message}`);
+      logger.warn(`[identity] bot 头像设置失败(跳过,下次启动自动重试): ${errorMessage(err)}`);
       return false;
     }
   });

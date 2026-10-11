@@ -69,15 +69,13 @@ export function buildLogFilterArgs(req: LogFilterRequest): LogFilterResult {
         message: t("logs.projectsNotFound", { unknown: unknown.join(", "), list }),
       };
     }
-    // Case-insensitive exact matching is delegated to `--case=0`: the pattern
-    // keeps the user's spelling, journalctl does the folding. The LEVEL group
-    // is part of every pattern (debug lists all four names) so the match is
-    // always anchored to the level-delimiter boundary — a message body that
-    // happens to mention `] [name]` cannot produce a false positive.
+    // 大小写折叠只作用于项目组(PCRE2 内联 (?i:…)),LEVEL 名恒为大写、
+    // 不参与折叠 —— 全局 --case=0 会让正文里的 `[error] [label]` 误中
+    // (审计工程批 票21)。JS 侧未知项目检测同样只折叠标签,两侧口径一致。
     const projects = req.requestedProjects.map(escapeRe).join("|");
-    args.push("--grep", `\\[(${LEVEL_ALTERNATIONS[level]})\\] \\[(${projects})\\]`, "--case=0");
+    args.push("--grep", `\\[(${LEVEL_ALTERNATIONS[level]})\\] \\[(?i:(${projects}))\\]`);
   } else if (level !== "debug") {
-    args.push("--grep", `\\[(${LEVEL_ALTERNATIONS[level]})\\] `, "--case=0");
+    args.push("--grep", `\\[(${LEVEL_ALTERNATIONS[level]})\\] `);
   }
   // level=debug without projects: no grep — everything passes (matches the
   // pre-spec intent of `--level debug`, which was silently broken via -p).

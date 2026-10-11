@@ -22,6 +22,9 @@
  *  裁决都从这里取。 */
 export const BANG_COMMAND = /^([!！]{1,2})\s+(\S.*)$/;
 
+/** /pmctl 前缀(单一持有:访客裁决按前缀拦整族 —— 审计工程批 票19)。 */
+export const PMCTL_COMMAND = "/pmctl";
+
 export interface CommandPolicy {
   /** 主名(小写含斜杠)。 */
   name: string;

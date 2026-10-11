@@ -11,7 +11,7 @@
 
 import { t } from "../i18n/index.js";
 import { displayIdentity, namespacedId } from "../identity.js";
-import { type ChallengeAuth } from "./challenge-auth.js";
+import { type ChallengeAuth, MAX_PAIRING_ATTEMPTS, PAIRING_BLOCK_MINUTES } from "./challenge-auth.js";
 
 export type AdminEffect =
   | { kind: "persistAuth" }
@@ -99,10 +99,10 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
           });
         case "blocked":
           return handled({
-            replies: ["🚫 Too many failed attempts. Blocked for 5 minutes."],
+            replies: [`🚫 Too many failed attempts. Blocked for ${PAIRING_BLOCK_MINUTES} minutes.`],
             notifications: [],
             effects: [],
-            audit: { event: "pairing.blocked", detail: `${displayIdentity(namespacedUserId)} blocked after 3 failed codes` },
+            audit: { event: "pairing.blocked", detail: `${displayIdentity(namespacedUserId)} blocked after ${MAX_PAIRING_ATTEMPTS} failed codes` },
           });
         case "wrong":
           return handled({
@@ -122,8 +122,6 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
               effects: [],
             });
           }
-          return { handled: false, replies: [], notifications: [], effects: [] };
-        default:
           return { handled: false, replies: [], notifications: [], effects: [] };
       }
     }

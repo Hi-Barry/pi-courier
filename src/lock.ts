@@ -14,6 +14,8 @@ import * as path from "node:path";
  *                    takers cannot both win.
  */
 
+// 锁模块刻意零依赖:跨进程竞争测试以原生 node 直跑本文件(TS type-stripping
+// 解析不了 .js→.ts 源内导入),故配置目录独立计算,不引 config(审计批3 评审)。
 const LOCK_PATH = path.join(os.homedir(), ".pi", "pi-courier.lock");
 
 const g = global as any;

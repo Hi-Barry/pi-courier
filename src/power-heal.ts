@@ -17,6 +17,7 @@
  */
 
 import { type ConfigStore, nativeMxid } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { logger } from "./logger.js";
 import type { RoomOps } from "./transports/interface.js";
 import type { MsgBridgeConfig } from "./types.js";
@@ -108,6 +109,9 @@ export async function healTrustedPowerLevels(roomOps: RoomOps, store: ConfigStor
   // users outside them (external admins, the bot itself) are never touched.
   // Failed demotions stay booked and retry on the next start.
   const trusted = cfg.auth?.trustedUsers ?? [];
+  // 降权先于提权(顺序不变量)。两段循环刻意保持串行:各循环体内有多处
+  // store.update 簿记(读-改-写),并行会让并发写互相覆盖、簿记按成功摘除
+  // 却丢了更新 —— 串行的时序就是正确性(审计工程批 票22 评审裁决)。
   for (const user of (cfg.powerElevatedUsers ?? []).filter((u) => !trusted.includes(u))) {
     await demoteTrustedUserEverywhere(roomOps, store, user);
   }
@@ -115,7 +119,7 @@ export async function healTrustedPowerLevels(roomOps: RoomOps, store: ConfigStor
     try {
       await elevateTrustedUsersInRoom(roomOps, store, roomId);
     } catch (err) {
-      logger.warn(`[power] 房间 ${roomId} 信任用户补权失败(跳过,下次启动自动重试): ${(err as Error).message}`);
+      logger.warn(`[power] 房间 ${roomId} 信任用户补权失败(跳过,下次启动自动重试): ${errorMessage(err)}`);
     }
   }
 }
@@ -141,7 +145,7 @@ export async function demoteTrustedUserEverywhere(
     } catch (err) {
       failed = true;
       logger.warn(
-        `[power] 房间 ${roomId} 撤销降权失败(保留簿记,下次启动自动重试): ${(err as Error).message}`
+        `[power] 房间 ${roomId} 撤销降权失败(保留簿记,下次启动自动重试): ${errorMessage(err)}`
       );
     }
   }

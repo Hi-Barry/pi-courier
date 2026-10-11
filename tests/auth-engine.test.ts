@@ -33,6 +33,25 @@ async function initiate(auth: ChallengeAuth, userId: string, chatId: string): Pr
   }, "matrix");
 }
 
+describe("displayIdentity 保留 homeserver 段(审计工程批 票21)", () => {
+  it("展示完整 native ID,不同 homeserver 可区分", async () => {
+    const { displayIdentity } = await import("../src/identity");
+    expect(displayIdentity("matrix:@alice:hs1")).toBe("@alice:hs1 (matrix)");
+    expect(displayIdentity("matrix:@alice:hs2")).toBe("@alice:hs2 (matrix)");
+    expect(displayIdentity("@bare:form")).toBe("@bare:form");
+  });
+});
+
+describe("namespacedId 幂等(审计工程批 票23)", () => {
+  it("同前缀重复包装返回原值,不同前缀正常加", async () => {
+    const { namespacedId } = await import("../src/identity");
+    expect(namespacedId("@u:s", "matrix")).toBe("matrix:@u:s");
+    expect(namespacedId("matrix:@u:s", "matrix")).toBe("matrix:@u:s");
+    expect(namespacedId("telegram:123", "matrix")).toBe("matrix:telegram:123");
+    expect(namespacedId("@u:s")).toBe("@u:s");
+  });
+});
+
 describe("ChallengeAuth strategy engine", () => {
   beforeEach(() => {
     vi.useFakeTimers();

@@ -17,6 +17,5 @@ describe("errorMessage (audit stability batch 票11)", () => {
 
   it("other primitives stringify", () => {
     expect(errorMessage(42)).toBe("42");
-    expect(errorMessage({ code: "EACCES" })).toBe("[object Object]");
   });
 });

@@ -9,7 +9,6 @@
  * the SDK log facade; the real MatrixClient structurally satisfies the
  * port, so no wrapper class is needed.
  */
-import * as os from "node:os";
 import * as path from "node:path";
 import type { ILogger, RoomCreateOptions } from "matrix-bot-sdk";
 import {
@@ -19,16 +18,10 @@ import {
   RustSdkCryptoStoreType,
   SimpleFsStorageProvider,
 } from "matrix-bot-sdk";
+import { CONFIG_DIR } from "../config.js";
+import { errorMessage } from "../errors.js";
 import { logger } from "../logger.js";
 import type { EncryptedMediaFile } from "./attachments.js";
-
-/** Safe message extraction: string rejections pass through; null/undefined
- *  rejections render as a readable placeholder instead of "undefined". */
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err === undefined || err === null) return "(no error value)";
-  return String(err);
-}
 
 /** Whether the error is the expected "native crypto binding failed to load"
  *  failure (missing download, ABI mismatch, unsupported loader). */
@@ -123,13 +116,13 @@ export type MatrixClientFactory = (config: MatrixClientConfig) => MatrixClientPo
  *   `crypto` member is the deployment-wide E2EE verdict.
  */
 export function createMatrixClient(config: MatrixClientConfig): MatrixClientPort {
-  const storagePath = path.join(os.homedir(), ".pi", "pi-courier-matrix-store.json");
+  const storagePath = path.join(CONFIG_DIR, "pi-courier-matrix-store.json");
   const storage = new SimpleFsStorageProvider(storagePath);
 
   let cryptoProvider: RustSdkCryptoStorageProvider | undefined;
   if (config.encryption !== false) {
     try {
-      const cryptoStorePath = path.join(os.homedir(), ".pi", "pi-courier-matrix-crypto");
+      const cryptoStorePath = path.join(CONFIG_DIR, "pi-courier-matrix-crypto");
       cryptoProvider = new RustSdkCryptoStorageProvider(cryptoStorePath, RustSdkCryptoStoreType.Sqlite);
       logger.info("[Matrix] E2EE crypto storage enabled (Rust/SQLite)");
     } catch (err) {

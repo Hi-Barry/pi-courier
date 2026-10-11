@@ -7,6 +7,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { errorMessage } from "../errors.js";
 import { logger } from "../logger.js";
 
 export class JsonStateFile<T> {
@@ -22,7 +23,7 @@ export class JsonStateFile<T> {
       raw = fs.readFileSync(this.filePath, "utf8");
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        logger.warn(`state file unreadable, starting from defaults: ${this.filePath} (${(err as Error).message})`);
+        logger.warn(`state file unreadable, starting from defaults: ${this.filePath} (${errorMessage(err)})`);
       }
       return structuredClone(this.fallback);
     }
@@ -37,7 +38,7 @@ export class JsonStateFile<T> {
       }
       return (parsed ?? structuredClone(this.fallback)) as T;
     } catch (err) {
-      logger.warn(`state file corrupt, starting from defaults: ${this.filePath} (${(err as Error).message})`);
+      logger.warn(`state file corrupt, starting from defaults: ${this.filePath} (${errorMessage(err)})`);
       return structuredClone(this.fallback);
     }
   }
@@ -86,7 +87,7 @@ export class JsonStateFile<T> {
         // 权限收紧失败不影响本次落盘
       }
     } catch (err) {
-      logger.warn(`state file write failed (memory copy stays authoritative): ${this.filePath} (${(err as Error).message})`);
+      logger.warn(`state file write failed (memory copy stays authoritative): ${this.filePath} (${errorMessage(err)})`);
     }
   }
 }

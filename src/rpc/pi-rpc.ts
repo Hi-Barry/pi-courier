@@ -387,7 +387,6 @@ export class PiRpc {
     await upstreamPromptSend(this.requireClient(), text, "followUp");
   }
 
-  /** Get available commands (extension commands, prompt templates, skills) with a short cache. */
   /** Subscribe to agent events. Safe to call before start(). Returns an
    *  unsubscribe function. */
   onEvent(listener: RpcEventListener): () => void {
@@ -402,6 +401,7 @@ export class PiRpc {
     };
   }
 
+  /** Get available commands (extension commands, prompt templates, skills) with a short cache. */
   async getCommands(): Promise<RpcSlashCommandInfo[]> {
     if (this.commandsCache && Date.now() - this.commandsCache.at < 60_000) {
       return this.commandsCache.list;
