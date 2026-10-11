@@ -87,6 +87,34 @@ describe("FileEventLedger (issue #113)", () => {
     expect(JSON.parse(lines()[0]!).init).toBeTypeOf("number");
   });
 
+  it("zero-byte ledger file degrades to first run (audit stability batch 票16)", () => {
+    writeFileSync(file, "", "utf8");
+    const ledger = new FileEventLedger(file);
+    expect(ledger.freshStart).toBe(true); // 宁丢不误:与 unreadable 同语义
+    expect(ledger.seen("$x")).toBe(false);
+    // 首运 init 落盘,台账恢复有效
+    expect(JSON.parse(lines()[0]!).init).toBeTypeOf("number");
+  });
+
+  it("entries with non-finite timestamps are dropped, good entries kept (audit stability batch 票16)", () => {
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ id: "$good", ts: Date.now() }),
+        // JSON 数字字面量可溢出为 Infinity(1e999);NaN 无法经 JSON 到达,
+        // 守卫同样覆盖(防御未来调用方)。
+        '{"id":"$inf","ts":1e999}',
+        '{"id":"$huge","ts":1e308}',
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const ledger = new FileEventLedger(file);
+    expect(ledger.freshStart).toBe(false);
+    expect(ledger.seen("$good")).toBe(true);
+    expect(ledger.seen("$inf")).toBe(false);
+    expect(ledger.seen("$huge")).toBe(true);
+  });
+
   it("unreadable ledger (dir occupying the file path) degrades to first-run, never throws", () => {
     rmSync(file, { force: true });
     mkdirSync(file); // EISDIR on read

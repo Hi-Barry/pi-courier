@@ -77,6 +77,18 @@ describe("AttachmentStore.save", () => {
     expect(await fs.promises.readFile(b.path, "utf-8")).toBe("PNGDATA");
   });
 
+  it("a pre-existing zero-byte file is never overwritten (audit stability batch 票16)", async () => {
+    const { store, root } = makeStore(countingSource());
+    // 预先放一个 0 字节文件,占住 z2 的确定性目标名(名字计算与 store 同源)
+    const victim = path.join(root, sanitizeRoomKey(ROOM), sanitizeMediaFilename("pre.bin", "mxc://s/z2"));
+    await fs.promises.mkdir(path.dirname(victim), { recursive: true });
+    await fs.promises.writeFile(victim, "");
+    const saved = await store.save(ROOM, { mxcUrl: "mxc://s/z2", body: "pre.bin" });
+    expect(saved.path).not.toBe(victim); // wx 命中 EEXIST → 落 -1
+    expect((await fs.promises.stat(victim)).size).toBe(0);
+    expect(await fs.promises.readFile(saved.path, "utf-8")).toBe("PNGDATA");
+  });
+
   it("wraps download failures with a user-ready message", async () => {
     const source: MediaSource = {
       downloadPlaintext: async () => {
