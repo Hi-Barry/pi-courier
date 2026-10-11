@@ -24,10 +24,17 @@ export interface LabelSource {
 
 /** The label for a project entry: trimmed name when present, else the
  *  workdir basename (empty basename — the root "/" workdir — falls back to
- *  the workdir itself, so a label is never empty). */
+ *  the workdir itself, so a label is never empty).
+ *
+ *  workdir is defensively optional at runtime: the projects map comes from
+ *  user-editable config and a preset-only entry (model/thinkingLevel/fallbacks
+ *  without workdir) is legal JSON — `path.basename(undefined)` used to throw
+ *  and take the whole /pmctl message down with it (2026-10-11 真机). */
 export function projectLabelOf(entry: LabelSource): string {
   const name = entry.name?.trim();
-  return name || path.basename(entry.workdir) || entry.workdir;
+  if (name) return name;
+  const workdir = typeof entry?.workdir === "string" ? entry.workdir : "";
+  return path.basename(workdir) || workdir;
 }
 
 const MAX_LABEL_LENGTH = 30;

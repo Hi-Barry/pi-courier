@@ -55,4 +55,13 @@ describe("validateProjectLabel", () => {
     expect(validateProjectLabel("myapp", ["MyApp", "other"])).toContain("MyApp");
     expect(validateProjectLabel("free", ["MyApp"])).toBeNull();
   });
+
+  it("projectLabelOf 对缺 workdir 的畸形条目不再抛错(手编/预设-only 条目)", () => {
+    // 2026-10-11 真机:projects 里混入只有预设字段、没有 workdir/name 的条目
+    // 时,path.basename(undefined) 会把整条 /pmctl 消息炸掉
+    expect(projectLabelOf({ name: "alpha", workdir: "/x/y" })).toBe("alpha");
+    expect(projectLabelOf({ workdir: "/x/y" })).toBe("y");
+    expect(projectLabelOf({} as never)).toBe("");
+    expect(projectLabelOf({ name: "  ", workdir: undefined } as never)).toBe("");
+  });
 });
