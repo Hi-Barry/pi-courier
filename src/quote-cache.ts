@@ -62,4 +62,5 @@ export function createQuoteCache(): QuoteCache {
     },
   };
 }
+
 import { truncateLine } from "./formatting.js";

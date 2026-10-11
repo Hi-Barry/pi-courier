@@ -17,6 +17,7 @@
  */
 
 import { type ConfigStore, nativeMxid } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { logger } from "./logger.js";
 import type { RoomOps } from "./transports/interface.js";
 import type { MsgBridgeConfig } from "./types.js";
@@ -108,16 +109,24 @@ export async function healTrustedPowerLevels(roomOps: RoomOps, store: ConfigStor
   // users outside them (external admins, the bot itself) are never touched.
   // Failed demotions stay booked and retry on the next start.
   const trusted = cfg.auth?.trustedUsers ?? [];
-  for (const user of (cfg.powerElevatedUsers ?? []).filter((u) => !trusted.includes(u))) {
-    await demoteTrustedUserEverywhere(roomOps, store, user);
-  }
-  for (const roomId of roomIds) {
-    try {
-      await elevateTrustedUsersInRoom(roomOps, store, roomId);
-    } catch (err) {
-      logger.warn(`[power] 房间 ${roomId} 信任用户补权失败(跳过,下次启动自动重试): ${(err as Error).message}`);
-    }
-  }
+  // 降权先于提权(顺序不变量);用户之间/房间之间相互独立,并行执行,
+  // 单点失败照旧留痕不拖垮整批(审计工程批 票22)。
+  await Promise.all(
+    (cfg.powerElevatedUsers ?? [])
+      .filter((u) => !trusted.includes(u))
+      .map((user) =>
+        demoteTrustedUserEverywhere(roomOps, store, user).catch((err) => {
+          logger.warn(`[power] 用户 ${user} 撤销降权失败(保留簿记,下次启动自动重试): ${errorMessage(err)}`);
+        })
+      )
+  );
+  await Promise.all(
+    roomIds.map((roomId) =>
+      elevateTrustedUsersInRoom(roomOps, store, roomId).catch((err) => {
+        logger.warn(`[power] 房间 ${roomId} 信任用户补权失败(跳过,下次启动自动重试): ${errorMessage(err)}`);
+      })
+    )
+  );
 }
 
 /** Symmetric closed loop (ticket 3, issue #44): strip the admin power this

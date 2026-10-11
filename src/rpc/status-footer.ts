@@ -31,23 +31,29 @@ export async function collectStatusFooter(rpc: PiRpc): Promise<StatusFooterInfo>
   } catch {
     // 该段保持 null('📂 ?')
   }
-  try {
-    const state = await rpc.requireClient().getState();
+  // 两段 RPC 相互独立,并行现拉(原两次串行回路白等一倍 —— 审计工程批 票22);
+  // 各段容错语义原样保留:任何异常只降级为该段 null。
+  // requireClient 可能同步抛(未连接)——经 then 链转成拒绝,两段各自降级
+  const stateP = Promise.resolve()
+    .then(() => rpc.requireClient())
+    .then((c) => c.getState());
+  const usageP = Promise.resolve()
+    .then(() => rpc.requireClient())
+    .then((c) => c.getSessionStats());
+  const [stateResult, usageResult] = await Promise.allSettled([stateP, usageP]);
+  if (stateResult.status === "fulfilled") {
+    const state = stateResult.value;
     const name = state.model?.name || state.model?.id;
     // 思考等级缺失时只显示模型;'·' 直连不分隔(如 GLM-5.3·high)。
     if (name) info.model = state.thinkingLevel ? `${name}·${state.thinkingLevel}` : name;
-  } catch {
-    // 模型·思考合并段保持 null(getState 整体失败 → '🤖 ?')
   }
-  try {
-    const usage = (await rpc.requireClient().getSessionStats()).contextUsage;
+  if (usageResult.status === "fulfilled") {
+    const usage = usageResult.value.contextUsage;
     if (usage) {
       // percent 为 null(手动压缩后无新 LLM 响应)→ '?',窗口仍可显示。
       const percent = typeof usage.percent === "number" ? `${usage.percent.toFixed(1)}%` : "?";
       info.context = `${percent}/${formatContextWindow(usage.contextWindow)}`;
     }
-  } catch {
-    // 上下文段保持 null('📜 ?')
   }
   return info;
 }

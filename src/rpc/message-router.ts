@@ -14,6 +14,7 @@ import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
 import { commandPolicy } from "../command-registry.js";
 import { type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
+import { errorMessage } from "../errors.js";
 import {
   extractTextFromMessage,
   formatToolCalls,
@@ -22,7 +23,6 @@ import {
   truncate,
   truncateLine,
 } from "../formatting.js";
-import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { namespacedId } from "../identity.js";
 import { isEnabled, type LeveledLogger, logger } from "../logger.js";

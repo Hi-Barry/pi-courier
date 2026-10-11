@@ -20,7 +20,6 @@ import {
   effectiveInstanceName,
   projectFallbackChain,
 } from "../config.js";
-import { PROJECT_SESSION_DIR } from "./project-manager.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
@@ -28,6 +27,7 @@ import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
 import { provisionManagedRoom } from "../space-topology.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
+import { PROJECT_SESSION_DIR } from "./project-manager.js";
 
 export interface PmctlCall {
   /** Room the command came from (also the pending-rm confirmation key). */

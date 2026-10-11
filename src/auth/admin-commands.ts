@@ -11,7 +11,7 @@
 
 import { t } from "../i18n/index.js";
 import { displayIdentity, namespacedId } from "../identity.js";
-import { MAX_PAIRING_ATTEMPTS, PAIRING_BLOCK_MINUTES, type ChallengeAuth } from "./challenge-auth.js";
+import { type ChallengeAuth, MAX_PAIRING_ATTEMPTS, PAIRING_BLOCK_MINUTES } from "./challenge-auth.js";
 
 export type AdminEffect =
   | { kind: "persistAuth" }
