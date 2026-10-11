@@ -53,6 +53,33 @@ describe("ReminderClock (issue #117)", () => {
     return { store, clock };
   };
 
+  it("single-flight: a re-entrant tick while a slow delivery is in flight skips and re-arms (audit stability batch 票17)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const store = new ReminderStore(new JsonStateFile<ReminderEntry[]>(file, []));
+    const deliveries: ReminderDelivery[] = [];
+    const clock = new ReminderClock(store, async (d) => {
+      deliveries.push(d);
+      await gate; // 第一条投递挂起,制造慢投递窗口
+    });
+    await clock.start();
+    clock.add({ chatId: "!r:s", transport: "matrix", userId: "matrix:@barry:server", username: "barry", text: "慢投递", dueAt: BASE + 30_000 });
+    const firstFire = vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(0); // 让第一轮 tick 进入 await gate
+    expect(deliveries).toHaveLength(1);
+
+    // 重入 tick:应让位并重新排程,而不是叠着跑二次投递
+    const inner = clock as unknown as { tick(): Promise<void> };
+    await inner.tick();
+    expect(deliveries).toHaveLength(1); // 没有重复投递
+
+    release();
+    await firstFire;
+    expect(deliveries).toHaveLength(1); // 全程恰好一次
+    // 定时链未断:收尾 arm() 已重新排程(this.timer 存在或已无未来提醒)
+    expect([store.list().length]).toEqual([0]);
+  });
+
   it("a reminder fires once at its due time, is delivered, and leaves the store", async () => {
     const { clock } = makeClock();
     await clock.start();

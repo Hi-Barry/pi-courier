@@ -100,6 +100,12 @@ export class RecapLedger {
   /** 发总结 prompt 并等终答(turn_end 的最终文本)。prompt 发送失败即撤销
    *  捕获并 reject,捕获槽不留悬案。 */
   startCapture(rpc: PiRpc): Promise<string> {
+    if (this.capture) {
+      // 上一张卡未 settle 就再来一张:原实现直接覆盖槽位,旧调用永远悬挂
+      // (悬案)。忙拒绝让两次调用都有明确结局,调用方既有 RecapBusyError
+      // 路径照常回执(审计稳定性批 票17)。
+      return Promise.reject(new RecapBusyError());
+    }
     return new Promise<string>((resolve, reject) => {
       this.capture = { rpc, resolve, reject };
       rpc.prompt(recapPromptText()).catch((err: unknown) => {

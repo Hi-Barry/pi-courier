@@ -51,7 +51,10 @@ export function formatToolCalls(message: AssistantMessage): string {
  * use this (it truncates without an ellipsis marker — audit lines stay raw).
  */
 export function truncateLine(text: string, max = 120): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
+  // RPC 队列里的元素形状不可信(上游可能给非字符串),防御性归一,
+  // 不让截断工具成为崩溃点(审计稳定性批 票17)。
+  const raw = typeof text === "string" ? text : String(text);
+  const oneLine = raw.replace(/\s+/g, " ").trim();
   return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
 }
 
