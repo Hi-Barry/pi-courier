@@ -147,13 +147,23 @@ export function createMatrixClient(config: MatrixClientConfig): MatrixClientPort
   // rejection that kills the process (issue #110). Register our own handler
   // with an explicit catch instead.
   client.on("room.invite", (roomId: string) => {
-    client.joinRoom(roomId).catch((err: unknown) => {
-      logger.warn(
-        "[Matrix] auto-join failed for invited room, skipping:",
-        roomId,
-        err instanceof Error ? err.message : err,
-      );
-    });
+    client.joinRoom(roomId)
+      .then(() => {
+        // SDK 的 room.join 只在 sync 的 join 段 timeline 里看到自己的 join
+        // 事件时才发出 —— 而 API 直接 join 后,该事件通常落在同一响应的
+        // state 段,SDK 永远看不到:自动加入的群不触发 room.join,joinedRooms
+        // 不记账、群聊一次性提示不发(2026-10-11 真机复现:bot 已 join、
+        // 房间零消息)。join 成功后主动补发一次;transport 侧按 isNew 去重,
+        // SDK 若在后续 sync 里迟到真事件也不会二次提示。
+        client.emit("room.join", roomId);
+      })
+      .catch((err: unknown) => {
+        logger.warn(
+          "[Matrix] auto-join failed for invited room, skipping:",
+          roomId,
+          err instanceof Error ? err.message : err,
+        );
+      });
   });
 
   // Route SDK-internal logs through the shared leveled logger — trace/debug

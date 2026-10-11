@@ -302,7 +302,7 @@ describe("handleAdminCommand (pure in/out)", () => {
       transport: "matrix",
     });
     expect(result.handled).toBe(true);
-    expect(result.replies).toEqual(["✅ Authenticated! You can now chat with the agent."]);
+    expect(result.replies).toEqual(["✅ 配对成功!现在可以直接和 agent 对话了。"]);
     // The invites ride the same effect chain as trust persistence — the
     // caller (router) applies them; the engine stays free of Matrix I/O.
     expect(result.effects).toEqual([
@@ -318,7 +318,7 @@ describe("handleAdminCommand (pure in/out)", () => {
     await initiate(auth, "@eve:server", "!dm:server");
     const wrong = shown() === "000000" ? "111111" : "000000";
     const result = handleAdminCommand(auth, { text: wrong, userId: "@eve:server", transport: "matrix" });
-    expect(result.replies).toEqual(["❌ Wrong code. 2 attempts remaining."]);
+    expect(result.replies).toEqual(["❌ 配对码不对,还剩 2 次机会。"]);
     expect(result.effects).toEqual([]);
   });
 
@@ -330,7 +330,7 @@ describe("handleAdminCommand (pure in/out)", () => {
       transport: "matrix",
     });
     expect(result.handled).toBe(true);
-    expect(result.replies).toEqual(["✅ Channel !group:server enabled (mode: mentions)"]);
+    expect(result.replies).toEqual(["✅ 频道 !group:server 已启用(mode: mentions)"]);
     expect(result.effects).toEqual([{ kind: "persistAuth" }]);
     expect(auth.isChannelEnabled("!group:server")).toBe(true);
   });
@@ -344,7 +344,7 @@ describe("handleAdminCommand (pure in/out)", () => {
       hideToolCalls: false,
     });
     expect(hidden.effects).toEqual([{ kind: "hideToolCalls", value: true }]);
-    expect(hidden.replies).toEqual(["🔧 Tool calls hidden in remote messages"]);
+    expect(hidden.replies).toEqual(["🔧 工具调用已在远程消息中隐藏"]);
 
     const shownAgain = handleAdminCommand(auth, {
       text: "/toggletools",
@@ -358,8 +358,8 @@ describe("handleAdminCommand (pure in/out)", () => {
   it("/revoke emits a warning notification plus persistAuth and the powerDemote effect; unknown users reply only", () => {
     const { auth } = makeEngine();
     const ok = handleAdminCommand(auth, { text: "/revoke @carol:server", userId: "@barry:server", transport: "matrix" });
-    expect(ok.replies).toEqual(["🔓 Revoked trust for @carol:server"]);
-    expect(ok.notifications).toEqual([{ message: "Revoked: @carol:server", level: "warning" }]);
+    expect(ok.replies).toEqual(["🔓 已撤销 @carol:server 的信任"]);
+    expect(ok.notifications).toEqual([{ message: "已撤销:@carol:server", level: "warning" }]);
     // The demotion effect carries the removed entry in its stored (namespaced)
     // form, however the admin spelled the command argument.
     expect(ok.effects).toEqual([
@@ -368,7 +368,7 @@ describe("handleAdminCommand (pure in/out)", () => {
     ]);
 
     const miss = handleAdminCommand(auth, { text: "/revoke nobody", userId: "@barry:server", transport: "matrix" });
-    expect(miss.replies).toEqual(["❌ User nobody not found in trusted users"]);
+    expect(miss.replies).toEqual(["❌ nobody 不在信任用户名单中"]);
     expect(miss.effects).toEqual([]);
   });
 
