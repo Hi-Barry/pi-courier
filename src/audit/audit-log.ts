@@ -62,6 +62,7 @@ export class AuditLog {
   private readonly rotateKeep: number;
   private readonly warnThreshold: number;
   private consecutiveFailures = 0;
+  private permissionsEnforced = false;
 
   constructor(
     private readonly filePath: string,
@@ -80,6 +81,18 @@ export class AuditLog {
       fs.mkdirSync(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
       this.rotateIfNeeded();
       fs.appendFileSync(this.filePath, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+      if (!this.permissionsEnforced) {
+        // 0600/0700 only apply on creation — a pre-existing loose file/dir
+        // (older version, manual copy) gets tightened once on the first
+        // successful append; rotation recreates files at 0600 by itself.
+        try {
+          fs.chmodSync(this.filePath, 0o600);
+          fs.chmodSync(path.dirname(this.filePath), 0o700);
+          this.permissionsEnforced = true;
+        } catch {
+          // 权限收紧失败不影响本次落账,下次 append 重试
+        }
+      }
       this.consecutiveFailures = 0;
     } catch (err) {
       this.consecutiveFailures += 1;

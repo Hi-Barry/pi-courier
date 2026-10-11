@@ -91,6 +91,19 @@ describe('config', () => {
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
+  it('tightens a pre-existing loose config file to 600 (audit batch 1 票8)', async () => {
+    mkdirSync(join(tmpDir, '.pi'), { recursive: true });
+    const configPath = join(tmpDir, '.pi', 'pi-courier.json');
+    writeFileSync(configPath, '{"legacy": true}', { mode: 0o644 });
+    expect(statSync(configPath).mode & 0o777).toBe(0o644);
+
+    const { saveConfig } = await importConfig();
+    saveConfig({ debug: true });
+
+    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+    expect(statSync(join(tmpDir, '.pi')).mode & 0o777).toBe(0o700);
+  });
+
   it('env vars override file values for the same transport', async () => {
     const { loadConfig, saveConfig } = await importConfig();
 

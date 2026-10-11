@@ -53,6 +53,11 @@ export class JsonStateFile<T> {
       }
       fs.writeFileSync(tmp, JSON.stringify(next, undefined, 2), { mode: 0o600 });
       fs.renameSync(tmp, this.filePath);
+      // 0600/0700 only apply when the file/dir is CREATED — a pre-existing
+      // loose file or directory (older version, manual copy) must be
+      // tightened so the documented contract actually holds.
+      fs.chmodSync(this.filePath, 0o600);
+      fs.chmodSync(path.dirname(this.filePath), 0o700);
     } catch (err) {
       logger.warn(`state file write failed (memory copy stays authoritative): ${this.filePath} (${(err as Error).message})`);
     }
