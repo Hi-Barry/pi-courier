@@ -1,5 +1,7 @@
 import * as fs from "node:fs";
+import { errorMessage } from "./errors.js";
 import { t } from "./i18n/index.js";
+import { logger } from "./logger.js";
 
 /**
  * Targeted hint for the `su`-without-`-` trap (issue #59, observed live on
@@ -68,7 +70,8 @@ export function dirOwnerUid(dir: string | undefined): number | null {
   if (!dir) return null;
   try {
     return fs.statSync(dir).uid;
-  } catch {
+  } catch (err) {
+    logger.debug(`[systemd] 探测失败,按无 systemd 处理: ${errorMessage(err)}`);
     return null;
   }
 }

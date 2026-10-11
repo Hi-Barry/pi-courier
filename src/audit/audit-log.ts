@@ -115,8 +115,10 @@ export class AuditLog {
   private shift(from: string, to: string): void {
     try {
       fs.renameSync(from, to);
-    } catch {
-      // 缺席的源是轮转链的正常形态
+    } catch (err) {
+      // 缺席的源是轮转链的正常形态;其余失败上抛,由 append 的连续失败
+      // 计数按同一阈值语义告警(审计稳定性批 票12)。
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }
   }
 }

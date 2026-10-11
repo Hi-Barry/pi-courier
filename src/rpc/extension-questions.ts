@@ -28,10 +28,12 @@
  * cancelled:true response resolves the dialog to its default value.
  */
 
+import { errorMessage } from "../errors.js";
 import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import type { LeveledLogger } from "../logger.js";
+import { logger } from "../logger.js";
 import type { ExternalMessage, MsgBridgeConfig, ReplyTarget } from "../types.js";
 import type { ExtensionUIResponsePayload, PiRpc } from "./pi-rpc.js";
 
@@ -185,7 +187,9 @@ export class ExtensionQuestions {
         // A pending question must never keep the bridge process alive by itself.
         entry.timer.unref?.();
         this.queue(rpc).push(entry);
-        this.deps.sendReply(target.chatId, target.transport, extensionUIQuestionText(request)).catch(() => {});
+        this.deps.sendReply(target.chatId, target.transport, extensionUIQuestionText(request)).catch((err: unknown) => {
+          log.warn(`[xq] 问题卡片发送失败(用户看不到这道题): ${errorMessage(err)}`);
+        });
         log.debug(`[extension-ui] ${request.method} 提问已发往房间 (id ${request.id})`);
         return;
       }
@@ -197,7 +201,9 @@ export class ExtensionQuestions {
         if (level === "warning" || level === "error") {
           if (target) {
             const icon = level === "error" ? "🔴" : "⚠️";
-            this.deps.sendReply(target.chatId, target.transport, `${icon} ${t("xq.notify", { message })}`).catch(() => {});
+            this.deps.sendReply(target.chatId, target.transport, `${icon} ${t("xq.notify", { message })}`).catch((err: unknown) => {
+            log.warn(`[xq] 问题通知发送失败: ${errorMessage(err)}`);
+          });
           } else {
             log.warn(`[extension-ui] 扩展通知(${level},无绑定房间): ${message}`);
           }
@@ -246,7 +252,9 @@ export class ExtensionQuestions {
     this.deps.respond(rpc, { id: entry.request.id, cancelled: true }).catch((err: unknown) => {
       entry.log.error(`[extension-ui] 超时代答回写失败 (id ${entry.request.id}): ${(err as Error).message}`);
     });
-    this.deps.sendReply(entry.target.chatId, entry.target.transport, t("xq.expired", { title })).catch(() => {});
+    this.deps.sendReply(entry.target.chatId, entry.target.transport, t("xq.expired", { title })).catch((err: unknown) => {
+      logger.warn(`[xq] 过期回执发送失败: ${errorMessage(err)}`);
+    });
   }
 
   /** Commit an answer to the oldest pending question (issue #54): write the

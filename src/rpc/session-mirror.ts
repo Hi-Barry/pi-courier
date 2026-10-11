@@ -19,8 +19,11 @@
  * 边界(有意不做):不转发 TUI 流式 delta(落盘即完整消息)、不转发工具调用、
  * 不反向实时驱动 TUI(TUI 重进即见,接力语义已覆盖)。
  */
+
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { errorMessage } from "../errors.js";
+import { logger } from "../logger.js";
 
 /** pi 会话文件首行 header:{"type":"session","version":3,"id":...,"cwd":...} */
 export interface SessionHeader {
@@ -300,7 +303,11 @@ export class SessionMirror {
     // role 在 message 里(会话文件结构:message:{role,content}),不在顶层。
     const role = (entry.message as { role?: string } | undefined)?.role;
     if (role !== "user" && role !== "assistant") return;
-    void this.resolveExternal(entry, role, file);
+    this.resolveExternal(entry, role, file).catch((err: unknown) => {
+      // 判定失败按外部处理的语义在 resolveExternal 内部;这里兜住其外的一切
+      // 拒绝(回调/清理),不产生未处理拒绝(审计稳定性批 票13)。
+      logger.warn(`[mirror] 外部判定流程异常(忽略该条): ${errorMessage(err)}`);
+    });
   }
 
   /**

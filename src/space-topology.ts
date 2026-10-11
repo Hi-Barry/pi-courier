@@ -22,6 +22,7 @@
  */
 
 import { activeSpaceRoomId, adoptManagementRoom, type ConfigStore, effectiveInstanceName, effectiveWorkdir, isSpaceMode, managementRoomId, nativeMxid } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { t } from "./i18n/index.js";
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
@@ -109,8 +110,9 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
           `${buildManagementRoomHelp(instanceName, botAccount, workdir)}\n\n` +
             `${t("mgmt.adminPowerNote")}`
         );
-      } catch {
+      } catch (err) {
         // The usage guide is nice-to-have; room setup must not depend on it.
+        logger.debug(`[space] usage guide send skipped: ${errorMessage(err)}`);
       }
     }
 
@@ -179,8 +181,10 @@ export async function maybeInitManagementRoom(
     // The guards above mean the list was empty — adopt writes the single entry.
     store.update(adoptManagementRoom(cfg, msg.chatId));
     logger.info(`[project] 管理房间已初始化: ${msg.chatId} (${roomName})`);
-  } catch {
-    // Non-matrix transport or transient failure — skip branding, try again later.
+  } catch (err) {
+    // Non-matrix transport or transient failure — skip branding, try again
+    // later. 降级必留痕:品牌化/收养哪一步败了、为什么(审计稳定性批 票12)。
+    logger.warn(`[project] 管理房间初始化失败(跳过,下次启动自动重试): ${errorMessage(err)}`);
   }
 }
 
