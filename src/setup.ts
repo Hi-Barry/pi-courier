@@ -18,6 +18,7 @@ import {
   nativeMxid,
   saveConfig,
 } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { detectSystemLanguage } from "./i18n/detect.js";
 import type { Locale } from "./i18n/index.js";
 import { setLocale, t } from "./i18n/index.js";
@@ -35,6 +36,8 @@ function createPrompter(): {
   ask: (prompt: string, opts?: { silent?: boolean }) => Promise<string>;
   close: () => void;
 } {
+  // Exported below for tests — the piped-mode race (audit critical) is
+  // pinned against a fake stdin in tests/setup-prompter.test.ts.
   if (stdin.isTTY) {
     const rl = createInterface({ input: stdin, output: stdout });
     // Each ask registers a `close` listener; the wizard makes a handful of
@@ -87,23 +90,27 @@ function createPrompter(): {
     };
   }
 
-  // Piped mode: read everything up front, then consume line by line
+  // Piped mode: read everything up front, then consume line by line.
+  // `ask` waits for EOF before consuming — resolving on first data (the old
+  // `data.length > 0` guard) raced the `end` handler and returned an empty
+  // answer for the very first question (audit critical fix).
   let data = "";
+  let ended = false;
+  const lines: string[] = [];
   stdin.setEncoding("utf-8");
   stdin.on("data", (chunk) => {
     data += chunk as string;
   });
-  const lines: string[] = [];
   stdin.on("end", () => {
     lines.push(...data.split("\n"));
+    ended = true;
   });
   return {
     ask: async (prompt: string) => {
       process.stdout.write(prompt);
-      await new Promise((resolve) => {
-        if (lines.length > 0 || data.length > 0) resolve(undefined);
-        else stdin.once("end", () => resolve(undefined));
-      });
+      if (!ended) {
+        await new Promise<void>((resolve) => stdin.once("end", () => resolve()));
+      }
       return lines.shift()?.trim() ?? "";
     },
     close: () => {
@@ -112,6 +119,8 @@ function createPrompter(): {
     },
   };
 }
+
+export { createPrompter };
 
 async function matrixLogin(
   homeserver: string,
@@ -147,7 +156,7 @@ async function matrixLogin(
 async function matrixWhoami(homeserver: string, accessToken: string): Promise<string> {
   const url = `${homeserver.replace(/\/$/, "")}/_matrix/client/v3/account/whoami`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-  if (!res.ok) throw new Error(t("setup.token.whoamiFailed", { status: res.status }));
+  if (!res.ok) throw new Error(t("setup.token.verifyKeptFailed", { status: res.status }));
   const data = (await res.json()) as { user_id?: string };
   return data.user_id ?? "unknown";
 }
@@ -255,7 +264,12 @@ export async function runSetup(): Promise<void> {
       const keep = ((await ask(t("setup.token.keep"))).trim() || "y").toLowerCase();
       if (keep === "y") {
         accessToken = existingToken;
-        botUserId = await matrixWhoami(homeserver, accessToken).catch(() => "unknown");
+        botUserId = await matrixWhoami(homeserver, accessToken).catch((err: unknown) => {
+          // 令牌校验失败仍按用户选择保留,但必须可见 —— 否则过期令牌照写
+          // 配置,启动后才炸(审计稳定性批 票12 评审修复)。
+          console.warn(t("setup.token.verifyKeptFailed", { message: errorMessage(err) }));
+          return "unknown";
+        });
         console.log(t("setup.token.kept", { user: botUserId }));
       } else {
         ({ accessToken, botUserId } = await acquireToken(ask, homeserver, deviceId));

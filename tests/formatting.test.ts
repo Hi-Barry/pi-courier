@@ -3,7 +3,17 @@ import {
   formatToolCalls,
   splitMessage,
   truncate,
+  truncateLine,
 } from '../src/formatting';
+
+describe('truncateLine defensive shape (audit stability batch 票17)', () => {
+  it('non-string input from untrusted RPC shapes never throws and stays readable', () => {
+    expect(truncateLine(123 as unknown as string)).toBe('123');
+    expect(truncateLine({ a: 1 } as unknown as string)).toBe('[object Object]');
+    expect(truncateLine(undefined as unknown as string)).toBe('undefined');
+    expect(truncateLine('正常文本')).toBe('正常文本');
+  });
+});
 
 describe('truncate', () => {
   it('returns short strings unchanged', () => {

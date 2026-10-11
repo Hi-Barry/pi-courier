@@ -42,6 +42,25 @@ describe("AuditLog (issue #124)", () => {
     expect(lines[1]).not.toContain("undefined");
   });
 
+  it("rotation failures feed the consecutive-failure threshold (audit stability batch 票12)", () => {
+    ({ dir } = tmpFile());
+    const file = join(dir, "audit.jsonl");
+    // 当前文件已超阈值(轮转会发生)且 .1 占成目录 → rename EISDIR
+    // (非 ENOENT)→ shift 上抛 → append 计入连续失败阈值
+    writeFileSync(file, "x".repeat(64), { mode: 0o600 });
+    mkdirSync(`${file}.1`);
+    const onDegraded = vi.fn();
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    try {
+      const audit = new AuditLog(file, { rotateBytes: 32, rotateKeep: 1, warnThreshold: 1, onDegraded });
+      audit.append("reload", "matrix:@u:s", "!room:s");
+      expect(onDegraded).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0][0])).toContain("audit log unavailable");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("creates the file 0600 (evidence is private)", () => {
     ({ dir } = tmpFile());
     const file = join(dir, "audit.jsonl");

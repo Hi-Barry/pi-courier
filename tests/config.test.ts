@@ -192,6 +192,44 @@ describe('config', () => {
     const { loadConfig } = await importConfig();
     expect(loadConfig().hideToolCalls).toBeUndefined();
   });
+  it('projects 畸形条目(null/标量)加载时清洗剔除并警告,不炸启动(审计稳定性批 票15)', async () => {
+    mkdirSync(join(tmpDir, '.pi'), { recursive: true });
+    writeFileSync(
+      join(tmpDir, '.pi', 'pi-courier.json'),
+      JSON.stringify({
+        projects: {
+          '!good:server': { name: 'ok' },
+          '!null:server': null,
+          '!scalar:server': 'oops',
+        },
+        workdir: '/tmp/w',
+      }),
+      'utf-8',
+    );
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { loadConfig } = await importConfig();
+      const cfg = loadConfig();
+      expect(cfg.workdir).toBe('/tmp/w');
+      expect(Object.keys(cfg.projects ?? {}).sort()).toEqual(['!good:server']);
+      expect(warnSpy.mock.calls.map(String).join('\n')).toContain('not an object');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('配置根为数组时整体忽略文件内容,加载不抛(审计稳定性批 票15)', async () => {
+    mkdirSync(join(tmpDir, '.pi'), { recursive: true });
+    writeFileSync(join(tmpDir, '.pi', 'pi-courier.json'), '[1,2,3]', 'utf-8');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { loadConfig } = await importConfig();
+      expect(loadConfig()).toEqual({});
+      expect(warnSpy.mock.calls.map(String).join('\n')).toContain('not an object');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
 
 describe('ConfigStore', () => {

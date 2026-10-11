@@ -123,15 +123,30 @@ export class ReminderClock implements ReminderController {
     this.timer = setTimeout(() => void this.tick(), delay);
   }
 
+  private ticking = false;
+
   private async tick(): Promise<void> {
-    this.timer = undefined;
-    const now = Date.now();
-    // Chunked arms can fire early (ceiling reached before dueAt): whatever is
-    // still future stays in the store and re-arms.
-    for (const entry of this.store.due(now)) {
-      await this.deliverEntry(entry, now);
+    // 单飞守卫(审计稳定性批 票17):上一轮 tick 还在慢投递时,新触发的
+    // tick 让位并重新排程 —— 既不叠着跑重复投递,也不让定时链断掉。
+    if (this.ticking) {
+      // 重入是异常态(慢投复盖到下一次触发),必须可见(审计稳定性批 票17)
+      logger.warn("[reminders] tick re-entered while a delivery is still in flight — skipped and re-armed");
+      this.arm();
+      return;
     }
-    this.arm();
+    this.ticking = true;
+    try {
+      this.timer = undefined;
+      const now = Date.now();
+      // Chunked arms can fire early (ceiling reached before dueAt): whatever is
+      // still future stays in the store and re-arms.
+      for (const entry of this.store.due(now)) {
+        await this.deliverEntry(entry, now);
+      }
+      this.arm();
+    } finally {
+      this.ticking = false;
+    }
   }
 
   /** Deliver + remove from the store. Late note when the fire slipped. */

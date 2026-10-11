@@ -36,8 +36,10 @@ import type {
   CredentialInfo,
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
+import { logger } from "../logger.js";
 import { formatReloadAllResult, restartIdleRpcs } from "../rpc/command-map.js";
 import type { PiRpc } from "../rpc/pi-rpc.js";
 
@@ -331,8 +333,12 @@ export class LoginManager {
     this.pending.set(chatId, entry);
     await this.deps.sendReply(chatId, transport, t("login.started", { id: providerId, method: chosen }));
     // Long-running by design: never block the message pipeline — the flow
-    // continues over the capture channel (deliver / cancel).
-    void this.run(entry);
+    // continues over the capture channel (deliver / cancel). run()'s catch
+    // already reports to the user; this handler catches ITS failure too
+    // (no unhandled rejection — audit stability batch 票13).
+    this.run(entry).catch((err: unknown) => {
+      logger.warn(`[login] 登录流程异常退出: ${errorMessage(err)}`);
+    });
   }
 
   /** Feed a plain room message into the pending flow. Returns true when the
@@ -416,7 +422,9 @@ export class LoginManager {
       signal: entry.controller.signal,
       prompt: (p) => this.promptUser(entry, p),
       notify: (e) => {
-        void this.deps.sendReply(chatId, transport, translateAuthEvent(e));
+        this.deps.sendReply(chatId, transport, translateAuthEvent(e)).catch((err: unknown) => {
+          logger.warn(`[login] 登录事件通知发送失败: ${errorMessage(err)}`);
+        });
       },
     };
     try {
@@ -438,7 +446,13 @@ export class LoginManager {
       entry.finished = true;
       this.drop(entry);
       if (err instanceof LoginCancelledError || entry.controller.signal.aborted) return;
-      await this.deps.sendReply(chatId, transport, t("login.failed", { id: providerId, message: (err as Error).message }));
+      // 失败回执自身失败时只留痕 —— run 的调用点是 fire-and-forget,
+      // 这里再抛就成了未处理拒绝(审计稳定性批 票13)。
+      await this.deps
+        .sendReply(chatId, transport, t("login.failed", { id: providerId, message: errorMessage(err) }))
+        .catch((sendErr: unknown) => {
+          logger.warn(`[login] 登录失败回执发送失败: ${errorMessage(sendErr)}`);
+        });
     }
   }
 

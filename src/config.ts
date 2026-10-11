@@ -9,6 +9,40 @@ import type { MsgBridgeConfig } from "./types.js";
 const CONFIG_DIR = path.join(os.homedir(), ".pi");
 const CONFIG_PATH = path.join(CONFIG_DIR, "pi-courier.json");
 
+/** Nested map fields whose entries are dereferenced downstream — a hand-edited
+ *  `null`/scalar entry used to crash loading with a TypeError (audit stability
+ *  batch 票15). Non-object entries are dropped with a warning; the
+ *  "never block startup" contract holds under any disk content. */
+const NESTED_MAP_FIELDS = ["projects"] as const;
+
+/** Drop malformed entries from nested map fields; keeps everything else
+ *  untouched. Returns the sanitized object (or {} when the file isn't one). */
+function sanitizeFileConfig(fileConfig: unknown): Record<string, unknown> {
+  if (typeof fileConfig !== "object" || fileConfig === null || Array.isArray(fileConfig)) {
+    if (fileConfig !== undefined) {
+      console.warn("⚠️  Config file root is not an object — ignoring file content.");
+    }
+    return {};
+  }
+  const source = fileConfig as Record<string, unknown>;
+  for (const field of NESTED_MAP_FIELDS) {
+    const value = source[field];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== "object" || Array.isArray(value)) {
+      console.warn(`⚠️  Config field "${field}" is not a map — dropping it.`);
+      delete source[field];
+      continue;
+    }
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        console.warn(`⚠️  Config "${field}.${key}" is not an object — dropping the entry.`);
+        delete (value as Record<string, unknown>)[key];
+      }
+    }
+  }
+  return source;
+}
+
 /**
  * Load config from file and env vars (env vars override file).
  */
@@ -24,7 +58,7 @@ export function loadConfig(): MsgBridgeConfig {
       }
 
       const fileConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
-      Object.assign(config, fileConfig);
+      Object.assign(config, sanitizeFileConfig(fileConfig));
     } catch (err) {
       console.error("Failed to load config file:", err);
     }

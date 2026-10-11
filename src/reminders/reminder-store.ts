@@ -6,6 +6,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { logger } from "../logger.js";
 import type { JsonStateFile } from "../state/json-file.js";
 
 export interface ReminderEntry {
@@ -31,9 +32,26 @@ export class ReminderStore {
   constructor(private readonly file: JsonStateFile<ReminderEntry[]>) {}
 
   /** Load from disk (clock startup). Corrupt/missing file → empty, per the
-   *  JsonStateFile contract. */
+   *  JsonStateFile contract. Entry-level shape guard (audit stability batch
+   *  票17): malformed entries are dropped with a warning instead of blowing
+   *  up the clock later. */
   load(): void {
-    this.entries = this.file.load();
+    const loaded = this.file.load();
+    const valid = loaded.filter(
+      (e) =>
+        typeof e?.id === "string" &&
+        typeof e?.chatId === "string" &&
+        typeof e?.transport === "string" &&
+        typeof e?.userId === "string" &&
+        typeof e?.username === "string" &&
+        typeof e?.text === "string" &&
+        Number.isFinite(e?.dueAt) &&
+        Number.isFinite(e?.createdAt)
+    );
+    if (valid.length !== loaded.length) {
+      logger.warn(`reminder store: dropped ${loaded.length - valid.length} malformed entr(ies) from disk`);
+    }
+    this.entries = valid;
   }
 
   /** Active reminders, earliest due first. */

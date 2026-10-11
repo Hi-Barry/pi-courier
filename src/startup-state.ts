@@ -19,6 +19,7 @@
  */
 
 import { type ConfigStore, isSpaceMode, managementRoomId } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { logger } from "./logger.js";
 import { healTrustedPowerLevels } from "./power-heal.js";
 import { healBotAvatar, healRoomIdentities } from "./room-branding.js";
@@ -70,16 +71,30 @@ export function createStartupState(deps: StartupStateDeps): StartupState {
 
   // 按序补发:首条失败即停并置顶保留(保序),不抛 —— 补发失败不改变调用
   // 方时序,重试搭下一条配对码的便车。
+  let draining = false;
   const drain = async (): Promise<void> => {
-    while (sink && pending.length > 0) {
-      const text = pending[0]!;
-      try {
-        await deliver(sink, text);
-      } catch (err) {
-        logger.warn(`[startup] 配对码发出失败,保留缓冲待下次尝试: ${(err as Error).message}`);
-        return;
+    // 单飞守卫(审计稳定性批 票17):在途 drain 会在每轮 while 复查 pending,
+    // 新推送项由它接管;两个 drain 并发会对同一 pending[0] 双发。
+    if (draining) {
+      // 在途 drain 每轮复查 pending,新推送项由它接管 —— 属设计内正常路径,
+      // debug 留痕即可(审计稳定性批 票17)。
+      logger.debug("[startup] drain already in flight — new notice handed over to it");
+      return;
+    }
+    draining = true;
+    try {
+      while (sink && pending.length > 0) {
+        const text = pending[0]!;
+        try {
+          await deliver(sink, text);
+        } catch (err) {
+          logger.warn(`[startup] 配对码发出失败,保留缓冲待下次尝试: ${errorMessage(err)}`);
+          return;
+        }
+        pending.shift();
       }
-      pending.shift();
+    } finally {
+      draining = false;
     }
   };
 

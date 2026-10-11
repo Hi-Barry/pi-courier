@@ -1,6 +1,7 @@
 import { MatrixError } from "matrix-bot-sdk";
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
-import { suppressLogLines } from "../logger.js";
+import { logger, suppressLogLines } from "../logger.js";
 import type { RoomOps } from "./interface.js";
 import type { MatrixClientPort } from "./matrix-client.js";
 
@@ -123,8 +124,9 @@ export class MatrixRoomOps implements RoomOps {
         via,
         canonical: true,
       });
-    } catch {
-      // best-effort
+    } catch (err) {
+      // best-effort(房间头徽章,装饰性)—— 留 debug 痕迹(审计稳定性批 票12)
+      logger.debug(`[rooms] m.room.parent write skipped for ${childRoomId}: ${errorMessage(err)}`);
     }
   }
 
@@ -137,8 +139,9 @@ export class MatrixRoomOps implements RoomOps {
     // right after, so remaining members keep a clean room header.
     try {
       await this.client.sendStateEvent(childRoomId, "m.room.parent", spaceRoomId, {});
-    } catch {
-      // best-effort
+    } catch (err) {
+      // best-effort —— 同上,留 debug 痕迹
+      logger.debug(`[rooms] m.room.parent clear skipped for ${childRoomId}: ${errorMessage(err)}`);
     }
   }
 

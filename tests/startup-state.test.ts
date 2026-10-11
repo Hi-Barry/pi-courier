@@ -32,6 +32,27 @@ describe("createStartupState — 配对码去向(pairing sink)", () => {
     ]);
   });
 
+  it("单飞:慢投递在途时新推送由在途 drain 接管,不双发同一码(审计稳定性批 票17)", async () => {
+    const startup = createStartupState({ store: new ConfigStore(mgmtConfig) });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const calls: string[] = [];
+    const sink = vi.fn(async (_room: string, _t: string, text: string) => {
+      calls.push(text);
+      if (text === "code-a") await gate; // 第一条挂起,制造慢投递窗口
+    });
+    await startup.wirePairingSink(sink);
+
+    const first = startup.sendPairingNotice("code-a"); // drain 进入 await gate
+    await Promise.resolve();
+    await startup.sendPairingNotice("code-b"); // 在途 → 让位,不并发第二条 drain
+
+    release();
+    await first;
+    await startup.sendPairingNotice("code-c"); // 守卫已释放,恢复正常
+    expect(calls).toEqual(["code-a", "code-b", "code-c"]);
+  });
+
   it("接线后直发:落地目标 = config 派生的管理房间,transport 标 matrix", async () => {
     const startup = createStartupState({ store: new ConfigStore(mgmtConfig) });
     const sink = vi.fn(async () => {});

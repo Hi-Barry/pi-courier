@@ -12,6 +12,7 @@
 import * as path from "node:path";
 import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
 import { type ConfigStore, projectFallbackChain } from "../config.js";
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { logger } from "../logger.js";
 import { projectLabelOf } from "../project-labels.js";
@@ -131,12 +132,22 @@ export class ProjectManager {
     return undefined;
   }
 
+  /** 停止并给失败留痕:停不下来 = 可能残留孤儿进程(审计稳定性批 票12)。 */
+  private async stopWithWarn(rpc: PiRpc): Promise<void> {
+    await rpc.stop().catch((err: unknown) => {
+      logger.withLabel(rpc.label).warn(`⚠️ 项目 pi 进程停止失败(可能残留子进程): ${errorMessage(err)}`);
+    });
+  }
+
   private async getProjectRpc(roomId: string, entry: ProjectEntry): Promise<PiRpc> {
     const existing = this.projectRpcs.get(roomId);
     if (existing) {
       // Wait for (or reuse) the in-flight connection so a fast second message
-      // never grabs a process that isn't ready yet.
-      await existing.start().catch(() => {});
+      // never grabs a process that isn't ready yet. 复用失败照旧往下走(后续
+      // 发送会再报错),但连接失败本身必须留痕(审计稳定性批 票13)。
+      await existing.start().catch((err: unknown) => {
+        logger.withLabel(existing.label).warn(`⚠️ 项目 pi 进程连接失败(沿用现有实例继续): ${errorMessage(err)}`);
+      });
       return existing;
     }
 
@@ -237,7 +248,7 @@ export class ProjectManager {
     const old = this.projectRpcs.get(roomId);
     if (old) {
       logger.withLabel(old.label).info(`🛑 项目 pi 进程停止(/pmctl mv 换目录,下次消息在新目录启动)`);
-      await old.stop().catch(() => {});
+      await this.stopWithWarn(old);
       this.projectRpcs.delete(roomId);
     }
   }
@@ -261,7 +272,7 @@ export class ProjectManager {
     const rpc = this.projectRpcs.get(roomId);
     if (rpc) {
       logger.withLabel(rpc.label).info(`🛑 项目 pi 进程停止(/pmctl rm)`);
-      await rpc.stop().catch(() => {});
+      await this.stopWithWarn(rpc);
       this.projectRpcs.delete(roomId);
     }
     this.updateProjects((projects) => {
@@ -271,7 +282,7 @@ export class ProjectManager {
 
   async stopAll(): Promise<void> {
     for (const rpc of this.projectRpcs.values()) {
-      await rpc.stop().catch(() => {});
+      await this.stopWithWarn(rpc);
     }
     this.projectRpcs.clear();
   }

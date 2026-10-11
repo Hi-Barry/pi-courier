@@ -79,6 +79,9 @@ export class FileEventLedger implements EventLedger {
       logger.warn(`event ledger unreadable, treating this session as first run: ${(err as Error).message}`);
       return null;
     }
+    // 零字节/纯空白文件 = 从未完整写过的台账,与「文件不存在」同语义:
+    // 按首运处理(宁丢不误,与上方 unreadable 分支一致)——审计稳定性批 票16。
+    if (!raw.trim()) return null;
     const entries: Array<{ id: string; ts: number }> = [];
     let keepInit = false;
     for (const line of raw.split("\n")) {
@@ -94,7 +97,12 @@ export class FileEventLedger implements EventLedger {
         keepInit = true;
         continue;
       }
-      if (typeof parsed.id === "string" && parsed.id && typeof parsed.ts === "number") {
+      if (
+        typeof parsed.id === "string" &&
+        parsed.id &&
+        typeof parsed.ts === "number" &&
+        Number.isFinite(parsed.ts) // NaN/Infinity 时间戳不构成账目(票16)
+      ) {
         entries.push({ id: parsed.id, ts: parsed.ts });
       }
     }

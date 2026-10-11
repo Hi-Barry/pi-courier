@@ -365,7 +365,7 @@ export class PmctlController {
       return;
     }
     const [roomId, entry] = found;
-    this.opts.projectManager.updateProjectWorkdir(roomId, resolvedWorkdir);
+    await this.opts.projectManager.updateProjectWorkdir(roomId, resolvedWorkdir);
     await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir }));
   }
 

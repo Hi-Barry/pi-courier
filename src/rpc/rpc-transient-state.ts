@@ -15,6 +15,8 @@
  * 订阅接缝自行失效 —— 两个状态都只依赖 rpc.onRestarted,互不纠缠。
  */
 
+import { errorMessage } from "../errors.js";
+import { logger } from "../logger.js";
 import { type QueueSnapshot, queueTotal } from "./command-map.js";
 import type { PiRpc } from "./pi-rpc.js";
 
@@ -57,8 +59,9 @@ export class RpcTransientState {
     if (snapshot && queueTotal(snapshot) > 0) {
       try {
         this.onQueueLost?.(rpc, snapshot);
-      } catch {
-        // 回执失败(发送异常等)不影响作废本身
+      } catch (err) {
+        // 回执失败(发送异常等)不影响作废本身 —— 但用户可见通知丢了,得留痕
+        logger.warn(`[transient] 作废回执发送失败: ${errorMessage(err)}`);
       }
     }
     this.mirrors.delete(rpc);
@@ -83,8 +86,9 @@ export class RpcTransientState {
   private notifyMirrorChanged(rpc: PiRpc, snapshot: QueueSnapshot): void {
     try {
       this.onMirrorChanged?.(rpc, snapshot);
-    } catch {
-      // 落盘失败不影响镜像本身(内存仍是权威)
+    } catch (err) {
+      // 落盘失败不影响镜像本身(内存仍是权威)—— 持久化降级留痕
+      logger.warn(`[transient] 瞬态状态落盘失败(内存仍权威): ${errorMessage(err)}`);
     }
   }
 }

@@ -6,9 +6,25 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { PiRpc } from "../src/rpc/pi-rpc";
-import { recapCardTitle, recapCcPrefix, recapPromptText, renderRecapCard } from "../src/rpc/recap";
+import { RecapBusyError, RecapLedger, recapCardTitle, recapCcPrefix, recapPromptText, renderRecapCard } from "../src/rpc/recap";
 import { ConfigStore } from "../src/config";
 import { makeMsg, makeRouterFixture } from "./helpers";
+
+describe("RecapLedger.startCapture 忙拒绝(审计稳定性批 票17)", () => {
+  it("上一张卡未 settle 时再次 startCapture 忙拒绝,旧槽位不被覆盖(无悬案)", async () => {
+    const ledger = new RecapLedger();
+    const rpc = { prompt: vi.fn().mockResolvedValue(undefined) } as unknown as PiRpc;
+    const first = ledger.startCapture(rpc); // 槽位占用中(模拟等终答)
+    await expect(ledger.startCapture(rpc)).rejects.toBeInstanceOf(RecapBusyError);
+    // 旧调用仍可正常结算 —— 未被覆盖成悬案
+    ledger.settleCapture(rpc, { text: "总结", pendingTools: false });
+    await expect(first).resolves.toBe("总结");
+    // 槽位清空后可再次捕获
+    const third = ledger.startCapture(rpc);
+    ledger.settleCapture(rpc, { text: "再来", pendingTools: false });
+    await expect(third).resolves.toBe("再来");
+  });
+});
 
 describe("recap card rendering (issue #122)", () => {
   it("plain card: header, body, optional context line", () => {

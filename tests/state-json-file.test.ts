@@ -78,6 +78,48 @@ describe("JsonStateFile (issue #114)", () => {
     expect(new JsonStateFile<typeof fallback>(file, fallback).load()).toEqual(fallback);
   });
 
+  it("top-level shape mismatch falls back with a warning (audit stability batch 票15)", () => {
+    const file = fresh();
+    // Fallback is an object, disk holds an array — parses fine, wrong shape.
+    writeFileSync(file, '[{"id":"a"}]', "utf8");
+    warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const fallback = { ok: true };
+    expect(new JsonStateFile<typeof fallback>(file, fallback).load()).toEqual(fallback);
+    expect(String(warnSpy.mock.calls[0][0])).toContain("shape mismatch");
+
+    // Mirror case: fallback is an array, disk holds an object.
+    const file2 = fresh();
+    writeFileSync(file2, '{"a":1}', "utf8");
+    expect(new JsonStateFile<Array<{ id: string }>>(file2, []).load()).toEqual([]);
+  });
+
+  it("interleaved saves from two instances of the same file always leave valid JSON (audit stability batch 票15)", () => {
+    const file = fresh();
+    const a = new JsonStateFile<{ n: number }>(file, { n: 0 });
+    const b = new JsonStateFile<{ n: number }>(file, { n: 0 });
+    a.save({ n: 1 });
+    b.save({ n: 2 });
+    a.save({ n: 3 });
+    // 两次 save 共用同一 pid 临时名 → 第二次 save 先清掉第一次的 tmp 再写,
+    // 串行交错后正式位永远是完整 JSON(跨进程靠 pid 不同天然隔离)。
+    expect(a.load()).toEqual({ n: 3 });
+    expect(existsSync(`${file}.${process.pid}.tmp`)).toBe(false);
+  });
+
+  it("save uses a PID-suffixed tmp and ignores a stale fixed-name tmp (audit stability batch 票15)", () => {
+    const file = fresh();
+    // Leftover from the old fixed-name scheme, full of garbage.
+    writeFileSync(`${file}.tmp`, "garbage", "utf8");
+
+    const state = new JsonStateFile<{ n: number }>(file, { n: 0 });
+    state.save({ n: 7 });
+
+    expect(state.load()).toEqual({ n: 7 });
+    // The new tmp name carries the pid; the old-style tmp is untouched debris.
+    expect(existsSync(`${file}.tmp`)).toBe(true);
+    expect(readFileSync(file, "utf8")).toContain('"n": 7');
+  });
+
   it("unreadable file (path is a directory → EISDIR) returns the fallback and warns", () => {
     dir = tmpDir();
     const file = join(dir, "state.json");
