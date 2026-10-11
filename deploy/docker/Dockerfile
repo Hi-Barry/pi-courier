@@ -38,10 +38,11 @@ RUN npm install -g @earendil-works/pi-coding-agent pi-courier@${PI_COURIER_VERSI
 # ============================== runtime ======================================
 FROM node:24-slim
 
+# 代理凭据只在构建期生效(逐 RUN 内联),不以 ENV 烙进最终镜像 —— 否则
+# docker inspect 可读到 user:pass@host。运行期需要代理时在 docker-compose 的
+# environment 里给容器传 https_proxy/http_proxy(见 README 部署节)。
 ARG HTTPS_PROXY=
 ARG HTTP_PROXY=
-ENV https_proxy=${HTTPS_PROXY} \
-    http_proxy=${HTTP_PROXY}
 
 # 系统依赖:
 #  - git:pi 的 bash 工具 / `pi install` 需要(slim 基础镜像没有)
@@ -52,18 +53,23 @@ ENV https_proxy=${HTTPS_PROXY} \
 #  - openssl:证书/密钥操作
 #  - procps:ps/pgrep 排查进程
 #  - python3:脚本/数据处理(node:slim 默认没有 python)
-# (apt 请求也走上面的代理 ENV,受限网络下可代理)
-RUN apt-get update \
+# (apt 请求也走上面的构建期代理变量,受限网络下可代理)
+RUN https_proxy=${HTTPS_PROXY} http_proxy=${HTTP_PROXY} apt-get update \
     && apt-get install -y --no-install-recommends \
        git ca-certificates curl jq wget unzip openssl procps python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI(gh):Debian 官方源没有,从 GitHub Releases 下载二进制。
 # 动态取 latest 版本;amd64 为主流 VPS 架构(TARGETARCH 可覆盖 arm64)。
+# 下载后用官方 checksums 文件校验,不符即构建失败(防损坏/防替换)。
 ARG TARGETARCH
 RUN GH_TAG=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r .tag_name) \
+    && GH_VER=${GH_TAG#v} \
     && ARCH=$(case "${TARGETARCH}" in arm64) echo arm64 ;; *) echo amd64 ;; esac) \
-    && curl -fsSL "https://github.com/cli/cli/releases/download/${GH_TAG}/gh_${GH_TAG#v}_linux_${ARCH}.tar.gz" -o /tmp/gh.tgz \
+    && GH_ASSET="gh_${GH_VER}_linux_${ARCH}.tar.gz" \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/${GH_TAG}/${GH_ASSET}" -o /tmp/gh.tgz \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/${GH_TAG}/gh_${GH_VER}_checksums.txt" -o /tmp/gh.sha \
+    && echo "$(grep "  ${GH_ASSET}\$" /tmp/gh.sha | awk '{print $1}')  /tmp/gh.tgz" | sha256sum -c - \
     && tar xzf /tmp/gh.tgz -C /tmp \
     && cp /tmp/gh_*/bin/gh /usr/local/bin/gh \
     && gh --version \

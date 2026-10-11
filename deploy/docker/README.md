@@ -37,9 +37,11 @@ git clone https://github.com/Hi-Barry/pi-courier.git && cd pi-courier/deploy/doc
 ### 2. 构建
 
 ```bash
-# 如果 VPS 需要代理访问外网(GitHub 下载 21MB E2EE 库),先导出:
-# export HTTPS_PROXY=http://<host>:<port>
-# export HTTP_PROXY=http://<host>:<port>
+# 如果 VPS 需要代理访问外网(GitHub 下载 21MB E2EE 库),构建时传入:
+# docker compose build --build-arg HTTPS_PROXY=http://<host>:<port> --build-arg HTTP_PROXY=http://<host>:<port>
+#
+# 注意:构建期代理凭据不会写进最终镜像(逐 RUN 内联)。运行期容器需要代理时,
+# 在 docker-compose.yml 的 environment 里给容器传 https_proxy/http_proxy。
 
 docker compose build
 ```
