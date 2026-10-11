@@ -441,6 +441,31 @@ describe("message-router multi-project routing", () => {
     expect(replies.at(-1)).toMatchObject({ chatId: "!proj:server", text: "⚠️ 扩展错误 (unknown): late boom" });
   });
 
+  it("steering/followUp 队列未清空时不释放默认绑定(折叠消息的回复在后续 turn 才到)", async () => {
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ text: "task" }));
+    // 运行中插话被折叠:queue_update 报告 steering 1 条(2026-10-11 真机:
+    // 原任务 turn 完成即释放绑定,折叠消息的回复系统性丢成 no replyTarget)
+    router.handleEvent({ type: "queue_update", steering: ["运行中插话"], followUp: [] }, rpc);
+    router.handleEvent({ type: "turn_end", message: textMessage("task done") }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    // 折叠消息的回复 turn 到达 —— 必须照常送达原聊天
+    router.handleEvent({ type: "turn_end", message: textMessage("插话的回复") }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0)); // footer fetch async
+    expect(replies.at(-1)).toMatchObject({ chatId: "!dm:server", text: expect.stringContaining("插话的回复") });
+
+    // 队列见空后,迟事件保护恢复:下一个完成 turn 释放绑定,迟到事件不再回复
+    router.handleEvent({ type: "queue_update", steering: [], followUp: [] }, rpc);
+    router.handleEvent({ type: "turn_end", message: textMessage("again") }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    const afterRelease = replies.length;
+    router.handleEvent({ type: "extension_error", error: "late boom" }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replies.length).toBe(afterRelease);
+  });
+
   it("muting agent logging (log level) does not affect reply routing", async () => {
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ text: "hi" }));
