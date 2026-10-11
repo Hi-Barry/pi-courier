@@ -352,6 +352,7 @@ const en: Record<MessageKey, string> = {
   "pmctl.rm.confirm":
     "⚠️ Delete project \"{name}\"?\n\nSend `/pmctl rm {name}` again to confirm.\nOnce confirmed, I stop the process and leave that room.\n(send `/pmctl rm cancel` to cancel)",
   "pmctl.mv.usage": "Usage: /pmctl mv <project name|room ID> <new path> (relative paths resolve against the project root)",
+  "pmctl.pathEscape": "❌ Path escapes the project root: {path}\nUse a name inside the project root; for a location elsewhere, pass an absolute path or one starting with ~/",
   "pmctl.mv.done":
     "🚚 Project \"{name}\" moved\n• new workdir: {workdir}\n• the session restarts (the old session stays in the old directory's .pi-session)",
   "pmctl.rename.usage": "Usage: /pmctl rename <project name|room ID> <new name>",

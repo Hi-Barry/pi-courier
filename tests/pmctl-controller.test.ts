@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir as osHomedir, tmpdir } from "node:os";
 import { ConfigStore } from "../src/config";
 import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { ProjectEntry, ProjectManager } from "../src/rpc/project-manager";
@@ -340,6 +340,35 @@ describe("PmctlController", () => {
     await handle("/pmctl mv myapp myapp-v2");
     expect(pm.updateProjectWorkdir).toHaveBeenCalledWith("!proj:server", "/home/you/Projects/myapp-v2");
     expect(replies.at(-1)).toContain("已迁移");
+  });
+
+  it("mv rejects a relative path that escapes the project root (audit batch 1 票9)", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!proj:server", { name: "myapp", workdir: "/w/myapp" }],
+    ]);
+    await handle("/pmctl mv myapp ../../etc");
+    expect(pm.updateProjectWorkdir).not.toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("逃出工程根");
+    expect(replies.at(-1)).toContain("../../etc");
+  });
+
+  it("path guard keeps ~/ expansion and absolute paths first-class (audit batch 1 票9)", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!proj:server", { name: "myapp", workdir: "/w/myapp" }],
+    ]);
+    await handle("/pmctl mv myapp ~/elsewhere");
+    expect(pm.updateProjectWorkdir).toHaveBeenCalledWith("!proj:server", join(osHomedir(), "elsewhere"));
+
+    await handle("/pmctl mv myapp /opt/elsewhere");
+    expect(pm.updateProjectWorkdir).toHaveBeenCalledWith("!proj:server", "/opt/elsewhere");
+  });
+
+  it("new rejects a root-escaping workdir before any side effect (audit batch 1 票9)", async () => {
+    await handle("/pmctl new evil ../../elsewhere");
+    expect(pm.registerProject).not.toHaveBeenCalled();
+    expect(roomOps.createRoom).not.toHaveBeenCalled();
+    expect(roomOps.createProjectRoom).not.toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("逃出工程根");
   });
 
   it("rename syncs the room name and surfaces roomOps failures", async () => {
