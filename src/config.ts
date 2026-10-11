@@ -135,7 +135,7 @@ export function effectiveWorkdir(cfg: MsgBridgeConfig): string {
 
 /** 附件保存根目录(spec #66):默认与 ~/.pi 下其他 pi-courier-* 状态文件平齐。 */
 export function attachmentsDirectory(cfg: MsgBridgeConfig): string {
-  return cfg.attachments?.directory ?? path.join(os.homedir(), ".pi", "pi-courier-attachments");
+  return cfg.attachments?.directory ?? path.join(CONFIG_DIR, "pi-courier-attachments");
 }
 
 /** 单个附件上限(MB):默认 10。 */

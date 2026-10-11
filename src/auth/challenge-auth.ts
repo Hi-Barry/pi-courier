@@ -240,7 +240,7 @@ export class ChallengeAuth {
     if (challenge.attempts >= MAX_PAIRING_ATTEMPTS) {
       this.challenges.delete(namespacedUserId);
       this.blockedUsers.set(namespacedUserId, Date.now() + PAIRING_BLOCK_MINUTES * 60 * 1000);
-      this.onNotify(`🚫 ${challenge.username} blocked (3 failed attempts)`, "warning");
+      this.onNotify(`🚫 ${challenge.username} blocked (${MAX_PAIRING_ATTEMPTS} failed attempts)`, "warning");
       return "blocked";
     }
 

@@ -245,7 +245,8 @@ export class PmctlController {
    *  matching against the same labels the log filter uses (projectLabelOf). */
   private findProject(target: string): [string, ProjectEntry] | undefined {
     // 标签匹配大小写不敏感(与登记校验/日志过滤口径一致 —— 审计工程批 票21)
-    const targetLower = target.toLowerCase();
+    // 与 validateProjectLabel 的唯一性口径对齐(NFKC 归一 + 折叠 —— 审计工程批 票21)
+    const targetLower = target.normalize("NFKC").toLowerCase();
     return this.opts.projectManager
       .listProjects()
       .find(([roomId, p]) => projectLabelOf(p).toLowerCase() === targetLower || roomId === target);

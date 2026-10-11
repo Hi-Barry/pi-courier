@@ -10,6 +10,7 @@
  * Cache misses are a normal, silent downgrade — quotes are best-effort context.
  */
 
+import { truncateLine } from "./formatting.js";
 /** A cleaned one-line excerpt of a quoted message plus its sender. */
 export interface QuoteEntry {
   username: string;
@@ -63,4 +64,3 @@ export function createQuoteCache(): QuoteCache {
   };
 }
 
-import { truncateLine } from "./formatting.js";

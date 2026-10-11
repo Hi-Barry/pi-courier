@@ -16,11 +16,11 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
 import { BANG_COMMAND } from "../command-registry.js";
+import { CONFIG_DIR } from "../config.js";
 import { errorMessage } from "../errors.js";
 import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
@@ -384,7 +384,7 @@ export function listSessions(dir: string): SessionSummary[] {
 
 /** The session dir a process scans: its own --session-dir, else pi's default. */
 export function resolveSessionDir(rpc: PiRpc): string {
-  return rpc.sessionDir ?? path.join(os.homedir(), ".pi", "agent", "sessions");
+  return rpc.sessionDir ?? path.join(CONFIG_DIR, "agent", "sessions");
 }
 
 /**

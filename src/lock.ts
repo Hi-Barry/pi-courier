@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { CONFIG_DIR as BRIDGE_CONFIG_DIR } from "./config.js";
 
 /**
  * Single-instance connection guard.
@@ -12,7 +12,7 @@ import * as path from "node:path";
  *                    launched as child processes with different PIDs).
  */
 
-const LOCK_PATH = path.join(os.homedir(), ".pi", "pi-courier.lock");
+const LOCK_PATH = path.join(BRIDGE_CONFIG_DIR, "pi-courier.lock");
 
 const g = global as any;
 if (!g.__msgBridgeInstanceId) {
@@ -43,7 +43,7 @@ export function acquireLock(): boolean {
       // can't be a live competitor to itself, and containers restart with
       // the main process as PID 1 every time — so take over the lock.
     }
-    const configDir = path.join(os.homedir(), ".pi");
+    const configDir = BRIDGE_CONFIG_DIR;
     if (!fs.existsSync(configDir)) {
       fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
     }

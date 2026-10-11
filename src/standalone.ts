@@ -11,7 +11,6 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { AUDIT_EVENTS, AuditLog } from "./audit/audit-log.js";
@@ -19,6 +18,7 @@ import { ChallengeAuth } from "./auth/challenge-auth.js";
 import {
   attachmentsDirectory,
   attachmentsMaxBytes,
+  CONFIG_DIR,
   ConfigStore,
   inboxMode,
   managementRoomId,
@@ -283,7 +283,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // ---- durable state (issue #114) --------------------------------------------
   // ~/.pi/pi-courier-state/(0700)收桥的派生状态文件:磁盘是备份,内存是热路径。
   // 配置(pi-courier.json)、Matrix SDK 存储、PID 锁各归 ~/.pi 原位,不迁。
-  const stateDir = path.join(os.homedir(), ".pi", "pi-courier-state");
+  const stateDir = path.join(CONFIG_DIR, "pi-courier-state");
   try {
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   } catch (err) {
@@ -396,7 +396,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     logger.warn("⚠️ some transports failed to connect:", errorMessage(err));
     // Friendly diagnostics for the two common E2EE/device-state failures so
     // users get the fix instead of a raw stack trace.
-    const msg = errorMessage(err) ?? "";
+    const msg = errorMessage(err);
     if (msg.includes("M_BAD_JSON") && msg.includes("device_id")) {
       logger.warn("   → 本地加密存储与 token 的设备身份不一致(换过 token / 重登过)。");
       logger.warn("     解法:删除加密存储后重启 — rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart");

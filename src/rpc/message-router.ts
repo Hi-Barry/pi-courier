@@ -728,7 +728,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // run BEFORE authorization (unenabled rooms are not authorized).
       handle: async (ctx) => {
         const { msg, text } = ctx;
-        if (!msg.isGroupChat || !/^\/enable(\s|$)/.test(text)) return false;
+        if (!msg.isGroupChat || !/^\/enable(\s|$)/i.test(text)) return false;
         const isTrusted = auth.isTrustedUser(msg.userId, msg.transport);
         if (!isTrusted) return false;
         const parts = text.split(/\s+/);
@@ -805,7 +805,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // takes effect on restart. Trusted users may toggle.
       handle: async (ctx) => {
         const { msg, text } = ctx;
-        if (!/^\/multiproject(\s|$)/.test(text)) return false;
+        if (!/^\/multiproject(\s|$)/i.test(text)) return false;
         const isTrusted = auth.isTrustedUser(msg.userId, msg.transport);
         if (!isTrusted) {
           await sendReply(msg.chatId, msg.transport, t("router.multiproject.forbidden"));

@@ -55,6 +55,14 @@ function storeWith(payload: Buffer | Error): AttachmentStore {
   return new AttachmentStore({ rootDir: root, maxBytes: 10 * 1024 * 1024 }, source);
 }
 
+describe("isMediaContent file:null 守卫(审计工程批 票23)", () => {
+  it("file:null 且无 url 不构成媒体", async () => {
+    const mod = await import("../src/transports/matrix-events");
+    expect(mod.isMediaContent({ msgtype: "m.image", body: "x", file: null })).toBe(false);
+    expect(mod.isMediaContent({ msgtype: "m.image", body: "x", file: { url: "mxc://a" } })).toBe(true);
+  });
+});
+
 describe("event translator — text", () => {
   it("translates a DM text message without mention stripping", async () => {
     const { translator } = makeTranslator();
