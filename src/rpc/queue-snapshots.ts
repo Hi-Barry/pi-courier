@@ -13,6 +13,7 @@
  * is accepted, not a bug.
  */
 
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { logger } from "../logger.js";
 import { JsonStateFile } from "../state/json-file.js";
@@ -113,7 +114,7 @@ export async function consumeQueueSnapshots(
       const ageMin = Math.max(0, Math.round((Date.now() - entry.at) / 60_000));
       logger.info(`queue lost notice sent to ${entry.roomId} (snapshot ${ageMin} min old, ${view.count} message(s))`);
     } catch (err) {
-      logger.warn(`queue lost notice failed for ${entry.roomId} — entry dropped: ${(err as Error).message}`);
+      logger.warn(`queue lost notice failed for ${entry.roomId} — entry dropped: ${errorMessage(err)}`);
     }
   }
   store.clear();

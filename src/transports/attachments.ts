@@ -13,9 +13,11 @@
  * (sanitizeMediaFilename) live here too — the module that writes files owns
  * the filename contract (spec #99/#101: formerly matrix-utils.ts).
  */
+
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 
 // ─── 附件输入(issue #66)────────────────────────────────────────
@@ -160,7 +162,7 @@ export class AttachmentStore {
       }
     } catch (err) {
       if (err instanceof AttachmentTooLargeError) throw err;
-      throw new AttachmentDownloadError((err as Error).message);
+      throw new AttachmentDownloadError(errorMessage(err));
     }
 
     // Re-check against REAL bytes — info.size is a hint, servers lie.
@@ -172,32 +174,29 @@ export class AttachmentStore {
     await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
 
     const filename = sanitizeMediaFilename(media.body, mxcKey);
-    const target = await uniqueTarget(dir, filename);
-    await fs.promises.writeFile(target, data, { mode: 0o600 });
+    const target = await writeExclusive(dir, filename, data);
 
     this.dedup.set(mxcKey, target);
     return { path: target, filename: path.basename(target), bytes: data.length };
   }
 }
 
-/** 同名不覆盖:哈希前缀已使碰撞近乎不可能,仍按 -1/-2 递增兜底(确定性)。 */
-async function uniqueTarget(dir: string, filename: string): Promise<string> {
-  let target = path.join(dir, filename);
+/** 同名不覆盖:哈希前缀已使碰撞近乎不可能,仍按 -1/-2 递增兜底(确定性)。
+ *  独占创建(flag "wx")封死「存在性检查后写入」的窗口——并发写者命中
+ *  EEXIST 即递增后缀重试,任何已存在文件(含 0 字节)都不会被覆盖
+ *  (审计稳定性批 票16)。 */
+async function writeExclusive(dir: string, filename: string, data: Buffer): Promise<string> {
   const ext = path.extname(filename);
   const stem = filename.slice(0, filename.length - ext.length);
-  // 存在性判定用 stat 成败而非字节数 — 0 字节的同名文件同样不许被覆盖。
-  for (let i = 1; await pathExists(target); i++) {
-    target = path.join(dir, `${stem}-${i}${ext}`);
-  }
-  return target;
-}
-
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.promises.access(p);
-    return true;
-  } catch {
-    return false;
+  let target = path.join(dir, filename);
+  for (let i = 1; ; i++) {
+    try {
+      await fs.promises.writeFile(target, data, { mode: 0o600, flag: "wx" });
+      return target;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      target = path.join(dir, `${stem}-${i}${ext}`);
+    }
   }
 }
 
