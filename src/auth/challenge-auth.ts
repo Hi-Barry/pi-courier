@@ -10,6 +10,7 @@
  * config store.
  */
 
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { matchesAdmin, matchesTrustedEntry, namespacedId } from "../identity.js";
 
@@ -301,8 +302,10 @@ export class ChallengeAuth {
     if (sendMessage) {
       try {
         await sendMessage(chatId, t("auth.challenge.prompt"));
-      } catch (_err) {
-        // Ignore send errors
+      } catch (err) {
+        // 配对提示发不出去,用户只能干等超时 —— 管理员必须能主动把码转告
+        // (audit stability batch 票18)。每次挑战至多一条通知。
+        this.onNotify(t("auth.challenge.promptFailed", { code, message: errorMessage(err) }), "warning");
       }
     }
 

@@ -41,6 +41,26 @@ describe("ChallengeAuth strategy engine", () => {
     vi.useRealTimers();
   });
 
+  it("pairing prompt send failure notifies the admin exactly once (audit stability batch 票18)", async () => {
+    const notifications: Array<{ message: string; level?: string }> = [];
+    const auth = new ChallengeAuth(
+      () => {},
+      (message, level) => notifications.push({ message, level })
+    );
+    auth.loadFromConfig({ trustedUsers: [], channels: {} });
+    // 提示发送持续失败:一次挑战恰好一条管理员通知
+    await auth.checkAuthorization("@loser:server", "!dm:server", "loser", false, false, async () => {
+      throw new Error("network down");
+    }, "matrix");
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]!.level).toBe("warning");
+    expect(notifications[0]!.message).toContain("network down");
+
+    // 发送成功:零通知
+    await auth.checkAuthorization("@winner:server", "!dm2:server", "winner", false, false, async () => {}, "matrix");
+    expect(notifications).toHaveLength(1);
+  });
+
   it("6-digit message with no pending pairing gets a one-per-chat hint (spec #93 票3)", async () => {
     const { auth } = makeEngine();
     const input = (chatId: string, text: string) =>

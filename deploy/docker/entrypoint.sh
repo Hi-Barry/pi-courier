@@ -11,12 +11,17 @@ set -e
 DEFAULTS=/opt/pi-courier/defaults
 CONFIG_DIR=/root/.pi
 
-if [ ! -d "$CONFIG_DIR/agent" ] || [ -z "$(ls -A "$CONFIG_DIR/agent" 2>/dev/null)" ]; then
-  echo "[pi-courier] first run: initializing $CONFIG_DIR/agent from template"
-  mkdir -p "$CONFIG_DIR/agent"
-  # -r is required: GNU cp refuses to copy a directory (even 'dir/.') without it
-  cp -rn "$DEFAULTS/agent/." "$CONFIG_DIR/agent/" || echo "[pi-courier] WARN: template copy failed"
-fi
+mkdir -p "$CONFIG_DIR/agent"
+# Per-file idempotent bootstrap (audit stability batch 票18): copy a default
+# only when its target is absent — two concurrent first starts converge on
+# the same complete state (no half-copied mixes), and no non-POSIX `cp -n`.
+for src in "$DEFAULTS"/agent/*; do
+  name=$(basename "$src")
+  if [ ! -e "$CONFIG_DIR/agent/$name" ]; then
+    echo "[pi-courier] first run: seeding $CONFIG_DIR/agent/$name from template"
+    cp -r "$src" "$CONFIG_DIR/agent/$name" || echo "[pi-courier] WARN: template copy failed: $name"
+  fi
+done
 
 # env-driven defaults for pi settings (pi itself has no env support for
 # defaultProvider/defaultModel, so render them into settings.json).
