@@ -5,7 +5,14 @@ import {
   truncate,
 } from '../src/formatting';
 
-describe('truncate', () => {
+describe('splitMessage maxLen 钳制(审计工程批 票23)', () => {
+  it('maxLen 0/负不再死循环,按 1 切分', () => {
+    expect(splitMessage('abc', 0)).toEqual(['a', 'b', 'c']);
+    expect(splitMessage('ab', -5)).toEqual(['a', 'b']);
+  });
+});
+
+describe('truncateLine', () => {
   it('returns short strings unchanged', () => {
     expect(truncate('hello', 10)).toBe('hello');
   });

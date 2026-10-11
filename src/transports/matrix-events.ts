@@ -182,7 +182,8 @@ export type MessageContentClassification =
 export function isMediaContent(content: unknown): content is MediaEventContent {
   if (typeof content !== "object" || content === null) return false;
   const c = content as Record<string, unknown>;
-  return typeof c.url === "string" || typeof c.file === "object";
+  // null 的 typeof 也是 "object" —— file:null 不构成媒体(审计工程批 票23)
+  return typeof c.url === "string" || (typeof c.file === "object" && c.file !== null);
 }
 
 /** 对一条房间消息内容做分类:文本 / 媒体(带下载所需信息) / 其他。 */

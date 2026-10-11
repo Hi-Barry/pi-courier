@@ -17,7 +17,8 @@ export interface StatusFooterInfo {
 /** 上下文窗口的人类刻度:≥1e6 一位小数 M(1_000_000→'1.0M'),≥1e3 整数 k
  *  (200_000→'200k'),否则原值(999→'999')。 */
 export function formatContextWindow(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  // ≥1M 走 M 刻度;999.5k 以上先舍入会得到 "1000k",也归 M(审计工程批 票23)
+  if (n >= 999_500) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
   return String(n);
 }
@@ -27,7 +28,7 @@ export function formatContextWindow(n: number): string {
 export async function collectStatusFooter(rpc: PiRpc): Promise<StatusFooterInfo> {
   const info: StatusFooterInfo = { cwd: null, context: null, model: null };
   try {
-    info.cwd = rpc.cwd ?? null;
+    info.cwd = rpc.cwd ? rpc.cwd : null; // 空串按取不到处理,不给 '📂 ' 段留空值
   } catch {
     // 该段保持 null('📂 ?')
   }

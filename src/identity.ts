@@ -11,9 +11,11 @@
  *    截断行为,MXID 的 homeserver 段不展示;改动属行为变化,不在纯重构范围)。
  */
 
-/** 存储形式:按 transport 加命名空间前缀。 */
+/** 存储形式:按 transport 加命名空间前缀;已是该前缀形式则幂等返回
+ *  (重复叠加会让同用户出现两个账本身份 —— 审计工程批 票23)。 */
 export function namespacedId(userId: string, transport?: string): string {
-  return transport ? `${transport}:${userId}` : userId;
+  if (!transport) return userId;
+  return userId.startsWith(`${transport}:`) ? userId : `${transport}:${userId}`;
 }
 
 /** native 形式:剥掉 transport 前缀(Matrix API 消费);无前缀形式原样返回。 */
