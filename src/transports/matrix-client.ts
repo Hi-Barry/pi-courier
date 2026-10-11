@@ -22,10 +22,12 @@ import {
 import { logger } from "../logger.js";
 import type { EncryptedMediaFile } from "./attachments.js";
 
-/** Safe message extraction: non-Error rejections (string/undefined) must
- *  render as something readable, never literally "undefined". */
+/** Safe message extraction: string rejections pass through; null/undefined
+ *  rejections render as a readable placeholder instead of "undefined". */
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  if (err instanceof Error) return err.message;
+  if (err === undefined || err === null) return "(no error value)";
+  return String(err);
 }
 
 /** Whether the error is the expected "native crypto binding failed to load"

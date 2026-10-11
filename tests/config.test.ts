@@ -104,6 +104,23 @@ describe('config', () => {
     expect(statSync(join(tmpDir, '.pi')).mode & 0o777).toBe(0o700);
   });
 
+  it('ConfigStore.update survives an injected persist failure without throwing (audit batch 1 票8)', async () => {
+    // .pi exists as a regular FILE → saveConfig's writeFileSync throws.
+    writeFileSync(join(tmpDir, '.pi'), 'not a directory');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const { ConfigStore } = await importConfig();
+      const store = new ConfigStore({ debug: true });
+      expect(() => store.update({ logLevel: 'debug' })).not.toThrow();
+      // The in-memory copy stays authoritative despite the disk failure.
+      expect(store.get().logLevel).toBe('debug');
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('env vars override file values for the same transport', async () => {
     const { loadConfig, saveConfig } = await importConfig();
 

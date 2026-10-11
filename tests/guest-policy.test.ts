@@ -97,6 +97,18 @@ describe("guest policy blocklist (issue #120)", () => {
     expect(commandPolicy("  /new ")?.guest).toBe("blocked");
   });
 
+  it("registered session-state commands stay available to non-guests (audit batch 1 票4)", () => {
+    // The guest verdict is the ONLY consumer that treats guest === "blocked"
+    // as a denial; the router's slash path for non-guests never consults the
+    // registry for permission — registration blocks guests, nobody else.
+    // Structural pin: the ten commands live in the registry (snapshot above)
+    // and are NOT demoted from the read-only doc.
+    for (const cmd of ["/new", "/clear", "/compact", "/model", "/thinking", "/cyclemodel", "/cyclethinking", "/autocompact", "/autoretry", "/name"]) {
+      expect(GUEST_READ_ONLY_DOC, cmd).not.toContain(cmd);
+      expect(commandPolicy(cmd)?.guest, cmd).toBe("blocked");
+    }
+  });
+
   it("/pmctl blocks every subcommand via the prefix rule", () => {
     for (const cmd of ["/pmctl new /w x", "/pmctl rm proj", "/pmctl rename a b"]) {
       expect(guestCommandVerdict(cmd).blocked).toBe(true);

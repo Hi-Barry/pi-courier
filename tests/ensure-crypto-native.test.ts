@@ -569,6 +569,24 @@ describe("ensureCryptoNative (cache + verification, injected deps, no network)",
     expect(warn.lines.join("\n")).toContain("FAILED sha256 verification");
   });
 
+  it("existing binding with an UNREADABLE manifest: TOFU + warn, kept (处置矩阵第3格,审计批1票5)", () => {
+    const cryptoDir = makeCryptoPkg();
+    writeFileSync(join(cryptoDir, `${BASENAME}.node`), FAKE_BINDING);
+    // Points at a directory-ish path that cannot parse as a manifest JSON —
+    // readManifest degrades to "everything unlisted" (TOFU).
+    const missingManifest = join(tempDir("crypto-manifest-missing-"), "nope.json");
+
+    const warn = captureWarn();
+    const res = ensureCryptoNative(
+      sandbox({ cryptoDir, cacheRoot: tempDir("crypto-cache-"), manifestPath: missingManifest, runDownloader: () => {} })
+    );
+    warn.restore();
+
+    expect(res).toMatchObject({ ok: true, downloaded: false, verified: "tofu" });
+    expect(existsSync(join(cryptoDir, `${BASENAME}.node`))).toBe(true);
+    expect(warn.lines.join("\n")).toContain("unreadable");
+  });
+
   it("existing binding with a non-hex manifest digest (typo): fail-safe delete + degrade", () => {
     const cryptoDir = makeCryptoPkg();
     writeFileSync(join(cryptoDir, `${BASENAME}.node`), FAKE_BINDING);

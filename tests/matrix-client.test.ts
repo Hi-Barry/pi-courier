@@ -101,6 +101,15 @@ describe("createMatrixClient E2EE degradation (audit batch 1 票10)", () => {
     expect(logged).not.toContain("undefined");
   });
 
+  it("an unidentifiable undefined rejection propagates — degradation stays reserved for native-load failures", () => {
+    cryptoStorage.impl = () => {
+      throw undefined; // eslint-disable-line no-throw-literal
+    };
+
+    expect(() => makeClient()).toThrow();
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
   it("any OTHER construction failure propagates (no silent E2EE loss)", () => {
     cryptoStorage.impl = () => {
       throw new Error("EACCES: crypto store path not writable");

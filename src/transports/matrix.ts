@@ -336,6 +336,11 @@ export class MatrixProvider {
     return !ledger.seen(eventId);
   }
 
+  /** Fail-closed stand-in member count for rooms whose live lookup failed
+   *  twice: isGroupChatRoom(3) is true, so mention gating stays on. Deliberate
+   *  coupling to isGroupChatRoom's "> 2" threshold — keep the two in sync. */
+  private static readonly FAIL_CLOSED_MEMBER_COUNT = 3;
+
   /** Cached member-count lookup shared by the text and media pipelines.
    *  One retry for transient API blips; if the lookup still fails, fail
    *  CLOSED — assume a group so mention gating applies. The old DM default
@@ -354,10 +359,14 @@ export class MatrixProvider {
       }
       if (memberCount !== undefined) {
         this.roomMemberCount.set(roomId, memberCount);
+      } else {
+        logger.warn(
+          `[Matrix] member count lookup failed twice for ${roomId} — failing closed as a group chat (repeats until the lookup recovers)`
+        );
       }
     }
-    // Unresolvable count → assume group (3+), never default to DM.
-    return isGroupChatRoom(memberCount ?? 3);
+    // Unresolvable count → assume group, never default to DM.
+    return isGroupChatRoom(memberCount ?? MatrixProvider.FAIL_CLOSED_MEMBER_COUNT);
   }
 
   /**

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { adminCommandHelpText, handleAdminCommand } from "../src/auth/admin-commands";
-import { matchesTrustedEntry } from "../src/identity";
+import { matchesAdmin, matchesTrustedEntry } from "../src/identity";
 
 /** Direct table tests for the auth strategy engine and the admin-command
  *  handler. The engine is a pure state machine (in-memory only, sender
@@ -182,6 +182,19 @@ describe("ChallengeAuth strategy engine", () => {
     expect(auth.isTrustedUser("@carol:server", "matrix")).toBe(true);
   });
 
+  it("admin matching keeps the documented dual-form semantics, cross-transport included (audit batch 1 票3)", () => {
+    // Namespaced form wins per transport; the bare form is the documented
+    // legacy compat rule (early deployments stored bare IDs in config).
+    expect(matchesAdmin("matrix:@barry:server", "@barry:server", "matrix")).toBe(true);
+    expect(matchesAdmin("matrix:@barry:server", "@barry:server", "telegram")).toBe(false);
+    // Bare-form compat: matches the raw ID on ANY transport — pinned here as
+    // intentional, not accidental (single real transport today; revisit if a
+    // second transport with colliding raw IDs ever ships).
+    expect(matchesAdmin("@barry:server", "@barry:server", "matrix")).toBe(true);
+    expect(matchesAdmin("12345", "12345", "telegram")).toBe(true);
+    expect(matchesAdmin("matrix:@barry:server", "@other:server", "matrix")).toBe(false);
+  });
+
   it("channel modes gate group messages without any I/O", async () => {
     const { auth } = makeEngine({
       "!room:server": { enabled: true, mode: "trusted-only" },
@@ -216,6 +229,19 @@ describe("ChallengeAuth strategy engine", () => {
     }
     // Variability: a predictable source (or constant) cannot produce this.
     expect(new Set(codes).size).toBeGreaterThan(12);
+  });
+
+  it("pairing code domain reaches both ends of the 6-digit range (audit batch 1 票2)", async () => {
+    const codes: number[] = [];
+    const auth = new ChallengeAuth((code) => codes.push(parseInt(code, 10)), () => {});
+    auth.loadFromConfig({ trustedUsers: [], channels: {} });
+    for (let i = 0; i < 1000; i++) {
+      await auth.checkAuthorization(`@sweep-${i}:server`, `!dm${i}:server`, `sweep-${i}`, false, false, undefined, "matrix");
+    }
+    // Both tails of the range are reachable — a truncated/predictable source
+    // (e.g. Math.random()*900000 with float rounding) can miss them.
+    expect(Math.min(...codes)).toBeLessThan(150000);
+    expect(Math.max(...codes)).toBeGreaterThan(950000);
   });
 });
 

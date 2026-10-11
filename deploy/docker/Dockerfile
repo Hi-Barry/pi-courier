@@ -62,8 +62,11 @@ RUN https_proxy=${HTTPS_PROXY} http_proxy=${HTTP_PROXY} apt-get update \
 # GitHub CLI(gh):Debian 官方源没有,从 GitHub Releases 下载二进制。
 # 动态取 latest 版本;amd64 为主流 VPS 架构(TARGETARCH 可覆盖 arm64)。
 # 下载后用官方 checksums 文件校验,不符即构建失败(防损坏/防替换)。
+# 代理仅构建期生效:本 RUN 内临时 export(空值时 curl 自动直连),
+# 运行层不再有代理 ENV。
 ARG TARGETARCH
-RUN GH_TAG=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r .tag_name) \
+RUN export https_proxy=${HTTPS_PROXY} http_proxy=${HTTP_PROXY}; \
+    GH_TAG=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r .tag_name) \
     && GH_VER=${GH_TAG#v} \
     && ARCH=$(case "${TARGETARCH}" in arm64) echo arm64 ;; *) echo amd64 ;; esac) \
     && GH_ASSET="gh_${GH_VER}_linux_${ARCH}.tar.gz" \

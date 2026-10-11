@@ -62,8 +62,8 @@ export const COMMAND_REGISTRY: readonly CommandPolicy[] = [
   // 会话镜像(访客禁:动共享会话)
   { name: "/attach", guest: "blocked" },
   { name: "/detach", guest: "blocked" },
-  // 会话与代理状态(访客禁:全部动共享会话/代理运行状态,审计批 #152 票4
-  // 按表头既定登记规则补齐;这些命令由 pi 会话侧消费,桥只拦访客)
+  // 会话与代理状态(访客禁:全部动共享会话/代理运行状态,#156 按表头
+  // 既定登记规则补齐;这些命令由 pi 会话侧消费,桥只拦访客)
   { name: "/new", guest: "blocked" },
   { name: "/clear", guest: "blocked" },
   { name: "/compact", guest: "blocked" },

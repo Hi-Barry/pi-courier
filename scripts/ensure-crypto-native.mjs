@@ -336,6 +336,28 @@ export function verifyDownloadedBinding(nodePath, manifestKey, manifest) {
 }
 
 /**
+ * Shared handling for the manifest-mismatch verdict at both verify call sites
+ * (fresh download and pre-existing binding): a binary that fails its manifest
+ * check must never load — delete it and degrade. Returns the degraded result.
+ */
+function rejectUnverifiedBinding(nodePath, key, check, source) {
+  // Never load an unverified native binary. Delete and degrade.
+  try {
+    rmSync(nodePath, { force: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`${LOG_PREFIX} could not delete the unverified binding: ${message}`);
+  }
+  console.warn(
+    `${LOG_PREFIX} ${source} crypto binding ${key} FAILED sha256 verification ` +
+      `(expected ${check.expected}, observed ${check.observed}) — file deleted, ` +
+      `continuing WITHOUT native E2EE crypto (the bridge still runs, encrypted ` +
+      `rooms will be unreadable). Possible tampering or upstream asset change.`
+  );
+  return { ok: false, reason: "hash-mismatch", verified: "rejected" };
+}
+
+/**
  * Orchestration. All inputs are injectable so tests run in temp dirs; the
  * no-argument call keeps the exact pre-cache behaviour contract:
  * `{ok, downloaded, reason?}` with failures warned, never thrown.
@@ -381,7 +403,9 @@ export function ensureCryptoNative(options = {}) {
     const key = version !== null ? `${version}/${basename}` : null;
     let check;
     try {
-      check = verifyDownloadedBinding(nodePath, key ?? "", readManifest(manifestPath));
+      // key may be null (unreadable version file) — manifestLookup treats
+      // that as unlisted, i.e. the same TOFU path as a lagging manifest.
+      check = verifyDownloadedBinding(nodePath, key, readManifest(manifestPath));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn(
@@ -391,20 +415,7 @@ export function ensureCryptoNative(options = {}) {
       return { ok: false, reason: "verify-failed" };
     }
     if (check.verdict === "manifest-mismatch") {
-      // Never load an unverified native binary. Delete and degrade.
-      try {
-        rmSync(nodePath, { force: true });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.warn(`${LOG_PREFIX} could not delete the unverified binding: ${message}`);
-      }
-      console.warn(
-        `${LOG_PREFIX} existing crypto binding ${key} FAILED sha256 verification ` +
-          `(expected ${check.expected}, observed ${check.observed}) — file deleted, ` +
-          `continuing WITHOUT native E2EE crypto (the bridge still runs, encrypted ` +
-          `rooms will be unreadable). Possible tampering or upstream asset change.`
-      );
-      return { ok: false, reason: "hash-mismatch", verified: "rejected" };
+      return rejectUnverifiedBinding(nodePath, key, check, "existing");
     }
     if (check.verdict === "manifest-miss" && key !== null) {
       manifestNag(key, check.observed);
@@ -478,20 +489,7 @@ export function ensureCryptoNative(options = {}) {
   }
 
   if (check.verdict === "manifest-mismatch") {
-    // Never load an unverified native binary. Delete and degrade.
-    try {
-      rmSync(nodePath, { force: true });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn(`${LOG_PREFIX} could not delete the unverified binding: ${message}`);
-    }
-    console.warn(
-      `${LOG_PREFIX} downloaded crypto binding ${key} FAILED sha256 verification ` +
-        `(expected ${check.expected}, observed ${check.observed}) — file deleted, ` +
-        `continuing WITHOUT native E2EE crypto (the bridge still runs, encrypted ` +
-        `rooms will be unreadable). Possible tampering or upstream asset change.`
-    );
-    return { ok: false, reason: "hash-mismatch", verified: "rejected" };
+    return rejectUnverifiedBinding(nodePath, key, check, "downloaded");
   }
 
   if (check.verdict === "manifest-miss" && key !== null) {
