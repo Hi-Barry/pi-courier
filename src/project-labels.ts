@@ -40,8 +40,11 @@ export function validateProjectLabel(candidate: string, existingLabels: string[]
   if (!name) return t("label.empty");
   if (/[[\]]/.test(name)) return t("label.noBrackets");
   if (/\s/.test(name)) return t("label.noWhitespace");
-  if (name.length > MAX_LABEL_LENGTH) return t("label.tooLong", { max: MAX_LABEL_LENGTH, length: name.length });
-  const lower = name.toLowerCase();
+  // 用户感知字符数(码点)而非 UTF-16 单元;唯一性比较 NFKC 归一后折叠
+  // (与日志过滤的标签折叠口径对齐 —— 审计工程批 票21)。
+  const length = [...name].length;
+  if (length > MAX_LABEL_LENGTH) return t("label.tooLong", { max: MAX_LABEL_LENGTH, length });
+  const lower = name.normalize("NFKC").toLowerCase();
   const clash = existingLabels.find((l) => l.toLowerCase() === lower);
   if (clash) return t("label.caseClash", { name, clash });
   return null;

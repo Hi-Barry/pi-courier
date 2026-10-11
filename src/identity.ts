@@ -21,11 +21,13 @@ export function nativeMxid(namespaced: string): string {
   return namespaced.startsWith("matrix:") ? namespaced.slice("matrix:".length) : namespaced;
 }
 
-/** 展示形式:/trusted 输出。与历史实现逐字一致 — 已知怪癖:MXID 的
- *  homeserver 段被截断(不属本 spec 的行为变化范围)。 */
+/** 展示形式:/trusted 输出。保留完整 native ID(含 homeserver 段)——
+ *  旧实现的截断让不同 homeserver 的同名用户无法区分,审计工程批 票21
+ *  修正这一文档化怪癖(快照已同步)。 */
 export function displayIdentity(namespaced: string): string {
-  const [transport, uid] = namespaced.split(":");
-  return uid ? `${uid} (${transport})` : namespaced;
+  const sep = namespaced.indexOf(":");
+  if (sep === -1) return namespaced;
+  return `${namespaced.slice(sep + 1)} (${namespaced.slice(0, sep)})`;
 }
 
 /**

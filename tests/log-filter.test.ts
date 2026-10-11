@@ -18,7 +18,7 @@ describe("buildLogFilterArgs — level (existing-behavior repair, spec #34)", ()
     if (!r.ok) return;
     expect(r.args).toEqual([
       "--user", "-u", "pi-courier", "-f",
-      "--grep", "\\[(INFO|WARN|ERROR)\\] ", "--case=0",
+      "--grep", "\\[(INFO|WARN|ERROR)\\] ",
     ]);
     expect(r.args).not.toContain("-p");
   });
@@ -58,29 +58,29 @@ describe("buildLogFilterArgs — project selection", () => {
   it("single project: level AND label in one anchored pattern", () => {
     const r = buildLogFilterArgs(req({ requestedProjects: ["ai-api"] }));
     if (!r.ok) throw new Error("unexpected");
-    expect(r.args).toContain("\\[(INFO|WARN|ERROR)\\] \\[(ai-api)\\]");
+    expect(r.args).toContain("\\[(INFO|WARN|ERROR)\\] \\[(?i:(ai-api))\\]");
   });
 
   it("multiple projects OR together", () => {
     const r = buildLogFilterArgs(req({ requestedProjects: ["ai-api", "www"] }));
     if (!r.ok) throw new Error("unexpected");
-    expect(r.args).toContain("\\[(INFO|WARN|ERROR)\\] \\[(ai-api|www)\\]");
+    expect(r.args).toContain("\\[(INFO|WARN|ERROR)\\] \\[(?i:(ai-api|www))\\]");
   });
 
-  it("matching is case-insensitive via --case=0, not by lowercasing labels", () => {
+  it("label matching folds via inline (?i:) — level tokens stay case-sensitive (audit batch 3 票21)", () => {
     const r = buildLogFilterArgs(req({ requestedProjects: ["myapp"] }));
     if (!r.ok) throw new Error("unexpected");
-    expect(r.args).toContain("--case=0");
-    // The pattern carries the user's spelling (folded by --case 0), not the
+    expect(r.args).not.toContain("--case=0"); // 全局折叠已去除:LEVEL 名不再被折叠
+    // The pattern carries the user's spelling (folded by (?i:…)), not the
     // stored "MyApp" — the user must not need exact case to filter.
-    expect(r.args.join(" ")).toContain("(myapp)");
+    expect(r.args.join(" ")).toContain("(?i:(myapp))");
     expect(r.args.join(" ")).not.toContain("MyApp");
   });
 
   it("regex metacharacters in a label are escaped, not interpreted", () => {
     const r = buildLogFilterArgs(req({ availableLabels: ["a.b+c"], requestedProjects: ["a.b+c"] }));
     if (!r.ok) throw new Error("unexpected");
-    expect(r.args).toContain("\\[(INFO|WARN|ERROR)\\] \\[(a\\.b\\+c)\\]");
+    expect(r.args).toContain("\\[(INFO|WARN|ERROR)\\] \\[(?i:(a\\.b\\+c))\\]");
   });
 
   it("unknown project errors with the available list", () => {

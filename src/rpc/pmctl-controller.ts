@@ -243,7 +243,11 @@ export class PmctlController {
   /** Resolve a user-supplied target ("name" or room ID) to a project,
    *  matching against the same labels the log filter uses (projectLabelOf). */
   private findProject(target: string): [string, ProjectEntry] | undefined {
-    return this.opts.projectManager.listProjects().find(([roomId, p]) => projectLabelOf(p) === target || roomId === target);
+    // 标签匹配大小写不敏感(与登记校验/日志过滤口径一致 —— 审计工程批 票21)
+    const targetLower = target.toLowerCase();
+    return this.opts.projectManager
+      .listProjects()
+      .find(([roomId, p]) => projectLabelOf(p).toLowerCase() === targetLower || roomId === target);
   }
 
   private async show(rest: string, reply: Reply): Promise<void> {

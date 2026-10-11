@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { projectLabelOf, validateProjectLabel } from "../src/project-labels";
 
+describe("validateProjectLabel 判定边界(审计工程批 票21)", () => {
+  it("astral 字符按感知字符计数,NFKC 归一后视为同标签", () => {
+    // 30 个 emoji = 30 个感知字符(旧实现按 UTF-16 记 60)
+    const emoji = "🍵".repeat(30);
+    expect(validateProjectLabel(emoji, [])).toBeNull();
+    // NFKC:全角 A 与半角 A、组合重音与预合成 é 视为冲突(NFKC 不折 ß/ss)
+    expect(validateProjectLabel("Ａpp", ["App"])).toContain("App");
+    expect(validateProjectLabel("cafe\u0301", ["caf\u00e9"])).toContain("caf\u00e9");
+  });
+});
+
 describe("projectLabelOf", () => {
   it("prefers an explicit name", () => {
     expect(projectLabelOf({ name: "ai-api", workdir: "/home/u/Projects/whatever" })).toBe("ai-api");

@@ -445,7 +445,9 @@ export async function handleSlashCommand(
   const commandWord = trimmed.split(/\s+/)[0]!.toLowerCase();
 
   const spaceIndex = trimmed.indexOf(" ");
-  const name = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
+  // 分发键统一小写:/Stop /Help 这类大写输入此前会落 default 被当普通
+  // 文本转发(审计工程批 票21;命令大小写不敏感与登记表/裁决口径一致)。
+  const name = (spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex)).toLowerCase();
   const args = (spaceIndex === -1 ? "" : trimmed.slice(spaceIndex + 1)).trim();
 
   try {
@@ -780,7 +782,10 @@ export async function handleSlashCommand(
         if (!parsed.provider) {
           // Bare id — try to find a matching model and use its provider
           const models = await rpc.requireClient().getAvailableModels();
-          const match = models.find((m) => m.id.includes(parsed.modelId));
+          // 精确 id 优先,子串兜底 —— 防 glm-5.3 误切 glm-5.3-air(审计工程批 票21)
+          const match =
+            models.find((m) => m.id === parsed.modelId) ??
+            models.find((m) => m.id.includes(parsed.modelId));
           if (!match) {
             await reply(t("cmd.model.notFound", { id: parsed.modelId }));
             return true;
