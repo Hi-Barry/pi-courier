@@ -20,6 +20,7 @@ import {
   effectiveInstanceName,
   projectFallbackChain,
 } from "../config.js";
+import { PROJECT_SESSION_DIR } from "./project-manager.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
@@ -60,7 +61,9 @@ function splitFirst(s: string): [string, string] {
   return sp === -1 ? [s.trim(), ""] : [s.slice(0, sp).trim(), s.slice(sp + 1).trim()];
 }
 
-const RM_CONFIRM_WINDOW_MS = 60_000;
+/** /pmctl rm 确认窗(单一持有,i18n 文案插值引用 —— 审计工程批 票19)。 */
+export const RM_CONFIRM_WINDOW_MS = 60_000;
+const RM_CONFIRM_WINDOW_SECONDS = RM_CONFIRM_WINDOW_MS / 1000;
 
 export class PmctlController {
   private pendingRm = new Map<string, PendingRm>();
@@ -269,7 +272,7 @@ export class PmctlController {
         room: roomId,
         workdir: entry.workdir,
         status: pm.isRunning(roomId) ? t("pmctl.statusRunning") : t("pmctl.statusLazy"),
-        session: `${entry.workdir}/.pi-session`,
+        session: `${entry.workdir}/${PROJECT_SESSION_DIR}`,
         presets: presets.join(" · ") || t("pmctl.show.noPresets"),
       })
     );
@@ -298,7 +301,7 @@ export class PmctlController {
     const pending = this.pendingRm.get(call.chatId);
     if (pending && Date.now() - pending.ts > RM_CONFIRM_WINDOW_MS) {
       this.pendingRm.delete(call.chatId); // expired — treat as a fresh rm
-      await reply(t("pmctl.rm.expired"));
+      await reply(t("pmctl.rm.expired", { seconds: RM_CONFIRM_WINDOW_SECONDS }));
     }
     // Only the exact room armed for THIS chat confirms — a stale or
     // different-room pending entry can never delete the wrong project.
@@ -352,7 +355,7 @@ export class PmctlController {
     }
     const [roomId, entry] = found;
     this.opts.projectManager.updateProjectWorkdir(roomId, resolvedWorkdir);
-    await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir }));
+    await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir, sessionDir: PROJECT_SESSION_DIR }));
   }
 
   private async rename(rest: string, reply: Reply, roomOps: RoomOps): Promise<void> {

@@ -41,6 +41,9 @@ export interface ProjectManagerOptions {
   notifyRoom?: (roomId: string, text: string) => void;
 }
 
+/** 项目会话目录名(单一持有:pmctl 展示与 i18n 文案从这里取 —— 审计工程批 票19)。 */
+export const PROJECT_SESSION_DIR = ".pi-session";
+
 export class ProjectManager {
   private defaultRpc: PiRpc;
   private baseOptions: PiRpcOptions;
@@ -143,7 +146,7 @@ export class ProjectManager {
     // Per-project session dir: each project's conversation state lives in
     // its own workdir/.pi-session — isolated and resumable (--continue).
     const args = [...(this.baseOptions.args ?? [])];
-    const projectSessionDir = path.join(entry.workdir, ".pi-session");
+    const projectSessionDir = path.join(entry.workdir, PROJECT_SESSION_DIR);
     args.push("--session-dir", projectSessionDir);
 
     const label = projectLabelOf(entry);

@@ -24,7 +24,7 @@ import { BANG_COMMAND } from "../command-registry.js";
 import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
-import type { ReminderEntry } from "../reminders/reminder-store.js";
+import { MAX_REMINDERS_PER_ROOM, type ReminderEntry } from "../reminders/reminder-store.js";
 import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
 import { upstreamClearQueueSend } from "./pi-rpc.js";
 import { RecapBusyError, RecapEmptyError } from "./recap.js";
@@ -577,7 +577,7 @@ export async function handleSlashCommand(
           return true;
         }
         if (!ctx.reminders.add(text, dueAt)) {
-          await reply(t("cmd.remind.limit"));
+          await reply(t("cmd.remind.limit", { max: MAX_REMINDERS_PER_ROOM }));
           return true;
         }
         await reply(t("cmd.remind.ok", { when: formatReminderTime(dueAt), text }));

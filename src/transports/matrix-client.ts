@@ -19,6 +19,7 @@ import {
   RustSdkCryptoStoreType,
   SimpleFsStorageProvider,
 } from "matrix-bot-sdk";
+import { CONFIG_DIR } from "../config.js";
 import { logger } from "../logger.js";
 import type { EncryptedMediaFile } from "./attachments.js";
 
@@ -103,13 +104,13 @@ export type MatrixClientFactory = (config: MatrixClientConfig) => MatrixClientPo
  *   port's absent `crypto` member is the deployment-wide E2EE verdict.
  */
 export function createMatrixClient(config: MatrixClientConfig): MatrixClientPort {
-  const storagePath = path.join(os.homedir(), ".pi", "pi-courier-matrix-store.json");
+  const storagePath = path.join(CONFIG_DIR, "pi-courier-matrix-store.json");
   const storage = new SimpleFsStorageProvider(storagePath);
 
   let cryptoProvider: RustSdkCryptoStorageProvider | undefined;
   if (config.encryption !== false) {
     try {
-      const cryptoStorePath = path.join(os.homedir(), ".pi", "pi-courier-matrix-crypto");
+      const cryptoStorePath = path.join(CONFIG_DIR, "pi-courier-matrix-crypto");
       cryptoProvider = new RustSdkCryptoStorageProvider(cryptoStorePath, RustSdkCryptoStoreType.Sqlite);
       logger.info("[Matrix] E2EE crypto storage enabled (Rust/SQLite)");
     } catch (err) {

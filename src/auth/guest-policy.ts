@@ -1,4 +1,4 @@
-import { BANG_COMMAND, commandPolicy } from "../command-registry.js";
+import { BANG_COMMAND, commandPolicy, PMCTL_COMMAND } from "../command-registry.js";
 
 /**
  * Guest policy (issue #120): what a guest may not do. Pure module — one
@@ -32,7 +32,7 @@ export function guestCommandVerdict(text: string): GuestVerdict {
   }
   if (!trimmed.startsWith("/")) return { blocked: false, command: "" };
   const name = trimmed.split(/\s+/)[0]!.toLowerCase();
-  if (commandPolicy(name)?.guest === "blocked" || name.startsWith("/pmctl")) {
+  if (commandPolicy(name)?.guest === "blocked" || name.startsWith(PMCTL_COMMAND)) {
     return { blocked: true, command: name };
   }
   return { blocked: false, command: "" };

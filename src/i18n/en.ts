@@ -67,7 +67,7 @@ const en: Record<MessageKey, string> = {
   "cmd.remind.rm.usage": "Usage: /remind rm <n> (see /remind list)",
   "cmd.remind.rm.ok": "✅ Reminder cancelled: {text}",
   "cmd.remind.rm.notFound": "❌ No such number — check /remind list first.",
-  "cmd.remind.limit": "⚠️ This room hit the 20 active-reminder cap; clean up with /remind rm first.",
+  "cmd.remind.limit": "⚠️ This room hit the {max} active-reminder cap; clean up with /remind rm first.",
   "remind.due": "⏰ Reminder for @{user}: {text}",
   "remind.late": "(late by {minutes} min)",
   "remind.dropped": "⚠️ {count} more overdue reminder(s) were silently dropped.",
@@ -343,7 +343,7 @@ const en: Record<MessageKey, string> = {
   "pmctl.rm.usage": "Usage: /pmctl rm <project name|room ID>",
   "pmctl.rm.cancelled": "✅ Delete cancelled",
   "pmctl.rm.nothingPending": "No pending delete confirmation",
-  "pmctl.rm.expired": "⏳ The previous confirmation expired (60 s); please confirm again.",
+  "pmctl.rm.expired": "⏳ The previous confirmation expired ({seconds} s); please confirm again.",
   "pmctl.rm.done":
     "🗑️ Project \"{name}\" deleted\n• mapping removed and process stopped\n• workdir kept: {workdir} (delete it yourself if you want)\n• leaving the room now…",
   "pmctl.rm.unlinkFailed": "⚠️ Failed to remove from the space (a stale entry may remain; remove it manually): {message}",
@@ -353,7 +353,7 @@ const en: Record<MessageKey, string> = {
     "⚠️ Delete project \"{name}\"?\n\nSend `/pmctl rm {name}` again to confirm.\nOnce confirmed, I stop the process and leave that room.\n(send `/pmctl rm cancel` to cancel)",
   "pmctl.mv.usage": "Usage: /pmctl mv <project name|room ID> <new path> (relative paths resolve against the project root)",
   "pmctl.mv.done":
-    "🚚 Project \"{name}\" moved\n• new workdir: {workdir}\n• the session restarts (the old session stays in the old directory's .pi-session)",
+    "🚚 Project \"{name}\" moved\n• new workdir: {workdir}\n• the session restarts (the old session stays in the old directory's {sessionDir})",
   "pmctl.rename.usage": "Usage: /pmctl rename <project name|room ID> <new name>",
   "pmctl.rename.ok": "✏️ Project renamed to \"{name}\"",
   "pmctl.rename.roomFailed": " (room rename failed: {message})",
