@@ -82,7 +82,7 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
       switch (outcome) {
         case "authenticated":
           return handled({
-            replies: ["✅ Authenticated! You can now chat with the agent."],
+            replies: [t("auth.pairing.success")],
             notifications: [],
             effects: [
               { kind: "persistAuth" },
@@ -93,20 +93,20 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
           });
         case "expired":
           return handled({
-            replies: ["⏱️ Challenge expired. Send any message to get a new code."],
+            replies: [t("auth.pairing.expired")],
             notifications: [],
             effects: [],
           });
         case "blocked":
           return handled({
-            replies: [`🚫 Too many failed attempts. Blocked for ${PAIRING_BLOCK_MINUTES} minutes.`],
+            replies: [t("auth.pairing.tooManyAttempts", { minutes: PAIRING_BLOCK_MINUTES })],
             notifications: [],
             effects: [],
             audit: { event: "pairing.blocked", detail: `${displayIdentity(namespacedUserId)} blocked after ${MAX_PAIRING_ATTEMPTS} failed codes` },
           });
         case "wrong":
           return handled({
-            replies: [`❌ Wrong code. ${auth.attemptsLeft(namespacedUserId)} attempts remaining.`],
+            replies: [t("auth.pairing.wrongCode", { attempts: auth.attemptsLeft(namespacedUserId) })],
             notifications: [],
             effects: [],
             audit: { event: "pairing.wrong", detail: `${displayIdentity(namespacedUserId)} entered a wrong code (${auth.attemptsLeft(namespacedUserId)} left)` },
@@ -135,28 +135,28 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
   switch (cmd) {
     case "/enable": {
       if (parts.length < 3) {
-        return handled({ replies: ["Usage: /enable <chatId> <all|mentions|trusted-only>"], notifications: [], effects: [] });
+        return handled({ replies: [t("cmd.enable.usage")], notifications: [], effects: [] });
       }
       const mode = parts[2] as "all" | "mentions" | "trusted-only";
       if (mode !== "all" && mode !== "mentions" && mode !== "trusted-only") {
-        return handled({ replies: ["Usage: /enable <chatId> <all|mentions|trusted-only>"], notifications: [], effects: [] });
+        return handled({ replies: [t("cmd.enable.usage")], notifications: [], effects: [] });
       }
       auth.enableChannel(parts[1], mode);
       return handled({
-        replies: [`✅ Channel ${parts[1]} enabled (mode: ${parts[2]})`],
-        notifications: [{ message: `Channel ${parts[1]} enabled (${parts[2]})`, level: "info" }],
+        replies: [t("cmd.enable.ok", { chatId: parts[1], mode: parts[2] })],
+        notifications: [{ message: t("cmd.enable.notify", { chatId: parts[1], mode: parts[2] }), level: "info" }],
         effects: [{ kind: "persistAuth" }],
       });
     }
 
     case "/disable": {
       if (parts.length < 2) {
-        return handled({ replies: ["Usage: /disable <chatId>"], notifications: [], effects: [] });
+        return handled({ replies: [t("cmd.disable.usage")], notifications: [], effects: [] });
       }
       auth.disableChannel(parts[1]);
       return handled({
-        replies: [`❌ Channel ${parts[1]} disabled`],
-        notifications: [{ message: `Channel ${parts[1]} disabled`, level: "info" }],
+        replies: [t("cmd.disable.ok", { chatId: parts[1] })],
+        notifications: [{ message: t("cmd.disable.notify", { chatId: parts[1] }), level: "info" }],
         effects: [{ kind: "persistAuth" }],
       });
     }
@@ -168,14 +168,14 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
       const lines = Object.entries(channels).map(
         ([id, channel]) => `• ${id}: ${channel.enabled ? "✅" : "❌"} (${channel.mode})`
       );
-      return handled({ replies: [lines.join("\n") || "No channels configured"], notifications: [], effects: [] });
+      return handled({ replies: [lines.join("\n") || t("cmd.channels.empty")], notifications: [], effects: [] });
     }
 
     case "/trusted": {
       const snapshot = auth.exportConfig();
       const trusted = snapshot.trustedUsers.map(displayIdentity).join(", ");
       return handled({
-        replies: [`Trusted users (${snapshot.trustedUsers.length}):\n${trusted || "None"}`],
+        replies: [t("cmd.trusted.list", { count: snapshot.trustedUsers.length, users: trusted || t("cmd.trusted.none") })],
         notifications: [],
         effects: [],
         audit: { event: "trust.list", detail: `listed ${snapshot.trustedUsers.length} trusted user(s)` },
@@ -185,7 +185,7 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
     case "/toggletools": {
       const next = !input.hideToolCalls;
       return handled({
-        replies: [`🔧 Tool calls ${next ? "hidden" : "shown"} in remote messages`],
+        replies: [t("cmd.toggletools.ok", { state: next ? t("cmd.toggletools.hidden") : t("cmd.toggletools.shown") })],
         notifications: [],
         effects: [{ kind: "hideToolCalls", value: next }],
       });
@@ -194,7 +194,7 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
     case "/revoke": {
       if (parts.length < 2) {
         return handled({
-          replies: ["Usage: /revoke <userId> or /revoke <transport:userId>"],
+          replies: [t("cmd.revoke.usage")],
           notifications: [],
           effects: [],
         });
@@ -216,14 +216,14 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
           effects.push({ kind: "powerDemote", userId: removed });
         }
         return handled({
-          replies: [`🔓 Revoked trust for ${revokeId}`],
-          notifications: [{ message: `Revoked: ${revokeId}`, level: "warning" }],
+          replies: [t("cmd.revoke.ok", { userId: revokeId })],
+          notifications: [{ message: t("cmd.revoke.notify", { userId: revokeId }), level: "warning" }],
           effects,
           audit: { event: "trust.revoke", detail: `revoked trust for ${removed ?? revokeId}` },
         });
       }
       return handled({
-        replies: [`❌ User ${revokeId} not found in trusted users`],
+        replies: [t("cmd.revoke.notFound", { userId: revokeId })],
         notifications: [],
         effects: [],
         audit: { event: "trust.revoke", detail: `revoke missed: ${revokeId} not in trusted users` },

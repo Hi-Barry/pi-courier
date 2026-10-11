@@ -25,7 +25,7 @@ describe("constants single-source (audit engineering batch 票19)", () => {
       const r = handleAdminCommand(auth, { text: "000000", userId: "@eve:server", transport: "matrix", chatId: "!dm:server" });
       if (r.replies.length > 0) reply = r.replies.join(" ");
     }
-    expect(reply).toContain(`${PAIRING_BLOCK_MINUTES} minutes`);
+    expect(reply).toContain(`已锁定 ${PAIRING_BLOCK_MINUTES} 分钟`);
   });
 
   it("PMCTL_COMMAND is the registry's /pmctl and guest verdict blocks the whole family", () => {

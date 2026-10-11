@@ -323,6 +323,27 @@ async function replyQueueView(rpc: PiRpc, snapshot: QueueSnapshot | undefined, r
   await reply(lines.join("\n"));
 }
 
+/**
+ * 等 agent 空闲:轮询 getState,不依赖 agent_settled 事件。
+ *
+ * 上游 RpcClient.waitForIdle 只订阅未来的 agent_settled、不查当前状态 ——
+ * abort 在订阅完成前就已 settle 时(快模型/回声场景,毫秒级),它必然
+ * 空等 60s 超时,/interrupt 的新指令随之丢失(2026-10-11 真机复现:
+ * 日志里 run 已 settled,waitForIdle 仍报 "Timeout waiting for agent to
+ * become idle")。轮询对任何 abort→settle 时序都成立。
+ */
+export async function waitForAgentIdle(
+  client: { getState(): Promise<{ isStreaming: boolean }> },
+  timeoutMs = 60_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await client.getState()).isStreaming) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error("agent did not become idle after abort");
+}
+
 /** /stop 与 //interrupt 共用的清队机制(issue #112):快照 → 上游清队,
  *  旧上游拒清即 clearFailed。钉零(#115)刻意留给调用方在各自原时点做
  *  (/stop 在 abort 后,//interrupt 在 prompt 后):清队 RPC 应答与 clear
@@ -361,20 +382,27 @@ export interface SessionSummary {
 /**
  * Scan a session dir for pi session files (*.jsonl), newest first. A missing
  * or unreadable dir yields [] (the caller reports "找不到会话目录").
+ *
+ * Recursive on purpose: pi lays sessions out as `<base>/<workdir-slug>/<file>.jsonl`
+ * (one subdirectory per working directory, e.g. `--tmp-pi-verify-workdir--`), so a
+ * flat readdir of the base sees zero files even when sessions exist — /sessions
+ * reported "📭 会话目录为空" and /switch 永远序号越界 (2026-10-11 真机发现).
  */
 export function listSessions(dir: string): SessionSummary[] {
-  let names: string[];
+  let entries: string[];
   try {
-    names = fs.readdirSync(dir);
+    entries = fs.readdirSync(dir, { recursive: true }) as string[];
   } catch {
     return [];
   }
   const sessions: SessionSummary[] = [];
-  for (const file of names) {
-    if (!file.endsWith(".jsonl")) continue;
-    const full = path.join(dir, file);
+  for (const rel of entries) {
+    if (!rel.endsWith(".jsonl")) continue;
+    const full = path.join(dir, rel);
     try {
-      sessions.push({ path: full, file, mtimeMs: fs.statSync(full).mtimeMs });
+      const st = fs.statSync(full);
+      if (!st.isFile()) continue;
+      sessions.push({ path: full, file: path.basename(rel), mtimeMs: st.mtimeMs });
     } catch {
       // Raced deletion between readdir and stat — skip.
     }
@@ -616,7 +644,7 @@ export async function handleSlashCommand(
         // original post-prompt timing (see the helper's doc for why).
         const { snapshot, cleared, clearFailed } = await clearQueuesBeforeAbort(rpc, queueView);
         await rpc.requireClient().abort();
-        await rpc.requireClient().waitForIdle();
+        await waitForAgentIdle(rpc.requireClient());
         await rpc.prompt(args);
         // 与 /stop 同款钉零(issue #115):清队成功后不等 queue_update 推送。
         if (cleared) setQueueMirror?.({ steering: [], followUp: [] });

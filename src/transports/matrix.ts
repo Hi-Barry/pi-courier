@@ -126,15 +126,19 @@ export class MatrixProvider {
 
     // Track room membership and member counts
     this.client.on("room.join", (roomId: string) => {
+      // isNew 去重:matrix-client 的邀请处理器在 API join 成功后补发一次
+      // room.join(见彼处注释),SDK 的 sync 扫描若在之后也 sighting 到同一
+      // 次加入,真事件迟到时不再二次发提示(提示只跟「首次见到加入」走)。
+      const isNewJoin = !this.joinedRooms.has(roomId);
       this.joinedRooms.add(roomId);
       // Refresh member count asynchronously
       this.client?.getJoinedRoomMembers(roomId)
         .then(members => {
           this.roomMemberCount.set(roomId, members.length);
           // Multi-user room that isn't explicitly enabled: post a one-time
-          // hint so the inviter knows how to enable it. The room.join event
-          // only fires on (re)join, so this is naturally idempotent.
-          if (shouldPostJoinHint(members.length, this.isRoomEnabled(roomId))) {
+          // hint so the inviter knows how to enable it. room.join 只在首次
+          // 加入(含邀请自动加入的补发)时提示;rejoin 由 isNew 重新放行。
+          if (isNewJoin && shouldPostJoinHint(members.length, this.isRoomEnabled(roomId))) {
             this.sendMessage(roomId, buildGroupJoinHint()).catch(() => {});
           }
         })

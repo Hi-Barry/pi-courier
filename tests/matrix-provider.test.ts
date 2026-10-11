@@ -218,6 +218,26 @@ describe("MatrixProvider 事件接线", () => {
     expect(content.body).toBe(buildGroupJoinHint());
   });
 
+  it("room.join:同一房间的新加入只提示一次(邀请补发 + SDK 迟到真事件不去重会双发)", async () => {
+    const { provider, clients } = makeProvider({
+      isRoomEnabled: () => false,
+      queue: [
+        fakeMatrixClient({
+          getJoinedRoomMembers: vi.fn(async () => [BOT, "@a:server", "@b:server"]),
+        }),
+      ],
+    });
+    await provider.connect();
+    const client = clients[0];
+
+    client.emit("room.join", "!group:server");
+    await until(() => client.sendMessage.mock.calls.length === 1);
+    // SDK 的 sync 扫描随后又 sighting 到同一次加入(迟到真事件)
+    client.emit("room.join", "!group:server");
+    await flush();
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("room.join:已启用的多人群不发提示;两人房也发不出提示", async () => {
     const { provider, clients } = makeProvider({ isRoomEnabled: () => true });
     await provider.connect();

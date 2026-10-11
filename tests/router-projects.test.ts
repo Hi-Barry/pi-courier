@@ -441,6 +441,31 @@ describe("message-router multi-project routing", () => {
     expect(replies.at(-1)).toMatchObject({ chatId: "!proj:server", text: "⚠️ 扩展错误 (unknown): late boom" });
   });
 
+  it("steering/followUp 队列未清空时不释放默认绑定(折叠消息的回复在后续 turn 才到)", async () => {
+    const router = makeRouter();
+    await router.handleIncoming(makeMsg({ text: "task" }));
+    // 运行中插话被折叠:queue_update 报告 steering 1 条(2026-10-11 真机:
+    // 原任务 turn 完成即释放绑定,折叠消息的回复系统性丢成 no replyTarget)
+    router.handleEvent({ type: "queue_update", steering: ["运行中插话"], followUp: [] }, rpc);
+    router.handleEvent({ type: "turn_end", message: textMessage("task done") }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    // 折叠消息的回复 turn 到达 —— 必须照常送达原聊天
+    router.handleEvent({ type: "turn_end", message: textMessage("插话的回复") }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0)); // footer fetch async
+    expect(replies.at(-1)).toMatchObject({ chatId: "!dm:server", text: expect.stringContaining("插话的回复") });
+
+    // 队列见空后,迟事件保护恢复:下一个完成 turn 释放绑定,迟到事件不再回复
+    router.handleEvent({ type: "queue_update", steering: [], followUp: [] }, rpc);
+    router.handleEvent({ type: "turn_end", message: textMessage("again") }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    const afterRelease = replies.length;
+    router.handleEvent({ type: "extension_error", error: "late boom" }, rpc);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(replies.length).toBe(afterRelease);
+  });
+
   it("muting agent logging (log level) does not affect reply routing", async () => {
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ text: "hi" }));
@@ -645,7 +670,7 @@ describe("message-router authorization pipeline (real ChallengeAuth)", () => {
     expect(codeBox.current).not.toBeNull();
 
     await router.handleIncoming(eveMsg(codeBox.current!));
-    expect(replies.at(-1)!.text).toContain("Authenticated");
+    expect(replies.at(-1)!.text).toContain("配对成功");
 
     // Now trusted: the next plain message reaches pi.
     await router.handleIncoming(eveMsg("hi pi"));
@@ -662,7 +687,7 @@ describe("message-router authorization pipeline (real ChallengeAuth)", () => {
     for (let i = 0; i < 3; i++) {
       await router.handleIncoming(mallory(wrongCode));
     }
-    expect(replies.at(-1)!.text).toContain("Blocked");
+    expect(replies.at(-1)!.text).toContain("已锁定");
 
     // Blocked: no challenge re-issue, no reply, nothing reaches pi.
     const repliesBefore = replies.length;
@@ -720,7 +745,7 @@ describe("space invite on trust transition (spec #16 ticket 4)", () => {
     const fx = makeFixtures({ space: { enabled: true, roomId: "!space:server", invitedUsers: ["matrix:@eve:server"] } });
     await passChallenge(fx);
     expect(fx.roomOps.inviteUser).not.toHaveBeenCalled();
-    expect(fx.replies.some((r) => r.text.includes("Authenticated"))).toBe(true);
+    expect(fx.replies.some((r) => r.text.includes("配对成功"))).toBe(true);
   });
 
   it("an invite failure is non-fatal: authentication still succeeds", async () => {
@@ -728,7 +753,7 @@ describe("space invite on trust transition (spec #16 ticket 4)", () => {
     (fx.roomOps.inviteUser as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("M_LIMIT_EXCEEDED"));
     await passChallenge(fx);
     expect(fx.roomOps.inviteUser).toHaveBeenCalledTimes(1);
-    expect(fx.replies.some((r) => r.text.includes("Authenticated"))).toBe(true);
+    expect(fx.replies.some((r) => r.text.includes("配对成功"))).toBe(true);
     // Not recorded — the startup ensure self-heals it on the next run.
     expect(fx.store.get().space?.invitedUsers ?? []).not.toContain("matrix:@eve:server");
   });
@@ -948,7 +973,7 @@ describe("management room invite on trust transition (issue #43 票2)", () => {
     expect(fx.store.get().space?.invitedUsers).toEqual(["matrix:@eve:server"]);
     expect(fx.store.get().space?.managementInvitedUsers).toEqual(["matrix:@eve:server"]);
     // The authentication itself is untouched by the invite side effects.
-    expect(fx.replies.some((r) => r.text.includes("Authenticated"))).toBe(true);
+    expect(fx.replies.some((r) => r.text.includes("配对成功"))).toBe(true);
   });
 
   it("no roomOps (degraded): consuming the effects neither throws nor invites anyone", async () => {
@@ -966,7 +991,7 @@ describe("management room invite on trust transition (issue #43 票2)", () => {
     });
     await router.handleIncoming(eveMsg("hello"));
     await router.handleIncoming(eveMsg(fx.codeBox.current!));
-    expect(fx.replies.some((r) => r.text.includes("Authenticated"))).toBe(true);
+    expect(fx.replies.some((r) => r.text.includes("配对成功"))).toBe(true);
     expect(fx.roomOps.inviteUser).not.toHaveBeenCalled();
     // persistAuth still applied — trust survives without Matrix room ops.
     expect(fx.store.get().auth?.trustedUsers).toContain("matrix:@eve:server");
@@ -1051,8 +1076,14 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
     expect(replies.at(-1)!.text).not.toContain("⚠️");
   });
 
-  it("/interrupt while streaming clears the queue first (TUI Esc order), then abort → waitForIdle → prompt", async () => {
+  it("/interrupt while streaming clears the queue first (TUI Esc order), then abort → 轮询空闲 → prompt", async () => {
+    // 入口时在流式;abort 之后 agent 空闲(waitForAgentIdle 轮询 getState 的真实语义)
     getState({ isStreaming: true, pendingMessageCount: 1 });
+    (rpc.requireClient().abort as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (rpc.requireClient().getState as ReturnType<typeof vi.fn>).mockResolvedValue({
+        model: { id: "m" }, isStreaming: false, pendingMessageCount: 0,
+      });
+    });
     // upstreamClearQueueSend casts the client to its private send channel.
     const send = vi.fn().mockResolvedValue({ success: true, data: { steering: ["old task"], followUp: [] } });
     (rpc as unknown as { send: unknown }).send = send;
@@ -1061,13 +1092,11 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
     await router.handleIncoming(makeMsg({ text: "/interrupt new order" }));
     expect(send).toHaveBeenCalledWith({ type: "clear_queue" });
     expect(rpc.requireClient().abort).toHaveBeenCalledTimes(1);
-    expect(rpc.requireClient().waitForIdle).toHaveBeenCalledTimes(1);
     expect(rpc.prompt).toHaveBeenCalledWith("new order");
-    // The sequence is strict: clear_queue → abort → waitForIdle → prompt.
+    // The sequence is strict: clear_queue → abort → 轮询 getState → prompt.
     const order = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
     expect(order(send)).toBeLessThan(order(rpc.requireClient().abort));
-    expect(order(rpc.requireClient().abort)).toBeLessThan(order(rpc.requireClient().waitForIdle));
-    expect(order(rpc.requireClient().waitForIdle)).toBeLessThan(order(rpc.prompt));
+    expect(order(rpc.requireClient().abort)).toBeLessThan(order(rpc.prompt));
     const text = replies.at(-1)!.text;
     expect(text).toContain("已打断,新指令已发出");
     expect(text).toContain("已清掉 1 条排队消息");
@@ -1077,13 +1106,17 @@ describe("send semantics command family (issue #53 ticket 2)", () => {
 
   it("/interrupt falls back to abort + queue warning when the client has no private send channel", async () => {
     getState({ isStreaming: true, pendingMessageCount: 1 });
+    (rpc.requireClient().abort as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (rpc.requireClient().getState as ReturnType<typeof vi.fn>).mockResolvedValue({
+        model: { id: "m" }, isStreaming: false, pendingMessageCount: 0,
+      });
+    });
     // No `send` on the client mock: upstreamClearQueueSend throws a TypeError
     // — the degradation path that also covers a pre-0.84.4 client library.
     const router = makeRouter();
     router.handleEvent({ type: "queue_update", steering: ["old task"], followUp: [] }, rpc);
     await router.handleIncoming(makeMsg({ text: "/interrupt new order" }));
     expect(rpc.requireClient().abort).toHaveBeenCalledTimes(1);
-    expect(rpc.requireClient().waitForIdle).toHaveBeenCalledTimes(1);
     expect(rpc.prompt).toHaveBeenCalledWith("new order");
     const text = replies.at(-1)!.text;
     expect(text).toContain("已打断,新指令已发出");
@@ -1501,7 +1534,7 @@ describe("power demotion on revoke (issue #44 票3)", () => {
     }
     expect(fx.roomOps.setUserPowerLevel).toHaveBeenCalledTimes(3);
     // The revoke confirmation is unchanged by the demotion side effect.
-    expect(fx.replies.some((r) => r.text === "🔓 Revoked trust for @eve:server")).toBe(true);
+    expect(fx.replies.some((r) => r.text === "🔓 已撤销 @eve:server 的信任")).toBe(true);
     // Trust revocation persisted; exactly the revoked user left the books.
     expect(fx.store.get().auth?.trustedUsers).not.toContain("matrix:@eve:server");
     expect(fx.store.get().powerElevatedUsers).toEqual(["matrix:@barry:server"]);
@@ -1519,7 +1552,7 @@ describe("power demotion on revoke (issue #44 票3)", () => {
     });
     (fx.roomOps.setUserPowerLevel as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("M_FORBIDDEN"));
     await fx.makeRouter().handleIncoming(makeMsg({ text: "/revoke @eve:server" }));
-    expect(fx.replies.some((r) => r.text === "🔓 Revoked trust for @eve:server")).toBe(true);
+    expect(fx.replies.some((r) => r.text === "🔓 已撤销 @eve:server 的信任")).toBe(true);
     // Trust revocation persisted even though the demotion failed...
     expect(fx.store.get().auth?.trustedUsers).not.toContain("matrix:@eve:server");
     // ...while the bookkeeping survives whole for the startup heal to retry.

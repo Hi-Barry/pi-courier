@@ -1240,7 +1240,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       if (event.type === "turn_end") {
         recapLedger.increment(rpc);
-        if (!target) return;
+        if (!target) {
+          log.debug(`[agent] turn_end dropped: no replyTarget bound (rpc=${rpc.label ?? "default"})`);
+          return;
+        }
         // 连败计数(issue #121):彻底失败的轮喂计数,其余轮次清零(工具
         // 循环的中间轮也算成功 —— 模型还在干活,故障 streak 不该跨过它)。
         // 自动切换的回执与失败回复同房间送达;交接卡捕获轮同样计数。
@@ -1253,7 +1256,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
         // 交接卡捕获(issue #122):在途捕获命中本进程时,终答落卡 —— 工具
         // 循环的中间轮继续等;卡片投递替代原生回复,总结文本不重复发房间。
-        if (recapLedger.settleCapture(rpc, turn) !== "none") return;
+        const settleVerdict = recapLedger.settleCapture(rpc, turn);
+        if (settleVerdict !== "none") {
+          log.debug(`[agent] turn_end captured by recap: ${settleVerdict}`);
+          return;
+        }
 
         // Reply summary at INFO level — the full conversation is also in pi's
         // session file.
@@ -1288,9 +1295,18 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // A completed conversational turn releases unpinned bindings (the
         // shared default rpc) so late events never reply to a stale chat.
         // Pinned project bindings survive (parity with the old roomId path).
+        //
+        // 例外(2026-10-11 真机):steering/followUp 队列非空时不释放 —— 被
+        // 折叠进运行中任务的消息,其回复在后续 turn 才到;中间任何一次 turn
+        // 完成(原任务收尾、自动重试轮)都会把绑定删掉,那些回复就成了
+        // "no replyTarget" 系统性丢失(运行中插话、离线积压回放第二条皆
+        // 中招,4/4 复现)。队列见空才释放:迟事件保护依旧成立 —— 已收敛
+        // 且无排队时,不会再有属于旧聊天的事件。
         const binding = bindings.get(rpc);
         if (!turn.pendingTools && binding && !binding.pinned) {
-          bindings.delete(rpc);
+          const mirror = transient.mirror(rpc);
+          const queued = (mirror?.steering.length ?? 0) + (mirror?.followUp.length ?? 0);
+          if (queued === 0) bindings.delete(rpc);
         }
         return;
       }
