@@ -35,8 +35,13 @@ Thumbs.db
 # Private dev log (not published)
 docs/DEVLOG.md
 
-# Local env (secrets)
-deploy/docker/.env
+# Local env (secrets) — any location, not just deploy/docker: a root .env or
+# a stray *.env must never be committable (.env.example stays tracked).
+.env
+.env.*
+*.env
+!*.env.example
+!**/.env.example
 
 # ZCode local session dir
 .zcode/
