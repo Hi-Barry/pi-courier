@@ -9,7 +9,6 @@
  * the SDK log facade; the real MatrixClient structurally satisfies the
  * port, so no wrapper class is needed.
  */
-import * as os from "node:os";
 import * as path from "node:path";
 import type { ILogger, RoomCreateOptions } from "matrix-bot-sdk";
 import {
@@ -20,6 +19,7 @@ import {
   SimpleFsStorageProvider,
 } from "matrix-bot-sdk";
 import { CONFIG_DIR } from "../config.js";
+import { errorMessage } from "../errors.js";
 import { logger } from "../logger.js";
 import type { EncryptedMediaFile } from "./attachments.js";
 
@@ -114,7 +114,7 @@ export function createMatrixClient(config: MatrixClientConfig): MatrixClientPort
       cryptoProvider = new RustSdkCryptoStorageProvider(cryptoStorePath, RustSdkCryptoStoreType.Sqlite);
       logger.info("[Matrix] E2EE crypto storage enabled (Rust/SQLite)");
     } catch (err) {
-      logger.warn("[Matrix] E2EE crypto not available, continuing without encryption:", (err as Error).message);
+      logger.warn("[Matrix] E2EE crypto not available, continuing without encryption:", errorMessage(err));
     }
   }
 

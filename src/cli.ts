@@ -22,6 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { effectiveLanguage, loadConfig } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { setLocale, t } from "./i18n/index.js";
 import { buildLogFilterArgs } from "./log-filter.js";
 import { projectLabelOf } from "./project-labels.js";
@@ -405,6 +406,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("[pi-courier] fatal:", (err as Error).message);
+  console.error("[pi-courier] fatal:", errorMessage(err));
   process.exit(1);
 });

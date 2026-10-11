@@ -18,6 +18,7 @@ import {
   nativeMxid,
   saveConfig,
 } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { detectSystemLanguage } from "./i18n/detect.js";
 import type { Locale } from "./i18n/index.js";
 import { setLocale, t } from "./i18n/index.js";
@@ -393,7 +394,7 @@ export async function runSetup(): Promise<void> {
     console.log(t("setup.done.rooms", { rooms: roomList || t("setup.done.noRooms") }));
     console.log(t("setup.next"));
   } catch (err) {
-    console.error(t("setup.failed", { message: (err as Error).message }));
+    console.error(t("setup.failed", { message: errorMessage(err) }));
     process.exitCode = 1;
   } finally {
     close(); // release stdin listeners so the process exits naturally

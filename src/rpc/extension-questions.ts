@@ -28,6 +28,7 @@
  * cancelled:true response resolves the dialog to its default value.
  */
 
+import { errorMessage } from "../errors.js";
 import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
@@ -172,7 +173,7 @@ export class ExtensionQuestions {
         if (!target) {
           log.warn(`[extension-ui] ${request.method} 请求无绑定房间,已代答取消 (id ${request.id})`);
           this.deps.respond(rpc, { id: request.id, cancelled: true }).catch((err: unknown) => {
-            log.error(`[extension-ui] 代答取消失败 (id ${request.id}): ${(err as Error).message}`);
+            log.error(`[extension-ui] 代答取消失败 (id ${request.id}): ${errorMessage(err)}`);
           });
           return;
         }
@@ -244,7 +245,7 @@ export class ExtensionQuestions {
     const title = truncateLine(entry.request.title ?? t("xq.untitled"), 80);
     entry.log.info(`[extension-ui] 提问超时未答,已代答取消 (id ${entry.request.id})`);
     this.deps.respond(rpc, { id: entry.request.id, cancelled: true }).catch((err: unknown) => {
-      entry.log.error(`[extension-ui] 超时代答回写失败 (id ${entry.request.id}): ${(err as Error).message}`);
+      entry.log.error(`[extension-ui] 超时代答回写失败 (id ${entry.request.id}): ${errorMessage(err)}`);
     });
     this.deps.sendReply(entry.target.chatId, entry.target.transport, t("xq.expired", { title })).catch(() => {});
   }
@@ -269,7 +270,7 @@ export class ExtensionQuestions {
     try {
       await this.deps.respond(rpc, payload);
     } catch (err) {
-      log.error(`[extension-ui] 应答回写失败 (id ${entry.request.id}): ${(err as Error).message}`);
+      log.error(`[extension-ui] 应答回写失败 (id ${entry.request.id}): ${errorMessage(err)}`);
       await this.deps.sendReply(msg.chatId, msg.transport, t("xq.answer.lost"));
       return;
     }

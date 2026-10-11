@@ -10,6 +10,7 @@
    fires exactly once, on time.
  */
 
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { logger } from "../logger.js";
 import type { ReminderEntry, ReminderStore } from "./reminder-store.js";
@@ -150,7 +151,7 @@ export class ReminderClock implements ReminderController {
     try {
       await this.deliver(delivery);
     } catch (err) {
-      logger.warn(`reminder delivery failed: ${(err as Error).message}`);
+      logger.warn(`reminder delivery failed: ${errorMessage(err)}`);
     }
   }
 }

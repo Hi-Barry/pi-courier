@@ -10,6 +10,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { errorMessage } from "../errors.js";
 import { logger } from "../logger.js";
 
 export const AUDIT_ROTATE_BYTES = 10 * 1024 * 1024;
@@ -84,7 +85,7 @@ export class AuditLog {
     } catch (err) {
       this.consecutiveFailures += 1;
       if (this.consecutiveFailures >= this.warnThreshold) {
-        const message = `audit log unavailable (${this.consecutiveFailures} consecutive failures) — the service keeps running without evidence: ${(err as Error).message}`;
+        const message = `audit log unavailable (${this.consecutiveFailures} consecutive failures) — the service keeps running without evidence: ${errorMessage(err)}`;
         logger.warn(message);
         try {
           this.options.onDegraded?.(message);

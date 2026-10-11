@@ -21,6 +21,7 @@ import * as path from "node:path";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
 import { BANG_COMMAND } from "../command-registry.js";
+import { errorMessage } from "../errors.js";
 import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
@@ -463,7 +464,7 @@ export async function handleSlashCommand(
         } catch (err) {
           if (err instanceof RecapBusyError) await reply(t("cmd.recap.busy"));
           else if (err instanceof RecapEmptyError) await reply(t("cmd.recap.empty"));
-          else await reply(t("cmd.generic.error", { message: (err as Error).message }));
+          else await reply(t("cmd.generic.error", { message: errorMessage(err) }));
         }
         return true;
       }
@@ -758,7 +759,7 @@ export async function handleSlashCommand(
           const state = await rpc.requireClient().getState();
           await reply(t("cmd.reload.ok", { model: state.model?.id ?? "unknown" }));
         } catch (err) {
-          await reply(t("cmd.reload.failed", { message: (err as Error).message }));
+          await reply(t("cmd.reload.failed", { message: errorMessage(err) }));
         }
         return true;
       }
@@ -910,7 +911,7 @@ export async function handleSlashCommand(
       }
     }
   } catch (err) {
-    await reply(t("cmd.generic.error", { message: (err as Error).message }));
+    await reply(t("cmd.generic.error", { message: errorMessage(err) }));
     return true;
   }
 }

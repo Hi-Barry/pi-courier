@@ -20,6 +20,7 @@ import {
   effectiveInstanceName,
   projectFallbackChain,
 } from "../config.js";
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
@@ -217,7 +218,7 @@ export class PmctlController {
         t("pmctl.new.ok", { name: pname, room: provision.roomId, workdir: resolvedWorkdir, notes })
       );
     } catch (err) {
-      await reply(t("pmctl.new.failed", { message: (err as Error).message }));
+      await reply(t("pmctl.new.failed", { message: errorMessage(err) }));
     }
   }
 
@@ -318,7 +319,7 @@ export class PmctlController {
         try {
           await this.onRoomRemoved(roomId);
         } catch (err) {
-          logger.warn(`room-death purge failed (entries expire via TTL): ${(err as Error).message}`);
+          logger.warn(`room-death purge failed (entries expire via TTL): ${errorMessage(err)}`);
         }
       }
       await reply(t("pmctl.rm.done", { name: projectLabelOf(entry), workdir: entry.workdir }));
@@ -330,13 +331,13 @@ export class PmctlController {
         try {
           await roomOps.removeRoomFromSpace(spaceRoomId, roomId);
         } catch (err) {
-          await reply(t("pmctl.rm.unlinkFailed", { message: (err as Error).message }));
+          await reply(t("pmctl.rm.unlinkFailed", { message: errorMessage(err) }));
         }
       }
       try {
         await roomOps.leaveRoom(roomId, t("pmctl.leaveReason"));
       } catch (err) {
-        await reply(t("pmctl.rm.leaveFailed", { message: (err as Error).message }));
+        await reply(t("pmctl.rm.leaveFailed", { message: errorMessage(err) }));
       }
       return;
     }
@@ -394,7 +395,7 @@ export class PmctlController {
       await roomOps.setRoomName(roomId, newName);
       await reply(renamed);
     } catch (err) {
-      await reply(`${renamed}${t("pmctl.rename.roomFailed", { message: (err as Error).message })}`);
+      await reply(`${renamed}${t("pmctl.rename.roomFailed", { message: errorMessage(err) })}`);
     }
   }
 }

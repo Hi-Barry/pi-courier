@@ -21,6 +21,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { errorMessage } from "../errors.js";
 
 /** pi 会话文件首行 header:{"type":"session","version":3,"id":...,"cwd":...} */
 export interface SessionHeader {
@@ -436,7 +437,7 @@ export class MirrorManager {
       mirror.clearDirty();
       return { kind: "relayed" };
     } catch (err) {
-      return { kind: "failed", message: (err as Error).message };
+      return { kind: "failed", message: errorMessage(err) };
     }
   }
 }

@@ -22,6 +22,7 @@
  */
 
 import { activeSpaceRoomId, adoptManagementRoom, type ConfigStore, effectiveInstanceName, effectiveWorkdir, isSpaceMode, managementRoomId, nativeMxid } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { t } from "./i18n/index.js";
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
@@ -145,7 +146,7 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
     return "ready";
   } catch (err) {
     logger.warn(
-      `[space] 空间初始化失败,本次以无空间模式运行(下次启动自动重试): ${(err as Error).message}`
+      `[space] 空间初始化失败,本次以无空间模式运行(下次启动自动重试): ${errorMessage(err)}`
     );
     return "degraded";
   }
@@ -190,14 +191,14 @@ export async function maybeInitManagementRoom(
  *  品牌失败两条路径语义一致:启动身份自愈兜底(下次启动自动补)。文案不含
  *  渠道前缀 —— /pmctl 拼成 ⚠️ 行进成功回执,启动 ensure 打 warn 日志。 */
 function spaceLinkNote(kind: "project" | "management", err: unknown): string {
-  const msg = (err as Error).message;
+  const msg = errorMessage(err);
   return kind === "management"
     ? t("space.linkFailedMgmt", { message: msg })
     : t("space.linkFailed", { message: msg });
 }
 
 function avatarNote(err: unknown): string {
-  return t("space.avatarFailed", { message: (err as Error).message });
+  return t("space.avatarFailed", { message: errorMessage(err) });
 }
 
 /** 建房成功后、可选步骤之前的落簿钩子(崩溃安全):两条路径各自的持久化
@@ -354,7 +355,7 @@ export async function inviteUserToSpaceOnce(
       // the startup self-heal stops re-inviting (and failing) on every boot.
       return recordInvited(store, "invitedUsers", invited, namespacedUser, true, "空间");
     }
-    logger.warn(`[space] 邀请 ${namespacedUser} 进空间失败(下次启动自愈): ${(err as Error).message}`);
+    logger.warn(`[space] 邀请 ${namespacedUser} 进空间失败(下次启动自愈): ${errorMessage(err)}`);
     return false;
   }
 }
@@ -388,7 +389,7 @@ export async function inviteUserToManagementRoomOnce(
       // Issue #62: same as the space twin — already in the room means done.
       return recordInvited(store, "managementInvitedUsers", invited, namespacedUser, true, "管理房间");
     }
-    logger.warn(`[space] 邀请 ${namespacedUser} 进管理房间失败(下次启动自愈): ${(err as Error).message}`);
+    logger.warn(`[space] 邀请 ${namespacedUser} 进管理房间失败(下次启动自愈): ${errorMessage(err)}`);
     return false;
   }
 }

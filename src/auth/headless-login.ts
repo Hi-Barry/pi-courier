@@ -36,6 +36,7 @@ import type {
   CredentialInfo,
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { formatReloadAllResult, restartIdleRpcs } from "../rpc/command-map.js";
@@ -387,7 +388,7 @@ export class LoginManager {
       await runtime.logout(providerId);
       await this.deps.sendReply(chatId, transport, t("login.logoutOk", { id: providerId }));
     } catch (err) {
-      await this.deps.sendReply(chatId, transport, t("login.logoutFailed", { message: (err as Error).message }));
+      await this.deps.sendReply(chatId, transport, t("login.logoutFailed", { message: errorMessage(err) }));
     }
   }
 
@@ -397,7 +398,7 @@ export class LoginManager {
       const runtime = await this.getRuntime();
       await this.deps.sendReply(chatId, transport, formatCredentials([...(await runtime.listCredentials())]));
     } catch (err) {
-      await this.deps.sendReply(chatId, transport, t("login.readFailed", { message: (err as Error).message }));
+      await this.deps.sendReply(chatId, transport, t("login.readFailed", { message: errorMessage(err) }));
     }
   }
 
@@ -440,7 +441,7 @@ export class LoginManager {
       entry.finished = true;
       this.drop(entry);
       if (err instanceof LoginCancelledError || entry.controller.signal.aborted) return;
-      await this.deps.sendReply(chatId, transport, t("login.failed", { id: providerId, message: (err as Error).message }));
+      await this.deps.sendReply(chatId, transport, t("login.failed", { id: providerId, message: errorMessage(err) }));
     }
   }
 

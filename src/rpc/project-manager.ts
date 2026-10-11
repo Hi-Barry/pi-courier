@@ -12,6 +12,7 @@
 import * as path from "node:path";
 import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
 import { type ConfigStore, projectFallbackChain } from "../config.js";
+import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { logger } from "../logger.js";
 import { projectLabelOf } from "../project-labels.js";
@@ -204,8 +205,8 @@ export class ProjectManager {
         applied.push(`thinking ${level}`);
       }
     } catch (err) {
-      logger.withLabel(label).warn(`⚠️ 项目预设应用失败: ${(err as Error).message}`);
-      this.notifyRoom(roomId, t("router.preset.failed", { message: (err as Error).message }));
+      logger.withLabel(label).warn(`⚠️ 项目预设应用失败: ${errorMessage(err)}`);
+      this.notifyRoom(roomId, t("router.preset.failed", { message: errorMessage(err) }));
       return;
     }
     logger.withLabel(label).info(`📋 项目预设已应用: ${applied.join(", ")}`);

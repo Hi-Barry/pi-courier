@@ -19,6 +19,7 @@
  */
 
 import { type ConfigStore, isSpaceMode, managementRoomId } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { logger } from "./logger.js";
 import { healTrustedPowerLevels } from "./power-heal.js";
 import { healBotAvatar, healRoomIdentities } from "./room-branding.js";
@@ -76,7 +77,7 @@ export function createStartupState(deps: StartupStateDeps): StartupState {
       try {
         await deliver(sink, text);
       } catch (err) {
-        logger.warn(`[startup] 配对码发出失败,保留缓冲待下次尝试: ${(err as Error).message}`);
+        logger.warn(`[startup] 配对码发出失败,保留缓冲待下次尝试: ${errorMessage(err)}`);
         return;
       }
       pending.shift();

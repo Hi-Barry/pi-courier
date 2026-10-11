@@ -9,6 +9,7 @@
  */
 
 import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName, isSpaceMode, managementRoomId } from "./config.js";
+import { errorMessage } from "./errors.js";
 import { logger } from "./logger.js";
 import {
   AVATAR_SET_VERSION,
@@ -98,7 +99,7 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
       logger.info(`[identity] 空间名已迁移: ${name} → ${renamed}`);
     }
   } catch (err) {
-    logger.warn(`[identity] 空间改名检查失败(跳过,下次启动自动重试): ${spaceId}: ${(err as Error).message}`);
+    logger.warn(`[identity] 空间改名检查失败(跳过,下次启动自动重试): ${spaceId}: ${errorMessage(err)}`);
   }
 
   // Avatars: three per-set pools (spec #84) — the space picks from the
@@ -118,7 +119,7 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
       if (result === "rebranded") logger.info(`[identity] ${label}头像已升级为新风格: ${file}`);
       return true;
     } catch (err) {
-      logger.warn(`[identity] ${label}(${roomId})头像设置失败(跳过,下次启动自动重试): ${(err as Error).message}`);
+      logger.warn(`[identity] ${label}(${roomId})头像设置失败(跳过,下次启动自动重试): ${errorMessage(err)}`);
       return false;
     }
   };
@@ -178,7 +179,7 @@ export async function healBotAvatar(roomOps: RoomOps, store: ConfigStore): Promi
     } catch (err) {
       // Failed set: stay pending so the next start retries the whole agent
       // migration — the marker is only ever booked on a confirmed success.
-      logger.warn(`[identity] bot 头像设置失败(跳过,下次启动自动重试): ${(err as Error).message}`);
+      logger.warn(`[identity] bot 头像设置失败(跳过,下次启动自动重试): ${errorMessage(err)}`);
       return false;
     }
   });

@@ -150,7 +150,7 @@ export async function demoteTrustedUserEverywhere(
     } catch (err) {
       failed = true;
       logger.warn(
-        `[power] 房间 ${roomId} 撤销降权失败(保留簿记,下次启动自动重试): ${(err as Error).message}`
+        `[power] 房间 ${roomId} 撤销降权失败(保留簿记,下次启动自动重试): ${errorMessage(err)}`
       );
     }
   }

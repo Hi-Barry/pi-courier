@@ -15,6 +15,7 @@
  * them (spec #99/#101: formerly matrix-utils.ts).
  */
 
+import { errorMessage } from "../errors.js";
 import type { QuoteCache } from "../quote-cache.js";
 import { toExcerpt } from "../quote-cache.js";
 import type { ExternalMessage } from "../types.js";
@@ -145,8 +146,8 @@ export function createEventTranslator(ports: EventTranslatorPorts) {
       };
     } catch (err) {
       return {
-        warn: `[Matrix] 附件处理失败(${username}): ${(err as Error).message}`,
-        message: { ...base, payload: { kind: "mediaError", reason: (err as Error).message } },
+        warn: `[Matrix] 附件处理失败(${username}): ${errorMessage(err)}`,
+        message: { ...base, payload: { kind: "mediaError", reason: errorMessage(err) } },
       };
     }
   }
