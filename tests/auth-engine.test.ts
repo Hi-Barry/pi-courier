@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { adminCommandHelpText, handleAdminCommand } from "../src/auth/admin-commands";
+import { matchesTrustedEntry } from "../src/identity";
 
 /** Direct table tests for the auth strategy engine and the admin-command
  *  handler. The engine is a pure state machine (in-memory only, sender
@@ -152,11 +153,33 @@ describe("ChallengeAuth strategy engine", () => {
     expect(auth.revokeUser("matrix:@carol:server")).toBe(true); // namespaced, exact
     expect(auth.isTrustedUser("@carol:server", "matrix")).toBe(false);
 
-    // Bare ID = the transport-native ID (@barry:server); suffix-matched.
+    // Bare ID = the transport-native ID (@barry:server); matched against the
+    // entry's full native segment (everything after the transport prefix).
     expect(auth.revokeUser("@barry:server")).toBe(true);
     expect(auth.isTrustedUser("@barry:server", "matrix")).toBe(false);
 
     expect(auth.revokeUser("nobody")).toBe(false);
+  });
+
+  it("revoke matching is segment-anchored: short/homeserver inputs never wildcard (audit batch 1)", () => {
+    // Direct table over the identity rule: native-segment equality, no
+    // arbitrary suffix matches.
+    expect(matchesTrustedEntry("matrix:@carol:server", "matrix:@carol:server")).toBe(true);
+    expect(matchesTrustedEntry("@carol:server", "matrix:@carol:server")).toBe(true); // bare native MXID
+    expect(matchesTrustedEntry("12345", "telegram:12345")).toBe(true); // bare telegram ID
+    // Previously matched via endsWith — these must NOT revoke anything.
+    expect(matchesTrustedEntry("server", "matrix:@user:server")).toBe(false);
+    expect(matchesTrustedEntry("hs.org", "matrix:@alice:hs.org")).toBe(false);
+    expect(matchesTrustedEntry("er", "matrix:@user:server")).toBe(false);
+    expect(matchesTrustedEntry("@user:server", "matrix:@other:server")).toBe(false);
+    // Bare entries: exact match only.
+    expect(matchesTrustedEntry("legacy-id", "legacy-id")).toBe(true);
+    expect(matchesTrustedEntry("id", "legacy-id")).toBe(false);
+    // Engine-level: revoking a homeserver fragment leaves trust intact.
+    const { auth } = makeEngine();
+    expect(auth.revokeUser("server")).toBe(false);
+    expect(auth.isTrustedUser("@barry:server", "matrix")).toBe(true);
+    expect(auth.isTrustedUser("@carol:server", "matrix")).toBe(true);
   });
 
   it("channel modes gate group messages without any I/O", async () => {
@@ -174,6 +197,25 @@ describe("ChallengeAuth strategy engine", () => {
     expect(
       await auth.checkAuthorization("@barry:server", "!other:server", "barry", true, false, undefined, "matrix")
     ).toBe(false);
+  });
+
+  it("pairing codes come from a CSPRNG within the 6-digit domain (audit batch 1)", async () => {
+    const codes: string[] = [];
+    const auth = new ChallengeAuth((code) => codes.push(code), () => {});
+    auth.loadFromConfig({ trustedUsers: [], channels: {} });
+    // One challenge per unknown DM user — distinct users, distinct codes.
+    for (let i = 0; i < 24; i++) {
+      await auth.checkAuthorization(`@fresh-${i}:server`, `!dm${i}:server`, `fresh-${i}`, false, false, undefined, "matrix");
+    }
+    expect(codes).toHaveLength(24);
+    for (const code of codes) {
+      expect(code).toMatch(/^\d{6}$/);
+      const n = parseInt(code, 10);
+      expect(n).toBeGreaterThanOrEqual(100000);
+      expect(n).toBeLessThanOrEqual(999999);
+    }
+    // Variability: a predictable source (or constant) cannot produce this.
+    expect(new Set(codes).size).toBeGreaterThan(12);
   });
 });
 
