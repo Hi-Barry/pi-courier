@@ -118,7 +118,7 @@ describe("extension UI × router wiring (spec #99 ticket 3 / issue #104)", () =>
     await askInDm(fx, uiRequest("q1"));
     await fx.router.handleIncoming(makeMsg({ text: "/help", messageId: "m2" }));
     expect(fx.extensionResponses).toHaveLength(0); // not eaten as an answer
-    expect(fx.replies.at(-1)!.text).toContain("Pi 命令");
+    expect(fx.replies.at(-1)!.text).toContain("Pi 原生命令");
     // ...and the question is still pending afterwards.
     await fx.router.handleIncoming(makeMsg({ text: "y", messageId: "m3" }));
     expect(fx.extensionResponses).toEqual([{ id: "q1", confirmed: true }]);

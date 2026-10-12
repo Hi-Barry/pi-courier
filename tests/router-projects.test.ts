@@ -701,7 +701,7 @@ describe("message-router authorization pipeline (real ChallengeAuth)", () => {
     await router.handleIncoming(makeMsg({ text: "/help" }));
     const help = replies.find((r) => r.text.includes("/new"));
     expect(help).toBeDefined();
-    expect(help!.text).toContain("Bridge 管理命令");
+    expect(help!.text).toContain("【多工程与项目】");
     expect(rpc.prompt).not.toHaveBeenCalled();
   });
 

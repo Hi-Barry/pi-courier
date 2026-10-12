@@ -60,9 +60,10 @@ function handled(result: Omit<AdminCommandResult, "handled">): AdminCommandResul
   return { handled: true, ...result };
 }
 
-/** Admin command help — the auth-owned section of the unified /help output
- *  (assembled by the command map; the management-room guide belongs to the
- *  router and pi-command help to the command map). */
+/** Admin command help — the auth-owned admin group of the unified /help output
+ *  (assembled by the command map; three threshold-annotated sections plus the
+ *  pairing footnote. The management-room guide belongs to the router and
+ *  pi-command help to the command map). */
 export function adminCommandHelpText(): string {
   return t("auth.help.admin");
 }
