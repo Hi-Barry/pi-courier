@@ -225,6 +225,12 @@ Pending questions auto-cancel after `extensionUiTimeoutMinutes` (default 10) —
 { "extensionUiTimeoutMinutes": 10 }
 ```
 
+Bash replies (`!` / `!!` / `/bash`) truncate their output before posting: the cap is `bashOutputLimit` characters (default 30000). Configured values above 65536 are clamped to 65536 — 64 KB is the Matrix event-size ceiling, so a longer reply would be rejected by the homeserver anyway. This field is also **not** part of the setup wizard:
+
+```json
+{ "bashOutputLimit": 50000 }
+```
+
 ### Bot language: bilingual messages (zh / en)
 
 All bot messages — command replies, pairing prompts, extension questions, management-room guides — speak English by default (0.3.0+). Chinese is one setting away:

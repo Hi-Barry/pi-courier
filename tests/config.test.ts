@@ -377,3 +377,34 @@ describe('config 派生函数族 — 管理房间(spec #99 票6 / issue #102)', 
     });
   });
 });
+
+describe('config 派生函数族 — bashOutputLimit(默认 30000,64KB 钳制)', () => {
+  it('缺省回落默认值 30000', async () => {
+    const { bashOutputLimit, BASH_OUTPUT_LIMIT_DEFAULT, BASH_OUTPUT_LIMIT_MAX } = await import('../src/config');
+    expect(BASH_OUTPUT_LIMIT_DEFAULT).toBe(30000);
+    expect(BASH_OUTPUT_LIMIT_MAX).toBe(64 * 1024);
+    expect(bashOutputLimit({})).toBe(30000);
+    expect(bashOutputLimit({ bashOutputLimit: undefined })).toBe(30000);
+  });
+
+  it('合法值原样通过', async () => {
+    const { bashOutputLimit } = await import('../src/config');
+    expect(bashOutputLimit({ bashOutputLimit: 1 })).toBe(1);
+    expect(bashOutputLimit({ bashOutputLimit: 50000 })).toBe(50000);
+  });
+
+  it('超过 64KB 硬顶钳制到 65536(Matrix 单事件上限,再大回帖必被 homeserver 拒)', async () => {
+    const { bashOutputLimit } = await import('../src/config');
+    expect(bashOutputLimit({ bashOutputLimit: 65537 })).toBe(65536);
+    expect(bashOutputLimit({ bashOutputLimit: 1_000_000 })).toBe(65536);
+  });
+
+  it('手编杂值白名单归一:非正数/非有限数按缺省处理,小数取整', async () => {
+    const { bashOutputLimit } = await import('../src/config');
+    expect(bashOutputLimit({ bashOutputLimit: 0 })).toBe(30000);
+    expect(bashOutputLimit({ bashOutputLimit: -5 })).toBe(30000);
+    expect(bashOutputLimit({ bashOutputLimit: Number.NaN })).toBe(30000);
+    expect(bashOutputLimit({ bashOutputLimit: Number.POSITIVE_INFINITY })).toBe(30000);
+    expect(bashOutputLimit({ bashOutputLimit: 100.9 })).toBe(100);
+  });
+});

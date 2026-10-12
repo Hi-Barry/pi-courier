@@ -182,6 +182,13 @@ export interface MsgBridgeConfig {
    */
   language?: "zh" | "en";
   /**
+   * bash 回帖输出截断上限(字符;`!`/`!!`//`/bash` 共用,默认 30000)。
+   * Matrix 单事件硬上限 64KB,配置值超过 65536 按 65536 钳制 —— 再大回帖
+   * 也会被 homeserver 拒。非正数/非有限数视为缺省。不进 setup 向导,
+   * 手编配置 + 重启生效(与 extensionUiTimeoutMinutes 同策略)。
+   */
+  bashOutputLimit?: number;
+  /**
    * Matrix 附件输入(issue #66):媒体事件的下载落盘配置。
    * directory 缺省 ~/.pi/pi-courier/attachments;maxMb 缺省 10。
    */

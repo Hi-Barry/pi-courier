@@ -186,6 +186,22 @@ export function attachmentsMaxBytes(cfg: MsgBridgeConfig): number {
   return Math.max(1, attachmentsMaxMb(cfg)) * 1024 * 1024;
 }
 
+/** bash 回帖截断上限默认值(字符)。 */
+export const BASH_OUTPUT_LIMIT_DEFAULT = 30000;
+/** bash 回帖截断上限硬顶(64KB):Matrix 单事件大小上限 —— 配置超过它,
+ *  回帖必然被 homeserver 拒,钳到这里就是"配置再多也不越过服务器红线"。 */
+export const BASH_OUTPUT_LIMIT_MAX = 64 * 1024;
+
+/** bash 回帖输出截断上限(字符;`!`/`!!`//`/bash` 共用):缺省/非法值回落
+ *  默认,超过 64KB 硬顶钳制。与 inboxMode 同风格的手编白名单归一。 */
+export function bashOutputLimit(cfg: MsgBridgeConfig): number {
+  const value = cfg.bashOutputLimit;
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return BASH_OUTPUT_LIMIT_DEFAULT;
+  }
+  return Math.min(Math.floor(value), BASH_OUTPUT_LIMIT_MAX);
+}
+
 // ── 语言解析链(issue #83)──────────────────────────────────────────
 // PI_LANGUAGE 环境变量 > config "language" > 系统 locale 检测 > "en"。
 // env 最高:容器/极简部署里最稳;系统 locale 语义见 i18n/detect.ts。

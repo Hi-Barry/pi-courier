@@ -20,7 +20,7 @@ import * as path from "node:path";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
 import { BANG_COMMAND } from "../command-registry.js";
-import { CONFIG_DIR } from "../config.js";
+import { BASH_OUTPUT_LIMIT_DEFAULT, CONFIG_DIR } from "../config.js";
 import { errorMessage } from "../errors.js";
 import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
@@ -66,6 +66,9 @@ export interface SlashCommandContext {
   /** 在跑 bash 记账(/bashstop 的"列出"数据源)。Absence = /bashstop 只能
    *  盲停(仍然可用:上游 abortBash 无在跑命令时是无害空操作)。 */
   bashTracker?: BashTracker;
+  /** bash 回帖截断上限(字符,config `bashOutputLimit` 派生值)。Absence =
+   *  默认值(BASH_OUTPUT_LIMIT_DEFAULT)。 */
+  bashOutputLimit?: number;
   /** TUI ↔ Matrix 会话镜像(/attach /detach,TUI 双端协同)。attach/detach
    *  返回已渲染好的房间文案(router 侧拼装:绑定房间 + i18n);rebase 在
    *  /new /switch 换会话后同步镜像的「当前会话文件」;active 供 /new 追加
@@ -168,11 +171,17 @@ export function formatElapsed(ms: number): string {
 }
 
 /** bash 结果的统一回帖(/bash 与 `!`/`!!` 共用):命令行 + 代码块输出 +
- *  退出码;被中止时显示已捕获的部分输出,不打退出码。excluded 附注语义。 */
-export function formatBashReply(command: string, result: BashResultView, excluded = false): string {
+ *  退出码;被中止时显示已捕获的部分输出,不打退出码。excluded 附注语义。
+ *  limit = 截断上限(字符,config bashOutputLimit 派生;缺省用默认值)。 */
+export function formatBashReply(
+  command: string,
+  result: BashResultView,
+  excluded = false,
+  limit: number = BASH_OUTPUT_LIMIT_DEFAULT,
+): string {
   const suffix = excluded ? t("cmd.bash.notWritten") : "";
-  const output = result.output.length > 3000
-    ? result.output.slice(0, 3000) + `\n${t("common.truncated")}`
+  const output = result.output.length > limit
+    ? result.output.slice(0, limit) + `\n${t("common.truncated")}`
     : result.output;
   if (result.cancelled) {
     return `${t("cmd.bash.aborted", { command, suffix })}\n\`\`\`\n${output || t("common.noOutput")}\n\`\`\``;
@@ -903,7 +912,7 @@ export async function handleSlashCommand(
         const release = ctx.bashTracker?.track(rpc, args);
         try {
           const result = await rpc.bash(args);
-          await reply(formatBashReply(args, result));
+          await reply(formatBashReply(args, result, false, ctx.bashOutputLimit));
           return true;
         } finally {
           release?.();
