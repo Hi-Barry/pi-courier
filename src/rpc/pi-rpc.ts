@@ -18,6 +18,10 @@ import { fileURLToPath } from "node:url";
 // importing process itself on Node <22.19, before any gate could run).
 import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
 
+/** 重启前排空在途请求的兜底上限:进程终究要重启(加载新凭据/扩展),不能
+ *  被一条僵死请求无限拖延;正常的桥→pi 请求远快于此。 */
+export const RESTART_DRAIN_TIMEOUT_MS = 10_000;
+
 export interface PiRpcOptions {
   /** Absolute path to pi's dist/cli.js (default: config.cliPath ← PI_CLI_PATH env, then local node_modules, then `which pi`) */
   cliPath?: string;
@@ -203,6 +207,12 @@ export class PiRpc {
   /** Listeners registered before start() — attached once the client connects */
   private listeners: Array<RpcEventListener | undefined> = [];
 
+  /** In-flight bridge→pi request count (F5 治本):requireClient() 返回的包装
+   *  客户端对每个 Promise 型调用计数,重启前排水等待,避免在途请求随进程
+   *  死亡被拒收成用户可见的 ❌(Agent process exited code=143)。 */
+  private inFlight = 0;
+  private wrappedClient?: RpcClient;
+
   /** Project label for tagged logging (undefined for the shared default rpc).
    *  Mutable: /pmctl rename & mv re-label a running project rpc. */
   label: string | undefined;
@@ -341,6 +351,8 @@ export class PiRpc {
     if (!this.client) return;
     await this.client.stop();
     this.client = undefined;
+    this.wrappedClient = undefined;
+    this.inFlight = 0;
     this.commandsCache = undefined;
     this.listeners = [];
   }
@@ -353,6 +365,7 @@ export class PiRpc {
    */
   async restart(): Promise<void> {
     const keptListeners = this.listeners;
+    await this.drainInFlight();
     await this.stop();
     this.listeners = keptListeners;
     await this.start();
@@ -362,6 +375,20 @@ export class PiRpc {
       } catch {
         // 生命周期监听器的失败不影响重启本身
       }
+    }
+  }
+
+  /**
+   * F5 治本:等在途桥→pi 请求收尾再杀进程。登录成功触发的自动重启
+   * (/reload 同路)会 SIGTERM pi 子进程,彼时仍在途的请求随进程死亡被
+   * 拒收成用户可见的 ❌「Agent process exited (code=143)」(2026-10-12
+   * 真机:/login 成功回执前 0.94s 先蹦一条假报错)。排空后再杀;超时兜底
+   * 照杀 —— 进程终究要重启,不能让一条僵死请求无限拖延。
+   */
+  async drainInFlight(timeoutMs = RESTART_DRAIN_TIMEOUT_MS): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.inFlight > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
 
@@ -444,7 +471,33 @@ export class PiRpc {
    *  包装不再转发。未连接时抛出 —— 调用方无需判空。 */
   requireClient(): RpcClient {
     if (!this.client) throw new Error("pi RPC not connected");
-    return this.client;
+    // 包装客户端对每个 Promise 型调用做在途计数(F5 治本的排水依据);
+    // 按底层实例缓存,stop/start 换进程后自动重建。
+    if (!this.wrappedClient) {
+      this.wrappedClient = this.wrapClient(this.client);
+    }
+    return this.wrappedClient;
+  }
+
+  /** 计数包装:所有经 requireClient() 的 Promise 型调用入账,settled 出账。
+   *  同步方法(onEvent 等)原样透传;拒绝照常传播,不吞不改。 */
+  private wrapClient(client: RpcClient): RpcClient {
+    return new Proxy(client, {
+      get: (target, prop, receiver) => {
+        const value = Reflect.get(target, prop, receiver);
+        if (typeof value !== "function") return value;
+        return (...args: unknown[]) => {
+          const result = (value as (...a: unknown[]) => unknown).apply(target, args);
+          if (result instanceof Promise) {
+            this.inFlight++;
+            return result.finally(() => {
+              this.inFlight = Math.max(0, this.inFlight - 1);
+            });
+          }
+          return result;
+        };
+      },
+    });
   }
 }
 

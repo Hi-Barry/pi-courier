@@ -466,6 +466,22 @@ describe("message-router multi-project routing", () => {
     expect(replies.length).toBe(afterRelease);
   });
 
+  it("命令兜底报错把命令名写进日志(F5 顺手):「谁遭殃」可查", async () => {
+    const router = makeRouter();
+    const errSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+    try {
+      (rpc.requireClient().getState as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("boom-state"));
+      await router.handleIncoming(makeMsg({ text: "/status" }));
+      const logged = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logged).toContain("[/status]");
+      expect(logged).toContain("boom-state");
+      // 房间回执维持原样(笼统文案不带命令名,不改变用户可见行为)
+      expect(replies.at(-1)!.text).toContain("命令执行失败");
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
   it("muting agent logging (log level) does not affect reply routing", async () => {
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ text: "hi" }));

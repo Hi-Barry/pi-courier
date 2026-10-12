@@ -1003,6 +1003,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           }
           return handled;
         } catch (err) {
+          // 命令名进日志(F5 顺手):「谁遭殃」一眼可查 —— 例:登录成功触发的
+          // 自动重启连带击杀在途命令时,❌ 回执只有笼统文案,日志必须能对上。
+          logger.error(
+            `❌ 命令执行失败 [${ctx.text.trim().split(/\s+/)[0] ?? "?"}]: ${errorMessage(err)}`,
+          );
           await sendReply(ctx.msg.chatId, ctx.msg.transport, t("cmd.generic.error", { message: errorMessage(err) }));
           return true;
         }
