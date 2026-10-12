@@ -1,14 +1,38 @@
 /**
  * Room & bot identity branding (spec #84): the bundled art sets, applied as
  * avatars — the space picks from the landscape set by instance name, the
- * management room has the cottage set's dedicated image, project rooms pick
- * from the cottage set by project name, and the bot account carries the
- * agent set's profile face. Startup identity self-heal (只补缺 + per-set
- * version migration) lives here; the /pmctl-new provisioning path calls
- * ensureRoomAvatar directly for mid-session rooms.
+ * management room has the architecture set's dedicated image, project rooms
+ * pick from the architecture set by project name (first-free-slot dedup, so
+ * sibling rooms in one space never share an image), and the bot account
+ * carries the agent set's profile face. Startup identity self-heal (只补缺 +
+ * per-set version migration) lives here; the /pmctl-new provisioning path
+ * calls ensureRoomAvatar directly for mid-session rooms.
+ *
+ * v5 user overrides: `spaceAvatar` / `botAvatar` / `projects[].avatar` point
+ * at a custom image file. A configured override is desired state — the heal
+ * re-uploads whenever the file's sha256 or the target's current avatar no
+ * longer matches the bookkeeping ref (config.spaceAvatarRef / botAvatarRef /
+ * roomAvatarRefs), instead of 只补缺. While an override is in effect for a
+ * scope, that scope's bundled-set migration stays pending: removing the
+ * override makes the next start rebrand the scope from the bundled pool
+ * once. A broken override (missing file / unsupported extension / upload
+ * failure) warns and falls through to the bundled logic for that start, so a
+ * target never ends up without a face.
  */
 
-import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName, isSpaceMode, managementRoomId } from "./config.js";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import {
+  activeSpaceRoomId,
+  botAvatarPath,
+  type ConfigStore,
+  customAvatarMime,
+  effectiveInstanceName,
+  isSpaceMode,
+  managementRoomId,
+  projectAvatarPath,
+  spaceAvatarPath,
+} from "./config.js";
 import { errorMessage } from "./errors.js";
 import { logger } from "./logger.js";
 import {
@@ -20,11 +44,12 @@ import {
   isLegacySpaceName,
   managementAvatarFile,
   pickPoolAvatarFile,
+  poolAvatarSlot,
   readAvatarBundled,
   spaceDisplayName,
 } from "./space-identity.js";
 import type { RoomOps } from "./transports/interface.js";
-import type { MsgBridgeConfig } from "./types.js";
+import type { AvatarCustomRef, MsgBridgeConfig } from "./types.js";
 
 /** Brand ONE room with the bundled avatar. Default policy is 只补缺: a room
  *  that already has an avatar keeps it. With `rebrand` (the startup heal,
@@ -34,8 +59,9 @@ import type { MsgBridgeConfig } from "./types.js";
  *  the policy (the startup heal warns + retries next start; the /pmctl new
  *  path surfaces a non-fatal note). Returns what happened: "set" (room had
  *  none), "rebranded" (old avatar replaced) or "kept". Shared by the startup
- *  identity heal and the project-room creation path (a mid-session room must
- *  not wait for the next restart to get its face). */
+ *  identity heal, the project-room creation path (a mid-session room must
+ *  not wait for the next restart to get its face) and the /pmctl rename
+ *  re-pick. */
 export async function ensureRoomAvatar(
   roomOps: RoomOps,
   roomId: string,
@@ -48,6 +74,73 @@ export async function ensureRoomAvatar(
   const mxcUrl = await roomOps.uploadMedia(data, "image/png");
   await roomOps.setRoomAvatar(roomId, mxcUrl, avatarInfo(data));
   return had ? "rebranded" : "set";
+}
+
+function sha256Hex(data: Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+/** Read a custom avatar file → {data, mime}. Throws when the extension is
+ *  unsupported or the file unreadable — callers treat that as "override
+ *  broken this boot" (warn + fall through to the bundled pool). */
+function readCustomAvatar(filePath: string): { data: Buffer; mime: string } {
+  const mime = customAvatarMime(filePath);
+  if (!mime) throw new Error(`unsupported avatar extension: ${filePath}`);
+  return { data: readFileSync(filePath), mime };
+}
+
+function refsDiffer(a: AvatarCustomRef | undefined, b: AvatarCustomRef): boolean {
+  return a?.sha256 !== b.sha256 || a?.mxc !== b.mxc;
+}
+
+/** Custom-avatar desired state for ONE project room: keep when the booked ref
+ *  still matches both the file content (sha256) and the room's current avatar
+ *  URL; re-upload + overwrite + re-book (config.roomAvatarRefs) otherwise.
+ *  Throws on failure — callers decide the fallback policy. Returns what
+ *  happened: "kept" or "set". Shared by the startup heal, the /pmctl new
+ *  provisioning path and the /pmctl rename re-pick. */
+export async function applyRoomCustomAvatar(
+  roomOps: RoomOps,
+  store: ConfigStore,
+  roomId: string,
+  filePath: string,
+): Promise<"kept" | "set"> {
+  const { data, mime } = readCustomAvatar(filePath);
+  const sha256 = sha256Hex(data);
+  const booked = store.get().roomAvatarRefs?.[roomId];
+  if (booked && booked.sha256 === sha256 && (await roomOps.getRoomAvatar(roomId)) === booked.mxc) {
+    return "kept";
+  }
+  const mxcUrl = await roomOps.uploadMedia(data, mime);
+  await roomOps.setRoomAvatar(roomId, mxcUrl, avatarInfo(data, mime));
+  const ref: AvatarCustomRef = { sha256, mxc: mxcUrl };
+  if (refsDiffer(booked, ref)) {
+    const refs = { ...(store.get().roomAvatarRefs ?? {}) };
+    refs[roomId] = ref;
+    store.update({ roomAvatarRefs: refs });
+  }
+  return "set";
+}
+
+/** Dedup-aware bundled picks for every configured project room, in config
+ *  order: each room starts at its own name bucket and steps forward over
+ *  slots an earlier sibling already took (first-free-slot), so two project
+ *  rooms in one space never land on the same image. Rooms in `skipRoomIds`
+ *  (custom overrides in effect) take no slot. Deterministic: same config →
+ *  same assignment. */
+export function poolFilesForProjects(
+  cfg: MsgBridgeConfig,
+  skipRoomIds?: ReadonlySet<string>,
+): Map<string, string> {
+  const files = new Map<string, string>();
+  const occupied = new Set<number>();
+  for (const [roomId, project] of Object.entries(cfg.projects ?? {})) {
+    if (skipRoomIds?.has(roomId)) continue;
+    const file = pickPoolAvatarFile(project.name ?? roomId, "room", occupied);
+    occupied.add(poolAvatarSlot(file));
+    files.set(roomId, file);
+  }
+  return files;
 }
 
 /** The ONE migration driver for all three art sets (spec #84 ticket 3
@@ -88,7 +181,11 @@ async function migrateAvatarSet(
  *  is the single source of truth for that start), each of the three sets
  *  booking and migrating independently. Per-room failures warn and retry on
  *  the next start; like healTrustedPowerLevels this never throws and never
- *  affects the startup tri-state. */
+ *  affects the startup tri-state.
+ *  v5 overrides: a configured custom avatar (spaceAvatar / projects[].avatar)
+ *  is enforced as desired state for its target and takes that target out of
+ *  the bundled pass; the space-set migration stays pending while a space
+ *  override is in effect (removing it rebrands once from the bundled pool). */
 export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): Promise<void> {
   const cfg = store.get();
   if (!isSpaceMode(cfg)) return;
@@ -109,16 +206,6 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
     logger.warn(`[identity] 空间改名检查失败(跳过,下次启动自动重试): ${spaceId}: ${errorMessage(err)}`);
   }
 
-  // Avatars: three per-set pools (spec #84) — the space picks from the
-  // landscape set by instance name, the management room has the cottage set's
-  // dedicated image, project rooms pick from the cottage set by project name
-  // (roomId fallback for legacy records without one) — same name, same image,
-  // forever. Each set migrates through the shared per-set driver
-  // (migrateAvatarSet): while a set's marker in config lags behind
-  // AVATAR_SET_VERSION (a restyle of THAT set shipped), the set's rooms are
-  // re-branded once; the marker is booked only after every one of the set's
-  // rooms succeeded — a failed room retries that set's migration next start
-  // while other sets book normally.
   const brandRoom = async (roomId: string, file: string, label: string, rebrand: boolean): Promise<boolean> => {
     try {
       const result = await ensureRoomAvatar(roomOps, roomId, file, { rebrand });
@@ -131,31 +218,88 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
     }
   };
 
-  await migrateAvatarSet(store, cfg, "space", (rebrand) =>
-    brandRoom(spaceId, pickPoolAvatarFile(instanceName, "space"), "空间", rebrand),
-  );
+  // Space avatar: custom override wins (desired state); broken override
+  // falls through to the bundled pool for this start.
+  const spaceCustomPath = spaceAvatarPath(cfg);
+  if (spaceCustomPath) {
+    try {
+      const outcome = await applySpaceCustomAvatar(roomOps, store, spaceId, spaceCustomPath);
+      logger.info(`[identity] 空间自定义头像已维护(${outcome === "kept" ? "保持" : "已上传"}): ${spaceCustomPath}`);
+    } catch (err) {
+      logger.warn(`[identity] 空间自定义头像不可用(${errorMessage(err)}),本启动回落内置图池: ${spaceCustomPath}`);
+      await migrateAvatarSet(store, cfg, "space", (rebrand) =>
+        brandRoom(spaceId, pickPoolAvatarFile(instanceName, "space"), "空间", rebrand),
+      );
+    }
+  } else {
+    await migrateAvatarSet(store, cfg, "space", (rebrand) =>
+      brandRoom(spaceId, pickPoolAvatarFile(instanceName, "space"), "空间", rebrand),
+    );
+  }
 
+  // Project rooms: custom overrides first (desired state, booking included);
+  // a room whose override is broken this boot joins the bundled pass below.
+  const customOk = new Set<string>();
+  for (const [roomId, project] of Object.entries(cfg.projects ?? {})) {
+    const filePath = projectAvatarPath(project);
+    if (!filePath) continue;
+    const label = `项目房间 ${project.name ?? roomId}`;
+    try {
+      const outcome = await applyRoomCustomAvatar(roomOps, store, roomId, filePath);
+      customOk.add(roomId);
+      logger.info(`[identity] ${label}自定义头像已维护(${outcome === "kept" ? "保持" : "已上传"}): ${filePath}`);
+    } catch (err) {
+      logger.warn(`[identity] ${label}自定义头像不可用(${errorMessage(err)}),本启动回落内置图池: ${filePath}`);
+    }
+  }
+
+  // Bundled pool for the rest — dedup-aware: every project room starts at its
+  // own name bucket and skips slots its siblings already took; successful
+  // custom rooms take no slot. Management room keeps its dedicated image.
   const roomTargets: Array<{ roomId: string; file: string; label: string }> = [];
   const mgmtRoomId = managementRoomId(cfg);
   if (mgmtRoomId) {
     roomTargets.push({ roomId: mgmtRoomId, file: managementAvatarFile(), label: "管理房间" });
   }
+  const poolFiles = poolFilesForProjects(cfg, customOk);
   for (const [roomId, project] of Object.entries(cfg.projects ?? {})) {
+    if (customOk.has(roomId)) continue;
     roomTargets.push({
       roomId,
-      file: pickPoolAvatarFile(project.name ?? roomId, "room"),
+      file: poolFiles.get(roomId) ?? pickPoolAvatarFile(project.name ?? roomId, "room"),
       label: `项目房间 ${project.name ?? roomId}`,
     });
   }
   await migrateAvatarSet(store, cfg, "room", async (rebrand) => {
     // 目标房间相互独立,并行品牌化;单房失败照旧留痕并让该组保持待重刷
-    // (审计工程批 票22)。
-    // brandRoom 自带逐目标容错(warn + false),并行只是省时
-    const results = await Promise.all(
-      roomTargets.map((target) => brandRoom(target.roomId, target.file, target.label, rebrand)),
-    );
-    return results.every(Boolean);
+    // (审计工程批 票22)。brandRoom 自带逐目标容错(warn + false),并行只是
+    // 省时;零图池目标(全部走自定义)时不记账——整套自定义撤销后下次启动
+    // 仍能从图池整刷一次。
+    const results = await Promise.all(roomTargets.map((target) => brandRoom(target.roomId, target.file, target.label, rebrand)));
+    return roomTargets.length > 0 && results.every(Boolean);
   });
+}
+
+/** Custom-avatar desired state for the space itself (config.spaceAvatar →
+ *  config.spaceAvatarRef booking). Throws on failure — the caller falls back
+ *  to the bundled pool path. */
+async function applySpaceCustomAvatar(
+  roomOps: RoomOps,
+  store: ConfigStore,
+  spaceId: string,
+  filePath: string,
+): Promise<"kept" | "set"> {
+  const { data, mime } = readCustomAvatar(filePath);
+  const sha256 = sha256Hex(data);
+  const booked = store.get().spaceAvatarRef;
+  if (booked && booked.sha256 === sha256 && (await roomOps.getRoomAvatar(spaceId)) === booked.mxc) {
+    return "kept";
+  }
+  const mxcUrl = await roomOps.uploadMedia(data, mime);
+  await roomOps.setRoomAvatar(spaceId, mxcUrl, avatarInfo(data, mime));
+  const ref: AvatarCustomRef = { sha256, mxc: mxcUrl };
+  if (refsDiffer(booked, ref)) store.update({ spaceAvatarRef: ref });
+  return "set";
 }
 
 /** Startup self-heal for the bot account's own face (spec #84 ticket 2): the
@@ -169,10 +313,23 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
  *  after success; a failure warns and retries next start, never booking.
  *  The pending→换装→记账 loop is the shared migrateAvatarSet driver — the
  *  same one the room identity heal uses for its two sets.
+ *  v5 override: a configured botAvatar is enforced as desired state
+ *  (config.botAvatarRef booking) and keeps the agent-set migration pending —
+ *  removing it rebrands once from the bundled pool.
  *  Runs in every mode (space or degraded): the bot account exists either way.
  *  Never throws — purely cosmetic, must not touch the startup tri-state. */
 export async function healBotAvatar(roomOps: RoomOps, store: ConfigStore): Promise<void> {
   const cfg = store.get();
+  const customPath = botAvatarPath(cfg);
+  if (customPath) {
+    try {
+      const outcome = await applyBotCustomAvatar(roomOps, store, customPath);
+      logger.info(`[identity] bot 自定义头像已维护(${outcome === "kept" ? "保持" : "已上传"}): ${customPath}`);
+      return;
+    } catch (err) {
+      logger.warn(`[identity] bot 自定义头像不可用(${errorMessage(err)}),本启动回落内置图池: ${customPath}`);
+    }
+  }
   await migrateAvatarSet(store, cfg, "agent", async (rebrand) => {
     try {
       const had = await roomOps.getProfileAvatarUrl();
@@ -190,4 +347,25 @@ export async function healBotAvatar(roomOps: RoomOps, store: ConfigStore): Promi
       return false;
     }
   });
+}
+
+/** Custom-avatar desired state for the bot's own profile (config.botAvatar →
+ *  config.botAvatarRef booking). Throws on failure — the caller falls back to
+ *  the bundled agent-pool path. */
+async function applyBotCustomAvatar(
+  roomOps: RoomOps,
+  store: ConfigStore,
+  filePath: string,
+): Promise<"kept" | "set"> {
+  const { data, mime } = readCustomAvatar(filePath);
+  const sha256 = sha256Hex(data);
+  const booked = store.get().botAvatarRef;
+  if (booked && booked.sha256 === sha256 && (await roomOps.getProfileAvatarUrl()) === booked.mxc) {
+    return "kept";
+  }
+  const mxcUrl = await roomOps.uploadMedia(data, mime);
+  await roomOps.setProfileAvatar(mxcUrl);
+  const ref: AvatarCustomRef = { sha256, mxc: mxcUrl };
+  if (refsDiffer(booked, ref)) store.update({ botAvatarRef: ref });
+  return "set";
 }

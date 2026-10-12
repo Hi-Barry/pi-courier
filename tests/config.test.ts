@@ -408,3 +408,62 @@ describe('config 派生函数族 — bashOutputLimit(默认 30000,64KB 钳制)',
     expect(bashOutputLimit({ bashOutputLimit: 100.9 })).toBe(100);
   });
 });
+
+describe('custom avatar path derive (spec #84 v5)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'pi-courier-avatar-path-'));
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function importConfig() {
+    vi.doMock('os', async () => {
+      const actual = await vi.importActual<typeof import('os')>('os');
+      return { ...actual, homedir: () => tmpDir };
+    });
+    vi.doMock('node:os', async () => {
+      const actual = await vi.importActual<typeof import('node:os')>('node:os');
+      return { ...actual, homedir: () => tmpDir };
+    });
+    return await import('../src/config');
+  }
+
+  it('normalizes ~, relative paths and blank values (absolute out)', async () => {
+    const cfg = await importConfig();
+    expect(cfg.customAvatarPath(undefined)).toBeUndefined();
+    expect(cfg.customAvatarPath('')).toBeUndefined();
+    expect(cfg.customAvatarPath('   ')).toBeUndefined();
+    expect(cfg.customAvatarPath('~/pix/face.png')).toBe(join(tmpDir, 'pix/face.png'));
+    expect(cfg.customAvatarPath('avatars/face.png')).toBe(join(tmpDir, '.pi', 'avatars/face.png'));
+    expect(cfg.customAvatarPath('/abs/face.png')).toBe('/abs/face.png');
+    // surrounding whitespace is trimmed, the inner value survives
+    expect(cfg.customAvatarPath('  /abs/face.png  ')).toBe('/abs/face.png');
+  });
+
+  it('maps whitelisted extensions to mimetypes and rejects others', async () => {
+    const cfg = await importConfig();
+    expect(cfg.customAvatarMime('/a.png')).toBe('image/png');
+    expect(cfg.customAvatarMime('/a.PNG')).toBe('image/png');
+    expect(cfg.customAvatarMime('/a.jpg')).toBe('image/jpeg');
+    expect(cfg.customAvatarMime('/a.jpeg')).toBe('image/jpeg');
+    expect(cfg.customAvatarMime('/a.webp')).toBe('image/webp');
+    expect(cfg.customAvatarMime('/a.gif')).toBe('image/gif');
+    expect(cfg.customAvatarMime('/a.txt')).toBeUndefined();
+    expect(cfg.customAvatarMime('/noext')).toBeUndefined();
+  });
+
+  it('exposes the three consumer accessors over the shared rule', async () => {
+    const cfg = await importConfig();
+    expect(cfg.spaceAvatarPath({ spaceAvatar: ' /x/p.png ' })).toBe('/x/p.png');
+    expect(cfg.spaceAvatarPath({})).toBeUndefined();
+    expect(cfg.botAvatarPath({ botAvatar: '~/f.png' })).toBe(join(tmpDir, 'f.png'));
+    expect(cfg.botAvatarPath({})).toBeUndefined();
+    expect(cfg.projectAvatarPath({ workdir: '/w', avatar: 'a.png' })).toBe(join(tmpDir, '.pi', 'a.png'));
+    expect(cfg.projectAvatarPath(undefined)).toBeUndefined();
+  });
+});

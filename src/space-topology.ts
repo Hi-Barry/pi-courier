@@ -21,13 +21,13 @@
  * management DM gets linked instead of duplicated.
  */
 
-import { activeSpaceRoomId, adoptManagementRoom, type ConfigStore, effectiveInstanceName, effectiveWorkdir, isSpaceMode, managementRoomId, nativeMxid } from "./config.js";
+import { activeSpaceRoomId, adoptManagementRoom, type ConfigStore, effectiveInstanceName, effectiveWorkdir, isSpaceMode, managementRoomId, nativeMxid, projectAvatarPath } from "./config.js";
 import { errorMessage } from "./errors.js";
 import { t } from "./i18n/index.js";
 import { logger } from "./logger.js";
 import { buildManagementRoomHelp, managementRoomName } from "./management-room.js";
 import { elevateTrustedUsersInRoom } from "./power-heal.js";
-import { ensureRoomAvatar } from "./room-branding.js";
+import { applyRoomCustomAvatar, ensureRoomAvatar, poolFilesForProjects } from "./room-branding.js";
 import { managementAvatarFile, pickPoolAvatarFile, spaceDisplayName } from "./space-identity.js";
 import type { RoomOps } from "./transports/interface.js";
 import type { ExternalMessage } from "./types.js";
@@ -250,8 +250,8 @@ export interface ManagedRoomProvision {
  * 启动自愈后的房间长相/权限一致」这条不变量由本函数持有:同一房间意图
  * 经过它,产出相同的房间操作序列(等价性钉点见
  * tests/provision-managed-room.test.ts)。按套选图的素材映射规则(项目房 =
- * 小屋套按项目名选图、管理房 = 管理专用图)也收回模块内部,调用方不再
- * 直接触 pickPoolAvatarFile。
+ * 自定义头像优先,否则建筑套按项目名选图并做同空间去重、管理房 = 管理
+ * 专用图)也收回模块内部,调用方不再直接触 pickPoolAvatarFile。
  *
  * 失败语义:建房失败向上抛(房间不存在,调用方各自处理);提权走既有幂等
  * 路径 elevateTrustedUsersInRoom(#41/#42,信任即管理员,power-heal),失败记入
@@ -298,12 +298,23 @@ export async function provisionManagedRoom(
     }
   }
 
-  // 按套品牌(best-effort):选图规则在模块内部 —— 项目房按项目名选小屋套,
-  // 管理房用管理专用图;失败由启动身份自愈兜底(只补缺,不覆盖)。
+  // 按套品牌(best-effort):选图规则在模块内部 —— 项目房优先自定义头像
+  // (projects[].avatar,期望状态),否则按项目名选建筑套(同空间去重:已有
+  // 项目占过的槽位顺延,config 未含本房时回落裸哈希);管理房用管理专用图。
+  // 失败由启动身份自愈兜底(只补缺,不覆盖)。
   try {
-    const file =
-      intent.kind === "project" ? pickPoolAvatarFile(intent.projectName, "room") : managementAvatarFile();
-    await ensureRoomAvatar(roomOps, roomId, file);
+    if (intent.kind === "project") {
+      const customPath = projectAvatarPath(store.get().projects?.[roomId]);
+      if (customPath) {
+        await applyRoomCustomAvatar(roomOps, store, roomId, customPath);
+      } else {
+        const file =
+          poolFilesForProjects(store.get()).get(roomId) ?? pickPoolAvatarFile(intent.projectName, "room");
+        await ensureRoomAvatar(roomOps, roomId, file);
+      }
+    } else {
+      await ensureRoomAvatar(roomOps, roomId, managementAvatarFile());
+    }
   } catch (err) {
     notes.push(avatarNote(err));
   }

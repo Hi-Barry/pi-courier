@@ -156,6 +156,29 @@ export interface MsgBridgeConfig {
    */
   agentAvatarVersion?: number;
   /**
+   * 自定义空间头像的图片路径(spec #84 v5 用户覆盖):配置后启动自愈按
+   * 「配置即期望状态」维护空间头像——图片内容(sha256)或房间当前头像与
+   * 簿记不符时重新上传覆盖,而非「只补缺」。缺省 = 走内置图池。
+   * 路径支持 ~ 展开与相对 ~/.pi/ 的相对路径;格式按扩展名识别
+   * (png/jpg/jpeg/webp/gif)。文件缺失/上传失败时 warn 并回落内置图池逻辑。
+   */
+  spaceAvatar?: string;
+  /** 自定义 bot 头像的图片路径:语义同 spaceAvatar,作用于 bot 账号
+   * profile 头像(本字段配置后无条件维护,盖过 agent 套的「只补缺」)。 */
+  botAvatar?: string;
+  /**
+   * 自定义头像簿记:空间头像最近一次上传的内容指纹与 mxc URL。
+   * 内部字段,由启动自愈维护,勿手编。
+   */
+  spaceAvatarRef?: AvatarCustomRef;
+  /** 自定义头像簿记:bot profile 头像的指纹与 mxc URL。内部字段,勿手编。 */
+  botAvatarRef?: AvatarCustomRef;
+  /**
+   * 自定义头像簿记:项目房间 roomId → 最近一次上传的指纹与 mxc URL。
+   * 内部字段,由启动自愈维护,勿手编;仅对配置了 projects[].avatar 的房间记账。
+   */
+  roomAvatarRefs?: Record<string, AvatarCustomRef>;
+  /**
    * Element 空间(Space)组织视图——把本实例创建的房间收纳进一个私有空间,
    * 便于在 Element 中管理。空间本身仍是展示层;信任用户的房间权限
    * (自动管理员,见 #42)由统一补权负责,与是否挂入空间无关。
@@ -205,6 +228,12 @@ export interface MsgBridgeConfig {
  * 预设只在进程(懒)启动/重启握手完成后应用一次 —— "开机默认,不是锁定",
  * 此后的 /model、/thinking 手动切换不受干扰,直到下一次重启回到预设。
  */
+/** 自定义头像簿记条目:最近一次上传的内容指纹(sha256,hex)与 mxc URL。 */
+export interface AvatarCustomRef {
+  sha256: string;
+  mxc: string;
+}
+
 export interface ProjectConfig {
   name?: string;
   workdir: string;
@@ -214,6 +243,8 @@ export interface ProjectConfig {
   thinkingLevel?: string;
   /** 项目降级链(issue #121):覆盖全局 modelFallbacks;条目须为 `provider/id` */
   fallbacks?: string[];
+  /** 自定义项目房间头像的图片路径(语义同 spaceAvatar,仅本房间生效)。 */
+  avatar?: string;
 }
 
 /** @see MsgBridgeConfig.space */
