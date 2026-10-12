@@ -834,7 +834,7 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
       → bridge 管理命令(/trusted /revoke /channels /enable <chatId> /disable /toggletools)
         → /pmctl 家族(PmctlController:门禁 + new/list/show/rm/mv/rename;空间启用时 new 挂链、rm 先摘链再退房)
           → 登录管理(/login /logout /auth —— 仅管理员 + 管理房间,单工程模式 DM 即管理房间)
-            → RPC 映射命令(/new /compact /model /queue /interrupt ...;DM /help 也在这里,统一输出 pi 命令 + bridge 命令)
+            → RPC 映射命令(/new /compact /model /queue /interrupt ...;DM /help 也在这里,统一输出 Pi 原生/桥增强/管理三组)
               → 应答捕获(非 / 消息:登录流程优先于 extension_ui 悬置提问;「取消」一律中止)
                 → 透传 prompt(命中回复引用时摘录前缀一并下发;/skill:xxx /template 普通文本;镜像生效且空闲时先 switch_session 重读会话文件——TUI↔Matrix 自动接力)
 ```

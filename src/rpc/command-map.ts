@@ -964,12 +964,16 @@ function parseModelArg(arg: string): { provider: string; modelId: string } {
   return { provider: "", modelId: trimmed };
 }
 
-/** Project list text: name, status, workdir, room id. */
+/** 统一 /help 文本:Pi 原生组 → 桥增强组 → 透传说明 → 管理组(auth 侧拥有,
+ *  见 admin-commands 的 adminCommandHelpText)。 */
 function helpText(): string {
   return [
-    t("cmd.help.piCommands"),
+    t("cmd.help.group.pi"),
+    "",
+    t("cmd.help.group.bridge"),
     "",
     t("cmd.help.passthrough"),
+    "",
     adminCommandHelpText(),
   ].join("\n");
 }

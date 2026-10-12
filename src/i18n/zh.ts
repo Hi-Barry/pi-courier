@@ -155,42 +155,56 @@ const zh = {
   "cmd.bashstop.none": "💤 没有在跑的 bash 命令。",
   "cmd.bashstop.running": "(已跑 {elapsed})",
   "cmd.bashstop.ok": "⏹ 已请求中止 {count} 条在跑命令:\n{lines}\n各命令已捕获的输出随后回帖。",
-  "cmd.help.piCommands":
-    "**Pi 命令**(通过 RPC 执行):\n" +
-    "• `/new` — 新会话\n" +
+  "cmd.help.group.pi":
+    "**Pi 原生命令**(pi TUI 同款,经 RPC 执行):\n" +
+    "\n" +
+    "【会话与上下文】\n" +
+    "• `/new` — 新会话(别名 `/clear`)\n" +
     "• `/compact [说明]` — 压缩上下文\n" +
+    "• `/name <名字>` — 会话命名\n" +
+    "• `/session` — 会话统计与费用\n" +
+    "• `/export [路径]` — 导出会话 HTML\n" +
+    "\n" +
+    "【模型与思考】\n" +
     "• `/model` / `/model <provider/id>` — 查看/切换模型\n" +
-    "• `/models` — 列出可用模型\n" +
     "• `/thinking [level]` — 查看/设置思考级别\n" +
+    "\n" +
+    "【生命周期】\n" +
+    "• `/reload` — 重启 pi 进程(装插件/改配置后使用);`/reload all` — 重启本实例全部进程(空闲才重启,忙碌跳过)",
+  "cmd.help.group.bridge":
+    "**桥增强命令**(pi TUI 没有,本项目实现):\n" +
+    "\n" +
+    "【会话导航与回顾】\n" +
+    "• `/sessions` — 列出最近会话(按修改时间)\n" +
+    "• `/switch <序号>` — 切换到 /sessions 列出的会话(流式中需先 /stop)\n" +
+    "• `/last` — 复述 agent 最近一次回复\n" +
+    "• `/recap` — 生成本会话交接卡(给接续会话看的摘要)\n" +
+    "\n" +
+    "【模型与思考(增强)】\n" +
+    "• `/models` — 列出可用模型\n" +
     "• `/cyclemodel` / `/cyclethinking` — 轮换到下一个模型 / 思考级别\n" +
     "• `/autocompact on|off` — 自动压缩开关(实例级生效:写入 pi 全局设置,一个项目房间切换影响全部项目)\n" +
     "• `/autoretry on|off` — 自动重试开关(实例级生效,同上)\n" +
-    "• `/sessions` — 列出最近会话(按修改时间)\n" +
-    "• `/switch <序号>` — 切换到 /sessions 列出的会话(流式中需先 /stop)\n" +
-    "• `/attach` — 开启 TUI ↔ Matrix 会话镜像(回复附加命令,终端跑它即可双端同步)\n" +
-    "• `/detach` — 关闭会话镜像\n" +
-    "• `/last` — 复述 agent 最近一次回复\n" +
-    "• `/session` — 会话统计与费用\n" +
+    "\n" +
+    "【运行控制】\n" +
     "• `/status` — 当前模型与状态\n" +
-    "• `/name <名字>` — 会话命名\n" +
-    "• `/export [路径]` — 导出会话 HTML\n" +
+    "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)\n" +
+    "• `/interrupt <新指令>` — 打断当前任务并立即下发新指令(一条消息完成)\n" +
+    "• `/queue [文本]` — 无参:查看队列;带文本:排队不打断当前任务(≈ Alt+Enter)\n" +
+    "\n" +
+    "【Shell 执行】\n" +
     "• `/bash <命令>` — 执行 shell 命令(写入上下文)\n" +
     "• `! <命令>` — 快捷执行 shell 命令(≈ TUI 的 `!`,结果写入上下文;感叹号后需空格)\n" +
     "• `!! <命令>` — 同上,但结果不写入上下文(≈ TUI 的 `!!`)\n" +
     "• `/bashstop` — 列出并中止在跑的 bash 命令(`!`/`!!`/`/bash` 通用)\n" +
-    "• `/queue [文本]` — 无参:查看队列;带文本:排队不打断当前任务(≈ Alt+Enter)\n" +
-    "• `/interrupt <新指令>` — 打断当前任务并立即下发新指令(一条消息完成)\n" +
-    "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)\n" +
+    "\n" +
+    "【定时提醒】\n" +
     "• `/remind <时间> <内容>` — 定时提醒(先落盘再跑,重启不丢;例:/remind 30m 泡茶)\n" +
     "• `/remind list` / `/remind rm <序号>` — 查看 / 取消本房间的提醒\n" +
-    "• `/reload` — 重启 pi 进程(装插件/改配置后使用);`/reload all` — 重启本实例全部进程(空闲才重启,忙碌跳过)\n" +
-    "• `/login [provider [oauth|api_key]]` — 无参:可登录 provider 列表;带参:无头登录(仅管理员 + 管理房间)\n" +
-    "• `/logout <provider>` — 删除 provider 凭据(仅管理员 + 管理房间)\n" +
-    "• `/auth` — 查看已保存的 provider 凭据(仅管理员 + 管理房间)\n" +
-    "• `/pmctl new <名称> <路径>` — 创建项目(管理房间)\n" +
-    "• `/pmctl list` — 项目列表\n" +
-    "• `/pmctl show|rm|mv|rename` — 项目详情/删除/迁移/重命名(管理房间;\n" +
-    "  rm 需二次确认,确认后停止进程并退出房间)",
+    "\n" +
+    "【会话镜像】\n" +
+    "• `/attach` — 开启 TUI ↔ Matrix 会话镜像(回复附加命令,终端跑它即可双端同步)\n" +
+    "• `/detach` — 关闭会话镜像",
   "cmd.help.passthrough": "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。",
 
   // ── router(管道回执,message-router.ts)──────────────────────────────
@@ -260,7 +274,27 @@ const zh = {
 
   // ── auth(配对/管理命令/无头登录)────────────────────────────────────
   "auth.help.admin":
-    "**Bridge 管理命令**: `/help`(本帮助)、`/trusted`、`/revoke`、`/channels`、`/enable`、`/disable`、`/toggletools`\n" +
+    "**管理命令**:\n" +
+    "\n" +
+    "【Provider 凭据】(仅管理员,管理房间)\n" +
+    "• `/login [provider [oauth|api_key]]` — 无参:可登录 provider 列表;带参:无头登录(pi 原生)\n" +
+    "• `/logout <provider>` — 删除 provider 凭据(pi 原生)\n" +
+    "• `/auth` — 查看已保存的 provider 凭据\n" +
+    "\n" +
+    "【权限与房间】(信任用户)\n" +
+    "• `/enable <房间> <all|mentions|trusted-only>` — 在指定房间启用 bot(群聊里可直接发 `/enable <模式>`;all 模式需管理员)\n" +
+    "• `/disable <房间>` — 停用指定房间\n" +
+    "• `/channels` — 列出已启用的房间及模式\n" +
+    "• `/trusted` — 列出信任用户名单\n" +
+    "• `/revoke <用户>` — 撤销某用户的信任身份\n" +
+    "• `/toggletools` — 切换工具调用的显示/隐藏(隐藏后群里不刷 tool call)\n" +
+    "\n" +
+    "【多工程与项目】(管理房间)\n" +
+    "• `/multiproject on|off` — 多工程模式开关(重启生效)\n" +
+    "• `/pmctl new <名称> <路径>` — 创建项目\n" +
+    "• `/pmctl list` — 项目列表\n" +
+    "• `/pmctl show|rm|mv|rename` — 项目详情/删除/迁移/重命名(rm 需二次确认,确认后停止进程并退出房间)\n" +
+    "\n" +
     "**认证**: 首次私聊 bot → bot 终端与管理房间会显示 6 位验证码 → 在收到提示的那个聊天里输入验证码即成为信任用户(第一个信任用户 = 管理员)。群聊由信任用户在群里发 `/enable <模式>` 启用。",
   "auth.pairing.noPendingHint": "ℹ️ 没有进行中的配对。如需配对,请先私信 bot,收到 6 位配对码后回复即可。",
   "setup.token.verifyKeptFailed": "⚠️ 保留的令牌校验失败({message})—— 仍按原样保留;若启动后登录异常请重跑 pi-courier setup。",

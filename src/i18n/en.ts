@@ -155,42 +155,56 @@ const en: Record<MessageKey, string> = {
   "cmd.bashstop.none": "💤 No bash commands running.",
   "cmd.bashstop.running": "(running for {elapsed})",
   "cmd.bashstop.ok": "⏹ Abort requested for {count} running command(s):\n{lines}\nCaptured output of each will follow as separate replies.",
-  "cmd.help.piCommands":
-    "**Pi commands** (executed over RPC):\n" +
-    "• `/new` — new session\n" +
+  "cmd.help.group.pi":
+    "**Pi-native commands** (same as the pi TUI, executed over RPC):\n" +
+    "\n" +
+    "【Session & context】\n" +
+    "• `/new` — new session (alias `/clear`)\n" +
     "• `/compact [note]` — compact the context\n" +
+    "• `/name <name>` — name the session\n" +
+    "• `/session` — session stats and cost\n" +
+    "• `/export [path]` — export the session as HTML\n" +
+    "\n" +
+    "【Models & thinking】\n" +
     "• `/model` / `/model <provider/id>` — view / switch model\n" +
-    "• `/models` — list available models\n" +
     "• `/thinking [level]` — view / set the thinking level\n" +
+    "\n" +
+    "【Lifecycle】\n" +
+    "• `/reload` — restart the pi process (after installing extensions / changing config); `/reload all` — restart every process of this instance (idle ones only, busy skipped)",
+  "cmd.help.group.bridge":
+    "**Bridge-only commands** (not in the pi TUI; implemented by this project):\n" +
+    "\n" +
+    "【Session navigation & recap】\n" +
+    "• `/sessions` — list recent sessions (by modification time)\n" +
+    "• `/switch <number>` — switch to a session from /sessions (run /stop first while streaming)\n" +
+    "• `/last` — repeat the agent's latest reply\n" +
+    "• `/recap` — generate a handoff card for this session (a summary for the session that takes over)\n" +
+    "\n" +
+    "【Models & thinking (enhanced)】\n" +
+    "• `/models` — list available models\n" +
     "• `/cyclemodel` / `/cyclethinking` — rotate to the next model / thinking level\n" +
     "• `/autocompact on|off` — auto-compaction toggle (instance-wide: written to pi's global settings; toggling in one project room affects all)\n" +
     "• `/autoretry on|off` — auto-retry toggle (instance-wide, same as above)\n" +
-    "• `/sessions` — list recent sessions (by modification time)\n" +
-    "• `/switch <number>` — switch to a session from /sessions (run /stop first while streaming)\n" +
-    "• `/attach` — enable the TUI ↔ Matrix session mirror (replies with a command to run in a terminal for two-way sync)\n" +
-    "• `/detach` — stop the session mirror\n" +
-    "• `/last` — repeat the agent's latest reply\n" +
-    "• `/session` — session stats and cost\n" +
+    "\n" +
+    "【Run control】\n" +
     "• `/status` — current model and state\n" +
-    "• `/name <name>` — name the session\n" +
-    "• `/export [path]` — export the session as HTML\n" +
+    "• `/stop` — stop all tasks immediately (≈ TUI Esc; alias `/abort`)\n" +
+    "• `/interrupt <new instruction>` — interrupt the current task and send the new one (single message)\n" +
+    "• `/queue [text]` — no args: view the queue; with text: queue without interrupting (≈ Alt+Enter)\n" +
+    "\n" +
+    "【Shell execution】\n" +
     "• `/bash <command>` — run a shell command (written to context)\n" +
     "• `! <command>` — quick shell execution (≈ TUI `!`; output written to context; a space is required after `!`)\n" +
     "• `!! <command>` — same, but output is NOT written to context (≈ TUI `!!`)\n" +
     "• `/bashstop` — list and abort running bash commands (shared by `!`/`!!`/`/bash`)\n" +
-    "• `/queue [text]` — no args: view the queue; with text: queue without interrupting (≈ Alt+Enter)\n" +
-    "• `/interrupt <new instruction>` — interrupt the current task and send the new one (single message)\n" +
-    "• `/stop` — stop all tasks immediately (≈ TUI Esc; alias `/abort`)\n" +
+    "\n" +
+    "【Timed reminders】\n" +
     "• `/remind <time> <text>` — a timed reminder (persisted before it runs, survives restarts; e.g. /remind 30m brew tea)\n" +
     "• `/remind list` / `/remind rm <n>` — view / cancel this room's reminders\n" +
-    "• `/reload` — restart the pi process (after installing extensions / changing config); `/reload all` — restart every process of this instance (idle ones only, busy skipped)\n" +
-    "• `/login [provider [oauth|api_key]]` — no args: list login-able providers; with args: headless login (admin + management room only)\n" +
-    "• `/logout <provider>` — delete a provider credential (admin + management room only)\n" +
-    "• `/auth` — view saved provider credentials (admin + management room only)\n" +
-    "• `/pmctl new <name> <path>` — create a project (management room)\n" +
-    "• `/pmctl list` — project list\n" +
-    "• `/pmctl show|rm|mv|rename` — project details / delete / move / rename (management room;\n" +
-    "  rm needs a second confirmation; after confirming, the process stops and the bot leaves the room)",
+    "\n" +
+    "【Session mirror】\n" +
+    "• `/attach` — enable the TUI ↔ Matrix session mirror (replies with a command to run in a terminal for two-way sync)\n" +
+    "• `/detach` — stop the session mirror",
   "cmd.help.passthrough":
     "**Passthrough**: `/skill:<name>`, prompt templates and extension commands run directly; plain text goes to the model.",
 
@@ -267,7 +281,27 @@ const en: Record<MessageKey, string> = {
 
   // ── auth ──────────────────────────────────────────────────────────────
   "auth.help.admin":
-    "**Bridge admin commands**: `/help` (this help), `/trusted`, `/revoke`, `/channels`, `/enable`, `/disable`, `/toggletools`\n" +
+    "**Admin commands**:\n" +
+    "\n" +
+    "【Provider credentials】(admin + management room only)\n" +
+    "• `/login [provider [oauth|api_key]]` — no args: list login-able providers; with args: headless login (pi-native)\n" +
+    "• `/logout <provider>` — delete a provider credential (pi-native)\n" +
+    "• `/auth` — view saved provider credentials\n" +
+    "\n" +
+    "【Permissions & rooms】(trusted users)\n" +
+    "• `/enable <room> <all|mentions|trusted-only>` — enable the bot in a room (in a group chat, sending `/enable <mode>` alone enables that group; the `all` mode requires the admin)\n" +
+    "• `/disable <room>` — disable a room\n" +
+    "• `/channels` — list enabled rooms and their modes\n" +
+    "• `/trusted` — list trusted users\n" +
+    "• `/revoke <user>` — revoke a user's trusted status\n" +
+    "• `/toggletools` — toggle tool-call visibility (when hidden, tool calls stop appearing in the chat)\n" +
+    "\n" +
+    "【Multi-project & projects】(management room)\n" +
+    "• `/multiproject on|off` — multi-project mode toggle (restart to apply)\n" +
+    "• `/pmctl new <name> <path>` — create a project\n" +
+    "• `/pmctl list` — project list\n" +
+    "• `/pmctl show|rm|mv|rename` — project details / delete / move / rename (rm needs a second confirmation; after confirming, the process stops and the bot leaves the room)\n" +
+    "\n" +
     "**Pairing**: DM the bot for the first time → a 6-digit code appears in the bot's terminal and the management room → enter it in the chat where you received the prompt to become a trusted user (the first trusted user = admin). Group chats are enabled by a trusted user sending `/enable <mode>` in the group.",
   "auth.pairing.noPendingHint":
     "ℹ️ No pairing in progress. To pair, DM the bot first; you will receive a 6-digit code — reply with it here.",
