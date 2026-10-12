@@ -24,6 +24,7 @@ import { CONFIG_DIR } from "../config.js";
 import { errorMessage } from "../errors.js";
 import { truncateLine } from "../formatting.js";
 import { t } from "../i18n/index.js";
+import { logger } from "../logger.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
 import { MAX_REMINDERS_PER_ROOM, type ReminderEntry } from "../reminders/reminder-store.js";
 import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
@@ -939,6 +940,9 @@ export async function handleSlashCommand(
       }
     }
   } catch (err) {
+    // 命令名进日志(F5 顺手):「谁遭殃」一眼可查 —— 例:登录成功触发的自动
+    // 重启连带击杀在途命令时,回执只有笼统文案,日志必须能对上是哪条命令。
+    logger.error(`❌ 命令执行失败 [${commandWord}]: ${errorMessage(err)}`);
     await reply(t("cmd.generic.error", { message: errorMessage(err) }));
     return true;
   }
