@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import type { MatrixClientPort } from "../src/transports/matrix-client.js";
 import { MatrixRoomOps } from "../src/transports/matrix-rooms.js";
 import { logger } from "../src/logger.js";
+import { AVATAR_SET_VERSION } from "../src/space-identity";
 import { fakeMatrixClient, type FakeMatrixClient, type FakeCall } from "./matrix-fakes.js";
 import { captureConsole } from "./helpers.js";
 
@@ -119,10 +120,10 @@ describe("runStartupHeals 编排", () => {
 
     // 404 是查询答案:getProfileAvatarUrl → null → bot 无脸 → 照常设置并记账
     expect(client.setAvatarUrl).toHaveBeenCalledWith("mxc://server/uploaded");
-    expect(store.get().agentAvatarVersion).toBe(1);
+    expect(store.get().agentAvatarVersion).toBe(AVATAR_SET_VERSION.agent);
     // 空间/房间两套不受影响,正常记账
-    expect(store.get().spaceAvatarVersion).toBe(1);
-    expect(store.get().roomAvatarVersion).toBe(1);
+    expect(store.get().spaceAvatarVersion).toBe(AVATAR_SET_VERSION.space);
+    expect(store.get().roomAvatarVersion).toBe(AVATAR_SET_VERSION.room);
     // SDK 形状的 404 ERROR 行一次都没有落线——编排层没开任何窗口
     expect(lines.join("\n")).not.toContain("M_NOT_FOUND");
   });
@@ -146,6 +147,6 @@ describe("runStartupHeals 编排", () => {
     // 补权与身份两段按逐房间/逐目标降级:warn 带 roomId,不抛出
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!mgmt:server"));
     // agent 套的读与写走别的端口方法——不受影响,照常记账
-    expect(store.get().agentAvatarVersion).toBe(1);
+    expect(store.get().agentAvatarVersion).toBe(AVATAR_SET_VERSION.agent);
   });
 });

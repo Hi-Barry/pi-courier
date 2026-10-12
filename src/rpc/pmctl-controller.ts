@@ -18,6 +18,7 @@ import {
   activeSpaceRoomId,
   type ConfigStore,
   effectiveInstanceName,
+  projectAvatarPath,
   projectFallbackChain,
 } from "../config.js";
 import { errorMessage } from "../errors.js";
@@ -25,6 +26,8 @@ import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
 import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
+import { applyRoomCustomAvatar, ensureRoomAvatar, poolFilesForProjects } from "../room-branding.js";
+import { pickPoolAvatarFile } from "../space-identity.js";
 import { provisionManagedRoom } from "../space-topology.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
@@ -402,15 +405,35 @@ export class PmctlController {
       await reply(`❌ ${labelError}`);
       return;
     }
+    // 头像重选基线:改名前的去重选图(新旧同图则免一次无谓上传)。
+    const oldPoolFile = poolFilesForProjects(this.opts.store.get()).get(roomId);
     this.opts.projectManager.renameProject(roomId, newName);
     const renamed = t("pmctl.rename.ok", { name: newName });
+    // 头像跟随(v5):自定义头像房按期望状态维护;图池房按新名重选(同空间
+    // 去重)。失败附注到回复但不阻塞改名 —— 纯外观问题,下次改名或重启自愈可再刷。
+    let avatarNote = "";
+    try {
+      const cfgNow = this.opts.store.get();
+      const customPath = projectAvatarPath(cfgNow.projects?.[roomId]);
+      if (customPath) {
+        await applyRoomCustomAvatar(roomOps, this.opts.store, roomId, customPath);
+      } else {
+        const newFile = poolFilesForProjects(cfgNow).get(roomId) ?? pickPoolAvatarFile(newName, "room");
+        if (newFile !== oldPoolFile) {
+          await ensureRoomAvatar(roomOps, roomId, newFile, { rebrand: true });
+        }
+      }
+    } catch (err) {
+      avatarNote = t("pmctl.rename.avatarFailed", { message: errorMessage(err) });
+      logger.warn(`[identity] /pmctl rename 头像重选失败(${roomId}): ${errorMessage(err)}`);
+    }
     // The project mapping is already renamed; surface room-rename failures
     // instead of swallowing them.
     try {
       await roomOps.setRoomName(roomId, newName);
-      await reply(renamed);
+      await reply(`${renamed}${avatarNote}`);
     } catch (err) {
-      await reply(`${renamed}${t("pmctl.rename.roomFailed", { message: errorMessage(err) })}`);
+      await reply(`${renamed}${avatarNote}${t("pmctl.rename.roomFailed", { message: errorMessage(err) })}`);
     }
   }
 }

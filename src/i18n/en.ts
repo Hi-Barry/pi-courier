@@ -417,6 +417,7 @@ const en: Record<MessageKey, string> = {
   "pmctl.rename.usage": "Usage: /pmctl rename <project name|room ID> <new name>",
   "pmctl.rename.ok": "✏️ Project renamed to \"{name}\"",
   "pmctl.rename.roomFailed": " (room rename failed: {message})",
+  "pmctl.rename.avatarFailed": " (avatar update failed: {message})",
 
   // ── attach / room / workdir / logs ────────────────────────────────────
   "attach.tooLarge":

@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { AVATAR_POOL_SIZE, AVATAR_SET_VERSION, nameHash, readAvatarBundled } from "../src/space-identity";
+import { poolFilesForProjects } from "../src/room-branding";
+import type { MsgBridgeConfig } from "../src/types";
 import type { RoomOps } from "../src/transports/interface";
 
 /**
@@ -492,7 +496,7 @@ describe("space ensure", () => {
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith(
       "!space:server",
       "mxc://server/avatar",
-      expect.objectContaining({ mimetype: "image/png", width: 512, height: 512 })
+      expect.objectContaining({ mimetype: "image/png", width: 256, height: 256 })
     );
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!mgmt:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
@@ -510,8 +514,8 @@ describe("space ensure", () => {
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!space:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!mgmt:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
-    expect(store.get().spaceAvatarVersion).toBe(1);
-    expect(store.get().roomAvatarVersion).toBe(1);
+    expect(store.get().spaceAvatarVersion).toBe(AVATAR_SET_VERSION.space);
+    expect(store.get().roomAvatarVersion).toBe(AVATAR_SET_VERSION.room);
   });
 
   it("a user-set avatar is re-branded too while the migration is pending (0.1.47 sender-guard reverted)", async () => {
@@ -524,12 +528,12 @@ describe("space ensure", () => {
     });
     expect(roomOps.uploadMedia).toHaveBeenCalledTimes(3);
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
-    expect(store.get().roomAvatarVersion).toBe(1);
+    expect(store.get().roomAvatarVersion).toBe(AVATAR_SET_VERSION.room);
   });
 
   it("after a set's migration is booked, its existing avatars are kept again (fill-only resumes)", async () => {
     const { roomOps } = await runIdentityHeal(
-      { ...fullRooms, spaceAvatarVersion: 1, roomAvatarVersion: 1 },
+      { ...fullRooms, spaceAvatarVersion: AVATAR_SET_VERSION.space, roomAvatarVersion: AVATAR_SET_VERSION.room },
       { getRoomAvatar: vi.fn().mockResolvedValue("mxc://server/candy") }
     );
     expect(roomOps.uploadMedia).not.toHaveBeenCalled();
@@ -544,13 +548,13 @@ describe("space ensure", () => {
     });
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!space:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
-    expect(store.get().spaceAvatarVersion).toBe(1);
+    expect(store.get().spaceAvatarVersion).toBe(AVATAR_SET_VERSION.space);
     expect(store.get().roomAvatarVersion).toBeUndefined();
   });
 
   it("sets migrate independently: a booked space set keeps its avatar while the room set is pending", async () => {
     const { roomOps, store } = await runIdentityHeal(
-      { ...fullRooms, spaceAvatarVersion: 1 },
+      { ...fullRooms, spaceAvatarVersion: AVATAR_SET_VERSION.space },
       { getRoomAvatar: vi.fn().mockResolvedValue("mxc://server/old") },
     );
     // The space room is fill-only now (already booked), the room-set rooms
@@ -559,8 +563,8 @@ describe("space ensure", () => {
     expect(roomOps.setRoomAvatar).not.toHaveBeenCalledWith("!space:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!mgmt:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
-    expect(store.get().spaceAvatarVersion).toBe(1);
-    expect(store.get().roomAvatarVersion).toBe(1);
+    expect(store.get().spaceAvatarVersion).toBe(AVATAR_SET_VERSION.space);
+    expect(store.get().roomAvatarVersion).toBe(AVATAR_SET_VERSION.room);
   });
 
   it("the retired single avatarPoolVersion marker is ignored: a v3 deployment migrates all sets", async () => {
@@ -569,8 +573,8 @@ describe("space ensure", () => {
       { getRoomAvatar: vi.fn().mockResolvedValue("mxc://server/candy") },
     );
     expect(roomOps.uploadMedia).toHaveBeenCalledTimes(3);
-    expect(store.get().spaceAvatarVersion).toBe(1);
-    expect(store.get().roomAvatarVersion).toBe(1);
+    expect(store.get().spaceAvatarVersion).toBe(AVATAR_SET_VERSION.space);
+    expect(store.get().roomAvatarVersion).toBe(AVATAR_SET_VERSION.room);
   });
 
   it("a single-room avatar failure warns and the other rooms are still branded", async () => {
@@ -583,6 +587,113 @@ describe("space ensure", () => {
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!space:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).not.toHaveBeenCalledWith("!mgmt:server", expect.anything(), expect.anything());
+  });
+
+  it("v5 dedup: two projects whose names land on the same bucket get different images", async () => {
+    // "alpha" and "theta" hash into the same slot (djb2 % ${AVATAR_POOL_SIZE}) —
+    // first-free-slot hands the second room the next image instead of a twin.
+    expect(nameHash("alpha") % AVATAR_POOL_SIZE).toBe(nameHash("theta") % AVATAR_POOL_SIZE);
+    const { roomOps } = await runIdentityHeal({
+      space: { enabled: true, roomId: "!space:server" },
+      managementRooms: [],
+      projects: { "!p1:server": { name: "alpha", workdir: "/w/a" }, "!p2:server": { name: "theta", workdir: "/w/t" } },
+    });
+    const uploads = (roomOps.uploadMedia as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as Buffer);
+    // slot 3 = room-04 for alpha; theta steps into the next free slot = room-05.
+    expect(uploads.some((b) => b.equals(readAvatarBundled("room-04.png")))).toBe(true);
+    expect(uploads.some((b) => b.equals(readAvatarBundled("room-05.png")))).toBe(true);
+  });
+
+  it("v5 poolFilesForProjects: first-free-slot in config order, skipped rooms take no slot", () => {
+    const cfg = {
+      projects: {
+        "!p1:server": { name: "alpha", workdir: "/w/a" },
+        "!p2:server": { name: "theta", workdir: "/w/t" },
+        "!p3:server": { name: "web", workdir: "/w/w" },
+      },
+    } as MsgBridgeConfig;
+    // The heal passes the custom-ok rooms (their override succeeded) — they
+    // take no pool slot and free it for the siblings that follow.
+    const files = poolFilesForProjects(cfg, new Set(["!p3:server"]));
+    expect(files.get("!p1:server")).toBe("room-04.png");
+    expect(files.get("!p2:server")).toBe("room-05.png");
+    expect(files.has("!p3:server")).toBe(false);
+    // Without the skip the room gets its own bucket back.
+    expect(poolFilesForProjects(cfg).get("!p3:server")).toBe("room-12.png");
+    // A skipped room frees its slot for the sibling that follows it.
+    const skipped = poolFilesForProjects(cfg, new Set(["!p1:server"]));
+    expect(skipped.get("!p2:server")).toBe("room-04.png");
+  });
+
+  it("v5 custom avatar: a configured projects[].avatar is enforced as desired state", async () => {
+    const face = join(tmpDir, "face.png");
+    writeFileSync(face, readAvatarBundled("room-24.png"));
+    const { store, roomOps } = await runIdentityHeal(
+      {
+        space: { enabled: true, roomId: "!space:server" },
+        managementRooms: [],
+        projects: { "!proj:server": { name: "alpha", workdir: "/w/a", avatar: face } },
+      },
+      { getRoomAvatar: vi.fn().mockResolvedValue(null) },
+    );
+    const uploads = (roomOps.uploadMedia as ReturnType<typeof vi.fn>).mock.calls;
+    expect(uploads.some((c) => c[1] === "image/png" && (c[0] as Buffer).equals(readAvatarBundled("room-24.png")))).toBe(true);
+    expect(store.get().roomAvatarRefs?.["!proj:server"]?.sha256).toBe(
+      createHash("sha256").update(readAvatarBundled("room-24.png")).digest("hex")
+    );
+    // While the override covers every project room the bundled room-set
+    // migration stays pending (zero pool targets — no booking).
+    expect(store.get().roomAvatarVersion).toBeUndefined();
+  });
+
+  it("v5 custom avatar: kept (no upload) while the ref matches content and current URL", async () => {
+    const face = join(tmpDir, "face.png");
+    writeFileSync(face, readAvatarBundled("room-24.png"));
+    const sha = createHash("sha256").update(readAvatarBundled("room-24.png")).digest("hex");
+    const { roomOps } = await runIdentityHeal(
+      {
+        space: { enabled: true, roomId: "!space:server" },
+        managementRooms: [],
+        spaceAvatarVersion: AVATAR_SET_VERSION.space,
+        projects: { "!proj:server": { name: "alpha", workdir: "/w/a", avatar: face } },
+        roomAvatarRefs: { "!proj:server": { sha256: sha, mxc: "mxc://server/avatar" } },
+      },
+      { getRoomAvatar: vi.fn().mockResolvedValue("mxc://server/avatar") },
+    );
+    expect(roomOps.uploadMedia).not.toHaveBeenCalled();
+    expect(roomOps.setRoomAvatar).not.toHaveBeenCalled();
+  });
+
+  it("v5 custom avatar: a missing file warns and falls back to the bundled pool for this start", async () => {
+    const { store, roomOps, warnSpy } = await runIdentityHeal(
+      {
+        space: { enabled: true, roomId: "!space:server" },
+        managementRooms: [],
+        spaceAvatarVersion: AVATAR_SET_VERSION.space,
+        roomAvatarVersion: AVATAR_SET_VERSION.room,
+        projects: { "!proj:server": { name: "alpha", workdir: "/w/a", avatar: join(tmpDir, "gone.png") } },
+      },
+      { getRoomAvatar: vi.fn().mockResolvedValue("mxc://server/existing") },
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("自定义头像不可用"));
+    // Fill-only fallback: the room keeps its existing avatar, nothing uploaded.
+    expect(roomOps.uploadMedia).not.toHaveBeenCalled();
+    expect(store.get().roomAvatarRefs).toBeUndefined();
+  });
+
+  it("v5 custom avatar: spaceAvatar is enforced and keeps the space-set migration pending", async () => {
+    const face = join(tmpDir, "space-face.png");
+    writeFileSync(face, readAvatarBundled("room-23.png"));
+    const { store, roomOps } = await runIdentityHeal(
+      { ...fullRooms, spaceAvatar: face },
+      { getRoomAvatar: vi.fn().mockResolvedValue(null) },
+    );
+    const uploads = (roomOps.uploadMedia as ReturnType<typeof vi.fn>).mock.calls;
+    expect(uploads.some((c) => c[1] === "image/png" && (c[0] as Buffer).equals(readAvatarBundled("room-23.png")))).toBe(true);
+    expect(store.get().spaceAvatarRef?.sha256).toBe(
+      createHash("sha256").update(readAvatarBundled("room-23.png")).digest("hex")
+    );
+    expect(store.get().spaceAvatarVersion).toBeUndefined();
   });
 
   it("is a no-op without a materialized space (degraded runs touch no room)", async () => {

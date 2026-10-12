@@ -397,6 +397,7 @@ const zh = {
   "pmctl.rename.usage": "用法: /pmctl rename <项目名|房间ID> <新名称>",
   "pmctl.rename.ok": "✏️ 项目已重命名为「{name}」",
   "pmctl.rename.roomFailed": "(房间改名失败: {message})",
+  "pmctl.rename.avatarFailed": "(头像更新失败: {message})",
 
   // ── attach / room / workdir / logs(传输与运行时)──────────────────────
   "attach.tooLarge": "附件过大({declared} > 上限 {max}),未保存。请压缩后重发,或让管理员调大 attachments.maxMb 配置。",

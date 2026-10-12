@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { detectSystemLanguage } from "./i18n/detect.js";
 import type { Locale } from "./i18n/index.js";
 import { adoptManagementRoomPatch } from "./management-room.js";
-import type { MsgBridgeConfig } from "./types.js";
+import type { MsgBridgeConfig, ProjectConfig } from "./types.js";
 
 /** 桥的配置目录 ~/.pi(单一持有:Matrix 客户端存储路径等从这里取 —— 审计工程批 票19)。 */
 export const CONFIG_DIR = path.join(os.homedir(), ".pi");
@@ -200,6 +200,48 @@ export function bashOutputLimit(cfg: MsgBridgeConfig): number {
     return BASH_OUTPUT_LIMIT_DEFAULT;
   }
   return Math.min(Math.floor(value), BASH_OUTPUT_LIMIT_MAX);
+}
+
+// ── 自定义头像路径派生(spec #84 v5 用户覆盖)────────────────────────
+// 空间/bot/项目三个消费位共用一条归一规则:~ 展开、相对 ~/.pi/ 解析、
+// 扩展名白名单定 mimetype。派生只有这一处解释,自愈与 /pmctl 同源。
+
+/** 自定义头像支持的扩展名 → mimetype;白名单外一律视为配置无效。 */
+const CUSTOM_AVATAR_MIME: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+/** 归一一条自定义头像路径:空白串视为未配置;前缀 ~ 展开到用户主目录;
+ *  相对路径相对 ~/.pi/(CONFIG_DIR)解析。返回值恒为绝对路径或 undefined。 */
+export function customAvatarPath(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  const expanded = trimmed.startsWith("~") ? path.join(os.homedir(), trimmed.slice(1)) : trimmed;
+  return path.isAbsolute(expanded) ? expanded : path.join(CONFIG_DIR, expanded);
+}
+
+/** 自定义头像的 mimetype(按扩展名,大小写不敏感);白名单外返回 undefined。 */
+export function customAvatarMime(filePath: string): string | undefined {
+  return CUSTOM_AVATAR_MIME[path.extname(filePath).toLowerCase()];
+}
+
+/** 空间自定义头像路径;undefined = 本启动视作未配置(走内置图池)。 */
+export function spaceAvatarPath(cfg: MsgBridgeConfig): string | undefined {
+  return customAvatarPath(cfg.spaceAvatar);
+}
+
+/** bot profile 自定义头像路径;undefined = 走内置 agent 图池。 */
+export function botAvatarPath(cfg: MsgBridgeConfig): string | undefined {
+  return customAvatarPath(cfg.botAvatar);
+}
+
+/** 项目房间自定义头像路径;undefined = 走内置 room 图池。 */
+export function projectAvatarPath(project: ProjectConfig | undefined): string | undefined {
+  return customAvatarPath(project?.avatar);
 }
 
 // ── 语言解析链(issue #83)──────────────────────────────────────────

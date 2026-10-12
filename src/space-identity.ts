@@ -5,22 +5,25 @@
  * template is migrated on startup — see isLegacySpaceName). Every managed room
  * also gets a bundled avatar from one of three art sets in assets/avatars/
  * (original AI-generated artwork, soft candy / marshmallow style, scripts/
- * generate-avatars-v4.mjs): spaces pick from the cool-pastel landscape set by
- * instanceName hash, project rooms from the warm cottage set by project name
+ * generate-avatars-v5.mjs): spaces pick from the landscape set by
+ * instanceName hash, project rooms from the architecture set by project name
  * hash (so a space and a room are telling apart at a glance), and the bot
  * account's own profile avatar (the agent's face) picks from the animal set —
  * each deployment lands on a stable image (recreates and restarts keep it)
- * while different instances/projects usually differ. The management room uses
- * the dedicated room-management.png from the cottage set. All artwork is
- * original AI-generated, no third-party assets; users can swap any PNG for
- * their own (same filename) without touching code.
+ * while different instances/projects usually differ: every pool spreads 24
+ * distinct subjects across 24 distinct dominant hues (the v5 hue wheel), and
+ * project rooms additionally skip slots already taken by a sibling room in
+ * the same space (first-free-slot, see pickPoolAvatarFile). The management
+ * room uses the dedicated room-management.png from the architecture set. All
+ * artwork is original AI-generated, no third-party assets; users can swap any
+ * PNG for their own (same filename) without touching code.
  */
 
 import { readFileSync } from "node:fs";
 import { t } from "./i18n/index.js";
 
-/** Number of images in each art-set pool (`<set>-01 … <set>-12`). */
-export const AVATAR_POOL_SIZE = 12;
+/** Number of images in each art-set pool (`<set>-01 … <set>-24`). */
+export const AVATAR_POOL_SIZE = 24;
 
 /** The three bundled art sets: agent = the bot account's own face (animal
  *  pool), space = landscape pool for Matrix spaces, room = cottage pool for
@@ -46,10 +49,31 @@ export function nameHash(name: string): number {
   return hash;
 }
 
-/** Pick a pool filename from a set for a name: same name → same image, forever. */
-export function pickPoolAvatarFile(name: string, set: AvatarSet): string {
-  const index = (nameHash(name) % AVATAR_POOL_SIZE) + 1;
-  return `${set}-${String(index).padStart(2, "0")}.png`;
+/** Pick a pool filename from a set for a name: same name → same image, forever.
+ *  `occupied` (index numbers already taken in the same space) turns selection
+ *  into a first-free-slot scan: start at the name's own bucket, step forward
+ *  until an unoccupied slot is found, so two projects in one space never land
+ *  on the same image. Fully deterministic given the occupied set; when every
+ *  slot is occupied the name's own bucket is returned unchanged. */
+export function pickPoolAvatarFile(
+  name: string,
+  set: AvatarSet,
+  occupied?: ReadonlySet<number>,
+): string {
+  const own = nameHash(name) % AVATAR_POOL_SIZE;
+  let index = own;
+  if (occupied) {
+    for (let steps = 0; steps < AVATAR_POOL_SIZE && occupied.has(index); steps++) {
+      index = (index + 1) % AVATAR_POOL_SIZE;
+    }
+  }
+  return `${set}-${String(index + 1).padStart(2, "0")}.png`;
+}
+
+/** The zero-based pool slot of a pool filename (`room-07.png` → 6) — the
+ *  bookkeeping half of pickPoolAvatarFile's first-free-slot scan. */
+export function poolAvatarSlot(file: string): number {
+  return Number.parseInt(file.replace(/^\w+-/, ""), 10) - 1;
 }
 
 /** The management room's dedicated image (always the same, always one of a kind). */
@@ -73,8 +97,15 @@ export function managementAvatarFile(): string {
  * candy pool): that field is no longer read — a v3 deployment migrates all
  * three sets exactly once on first v4 start, same art-to-art rebrand as any
  * restyle.
+ * 2 (v5): full restyle of all three sets (scripts/generate-avatars-v5.mjs,
+ * qwen-image-3.0-pro art): the pools grow from 12 to 24 images each, the
+ * subjects diversify within a set (landscapes from aurora to galaxies,
+ * architecture from cottages to pagodas and space pods, 24 animal faces) and
+ * the dominant hues are spread across the color wheel, so coexisting
+ * deployments and rooms stay visually apart. The bump re-brands every
+ * deployment's three sets exactly once on first v5 start.
  */
-export const AVATAR_SET_VERSION: Record<AvatarSet, number> = { agent: 1, space: 1, room: 1 };
+export const AVATAR_SET_VERSION: Record<AvatarSet, number> = { agent: 2, space: 2, room: 2 };
 
 /** A deployment's booked version for an art set; 0 = never migrated (the
  *  field is absent — see the `<set>AvatarVersion` config fields). */
@@ -121,7 +152,15 @@ function avatarAssetUrl(file: string): URL {
   return new URL(`../assets/avatars/${file}`, import.meta.url);
 }
 
-/** m.room.avatar `info` sub-block describing the bundled 512×512 PNGs. */
-export function avatarInfo(data: Buffer): Record<string, unknown> {
-  return { mimetype: "image/png", width: 512, height: 512, size: data.length };
+/** m.room.avatar `info` sub-block. Width/height come from the PNG IHDR header
+ *  when the data is a PNG (the bundled art: pool images are 256×256, the
+ *  management image 512×512); for any other format the block carries only
+ *  mimetype and size — Element scales avatars for display regardless. */
+export function avatarInfo(data: Buffer, mimetype = "image/png"): Record<string, unknown> {
+  const info: Record<string, unknown> = { mimetype, size: data.length };
+  if (mimetype === "image/png" && data.length >= 24 && data.subarray(0, 8).toString("hex") === "89504e470d0a1a0a") {
+    info.width = data.readUInt32BE(16);
+    info.height = data.readUInt32BE(20);
+  }
+  return info;
 }

@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir as osHomedir, tmpdir } from "node:os";
 import { ConfigStore } from "../src/config";
 import { PmctlController } from "../src/rpc/pmctl-controller";
+import { readAvatarBundled } from "../src/space-identity";
 import type { ProjectEntry, ProjectManager } from "../src/rpc/project-manager";
 import type { RoomOps } from "../src/transports/interface";
 
@@ -154,7 +156,7 @@ describe("PmctlController", () => {
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith(
       "!newroom:server",
       "mxc://server/avatar",
-      expect.objectContaining({ mimetype: "image/png", width: 512, height: 512 })
+      expect.objectContaining({ mimetype: "image/png", width: 256, height: 256 })
     );
     expect(replies.at(-1)).toContain("创建完成");
     expect(replies.at(-1)).not.toContain("头像设置失败");
@@ -206,6 +208,63 @@ describe("PmctlController", () => {
     ]);
     await handle("/pmctl rename alpha alpha");
     expect(pm.renameProject).toHaveBeenCalledWith("!a:server", "alpha");
+  });
+
+  // ---- v5 rename avatar re-pick ---------------------------------------------
+
+  function seedProject(roomId: string, name: string, extra: Record<string, unknown> = {}) {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([[roomId, { name, workdir: `/w/${name}` }]]);
+    store.update({ projects: { ...(store.get().projects ?? {}), [roomId]: { name, workdir: `/w/${name}`, ...extra } } });
+  }
+  function renameProjectUpdatesStore() {
+    (pm.renameProject as ReturnType<typeof vi.fn>).mockImplementation((roomId: string, name: string) => {
+      const projects = { ...(store.get().projects ?? {}) };
+      if (projects[roomId]) projects[roomId] = { ...projects[roomId], name };
+      store.update({ projects });
+    });
+  }
+
+  it("v5 rename re-picks the pool avatar when the bucket changes", async () => {
+    renameProjectUpdatesStore();
+    seedProject("!a:server", "alpha"); // slot 3 → room-04
+    await handle("/pmctl rename alpha beta"); // slot 9 → room-10
+    const upload = roomOps.uploadMedia as ReturnType<typeof vi.fn>;
+    expect(upload.mock.calls.length).toBe(1);
+    expect((upload.mock.calls[0]?.[0] as Buffer).equals(readAvatarBundled("room-10.png"))).toBe(true);
+    expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!a:server", "mxc://server/avatar", expect.anything());
+    expect(replies.at(-1)).toContain("beta");
+  });
+
+  it("v5 rename within the same bucket skips the re-upload", async () => {
+    renameProjectUpdatesStore();
+    seedProject("!a:server", "alpha"); // slot 3
+    await handle("/pmctl rename alpha theta"); // also slot 3 → same image
+    expect(roomOps.uploadMedia).not.toHaveBeenCalled();
+    expect(roomOps.setRoomAvatar).not.toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("theta");
+  });
+
+  it("v5 rename keeps a custom-avatar room on its desired state", async () => {
+    renameProjectUpdatesStore();
+    const face = join(tmpDir, "face.png");
+    writeFileSync(face, readAvatarBundled("room-24.png"));
+    seedProject("!a:server", "alpha", { avatar: face });
+    await handle("/pmctl rename alpha beta");
+    const upload = roomOps.uploadMedia as ReturnType<typeof vi.fn>;
+    expect(upload.mock.calls.some((c) => c[1] === "image/png" && (c[0] as Buffer).equals(readAvatarBundled("room-24.png")))).toBe(true);
+    expect(store.get().roomAvatarRefs?.["!a:server"]?.sha256).toBe(
+      createHash("sha256").update(readAvatarBundled("room-24.png")).digest("hex")
+    );
+  });
+
+  it("v5 rename avatar failure is a non-fatal note on the reply", async () => {
+    renameProjectUpdatesStore();
+    seedProject("!a:server", "alpha");
+    (roomOps.setRoomAvatar as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("M_LIMITED"));
+    await handle("/pmctl rename alpha beta");
+    expect(replies.at(-1)).toContain("头像更新失败");
+    expect(replies.at(-1)).toContain("beta");
+    expect(pm.renameProject).toHaveBeenCalled();
   });
 
   it("rejects rename with brackets", async () => {
