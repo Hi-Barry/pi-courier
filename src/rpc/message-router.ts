@@ -13,7 +13,7 @@ import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
 import { commandPolicy } from "../command-registry.js";
-import { type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
+import { bashOutputLimit, type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
 import { errorMessage } from "../errors.js";
 import {
   extractTextFromMessage,
@@ -957,6 +957,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             setQueueMirror: (snapshot) => transient.setMirror(rpc, snapshot),
             allRpcs: () => projectManager.allRpcs(),
             bashTracker,
+            // bash 回帖截断上限(config bashOutputLimit;`!`/`!!` 与 /bash 共用一份派生值)
+            bashOutputLimit: bashOutputLimit(store.get()),
             // 审计缝(issue #124):命令层只报「发生了什么」,落账仍在 router
             //(/stop //interrupt 的真实清队、/bash 的 shell 执行由此上报)。
             audit: (event, detail) => auditTrail(event, ctx.msg, detail),
@@ -1034,7 +1036,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           t("router.bang.inProgress", { command: bang.command, suffix: bang.excluded ? t("cmd.bash.excludedNote") : "" })
         ).catch(() => {});
         rpc.bash(bang.command, { excludeFromContext: bang.excluded })
-          .then((result) => sendReply(ctx.msg.chatId, ctx.msg.transport, formatBashReply(bang.command, result, bang.excluded)))
+          .then((result) =>
+            sendReply(ctx.msg.chatId, ctx.msg.transport, formatBashReply(bang.command, result, bang.excluded, bashOutputLimit(store.get())))
+          )
           .catch((err: unknown) =>
             sendReply(ctx.msg.chatId, ctx.msg.transport, t("cmd.bash.error", { message: errorMessage(err) }))
           )

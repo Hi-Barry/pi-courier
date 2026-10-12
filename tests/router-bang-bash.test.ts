@@ -6,6 +6,7 @@
  *  - formatBashReply 的统一回帖形态
  */
 import { describe, expect, it, vi } from "vitest";
+import { ConfigStore } from "../src/config";
 import {
   createBashTracker,
   formatBashReply,
@@ -77,9 +78,27 @@ describe("formatBashReply — 统一回帖形态", () => {
     expect(text).not.toContain("退出码");
   });
 
-  it("超 3000 字符截断", () => {
+  it("默认上限(30000)之内不截断 —— 0.7.2 前的 3000 旧上限已放开", () => {
     const text = formatBashReply("big", { ...ok, output: "x".repeat(4000) });
+    expect(text).not.toContain("…(已截断)");
+    expect(text).toContain("x".repeat(4000));
+  });
+
+  it("超默认上限(30000)截断", () => {
+    const text = formatBashReply("big", { ...ok, output: "x".repeat(30001) });
     expect(text).toContain("…(已截断)");
+  });
+
+  it("自定义 limit 生效:超过即按传入值截断", () => {
+    const text = formatBashReply("big", { ...ok, output: "x".repeat(51) }, false, 50);
+    expect(text).toContain("…(已截断)");
+    expect(text).toContain("x".repeat(50));
+    expect(text).not.toContain("x".repeat(51));
+  });
+
+  it("limit 传 undefined 落回默认值", () => {
+    const text = formatBashReply("big", { ...ok, output: "x".repeat(4000) }, false, undefined);
+    expect(text).not.toContain("…(已截断)");
   });
 
   it("空输出显示占位符", () => {
@@ -209,6 +228,72 @@ describe("bashBang 管道阶段", () => {
     await router.handleIncoming(makeMsg({ text: "/bashstop", messageId: "m2" }));
     expect(abortBash).toHaveBeenCalledTimes(1);
     expect(replies.join("\n")).toContain("`sleep 100`");
+  });
+});
+
+describe("bashOutputLimit 配置接线(默认 30000,64KB 钳制)", () => {
+  /** 微任务 + 一个宏任务:让 .then 回帖链跑完。 */
+  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  /** 带 bash mock 的小工厂:store 注入自定义 bashOutputLimit。 */
+  function makeFixtureWithLimit(limit: number) {
+    const replies: string[] = [];
+    const bash = vi.fn().mockResolvedValue({ output: "y".repeat(30), exitCode: 0, cancelled: false, truncated: false });
+    const rpc = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      bash,
+      label: undefined,
+      onEvent: vi.fn(),
+      requireClient: () => ({ abortBash: vi.fn() }),
+    } as unknown as PiRpc;
+    const { router } = makeRouterFixture({
+      rpc,
+      store: new ConfigStore({ bashOutputLimit: limit }),
+      sendReply: async (_chatId: string, _transport: string, text: string) => {
+        replies.push(text);
+      },
+    });
+    return { router, bash, replies };
+  }
+
+  it("`!` 回帖按配置值截断(30 字符输出、上限 20 → 留 20 + 截断标记)", async () => {
+    const { router, replies } = makeFixtureWithLimit(20);
+    await router.handleIncoming(makeMsg({ text: "! gen", messageId: "m1" }));
+    await flush();
+    const text = replies.join("\n");
+    expect(text).toContain("…(已截断)");
+    expect(text).toContain("y".repeat(20));
+    expect(text).not.toContain("y".repeat(21));
+  });
+
+  it("`!!` 与 /bash 共用同一份配置值(/bash 阻塞路径也截断)", async () => {
+    const { router, replies } = makeFixtureWithLimit(10);
+    await router.handleIncoming(makeMsg({ text: "/bash gen", messageId: "m1" }));
+    const text = replies.join("\n");
+    expect(text).toContain("…(已截断)");
+    expect(text).toContain("y".repeat(10));
+    expect(text).not.toContain("y".repeat(11));
+  });
+
+  it("不配置时走默认上限(30 字符输出 < 30000 → 不截断)", async () => {
+    const replies: string[] = [];
+    const bash = vi.fn().mockResolvedValue({ output: "z".repeat(30), exitCode: 0, cancelled: false, truncated: false });
+    const rpc = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      bash,
+      label: undefined,
+      onEvent: vi.fn(),
+      requireClient: () => ({ abortBash: vi.fn() }),
+    } as unknown as PiRpc;
+    const { router } = makeRouterFixture({
+      rpc,
+      sendReply: async (_chatId: string, _transport: string, text: string) => {
+        replies.push(text);
+      },
+    });
+    await router.handleIncoming(makeMsg({ text: "! gen", messageId: "m1" }));
+    await flush();
+    expect(replies.join("\n")).not.toContain("…(已截断)");
   });
 });
 

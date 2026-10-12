@@ -225,6 +225,12 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
 { "extensionUiTimeoutMinutes": 10 }
 ```
 
+bash 回帖(`!` / `!!` / `/bash`)发帖前会截断输出:上限 `bashOutputLimit` 字符(默认 30000)。配置值超过 65536 按 65536 钳制 —— 64KB 是 Matrix 单事件大小上限,再长的回帖也会被 homeserver 拒。该字段同样**不进** setup 向导:
+
+```json
+{ "bashOutputLimit": 50000 }
+```
+
 ### 机器人语言:中英双语(zh / en)
 
 全部机器人消息 —— 命令回复、配对提示、扩展提问、管理房使用说明 —— 从 0.3.0 起默认英文,改一处配置即可切换成中文:
