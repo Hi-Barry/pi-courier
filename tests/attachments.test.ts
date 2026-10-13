@@ -37,7 +37,8 @@ function makeStore(source: MediaSource, maxBytes = 10 * 1024 * 1024) {
 const ROOM = "!abc:matrix.org";
 
 describe("AttachmentStore.save", () => {
-  it("saves a plaintext media payload to <root>/<roomKey>/<hash>-<name>", async () => {
+  // POSIX mode bits: meaningless on Windows (libuv reports 0666/0444 only).
+  it.skipIf(process.platform === "win32")("saves a plaintext media payload to <root>/<roomKey>/<hash>-<name>", async () => {
     const source = countingSource();
     const { store, root } = makeStore(source);
     const saved = await store.save(ROOM, { mxcUrl: "mxc://s/abc", body: "photo.png", sizeHint: 7 });

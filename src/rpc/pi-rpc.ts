@@ -254,11 +254,12 @@ export class PiRpc {
     // Windows: there is no `which` (spawning it fails with ENOENT every
     // time — libuv's PATH search only tries .com/.exe), so skip the PATH
     // lookup entirely. pi.dev's install.ps1 produces the same releases-v1
-    // tree managedInstallEntry understands at the default root (~/.pi), so
-    // try that directly; an npm-global pi cannot be auto-detected here and
+    // tree managedInstallEntry understands at its default agent dir
+    // (~/.pi/agent — verified against install.ps1's Get-PiAgentDir), so try
+    // that directly; an npm-global pi cannot be auto-detected here and
     // falls through to the local node_modules copy.
     if (process.platform === "win32") {
-      const managed = managedInstallEntry(path.join(os.homedir(), ".pi", "bin", "pi"));
+      const managed = managedInstallEntry(path.join(os.homedir(), ".pi", "agent", "bin", "pi"));
       if (managed) return managed;
 
       // Local node_modules copy (dev setup / peer auto-install) — same
@@ -274,7 +275,7 @@ export class PiRpc {
       throw new Error(
         "Cannot locate the pi CLI on Windows. The npm-global install cannot be auto-detected (there is no `which`): " +
           "set PI_CLI_PATH to the dist/cli.js inside your pi package directory — do NOT point it at the pi.cmd / pi.ps1 shim — " +
-          "or install pi via pi.dev's install.ps1 (~/.pi), which is detected automatically."
+          "or install pi via pi.dev's install.ps1 (~/.pi/agent), which is detected automatically."
       );
     }
 

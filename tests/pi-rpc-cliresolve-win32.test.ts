@@ -1,8 +1,8 @@
 /**
  * resolveCliPath on win32 (evaluation 2026-10-13): Windows has no `which` —
  * spawning it fails with ENOENT every time — so discovery must skip the PATH
- * lookup entirely, try pi.dev's install.ps1 managed layout at ~/.pi first,
- * then the local node_modules copy, and say PI_CLI_PATH otherwise.
+ * lookup entirely, try pi.dev's install.ps1 managed layout at ~/.pi/agent
+ * first, then the local node_modules copy, and say PI_CLI_PATH otherwise.
  *
  * These cases need file-level module mocks: process.platform is flipped via
  * Object.defineProperty (configurable, verified on Node 24), but homedir and
@@ -63,11 +63,17 @@ describe("resolveCliPath — win32 (no `which`)", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  /** Fake pi.dev's install.ps1 result under the (mocked) home root. */
+  /**
+   * Fake pi.dev's install.ps1 result under the (mocked) home root. Layout
+   * verified against the official install.ps1: Get-PiAgentDir returns
+   * `UserProfile\.pi\agent`, the shim sits at `<agent>\bin\pi*` and the
+   * managed tree at `<agent>\install\...` (Select-PiManagedInstallDir).
+   */
   function fakeManagedInstall(version = "0.87.1"): string {
     const pkg = path.join(
       tmpDir,
       ".pi",
+      "agent",
       "install",
       "releases",
       version,
@@ -76,12 +82,12 @@ describe("resolveCliPath — win32 (no `which`)", () => {
       "pi-coding-agent",
     );
     fs.mkdirSync(path.join(pkg, "dist", "bundle"), { recursive: true });
-    fs.writeFileSync(path.join(tmpDir, ".pi", "install", "current-version"), `${version}\n`);
+    fs.writeFileSync(path.join(tmpDir, ".pi", "agent", "install", "current-version"), `${version}\n`);
     fs.writeFileSync(path.join(pkg, "dist", "bundle", "cli.js"), "console.log('pi');\n");
     return path.join(pkg, "dist", "bundle", "cli.js");
   }
 
-  it("resolves the install.ps1 managed layout at ~/.pi without ever spawning `which`", async () => {
+  it("resolves the install.ps1 managed layout at ~/.pi/agent without ever spawning `which`", async () => {
     const expected = fakeManagedInstall();
 
     await expect(PiRpc.resolveCliPath()).resolves.toBe(expected);

@@ -450,7 +450,7 @@ pi-courier run
 - `!` / `!!` bash 命令走 **Git for Windows** 自带的 bash(与上游 pi 的 Windows 行为一致)——没装的话会得到一条可读的报错。
 - 开机自启三种方式:任务计划程序;用 [NSSM](https://nssm.cc/) 把 `pi-courier run` 包成服务;或干脆保持前台会话。
 - `pi-courier update` 在 Windows 上可用:它通过 npm 的 `npm-cli.js` 入口启动 npm,并跳过 systemd 的停启编排。
-- 如果找不到 pi 本体(Windows 没有 `which`),把 `PI_CLI_PATH` 指到 pi 包目录里的 `dist/cli.js`——**不要**指 `pi.cmd` / `pi.ps1` 垫片。pi.dev `install.ps1` 装在 `~/.pi` 的安装会被自动识别。
+- 如果找不到 pi 本体(Windows 没有 `which`),把 `PI_CLI_PATH` 指到 pi 包目录里的 `dist/cli.js`——**不要**指 `pi.cmd` / `pi.ps1` 垫片。pi.dev `install.ps1` 装在 `~/.pi/agent` 的安装会被自动识别。
 - 配置文件权限检查(0600)在 Windows 上跳过:系统无法表达 POSIX 权限位,继续检查只会每次启动误报。Ctrl+Break(SIGBREAK)可干净退出。
 
 **已知限制**:服务管理子命令(`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`)仅支持 Linux(systemd),在其他平台会直接报错退出。

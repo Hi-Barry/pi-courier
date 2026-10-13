@@ -75,7 +75,9 @@ describe('config', () => {
     expect(loaded.debug).toBe(false);
   });
 
-  it('creates .pi directory with 700 permissions', async () => {
+  // POSIX mode bits: libuv reports only 0666/0444 for regular files/dirs on
+  // Windows — these assertions are meaningless there (see src/config.ts).
+  it.skipIf(process.platform === "win32")('creates .pi directory with 700 permissions', async () => {
     const { saveConfig } = await importConfig();
     saveConfig({});
 
@@ -83,7 +85,7 @@ describe('config', () => {
     expect(stats.mode & 0o777).toBe(0o700);
   });
 
-  it('writes config file with 600 permissions', async () => {
+  it.skipIf(process.platform === "win32")('writes config file with 600 permissions', async () => {
     const { saveConfig } = await importConfig();
     saveConfig({});
 
@@ -91,7 +93,7 @@ describe('config', () => {
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
-  it('tightens a pre-existing loose config file to 600 (audit batch 1 票8)', async () => {
+  it.skipIf(process.platform === "win32")('tightens a pre-existing loose config file to 600 (audit batch 1 票8)', async () => {
     mkdirSync(join(tmpDir, '.pi'), { recursive: true });
     const configPath = join(tmpDir, '.pi', 'pi-courier.json');
     writeFileSync(configPath, '{"legacy": true}', { mode: 0o644 });

@@ -61,7 +61,9 @@ describe("loadConfig permission self-check vs platform", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("linux (control): the same config still triggers the 0600 warning", async () => {
+  it.skipIf(process.platform === "win32")("linux (control): the same config still triggers the 0600 warning", async () => {
+    // Also skipped on real Windows: flipping process.platform cannot make
+    // libuv report POSIX modes there, so chmod 0644 would never warn.
     writeLooseConfig();
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

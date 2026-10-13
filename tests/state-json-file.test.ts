@@ -39,7 +39,8 @@ describe("JsonStateFile (issue #114)", () => {
     expect(new JsonStateFile<Array<{ id: string }>>(file, []).load()).toEqual([{ id: "a" }, { id: "b" }]);
   });
 
-  it("tightens pre-existing loose file/dir permissions on save (audit batch 1 票8)", () => {
+  // POSIX mode bits: meaningless on Windows (libuv reports 0666/0444 only).
+  it.skipIf(process.platform === "win32")("tightens pre-existing loose file/dir permissions on save (audit batch 1 票8)", () => {
     dir = tmpDir();
     const file = join(dir, "state.json");
     writeFileSync(file, "{}", { mode: 0o644 });
@@ -131,7 +132,8 @@ describe("JsonStateFile (issue #114)", () => {
     expect(String(warnSpy.mock.calls[0][0])).toContain("unreadable");
   });
 
-  it("saves are 0600 and the created directory is 0700", () => {
+  // POSIX mode bits: meaningless on Windows (libuv reports 0666/0444 only).
+  it.skipIf(process.platform === "win32")("saves are 0600 and the created directory is 0700", () => {
     const file = fresh();
     new JsonStateFile<unknown[]>(file, []).save([]);
     expect(statSync(file).mode & 0o777).toBe(0o600);

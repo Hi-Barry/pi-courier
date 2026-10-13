@@ -458,7 +458,7 @@ pi-courier run
 - `!` / `!!` bash commands run through the bash that ships with **Git for Windows** (matching upstream pi's Windows behaviour) — without it they fail with a readable error.
 - Autostart, three ways: Task Scheduler; wrap `pi-courier run` with [NSSM](https://nssm.cc/); or just keep a foreground session.
 - `pi-courier update` works on Windows: it launches npm through its `npm-cli.js` entry and skips the systemd stop/start choreography.
-- If pi itself cannot be found (there is no `which` on Windows), set `PI_CLI_PATH` to the `dist/cli.js` inside your pi package directory — **not** the `pi.cmd` / `pi.ps1` shim. A pi.dev `install.ps1` install under `~/.pi` is detected automatically.
+- If pi itself cannot be found (there is no `which` on Windows), set `PI_CLI_PATH` to the `dist/cli.js` inside your pi package directory — **not** the `pi.cmd` / `pi.ps1` shim. A pi.dev `install.ps1` install under `~/.pi/agent` is detected automatically.
 - The config-file permission check (0600) is skipped on Windows: the OS cannot express POSIX modes there, so checking would warn on every start. Ctrl+Break (SIGBREAK) shuts the bridge down cleanly.
 
 **Known limitations**: the service-management subcommands (`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`) are Linux-only (systemd) and exit with an explanation on other platforms.

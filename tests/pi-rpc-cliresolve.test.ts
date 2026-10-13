@@ -58,7 +58,10 @@ describe("resolveCliPath — pi.dev managed install (issue #111)", () => {
     return bin;
   }
 
-  it("resolves the shell wrapper to the release's dist/bundle/cli.js", async () => {
+  // These four cases exercise the POSIX discovery chain (`which` + PATH
+  // injection); the win32 branch ignores PATH entirely and would return the
+  // local peer copy — see pi-rpc-cliresolve-win32.test.ts for that path.
+  it.skipIf(process.platform === "win32")("resolves the shell wrapper to the release's dist/bundle/cli.js", async () => {
     fakeManagedInstall();
     putOnPath();
 
@@ -78,7 +81,7 @@ describe("resolveCliPath — pi.dev managed install (issue #111)", () => {
     );
   });
 
-  it("follows a version bump via install/current-version", async () => {
+  it.skipIf(process.platform === "win32")("follows a version bump via install/current-version", async () => {
     fakeManagedInstall("0.88.0");
     putOnPath();
 
@@ -98,7 +101,7 @@ describe("resolveCliPath — pi.dev managed install (issue #111)", () => {
     );
   });
 
-  it("still resolves a symlinked npm install via realpath untouched", async () => {
+  it.skipIf(process.platform === "win32")("still resolves a symlinked npm install via realpath untouched", async () => {
     const target = path.join(tmpDir, "npm", "pi-coding-agent", "dist", "cli.js");
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, "console.log('pi');\n");
@@ -111,7 +114,7 @@ describe("resolveCliPath — pi.dev managed install (issue #111)", () => {
     await expect(PiRpc.resolveCliPath()).resolves.toBe(target);
   });
 
-  it("passes an unrecognized wrapper through so the spawn error stays visible", async () => {
+  it.skipIf(process.platform === "win32")("passes an unrecognized wrapper through so the spawn error stays visible", async () => {
     const bin = path.join(tmpDir, "bin", "pi");
     fs.mkdirSync(path.join(tmpDir, "bin"), { recursive: true });
     fs.writeFileSync(bin, "#!/bin/sh\nexec /opt/pi/run\n");
