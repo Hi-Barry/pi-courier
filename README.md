@@ -19,7 +19,7 @@ Matrix bot ←→ pi-courier ←→ pi --mode rpc (system-installed)
 - **Chat-native control**: steer, queue or interrupt while pi runs; answer extension questions right in the room; log a provider in without leaving Matrix
 - **pi is not bundled** — installed independently on the system, upgraded on its own
 - **Sessions persist** to `~/.pi/agent/sessions` and resume automatically after restarts
-- **One-command CLI**: setup wizard, systemd auto-start, self-update
+- **One-command CLI**: setup wizard, systemd auto-start (Linux), self-update
 
 ## 2. Install
 
@@ -27,7 +27,7 @@ Matrix bot ←→ pi-courier ←→ pi --mode rpc (system-installed)
 
 | Component | Requirement |
 |---|---|
-| Node.js | >= 20 (tested on 24.x) |
+| Node.js | >= 22.19 (tested on 24.x) |
 | pi | >= 0.83, installed **globally** |
 
 Install pi first — pi-courier connects to it:
@@ -441,6 +441,28 @@ pi-courier restart
 
 A pi.dev managed install (`~/.pi/agent`) is supported too: pi-courier resolves the `bin/pi` wrapper script to the current version's real JS entry automatically, so pi upgrades need no config changes (0.3.1+).
 
+## Windows notes (experimental)
+
+Windows support is new and not yet verified on real hardware — treat it as experimental.
+
+**Requirements**: Node.js >= 22.19 (the same hard floor pi 1.x enforces). The E2EE crypto native binding ships prebuilt for `win32-x64-msvc` / `win32-ia32-msvc` / `win32-arm64-msvc` and is downloaded + sha256-verified during install.
+
+**Install and run**:
+
+```powershell
+npm install -g pi-courier
+pi-courier setup
+pi-courier run
+```
+
+- `!` / `!!` bash commands run through the bash that ships with **Git for Windows** (matching upstream pi's Windows behaviour) — without it they fail with a readable error.
+- Autostart, three ways: Task Scheduler; wrap `pi-courier run` with [NSSM](https://nssm.cc/); or just keep a foreground session.
+- `pi-courier update` works on Windows: it launches npm through its `npm-cli.js` entry and skips the systemd stop/start choreography.
+- If pi itself cannot be found (there is no `which` on Windows), set `PI_CLI_PATH` to the `dist/cli.js` inside your pi package directory — **not** the `pi.cmd` / `pi.ps1` shim. A pi.dev `install.ps1` install under `~/.pi` is detected automatically.
+- The config-file permission check (0600) is skipped on Windows: the OS cannot express POSIX modes there, so checking would warn on every start. Ctrl+Break (SIGBREAK) shuts the bridge down cleanly.
+
+**Known limitations**: the service-management subcommands (`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`) are Linux-only (systemd) and exit with an explanation on other platforms.
+
 ## 4. FAQ
 
 **Q: `npm install` hangs / crawls at 20-60 kB/s?**
@@ -514,16 +536,6 @@ Env var alternatives (priority: env vars > config file > wizard):
 | `PI_LOG_LEVEL` | logLevel (debug/info/warn/error) |
 
 The LLM key can also come from an env var: write `"key": "${PI_LLM_API_KEY}"` in auth.json and pi reads it from the environment at startup (the Docker template does this by default).
-
-## Windows notes (experimental)
-
-Windows support is new and not yet verified on real hardware — treat it as experimental.
-
-- Run in the foreground: `pi-courier setup`, then `pi-courier run`.
-- The service-management subcommands (`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`) are Linux-only (systemd) and exit with an explanation on other platforms. For autostart on Windows, use Task Scheduler or wrap the bridge with [NSSM](https://nssm.cc/).
-- `pi-courier update` works on Windows: it launches npm through its `npm-cli.js` entry and skips the systemd stop/start choreography.
-- If pi itself cannot be found (there is no `which` on Windows), set `PI_CLI_PATH` to the `dist/cli.js` inside your pi package directory — **not** the `pi.cmd` / `pi.ps1` shim. A pi.dev `install.ps1` install under `~/.pi` is detected automatically.
-- The config-file permission check (0600) is skipped on Windows: the OS cannot express POSIX modes there, so the check would warn on every start.
 
 ## 5. License & Acknowledgements
 

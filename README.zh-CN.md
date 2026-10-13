@@ -19,7 +19,7 @@ Matrix bot ←→ pi-courier ←→ pi --mode rpc(系统安装)
 - **聊天原生操控**:pi 运行中可 steer / 排队 / 打断;扩展提问在房间里直接答;登录 provider 不用离开 Matrix
 - **不捆绑 pi** —— pi 独立安装、独立升级
 - **会话持久化**到 `~/.pi/agent/sessions`,重启自动恢复
-- **一条命令的 CLI**:配置向导、systemd 开机自启、自动更新
+- **一条命令的 CLI**:配置向导、systemd 开机自启(仅 Linux)、自动更新
 
 ## 2. 怎么装
 
@@ -27,7 +27,7 @@ Matrix bot ←→ pi-courier ←→ pi --mode rpc(系统安装)
 
 | 组件 | 要求 |
 |---|---|
-| Node.js | >= 20(实测 24.x) |
+| Node.js | >= 22.19(实测 24.x) |
 | pi | >= 0.83,**全局安装** |
 
 先装 pi —— pi-courier 连接的是它:
@@ -433,6 +433,28 @@ pi-courier restart
 
 pi.dev 托管安装(`~/.pi/agent`)同样支持:pi-courier 会把 `bin/pi` 包装脚本自动解析到当前版本的真实 JS 入口,pi 升级后无需改配置(0.3.1 起)。
 
+## Windows 说明(实验性)
+
+Windows 支持是新的,尚未经过真机验证——请按实验性对待。
+
+**系统要求**:Node.js >= 22.19(与 pi 1.x 的硬性下限一致)。E2EE 加密原生库对 `win32-x64-msvc` / `win32-ia32-msvc` / `win32-arm64-msvc` 提供预编译产物,安装时下载并做 sha256 校验。
+
+**安装与运行**:
+
+```powershell
+npm install -g pi-courier
+pi-courier setup
+pi-courier run
+```
+
+- `!` / `!!` bash 命令走 **Git for Windows** 自带的 bash(与上游 pi 的 Windows 行为一致)——没装的话会得到一条可读的报错。
+- 开机自启三种方式:任务计划程序;用 [NSSM](https://nssm.cc/) 把 `pi-courier run` 包成服务;或干脆保持前台会话。
+- `pi-courier update` 在 Windows 上可用:它通过 npm 的 `npm-cli.js` 入口启动 npm,并跳过 systemd 的停启编排。
+- 如果找不到 pi 本体(Windows 没有 `which`),把 `PI_CLI_PATH` 指到 pi 包目录里的 `dist/cli.js`——**不要**指 `pi.cmd` / `pi.ps1` 垫片。pi.dev `install.ps1` 装在 `~/.pi` 的安装会被自动识别。
+- 配置文件权限检查(0600)在 Windows 上跳过:系统无法表达 POSIX 权限位,继续检查只会每次启动误报。Ctrl+Break(SIGBREAK)可干净退出。
+
+**已知限制**:服务管理子命令(`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`)仅支持 Linux(systemd),在其他平台会直接报错退出。
+
 ## 4. 常见问题
 
 **Q: `npm install` 卡住 / 只有 20-60 kB/s?**
@@ -506,16 +528,6 @@ A: 向导生成的配置,示例:
 | `PI_LOG_LEVEL` | logLevel(debug/info/warn/error) |
 
 LLM key 也可用环境变量:auth.json 里写 `"key": "${PI_LLM_API_KEY}"`,pi 启动时从环境变量读取(Docker 部署的模板已默认如此)。
-
-## Windows 说明(实验性)
-
-Windows 支持是新的,尚未经过真机验证——请按实验性对待。
-
-- 前台运行:先 `pi-courier setup`,再 `pi-courier run`。
-- 服务管理子命令(`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`)仅支持 Linux(systemd),在其他平台会直接报错退出。Windows 上开机自启可用任务计划程序,或用 [NSSM](https://nssm.cc/) 把桥包成服务。
-- `pi-courier update` 在 Windows 上可用:它通过 npm 的 `npm-cli.js` 入口启动 npm,并跳过 systemd 的停启编排。
-- 如果找不到 pi 本体(Windows 没有 `which`),把 `PI_CLI_PATH` 指到 pi 包目录里的 `dist/cli.js`——**不要**指 `pi.cmd` / `pi.ps1` 垫片。pi.dev `install.ps1` 装在 `~/.pi` 的安装会被自动识别。
-- 配置文件权限检查(0600)在 Windows 上跳过:系统无法表达 POSIX 权限位,继续检查只会每次启动误报。
 
 ## 5. 协议与声明
 
