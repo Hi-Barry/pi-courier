@@ -4,6 +4,10 @@
  * parsing shell syntax as JS. resolveCliPath must follow the releases-v1
  * layout to the real JS entry, while symlinked npm installs and unknown
  * wrappers keep their old behavior.
+ *
+ * The win32 flip lives in pi-rpc-cliresolve-win32.test.ts: it needs file-level
+ * module mocks (ESM namespaces aren't spyable), which must not leak into the
+ * POSIX cases here.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
