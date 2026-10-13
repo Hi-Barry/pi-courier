@@ -25,6 +25,7 @@ import { effectiveLanguage, loadConfig } from "./config.js";
 import { errorMessage } from "./errors.js";
 import { setLocale, t } from "./i18n/index.js";
 import { buildLogFilterArgs } from "./log-filter.js";
+import { globalNodeModulesDir, resolveNpmCli } from "./npm-runtime.js";
 import { projectLabelOf } from "./project-labels.js";
 import { busFailureHint, dirOwnerUid } from "./systemd-hint.js";
 import { suppressKnownWarnings } from "./warnings.js";
@@ -56,7 +57,12 @@ function projectDir(): string {
  * with override:true).
  */
 function e2eNativeBinaryExists(): boolean {
-  const globalNodeModules = path.join(path.dirname(process.execPath), "..", "lib", "node_modules");
+  const globalNodeModules = globalNodeModulesDir({
+    platform: process.platform,
+    execPath: process.execPath,
+    appData: process.env.APPDATA,
+    homeDir: os.homedir(),
+  });
   const cryptoPkgDir = path.join(globalNodeModules, "@matrix-org", "matrix-sdk-crypto-nodejs");
   if (!fs.existsSync(cryptoPkgDir)) return false;
   try {
@@ -283,6 +289,19 @@ function cmdDisable(): void {
 // update
 // ===========================================================================
 
+/**
+ * Spawn plan for an npm invocation: run npm's JS entry (npm-cli.js) with the
+ * current node when it can be located, because a bare `spawnSync("npm", ...)`
+ * fails on Windows with ENOENT — libuv's PATH search only tries .com/.exe and
+ * never resolves npm.cmd. Falls back to the historical bare command when the
+ * JS entry can't be found, so exotic layouts keep the old behavior.
+ */
+function npmCommand(args: readonly string[]): { cmd: string; args: string[] } {
+  const npmCli = resolveNpmCli(process.execPath);
+  if (npmCli) return { cmd: process.execPath, args: [npmCli, ...args] };
+  return { cmd: "npm", args: [...args] };
+}
+
 function cmdUpdate(): void {
   const projDir = projectDir();
   const installedViaNpm = !fs.existsSync(path.join(projDir, ".git"));
@@ -312,7 +331,8 @@ function cmdUpdate(): void {
       console.log(t("cli.update.nativeSkipped"));
       npmArgs.push("--ignore-scripts");
     }
-    const res = spawnSync("npm", npmArgs, {
+    const { cmd, args } = npmCommand(npmArgs);
+    const res = spawnSync(cmd, args, {
       stdio: "inherit",
     });
     if (res.status !== 0) {
@@ -322,11 +342,12 @@ function cmdUpdate(): void {
   } else {
     // Installed from a git clone → pull + install + build.
     console.log(t("cli.update.gitUpgrade"));
-    for (const [cmd, args] of [
-      ["git", ["pull"]],
-      ["npm", ["install"]],
-      ["npm", ["run", "build"]],
-    ] as const) {
+    const steps: Array<{ cmd: string; args: string[] }> = [
+      { cmd: "git", args: ["pull"] },
+      npmCommand(["install"]),
+      npmCommand(["run", "build"]),
+    ];
+    for (const { cmd, args } of steps) {
       console.log(`\n$ ${cmd} ${args.join(" ")}`);
       const res = spawnSync(cmd, args, { cwd: projDir, stdio: "inherit" });
       if (res.status !== 0) {
