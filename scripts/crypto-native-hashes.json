@@ -1,3 +1,6 @@
 {
-  "0.4.0/matrix-sdk-crypto.linux-x64-gnu": "7078d4dd987128f79afd192c4f621f64adece37e43f2a8756f1d0a9f034de718"
+  "0.4.0/matrix-sdk-crypto.linux-x64-gnu": "7078d4dd987128f79afd192c4f621f64adece37e43f2a8756f1d0a9f034de718",
+  "0.4.0/matrix-sdk-crypto.win32-x64-msvc": "5dce9477762b8962a470f89a571448e46a4232c297a2daee9d6c4c885dddd867",
+  "0.4.0/matrix-sdk-crypto.win32-ia32-msvc": "257d4763d9dc927074759a92a1f9edb0f2b442935e44e383418eb6de478ead1a",
+  "0.4.0/matrix-sdk-crypto.win32-arm64-msvc": "4ade88e9e8051a645c82d0a7c34cf8fde1c72da84beb5ecec8a8eebfc1234b0b"
 }
