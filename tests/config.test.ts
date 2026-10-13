@@ -256,7 +256,8 @@ describe('ConfigStore', () => {
     return await import('../src/config');
   }
 
-  it('persists updates to disk with 600 permissions and no format change', async () => {
+  // POSIX mode bits: meaningless on Windows (libuv reports 0666/0444 only).
+  it.skipIf(process.platform === "win32")('persists updates to disk with 600 permissions and no format change', async () => {
     const { ConfigStore } = await importConfig();
     const piDir = join(tmpDir, '.pi');
     const path = join(piDir, 'pi-courier.json');
