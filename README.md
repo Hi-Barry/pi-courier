@@ -515,6 +515,16 @@ Env var alternatives (priority: env vars > config file > wizard):
 
 The LLM key can also come from an env var: write `"key": "${PI_LLM_API_KEY}"` in auth.json and pi reads it from the environment at startup (the Docker template does this by default).
 
+## Windows notes (experimental)
+
+Windows support is new and not yet verified on real hardware — treat it as experimental.
+
+- Run in the foreground: `pi-courier setup`, then `pi-courier run`.
+- The service-management subcommands (`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`) are Linux-only (systemd) and exit with an explanation on other platforms. For autostart on Windows, use Task Scheduler or wrap the bridge with [NSSM](https://nssm.cc/).
+- `pi-courier update` works on Windows: it launches npm through its `npm-cli.js` entry and skips the systemd stop/start choreography.
+- If pi itself cannot be found (there is no `which` on Windows), set `PI_CLI_PATH` to the `dist/cli.js` inside your pi package directory — **not** the `pi.cmd` / `pi.ps1` shim. A pi.dev `install.ps1` install under `~/.pi` is detected automatically.
+- The config-file permission check (0600) is skipped on Windows: the OS cannot express POSIX modes there, so the check would warn on every start.
+
 ## 5. License & Acknowledgements
 
 MIT License — see [LICENSE](LICENSE).

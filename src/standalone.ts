@@ -474,6 +474,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   };
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
+  // Windows delivers Ctrl+Break (and some service-stop handoffs) as SIGBREAK
+  // — SIGTERM never arrives there (evaluation 2026-10-13). POSIX defines the
+  // signal too, where it essentially never fires; same shutdown path, so
+  // registering it is harmless everywhere.
+  process.on("SIGBREAK", () => void shutdown("SIGBREAK"));
 
   logger.info("🚀 pi-courier ready. Waiting for messages...");
 }

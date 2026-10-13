@@ -500,6 +500,8 @@ const zh = {
   "cli.enable.logsHint": "   日志: journalctl --user -u {unit} -f",
   "cli.systemctl.failed": "❌ systemctl {args} 失败(退出码 {status})",
   "cli.service.notInstalled": "❌ 服务未安装。先运行 `pi-courier enable` 安装。",
+  "cli.service.unsupportedPlatform":
+    "❌ 服务管理子命令({cmd})目前仅支持 Linux(systemd)。Windows 上请前台运行 `pi-courier run`;开机自启用任务计划程序或 NSSM 包一层,详见 README 的 Windows 章节。",
   "cli.service.statusFailed": "⚠️ 服务状态查询失败(退出码 {status})——以下为 journald 历史日志,不代表服务当前在运行。",
   "cli.service.singleProjectNoFilter": "❌ 当前为单工程模式,日志不区分项目(多工程模式才打项目标签)。",
   "cli.disable.notInstalled": "❌ 服务未安装(unit 文件不存在)。",
@@ -511,6 +513,7 @@ const zh = {
   "cli.update.npmFailed": "❌ npm 升级失败(退出码 {status})",
   "cli.update.gitUpgrade": "🔄 更新 pi-courier(git)…",
   "cli.update.cmdFailed": "❌ {cmd} 失败(退出码 {status})",
+  "cli.update.serviceSkipped": "ℹ️ 非 Linux 平台:跳过 systemd 服务检查(本机无 systemctl),直接升级。",
   "cli.update.restarting": "🔄 重新启动服务…",
   "cli.update.restarted": "✅ 服务已重新启动。",
   "cli.update.wasInactive": "\nℹ️  更新前服务未运行,已跳过启动。",

@@ -12,6 +12,16 @@ import { logger } from "./logger.js";
  * error never says what to do — this hint does.
  */
 
+/** Pure decision: can the systemd-backed service subcommands run on this
+ *  platform? User units + journald only exist on Linux, so everywhere else
+ *  the service family must be refused up front — before `enable` writes a
+ *  unit file nothing will ever read (evaluation 2026-10-13: the family used
+ *  to die with an obscure systemctl error AFTER writing the unit).
+ *  Parameterized for unit tests; callers pass process.platform. */
+export function serviceManagementSupported(platform: NodeJS.Platform): boolean {
+  return platform === "linux";
+}
+
 /** Decision input; xdgOwnerUid comes from dirOwnerUid (null = unresolvable). */
 export interface BusFailureHintInput {
   euid: number;

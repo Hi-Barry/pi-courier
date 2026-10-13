@@ -27,7 +27,7 @@ import { setLocale, t } from "./i18n/index.js";
 import { buildLogFilterArgs } from "./log-filter.js";
 import { globalNodeModulesDir, resolveNpmCli } from "./npm-runtime.js";
 import { projectLabelOf } from "./project-labels.js";
-import { busFailureHint, dirOwnerUid } from "./systemd-hint.js";
+import { busFailureHint, dirOwnerUid, serviceManagementSupported } from "./systemd-hint.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
 suppressKnownWarnings();
@@ -99,6 +99,19 @@ async function cmdRun(args: string[]): Promise<void> {
 // enable / start / stop / status / logs
 // ===========================================================================
 
+/**
+ * Platform guard for the systemd-backed service subcommands (evaluation
+ * 2026-10-13): user units + journald only exist on Linux, and `enable` used
+ * to write a unit file nothing could ever use before dying on an obscure
+ * systemctl error. Refuse up front on every other platform; on Linux this
+ * is a no-op and not a single line of the old behavior changes.
+ */
+function requireLinux(cmd: string): void {
+  if (serviceManagementSupported(process.platform)) return;
+  console.error(t("cli.service.unsupportedPlatform", { cmd }));
+  process.exit(1);
+}
+
 function userUnitPath(): string {
   return path.join(os.homedir(), ".config", "systemd", "user", SERVICE_UNIT);
 }
@@ -133,6 +146,7 @@ WantedBy=default.target
 }
 
 function cmdEnable(): void {
+  requireLinux("enable");
   const major = Number(process.versions.node.split(".")[0]);
   if (major < 21) {
     console.warn(t("cli.enable.nodeTooOld", { version: process.versions.node }));
@@ -209,6 +223,7 @@ function projectLabels(): { labels: string[]; multiProject: boolean } {
 }
 
 function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", args: string[] = []): void {
+  requireLinux(action);
   const unitPath = userUnitPath();
   if (!fs.existsSync(unitPath)) {
     console.error(t("cli.service.notInstalled"));
@@ -269,6 +284,7 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
 }
 
 function cmdDisable(): void {
+  requireLinux("disable");
   const unitPath = userUnitPath();
   if (!fs.existsSync(unitPath)) {
     console.error(t("cli.disable.notInstalled"));
@@ -308,11 +324,19 @@ function cmdUpdate(): void {
 
   // 1. Stop the service first (if running) so the upgrade happens on a clean
   //    state — the old process never touches partially-replaced files.
-  const active = spawnSync("systemctl", ["--user", "is-active", SERVICE_NAME], { encoding: "utf-8" });
-  const wasActive = active.stdout?.trim() === "active";
-  if (wasActive) {
-    console.log(t("cli.update.stopping"));
-    runSystemctl(["stop", SERVICE_NAME]);
+  //    Linux-only: there is no systemctl elsewhere, and the upgrade itself
+  //    works fine without it — skip the stop/start choreography with a note
+  //    instead of failing the whole update (evaluation 2026-10-13).
+  let wasActive = false;
+  if (serviceManagementSupported(process.platform)) {
+    const active = spawnSync("systemctl", ["--user", "is-active", SERVICE_NAME], { encoding: "utf-8" });
+    wasActive = active.stdout?.trim() === "active";
+    if (wasActive) {
+      console.log(t("cli.update.stopping"));
+      runSystemctl(["stop", SERVICE_NAME]);
+    }
+  } else {
+    console.log(t("cli.update.serviceSkipped"));
   }
 
   // 2. Upgrade the code.
@@ -360,14 +384,16 @@ function cmdUpdate(): void {
   // 3. Start the service again if it was running, so the update takes effect.
   //    If it wasn't running before the update (manually stopped, or a previous
   //    update was interrupted), tell the user — never silently leave it dead,
-  //    and never override an intentional stop.
-  if (wasActive) {
-    console.log(t("cli.update.restarting"));
-    runSystemctl(["start", SERVICE_NAME]);
-    console.log(t("cli.update.restarted"));
-  } else {
-    console.log(t("cli.update.wasInactive"));
-    console.log(t("cli.update.startHint"));
+  //    and never override an intentional stop. Linux-only, as above.
+  if (serviceManagementSupported(process.platform)) {
+    if (wasActive) {
+      console.log(t("cli.update.restarting"));
+      runSystemctl(["start", SERVICE_NAME]);
+      console.log(t("cli.update.restarted"));
+    } else {
+      console.log(t("cli.update.wasInactive"));
+      console.log(t("cli.update.startHint"));
+    }
   }
   console.log(t("cli.update.done"));
 }

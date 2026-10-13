@@ -507,6 +507,16 @@ A: 向导生成的配置,示例:
 
 LLM key 也可用环境变量:auth.json 里写 `"key": "${PI_LLM_API_KEY}"`,pi 启动时从环境变量读取(Docker 部署的模板已默认如此)。
 
+## Windows 说明(实验性)
+
+Windows 支持是新的,尚未经过真机验证——请按实验性对待。
+
+- 前台运行:先 `pi-courier setup`,再 `pi-courier run`。
+- 服务管理子命令(`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`)仅支持 Linux(systemd),在其他平台会直接报错退出。Windows 上开机自启可用任务计划程序,或用 [NSSM](https://nssm.cc/) 把桥包成服务。
+- `pi-courier update` 在 Windows 上可用:它通过 npm 的 `npm-cli.js` 入口启动 npm,并跳过 systemd 的停启编排。
+- 如果找不到 pi 本体(Windows 没有 `which`),把 `PI_CLI_PATH` 指到 pi 包目录里的 `dist/cli.js`——**不要**指 `pi.cmd` / `pi.ps1` 垫片。pi.dev `install.ps1` 装在 `~/.pi` 的安装会被自动识别。
+- 配置文件权限检查(0600)在 Windows 上跳过:系统无法表达 POSIX 权限位,继续检查只会每次启动误报。
+
 ## 5. 协议与声明
 
 MIT License —— 见 [LICENSE](LICENSE)。
