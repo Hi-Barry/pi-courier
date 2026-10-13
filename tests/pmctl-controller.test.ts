@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { homedir as osHomedir, tmpdir } from "node:os";
 import { ConfigStore } from "../src/config";
 import { PmctlController } from "../src/rpc/pmctl-controller";
@@ -71,7 +71,15 @@ describe("PmctlController", () => {
       leaveRoom: vi.fn().mockResolvedValue(undefined),
       getBotUserId: vi.fn().mockReturnValue("@bot:server"),
     };
-    store = new ConfigStore({ managementRooms: [], projects: {}, workdir: "/home/you/Projects" });
+    // instanceName is pinned so room-name assertions ("myapp(debian)") don't
+    // depend on the machine's hostname (effectiveInstanceName falls back to
+    // os.hostname() — runner hostnames differ everywhere).
+    store = new ConfigStore({
+      managementRooms: [],
+      projects: {},
+      instanceName: "debian",
+      workdir: "/home/you/Projects",
+    });
     controller = new PmctlController({
       projectManager: pm as unknown as ProjectManager,
       roomOps: roomOps as unknown as RoomOps,
@@ -135,7 +143,7 @@ describe("PmctlController", () => {
     expect(roomOps.createProjectRoom).toHaveBeenCalledWith("myapp(debian)", "@barry:server");
     // The invite target is passed as-is — no prefix stripping in the controller.
     expect(String((roomOps.createProjectRoom as ReturnType<typeof vi.fn>).mock.calls[0][1])).not.toContain("matrix:");
-    expect(pm.registerProject).toHaveBeenCalledWith("!newroom:server", "/home/you/Projects/myapp", "myapp");
+    expect(pm.registerProject).toHaveBeenCalledWith("!newroom:server", resolve("/home/you/Projects", "myapp"), "myapp");
     expect(replies.at(-1)).toContain("创建完成");
   });
 
@@ -165,7 +173,7 @@ describe("PmctlController", () => {
   it("an avatar failure is cosmetic: the project still completes, note promises self-heal", async () => {
     roomOps.setRoomAvatar.mockRejectedValue(new Error("M_LIMIT_EXCEEDED"));
     await handle("/pmctl new myapp");
-    expect(pm.registerProject).toHaveBeenCalledWith("!newroom:server", "/home/you/Projects/myapp", "myapp");
+    expect(pm.registerProject).toHaveBeenCalledWith("!newroom:server", resolve("/home/you/Projects", "myapp"), "myapp");
     expect(replies.at(-1)).toContain("创建完成");
     expect(replies.at(-1)).toContain("头像设置失败");
     expect(replies.at(-1)).toContain("下次启动自动补");
@@ -397,7 +405,9 @@ describe("PmctlController", () => {
       ["!proj:server", { name: "myapp", workdir: "/w/myapp" }],
     ]);
     await handle("/pmctl mv myapp myapp-v2");
-    expect(pm.updateProjectWorkdir).toHaveBeenCalledWith("!proj:server", "/home/you/Projects/myapp-v2");
+    // resolve() 镜像产品的 root+name 解析:POSIX 下与原字面量等价,
+    // win32 下夹具的 POSIX 根会被解析出盘符前缀,期望值必须同源。
+    expect(pm.updateProjectWorkdir).toHaveBeenCalledWith("!proj:server", resolve("/home/you/Projects", "myapp-v2"));
     expect(replies.at(-1)).toContain("已迁移");
   });
 
@@ -473,7 +483,7 @@ describe("PmctlController", () => {
   it("new link failure never fails the project (warn note appended)", async () => {
     roomOps.addRoomToSpace.mockRejectedValue(new Error("M_FORBIDDEN"));
     await spaceController().handle("/pmctl new myapp", call, reply);
-    expect(pm.registerProject).toHaveBeenCalledWith("!newroom:server", "/home/you/Projects/myapp", "myapp");
+    expect(pm.registerProject).toHaveBeenCalledWith("!newroom:server", resolve("/home/you/Projects", "myapp"), "myapp");
     expect(replies.at(-1)).toContain("创建完成");
     expect(replies.at(-1)).toContain("挂入空间失败");
   });
@@ -611,7 +621,7 @@ describe("PmctlController", () => {
     );
     await handle("/pmctl new myapp");
     expect(ops.setUserPowerLevel).toHaveBeenCalledWith("!newroom:server", "@barry:server", 100);
-    expect(pmMock.registerProject).toHaveBeenCalledWith("!newroom:server", "/home/you/Projects/myapp", "myapp");
+    expect(pmMock.registerProject).toHaveBeenCalledWith("!newroom:server", resolve("/home/you/Projects", "myapp"), "myapp");
     expect(replies.some((r) => r.includes("信任用户补权失败"))).toBe(true);
     expect(replies.at(-1)).toContain("创建完成");
   });
