@@ -476,7 +476,11 @@ describe("PmctlController", () => {
   });
 
   it("new on POSIX: reserved-looking names stay untouched (control case)", async () => {
-    // default controller (test env platform = linux): no win32 guard fires
+    // Platform pinned to linux: on a Windows CI runner the default controller
+    // correctly applies the win32 guard — the control case must pin the POSIX
+    // path it asserts, not inherit the host platform (first CI run on
+    // windows-latest failed on exactly this assumption).
+    controller = withPlatform("linux");
     await handle("/pmctl new myapp con");
     expect(pm.registerProject).toHaveBeenCalled();
   });
