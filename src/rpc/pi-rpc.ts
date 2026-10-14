@@ -11,6 +11,7 @@
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 // Type-only import: the runtime value (RpcClient) is loaded lazily in
@@ -75,6 +76,12 @@ export interface BashResultView {
  * `<agent>/install/releases/<current-version>/node_modules/@earendil-works/
  * pi-coding-agent/dist/bundle/cli.js`. Undefined whenever the layout doesn't
  * match, leaving the caller's passthrough behavior intact.
+ *
+ * The layout check itself is platform-neutral: pi.dev's Windows installer
+ * (install.ps1) produces the same `install/current-version` +
+ * `install/releases` tree, so the Windows discovery path feeds this the
+ * default `<agent>/bin/pi` location directly (no `which` hop — see
+ * resolveCliPath).
  */
 function managedInstallEntry(realBin: string): string | undefined {
   const agentDir = path.dirname(path.dirname(realBin)); // <agent>/bin/pi → <agent>
@@ -244,6 +251,34 @@ export class PiRpc {
    *  into config.cliPath by loadConfig (spec #72 票4/C4) — this chain only
    *  resolves between the configured path and the two install locations. */
   static async resolveCliPath(): Promise<string> {
+    // Windows: there is no `which` (spawning it fails with ENOENT every
+    // time — libuv's PATH search only tries .com/.exe), so skip the PATH
+    // lookup entirely. pi.dev's install.ps1 produces the same releases-v1
+    // tree managedInstallEntry understands at its default agent dir
+    // (~/.pi/agent — verified against install.ps1's Get-PiAgentDir), so try
+    // that directly; an npm-global pi cannot be auto-detected here and
+    // falls through to the local node_modules copy.
+    if (process.platform === "win32") {
+      const managed = managedInstallEntry(path.join(os.homedir(), ".pi", "agent", "bin", "pi"));
+      if (managed) return managed;
+
+      // Local node_modules copy (dev setup / peer auto-install) — same
+      // fallback as POSIX.
+      try {
+        const entryUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
+        const entry = fileURLToPath(entryUrl);
+        return path.join(path.dirname(entry), "cli.js");
+      } catch {
+        // fall through
+      }
+
+      throw new Error(
+        "Cannot locate the pi CLI on Windows. The npm-global install cannot be auto-detected (there is no `which`): " +
+          "set PI_CLI_PATH to the dist/cli.js inside your pi package directory — do NOT point it at the pi.cmd / pi.ps1 shim — " +
+          "or install pi via pi.dev's install.ps1 (~/.pi/agent), which is detected automatically."
+      );
+    }
+
     // 1. System-installed pi (`which pi`, resolve symlink to dist/cli.js).
     //    Preferred: pi is installed independently and upgraded on its own.
     try {

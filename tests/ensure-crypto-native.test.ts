@@ -221,7 +221,8 @@ describe("readManifest", () => {
 });
 
 describe("writeCacheEntry / readCacheEntry", () => {
-  it("writes the copy + sidecar with dir 0700 and files 0600", () => {
+  // POSIX mode bits: meaningless on Windows (libuv reports 0666/0444 only).
+  it.skipIf(process.platform === "win32")("writes the copy + sidecar with dir 0700 and files 0600", () => {
     const cacheRoot = tempDir("crypto-cache-");
     const sourceDir = tempDir("crypto-src-");
     const source = join(sourceDir, "binding.node");
@@ -336,7 +337,8 @@ describe("verifyDownloadedBinding", () => {
 });
 
 describe("restoreBindingFromCache", () => {
-  it("atomically copies the cached binding into the package dir", () => {
+  // POSIX mode bits: meaningless on Windows (libuv reports 0666/0444 only).
+  it.skipIf(process.platform === "win32")("atomically copies the cached binding into the package dir", () => {
     const cacheRoot = tempDir("crypto-cache-");
     writeCacheEntry(cacheRoot, VERSION, BASENAME, withFakeBinding(), FAKE_SHA);
     const cryptoDir = makeCryptoPkg();
@@ -371,7 +373,8 @@ describe("ensureCryptoNative (cache + verification, injected deps, no network)",
     for (const spy of spies) spy.mockRestore();
   });
 
-  it("after a real download: caches the copy + sidecar with correct paths/modes", () => {
+  // POSIX mode bits: meaningless on Windows (libuv reports 0666/0444 only).
+  it.skipIf(process.platform === "win32")("after a real download: caches the copy + sidecar with correct paths/modes", () => {
     const cryptoDir = makeCryptoPkg();
     const cacheRoot = tempDir("crypto-cache-");
     const manifestPath = makeManifest({ [KEY]: FAKE_SHA });

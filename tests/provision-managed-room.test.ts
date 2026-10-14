@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import type { ProjectEntry, ProjectManager } from "../src/rpc/project-manager";
 import type { RoomOps } from "../src/transports/interface";
@@ -190,7 +190,8 @@ describe("provisionManagedRoom(票2:中途房 ≡ 自愈房)", () => {
     expect(provisionOps(traceA, "!newroom:server")).toEqual(expected);
     expect(provisionOps(traceB, "!mgmt:server")).toEqual(expected);
     // 两条路径的落簿都已完成(崩溃安全:建房事实先落盘)。
-    expect(pmA.registerProject).toHaveBeenCalledWith("!newroom:server", "/home/you/Projects/myapp", "myapp");
+    // resolve() 镜像产品的 root+name 解析(POSIX 下即原字面量;win32 会带盘符)。
+    expect(pmA.registerProject).toHaveBeenCalledWith("!newroom:server", resolve("/home/you/Projects", "myapp"), "myapp");
     expect(storeB.get().managementRooms).toEqual(["!mgmt:server"]);
   });
 

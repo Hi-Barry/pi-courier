@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile } from 'child_process';
-import { fileURLToPath } from 'url';
 
 describe('lock', () => {
   let tmpDir: string;
@@ -190,7 +189,9 @@ describe('lock', () => {
   });
 
   it('exactly one cross-process contender wins the race', async () => {
-    const lockModuleUrl = fileURLToPath(new URL('../src/lock.ts', import.meta.url));
+    // file:// URL, not a bare path: ESM import() on win32 rejects "D:\…" as
+    // an unsupported URL scheme (ERR_UNSUPPORTED_ESM_URL_SCHEME).
+    const lockModuleUrl = new URL('../src/lock.ts', import.meta.url).href;
     const runner = join(tmpDir, 'contender.mjs');
     // Winner holds the lock and stays alive (the contender process IS the
     // liveness guarantee — an exited holder is stale by design); losers
@@ -214,9 +215,10 @@ describe('lock', () => {
           execFile(
             process.execPath,
             [runner],
-            // os.homedir() follows $HOME on Linux — point the contender's
-            // lock dir at the temp dir, never at the real ~/.pi.
-            { env: { ...process.env, HOME: tmpDir } },
+            // os.homedir() follows $HOME on POSIX and $USERPROFILE on
+            // Windows — set both so the contenders' lock dir is the temp
+            // dir on every platform, never the real ~/.pi.
+            { env: { ...process.env, HOME: tmpDir, USERPROFILE: tmpDir } },
             (err, stdout) => (err ? reject(err) : resolve(String(stdout)))
           );
         })

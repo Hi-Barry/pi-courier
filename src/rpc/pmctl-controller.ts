@@ -160,7 +160,10 @@ export class PmctlController {
   private resolveProjectPath(p: string): string | null {
     if (p === "~") return os.homedir();
     if (p.startsWith("~/")) p = path.join(os.homedir(), p.slice(2));
-    if (p.startsWith("/")) return p;
+    // isAbsolute, not startsWith("/"): on win32 the ~/ expansion above yields
+    // a drive path (C:\…) that must stay first-class too; POSIX semantics are
+    // identical (absolute ⟺ starts with "/").
+    if (path.isAbsolute(p)) return p;
     const root = this.opts.store.get().workdir ?? path.join(os.homedir(), "Projects");
     const resolved = path.resolve(root, p);
     const rel = path.relative(root, resolved);

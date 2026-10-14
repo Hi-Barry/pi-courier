@@ -40,7 +40,8 @@ describe("resolveWorkdir", () => {
 
   const configPath = () => join(tmpDir, ".pi", "pi-courier.json");
 
-  it("silent default path: falls back to ~/Projects, persists through the store", async () => {
+  // POSIX mode bits: meaningless on Windows (libuv reports 0666/0444 only).
+  it.skipIf(process.platform === "win32")("silent default path: falls back to ~/Projects, persists through the store", async () => {
     const { resolveWorkdir, ConfigStore } = await importModule();
     const store = new ConfigStore();
 

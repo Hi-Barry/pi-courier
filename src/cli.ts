@@ -25,8 +25,9 @@ import { effectiveLanguage, loadConfig } from "./config.js";
 import { errorMessage } from "./errors.js";
 import { setLocale, t } from "./i18n/index.js";
 import { buildLogFilterArgs } from "./log-filter.js";
+import { globalNodeModulesDir, resolveNpmCli } from "./npm-runtime.js";
 import { projectLabelOf } from "./project-labels.js";
-import { busFailureHint, dirOwnerUid } from "./systemd-hint.js";
+import { busFailureHint, dirOwnerUid, serviceManagementSupported } from "./systemd-hint.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
 suppressKnownWarnings();
@@ -56,7 +57,12 @@ function projectDir(): string {
  * with override:true).
  */
 function e2eNativeBinaryExists(): boolean {
-  const globalNodeModules = path.join(path.dirname(process.execPath), "..", "lib", "node_modules");
+  const globalNodeModules = globalNodeModulesDir({
+    platform: process.platform,
+    execPath: process.execPath,
+    appData: process.env.APPDATA,
+    homeDir: os.homedir(),
+  });
   const cryptoPkgDir = path.join(globalNodeModules, "@matrix-org", "matrix-sdk-crypto-nodejs");
   if (!fs.existsSync(cryptoPkgDir)) return false;
   try {
@@ -93,6 +99,19 @@ async function cmdRun(args: string[]): Promise<void> {
 // enable / start / stop / status / logs
 // ===========================================================================
 
+/**
+ * Platform guard for the systemd-backed service subcommands (evaluation
+ * 2026-10-13): user units + journald only exist on Linux, and `enable` used
+ * to write a unit file nothing could ever use before dying on an obscure
+ * systemctl error. Refuse up front on every other platform; on Linux this
+ * is a no-op and not a single line of the old behavior changes.
+ */
+function requireLinux(cmd: string): void {
+  if (serviceManagementSupported(process.platform)) return;
+  console.error(t("cli.service.unsupportedPlatform", { cmd }));
+  process.exit(1);
+}
+
 function userUnitPath(): string {
   return path.join(os.homedir(), ".config", "systemd", "user", SERVICE_UNIT);
 }
@@ -127,6 +146,7 @@ WantedBy=default.target
 }
 
 function cmdEnable(): void {
+  requireLinux("enable");
   const major = Number(process.versions.node.split(".")[0]);
   if (major < 21) {
     console.warn(t("cli.enable.nodeTooOld", { version: process.versions.node }));
@@ -203,6 +223,7 @@ function projectLabels(): { labels: string[]; multiProject: boolean } {
 }
 
 function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", args: string[] = []): void {
+  requireLinux(action);
   const unitPath = userUnitPath();
   if (!fs.existsSync(unitPath)) {
     console.error(t("cli.service.notInstalled"));
@@ -263,6 +284,7 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
 }
 
 function cmdDisable(): void {
+  requireLinux("disable");
   const unitPath = userUnitPath();
   if (!fs.existsSync(unitPath)) {
     console.error(t("cli.disable.notInstalled"));
@@ -283,17 +305,38 @@ function cmdDisable(): void {
 // update
 // ===========================================================================
 
+/**
+ * Spawn plan for an npm invocation: run npm's JS entry (npm-cli.js) with the
+ * current node when it can be located, because a bare `spawnSync("npm", ...)`
+ * fails on Windows with ENOENT — libuv's PATH search only tries .com/.exe and
+ * never resolves npm.cmd. Falls back to the historical bare command when the
+ * JS entry can't be found, so exotic layouts keep the old behavior.
+ */
+function npmCommand(args: readonly string[]): { cmd: string; args: string[] } {
+  const npmCli = resolveNpmCli(process.execPath);
+  if (npmCli) return { cmd: process.execPath, args: [npmCli, ...args] };
+  return { cmd: "npm", args: [...args] };
+}
+
 function cmdUpdate(): void {
   const projDir = projectDir();
   const installedViaNpm = !fs.existsSync(path.join(projDir, ".git"));
 
   // 1. Stop the service first (if running) so the upgrade happens on a clean
   //    state — the old process never touches partially-replaced files.
-  const active = spawnSync("systemctl", ["--user", "is-active", SERVICE_NAME], { encoding: "utf-8" });
-  const wasActive = active.stdout?.trim() === "active";
-  if (wasActive) {
-    console.log(t("cli.update.stopping"));
-    runSystemctl(["stop", SERVICE_NAME]);
+  //    Linux-only: there is no systemctl elsewhere, and the upgrade itself
+  //    works fine without it — skip the stop/start choreography with a note
+  //    instead of failing the whole update (evaluation 2026-10-13).
+  let wasActive = false;
+  if (serviceManagementSupported(process.platform)) {
+    const active = spawnSync("systemctl", ["--user", "is-active", SERVICE_NAME], { encoding: "utf-8" });
+    wasActive = active.stdout?.trim() === "active";
+    if (wasActive) {
+      console.log(t("cli.update.stopping"));
+      runSystemctl(["stop", SERVICE_NAME]);
+    }
+  } else {
+    console.log(t("cli.update.serviceSkipped"));
   }
 
   // 2. Upgrade the code.
@@ -312,7 +355,8 @@ function cmdUpdate(): void {
       console.log(t("cli.update.nativeSkipped"));
       npmArgs.push("--ignore-scripts");
     }
-    const res = spawnSync("npm", npmArgs, {
+    const { cmd, args } = npmCommand(npmArgs);
+    const res = spawnSync(cmd, args, {
       stdio: "inherit",
     });
     if (res.status !== 0) {
@@ -322,11 +366,12 @@ function cmdUpdate(): void {
   } else {
     // Installed from a git clone → pull + install + build.
     console.log(t("cli.update.gitUpgrade"));
-    for (const [cmd, args] of [
-      ["git", ["pull"]],
-      ["npm", ["install"]],
-      ["npm", ["run", "build"]],
-    ] as const) {
+    const steps: Array<{ cmd: string; args: string[] }> = [
+      { cmd: "git", args: ["pull"] },
+      npmCommand(["install"]),
+      npmCommand(["run", "build"]),
+    ];
+    for (const { cmd, args } of steps) {
       console.log(`\n$ ${cmd} ${args.join(" ")}`);
       const res = spawnSync(cmd, args, { cwd: projDir, stdio: "inherit" });
       if (res.status !== 0) {
@@ -339,14 +384,16 @@ function cmdUpdate(): void {
   // 3. Start the service again if it was running, so the update takes effect.
   //    If it wasn't running before the update (manually stopped, or a previous
   //    update was interrupted), tell the user — never silently leave it dead,
-  //    and never override an intentional stop.
-  if (wasActive) {
-    console.log(t("cli.update.restarting"));
-    runSystemctl(["start", SERVICE_NAME]);
-    console.log(t("cli.update.restarted"));
-  } else {
-    console.log(t("cli.update.wasInactive"));
-    console.log(t("cli.update.startHint"));
+  //    and never override an intentional stop. Linux-only, as above.
+  if (serviceManagementSupported(process.platform)) {
+    if (wasActive) {
+      console.log(t("cli.update.restarting"));
+      runSystemctl(["start", SERVICE_NAME]);
+      console.log(t("cli.update.restarted"));
+    } else {
+      console.log(t("cli.update.wasInactive"));
+      console.log(t("cli.update.startHint"));
+    }
   }
   console.log(t("cli.update.done"));
 }

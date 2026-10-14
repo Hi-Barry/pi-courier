@@ -527,6 +527,8 @@ Note: pi itself is installed and upgraded independently on the system
   "cli.enable.logsHint": "   logs: journalctl --user -u {unit} -f",
   "cli.systemctl.failed": "❌ systemctl {args} failed (exit code {status})",
   "cli.service.notInstalled": "❌ Service not installed. Run `pi-courier enable` first.",
+  "cli.service.unsupportedPlatform":
+    "❌ Service management ({cmd}) is Linux-only (systemd) for now. On Windows, run `pi-courier run` in the foreground; for autostart use Task Scheduler or wrap the bridge with NSSM — see the Windows section in the README.",
   "cli.service.statusFailed":
     "⚠️ The status query failed (exit code {status}) — the journald output below is HISTORY and does not mean the service is running.",
   "cli.service.singleProjectNoFilter":
@@ -541,6 +543,8 @@ Note: pi itself is installed and upgraded independently on the system
   "cli.update.npmFailed": "❌ npm upgrade failed (exit code {status})",
   "cli.update.gitUpgrade": "🔄 Updating pi-courier (git) …",
   "cli.update.cmdFailed": "❌ {cmd} failed (exit code {status})",
+  "cli.update.serviceSkipped":
+    "ℹ️ Not Linux: skipping the systemd service checks (no systemctl on this platform) and updating directly.",
   "cli.update.restarting": "🔄 Restarting the service…",
   "cli.update.restarted": "✅ Service restarted.",
   "cli.update.wasInactive": "\nℹ️  The service was not running before the update; it was not started.",

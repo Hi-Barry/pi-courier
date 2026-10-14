@@ -1,0 +1,8 @@
+# Normalize all text files to LF everywhere (working tree included).
+#
+# Why: the Windows CI runner checks out with CRLF by default, and a CRLF
+# scripts/ensure-crypto-native.mjs makes vitest's module loader die with
+# "SyntaxError: Invalid or unexpected token" (reproduced locally 2026-10-13;
+# node --check passes, the .ts files are unaffected — only the CRLF .mjs
+# through vitest's loader fails). text=auto leaves real binaries untouched.
+* text=auto eol=lf

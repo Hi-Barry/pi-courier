@@ -52,10 +52,17 @@ export function loadConfig(): MsgBridgeConfig {
 
   if (fs.existsSync(CONFIG_PATH)) {
     try {
-      const stats = fs.statSync(CONFIG_PATH);
-      const mode = stats.mode & 0o777;
-      if ((mode & 0o077) !== 0) {
-        console.warn(`⚠️  Config file ${CONFIG_PATH} has insecure permissions (${mode.toString(8)}). Should be 0600.`);
+      // Permission self-check is POSIX-only (evaluation 2026-10-13): libuv
+      // reports only 0666/0444 for regular files on Windows, so the 0600
+      // contract has no meaning there and the check would warn on every
+      // single start. The 0600/0700 writes below stay — on Windows libuv
+      // maps them to "writable", which is harmless.
+      if (process.platform !== "win32") {
+        const stats = fs.statSync(CONFIG_PATH);
+        const mode = stats.mode & 0o777;
+        if ((mode & 0o077) !== 0) {
+          console.warn(`⚠️  Config file ${CONFIG_PATH} has insecure permissions (${mode.toString(8)}). Should be 0600.`);
+        }
       }
 
       const fileConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));

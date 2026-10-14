@@ -872,6 +872,24 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 
 红线:i18n 模块不 import src/ 其他文件(零循环依赖)、零第三方运行时依赖;logger 日志与代码注释**不翻译**;语言运行中不热切换(重启生效)。tests/setup.ts 全局 `setLocale("zh")` —— 存量测试的中文断言零改动;注意 `vi.resetModules()` 会重建 i18n 模块图,此类测试须在动态 import 后重新 `setLocale("zh")`。
 
+### 13.6 跨平台支持(Windows,实验性)
+
+Windows 适配分三期落地(2026-10-13,依据同日跨平台深度评估;真机验收未做,按实验性对待):
+
+- **第一期 CI**:`.github/workflows/ci.yml` ubuntu+windows 双平台矩阵(lint/typecheck/build/test),push(master、`feat/**`)与 pull_request 触发;windows runner 上 `npm ci` 真实走一遍 postinstall 的 win32 原生库下载路径。
+- **第二期核心修复**:pi 发现链 win32 跳过 `which`(恒 ENOENT),托管安装(`~/.pi/agent` releases-v1,根目录经 install.ps1 的 Get-PiAgentDir 实证)→ `import.meta.resolve` → `PI_CLI_PATH` 三级解析;`update` 经 `src/npm-runtime.ts` 的 `resolveNpmCli()` 直启 `node npm-cli.js`(Windows 无法裸 spawn npm);e2e 原生库检查的全局前缀按平台解析(win32 = `%APPDATA%\npm\node_modules`)。
+- **第三期外围守卫**:服务管理族入口 `requireLinux()` 平台守卫(非 linux 报错退出,守卫在写 unit 文件之前);config 权限自检 win32 跳过(libuv 在 Windows 只报 0666/0444,0600 契约无意义);信号补 `SIGBREAK`(Windows Ctrl+Break)。
+
+**win32 分支约定**:平台分支只允许两种形态——新增 `process.platform === "win32"` 专属分支,或非 linux 守卫提前拒绝;**POSIX 分支的既有顺序与语义一个字不动**(Linux 是主战场,回归零容忍)。守卫判定一律抽成纯函数(参数化 platform)以便单测;内置模块 mock 用 `vi.hoisted` + `vi.mock` 工厂(vitest 4 下 `vi.spyOn` 打不动 ESM 命名空间)。
+
+**真机验收清单**(CI 矩阵覆盖不到、只能在真 Windows 上验的):
+
+1. 任务计划程序 / NSSM 包 `pi-courier run` 开机自启
+2. `.cmd` 垫片行为(npm 全局 bin 的垫片能否正常拉起)
+3. NTFS 大小写不敏感与保留文件名对配置/会话/附件路径的影响
+4. win32 `.node` 原生库下载 + sha256 校验 + dlopen 加载全链路(清单 `scripts/crypto-native-hashes.json` 已录三个 win32 条目)
+5. Ctrl+C / Ctrl+Break(SIGBREAK)优雅退出,rpc.stop 与锁释放干净
+
 ---
 
 ## 14. 关键设计决策

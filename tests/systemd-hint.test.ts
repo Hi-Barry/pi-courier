@@ -74,7 +74,9 @@ describe("busFailureHint (issue #59 — the `su` without `-` trap)", () => {
 });
 
 describe("dirOwnerUid", () => {
-  it("resolves the owning uid of an existing directory", () => {
+  // stat.uid 在 Windows 恒为 0(libuv 无属主语义),而该函数只被 Linux 的
+  // systemctl 总线提示消费 —— 属主解析这条断言仅在 POSIX 上有意义。
+  it.skipIf(process.platform === "win32")("resolves the owning uid of an existing directory", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-courier-hint-"));
     try {
       expect(dirOwnerUid(dir)).toBe(typeof process.getuid === "function" ? process.getuid() : -1);

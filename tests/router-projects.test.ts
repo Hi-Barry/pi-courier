@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ConfigStore } from "../src/config";
 import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { handleAdminCommand } from "../src/auth/admin-commands";
@@ -226,9 +226,10 @@ describe("message-router multi-project routing", () => {
     const router = makeRouter();
     await router.handleIncoming(makeMsg({ text: "/newproject myapp myapp" }));
     await new Promise((r) => setTimeout(r, 20));
+    // resolve() 镜像产品的 root+name 解析(POSIX 下即原字面量;win32 会带盘符)。
     expect(projectManager.registerProject).toHaveBeenCalledWith(
       "!newproj:server",
-      "/home/you/Projects/myapp",
+      resolve("/home/you/Projects", "myapp"),
       "myapp"
     );
   });
@@ -252,7 +253,7 @@ describe("message-router multi-project routing", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(projectManager.registerProject).toHaveBeenCalledWith(
       "!newproj:server",
-      "/home/you/Projects/newapp",
+      resolve("/home/you/Projects", "newapp"),
       "newapp"
     );
   });

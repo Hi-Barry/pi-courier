@@ -61,7 +61,8 @@ describe("AuditLog (issue #124)", () => {
     }
   });
 
-  it("creates the file 0600 (evidence is private)", () => {
+  // POSIX mode bits: meaningless on Windows (libuv reports 0666/0444 only).
+  it.skipIf(process.platform === "win32")("creates the file 0600 (evidence is private)", () => {
     ({ dir } = tmpFile());
     const file = join(dir, "audit.jsonl");
     new AuditLog(file).append("reload", "matrix:@u:s", "!room:s");
@@ -69,7 +70,7 @@ describe("AuditLog (issue #124)", () => {
     expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 
-  it("tightens a pre-existing loose audit file/dir on first append (audit batch 1 票8)", () => {
+  it.skipIf(process.platform === "win32")("tightens a pre-existing loose audit file/dir on first append (audit batch 1 票8)", () => {
     ({ dir } = tmpFile());
     const file = join(dir, "audit.jsonl");
     writeFileSync(file, "old\n", { mode: 0o644 });
