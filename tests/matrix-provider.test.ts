@@ -443,6 +443,131 @@ describe("MatrixProvider 出站", () => {
   });
 });
 
+describe("MatrixProvider 出站串行队列(issue #195)", () => {
+  beforeEach(() => {
+    captureConsole();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** 可控挂点:每条 sendMessage 在 gates 里登记一个放行柄,不放行不结算。 */
+  function gatedSend(client: FakeMatrixClient) {
+    const bodies: string[] = [];
+    const gates: Array<(v: string) => void> = [];
+    client.sendMessage.mockImplementation((_roomId: string, content: { body: string }) => {
+      bodies.push(content.body);
+      return new Promise<string>((resolve) => gates.push(resolve));
+    });
+    return {
+      bodies,
+      release: (i: number) => gates[i]("$ok"),
+    };
+  }
+
+  it("同房间并发发送按入队顺序 FIFO 串行:前一条结算前下一条不出手", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const gate = gatedSend(clients[0]);
+
+    const first = provider.sendMessage(ROOM, "第一片");
+    const second = provider.sendMessage(ROOM, "第二片");
+    const third = provider.sendMessage(ROOM, "第三片");
+
+    await flush();
+    expect(gate.bodies).toEqual(["第一片"]);
+
+    gate.release(0);
+    await first;
+    await vi.waitFor(() => expect(gate.bodies).toEqual(["第一片", "第二片"]));
+
+    gate.release(1);
+    await second;
+    await vi.waitFor(() => expect(gate.bodies).toEqual(["第一片", "第二片", "第三片"]));
+
+    gate.release(2);
+    await third;
+  });
+
+  it("中间某条失败:调用方收到 reject,后续消息照常发送(断链传播)", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const client = clients[0];
+    // 顺序:第 2 条 reject,其余走默认秒过实现
+    client.sendMessage.mockImplementationOnce(async () => "$first");
+    client.sendMessage.mockImplementationOnce(async () => {
+      throw new Error("M_LIMIT_EXCEEDED");
+    });
+    client.sendMessage.mockImplementationOnce(async () => "$third");
+
+    await provider.sendMessage(ROOM, "第一条");
+    await expect(provider.sendMessage(ROOM, "第二条(失败)")).rejects.toThrow("M_LIMIT_EXCEEDED");
+    await provider.sendMessage(ROOM, "第三条");
+    expect(client.sendMessage).toHaveBeenCalledTimes(3);
+
+    // 失败后再发:链未被污染,照常发送
+    await provider.sendMessage(ROOM, "失败后的消息");
+    expect(client.sendMessage).toHaveBeenCalledTimes(4);
+  });
+
+  it("房间隔离:房间 A 的在途消息不阻塞房间 B 的发送", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const gate = gatedSend(clients[0]);
+
+    const blocked = provider.sendMessage("!room-a:server", "A 房在途");
+    await flush();
+    expect(gate.bodies).toEqual(["A 房在途"]);
+
+    // A 未放行期间,B 房消息立即出手(若实现退化为全局单链,B 会排在
+    // A 之后永不出现,waitFor 超时即用例失败)
+    const roomB = provider.sendMessage("!room-b:server", "B 房即时");
+    await vi.waitFor(() => expect(gate.bodies).toEqual(["A 房在途", "B 房即时"]));
+
+    gate.release(0);
+    await blocked;
+    gate.release(1);
+    await roomB;
+  });
+
+  it("断连后排队的消息以可读错误结算(非 TypeError),重连后链恢复", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const gate = gatedSend(clients[0]);
+
+    const inFlight = provider.sendMessage(ROOM, "断连前在途");
+    const queued = provider.sendMessage(ROOM, "断连前排队");
+    await flush();
+
+    await provider.disconnect();
+    gate.release(0);
+    await inFlight;
+    await expect(queued).rejects.toThrow("Matrix client not connected");
+
+    // 重连后发送照常(链上的旧条目已结算完毕)
+    await provider.connect();
+    const gate2 = gatedSend(clients[1]);
+    const after = provider.sendMessage(ROOM, "重连后的消息");
+    await vi.waitFor(() => expect(gate2.bodies).toEqual(["重连后的消息"]));
+    gate2.release(0);
+    await after;
+  });
+
+  it("空链清理:结算后队列条目被移除,不留无界 Map(以恢复原速直发为证)", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const client = clients[0];
+
+    // 空闲(无挂起)时连发多条:链上依次瞬时结算,最终恢复“直发”行为
+    await provider.sendMessage(ROOM, "一");
+    await provider.sendMessage(ROOM, "二");
+    expect(client.sendMessage.mock.calls.map((c) => (c[1] as { body: string }).body)).toEqual([
+      "一",
+      "二",
+    ]);
+  });
+});
+
 describe("MatrixProvider.mediaSource", () => {
   beforeEach(() => {
     captureConsole();

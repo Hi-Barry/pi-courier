@@ -247,14 +247,48 @@ export class MatrixProvider {
 
     const { body, formattedBody } = formatForMatrix(text);
 
-    await this.client.sendMessage(chatId, {
-      msgtype: "m.text",
-      body,
-      ...(formattedBody && {
-        format: "org.matrix.custom.html",
-        formatted_body: formattedBody,
-      }),
+    await this.enqueueSend(chatId, () => {
+      // 排队期间可能已 disconnect(client 置空):报可读错误而非 TypeError。
+      if (!this.client) throw new Error("Matrix client not connected");
+      return this.client.sendMessage(chatId, {
+        msgtype: "m.text",
+        body,
+        ...(formattedBody && {
+          format: "org.matrix.custom.html",
+          formatted_body: formattedBody,
+        }),
+      });
     });
+  }
+
+  /**
+   * Per-room FIFO 发送链(issue #195):homeserver 按收到顺序把事件排进
+   * 房间事件流(txnId 只做幂等去重不参与排序),并发 PUT 即乱序 —— 分片
+   * 回复、终答与紧随的回执都可能颠倒。这里让同房间的消息严格按入队顺序
+   * 一条发完再发下一条:入队顺序 = 房间事件流顺序 = 客户端展示顺序。
+   *
+   * - 不同房间各持一条链,互不阻塞(单房间网络抖动不拖累其他房间);
+   * - 单条失败照常 reject 给调用方记账,但链上后续消息照发(断链传播);
+   * - 只管房间文本消息:typing、媒体上传、state 事件、房间管理操作不进队列。
+   */
+  private sendQueues = new Map<string, Promise<void>>();
+
+  private enqueueSend(chatId: string, send: () => Promise<unknown>): Promise<void> {
+    const prev = this.sendQueues.get(chatId) ?? Promise.resolve();
+    // 上一步的失败不传染本步:链上每条独立结算。
+    const run = prev.then(send, send);
+    // 队尾只记“完成与否”,永不持有 rejection —— 链条不被污染。
+    const next = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.sendQueues.set(chatId, next);
+    // 空链清理:本条结算时队列尾部若仍是自己(期间无新消息入队),删除
+    // 条目,Map 只持有在途房间;新消息已替换队尾则保留。
+    void next.then(() => {
+      if (this.sendQueues.get(chatId) === next) this.sendQueues.delete(chatId);
+    });
+    return run.then(() => undefined);
   }
 
   async sendTyping(chatId: string): Promise<void> {
