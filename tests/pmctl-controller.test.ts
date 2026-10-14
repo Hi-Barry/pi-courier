@@ -440,6 +440,75 @@ describe("PmctlController", () => {
     expect(replies.at(-1)).toContain("逃出工程根");
   });
 
+  // ---- win32 path guards (issue #190) --------------------------------------
+
+  /** Rebuild the controller with a pinned platform (the guard seam). */
+  const withPlatform = (platform: NodeJS.Platform) =>
+    new PmctlController({
+      projectManager: pm as unknown as ProjectManager,
+      roomOps: roomOps as unknown as RoomOps,
+      store,
+      platform,
+    });
+
+  it("new on win32: DOS reserved workdir refused before any side effect", async () => {
+    controller = withPlatform("win32");
+    await handle("/pmctl new myapp con");
+    expect(pm.registerProject).not.toHaveBeenCalled();
+    expect(roomOps.createRoom).not.toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("系统保留名");
+    expect(replies.at(-1)).toContain("con");
+  });
+
+  it("new on win32: NTFS-illegal characters in the workdir refused", async () => {
+    controller = withPlatform("win32");
+    await handle("/pmctl new myapp a?b");
+    expect(pm.registerProject).not.toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("非法字符");
+  });
+
+  it("new on win32: over-long workdir refused with the measured length", async () => {
+    controller = withPlatform("win32");
+    const long = "name-" + "x".repeat(300);
+    await handle(`/pmctl new myapp ${long}`);
+    expect(pm.registerProject).not.toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("过长");
+  });
+
+  it("new on POSIX: reserved-looking names stay untouched (control case)", async () => {
+    // default controller (test env platform = linux): no win32 guard fires
+    await handle("/pmctl new myapp con");
+    expect(pm.registerProject).toHaveBeenCalled();
+  });
+
+  it("new on win32: a workdir colliding case-insensitively with another project is refused", async () => {
+    controller = withPlatform("win32");
+    // 绝对路径直通 resolveProjectPath(Linux 测试机上 POSIX 语义也原样保留),
+    // 让大小写冲突检查成为唯一命中的守卫。
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!proj:server", { name: "Foo", workdir: "/Projects/Foo" }],
+    ]);
+    await handle("/pmctl new bar /projects/foo");
+    expect(pm.registerProject).not.toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("指向同一处");
+    expect(replies.at(-1)).toContain("Foo");
+  });
+
+  it("mv on win32: moving onto another project's dir (case variant) refused; own dir is not a self-clash", async () => {
+    controller = withPlatform("win32");
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!a:server", { name: "Alpha", workdir: "/Projects/Alpha" }],
+      ["!b:server", { name: "Beta", workdir: "/Projects/Beta" }],
+    ]);
+    // onto Alpha from Beta — refused
+    await handle("/pmctl mv Beta /projects/alpha");
+    expect(pm.updateProjectWorkdir).not.toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("指向同一处");
+    // onto its own path (case variant) — allowed, self is excluded
+    await handle("/pmctl mv Beta /projects/BETA");
+    expect(pm.updateProjectWorkdir).toHaveBeenCalledWith("!b:server", "/projects/BETA");
+  });
+
   it("rename syncs the room name and surfaces roomOps failures", async () => {
     (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
       ["!proj:server", { name: "myapp", workdir: "/w/myapp" }],

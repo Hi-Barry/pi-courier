@@ -363,6 +363,12 @@ const zh = {
   "label.tooLong": "项目名最长 {max} 字符(当前 {length})",
   "label.caseClash": "项目名「{name}」与现有项目「{clash}」仅大小写不同(日志过滤按名字匹配,会混淆)",
 
+  // ── path(Windows 路径守卫,win32-path.ts,issue #190)────────────────
+  "path.win32.reserved": "❌ 该路径在 Windows 上不可用:「{component}」是系统保留名(CON/PRN/AUX/NUL/COM1-9/LPT1-9),请换一个名字",
+  "path.win32.illegalChars": "❌ 该路径在 Windows 上不可用:「{component}」含非法字符(< > : \" | ? * 之一)",
+  "path.win32.tooLong": "❌ 该路径过长:{length} 字符,超过 Windows 上限(259 字符),请用更短的路径",
+  "path.win32.dupWorkdir": "❌ 该路径与其他项目的工作目录在 Windows 上指向同一处(NTFS 大小写不敏感):\n• 现有项目: {name} — {workdir}\n共用目录会让两个项目共用会话状态,请换一个路径",
+
   // ── pmctl(多工程管理,/pmctl 家族)───────────────────────────────────
   "pmctl.singleProjectMode": "❌ 当前为单工程模式,未启用项目管理。\n如需多工程:发 `/multiproject on` 并重启(pi-courier restart)。",
   "pmctl.managementRoomOnly": "❌ /pmctl 仅可在管理房间(与 bot 的私聊)使用",
