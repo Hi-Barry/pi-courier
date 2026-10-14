@@ -19,7 +19,7 @@ Matrix bot ←→ pi-courier ←→ pi --mode rpc (system-installed)
 - **Chat-native control**: steer, queue or interrupt while pi runs; answer extension questions right in the room; log a provider in without leaving Matrix
 - **pi is not bundled** — installed independently on the system, upgraded on its own
 - **Sessions persist** to `~/.pi/agent/sessions` and resume automatically after restarts
-- **One-command CLI**: setup wizard, systemd auto-start (Linux), self-update
+- **One-command CLI**: setup wizard, autostart (systemd on Linux, Task Scheduler on Windows), self-update
 
 ## 2. Install
 
@@ -27,7 +27,7 @@ Matrix bot ←→ pi-courier ←→ pi --mode rpc (system-installed)
 
 | Component | Requirement |
 |---|---|
-| Node.js | >= 22.19 (tested on 24.x) |
+| Node.js | >= 22.19 (tested on 24.x and 26.x) |
 | pi | >= 0.83, installed **globally** |
 
 Install pi first — pi-courier connects to it:
@@ -39,7 +39,7 @@ pi --version
 
 Using nvm? Run `source ~/.nvm/nvm.sh` in each new terminal so `pi` and `node` are on PATH.
 
-> **⚠️ Node version for pi 1.0+**: since pi 1.0, upstream hard-requires **Node ≥ 22.19** — on older Node the pi CLI dies at startup with a `SyntaxError` (missing `fs.globSync`). pi-courier itself still runs on Node ≥ 20; if you must stay on Node 20/21, keep a pre-1.0 pi (e.g. `npm install -g @earendil-works/pi-coding-agent@0.83.0`). pi-courier checks this at startup and tells you what to do instead of letting pi crash cryptically.
+> **⚠️ Node version**: pi 1.0+ hard-requires **Node ≥ 22.19** — on older Node the pi CLI dies at startup with a `SyntaxError` (missing `fs.globSync`). pi-courier declares the same floor (its own `engines` is `>=22.19` since 1.0.0). If you must stay on Node 20/21, keep a pre-1.0 pi (e.g. `npm install -g @earendil-works/pi-coding-agent@0.83.0`) together with pi-courier 0.7.x.
 
 ### Option A: Regular users — one command
 
@@ -48,6 +48,14 @@ npm install -g pi-courier
 ```
 
 That's it. Verify: `pi-courier help`.
+
+> **⚠️ npm ≥ 11 with the install-scripts gate**: if the install prints `npm warn install-scripts … not yet covered by allowScripts`, npm has silently skipped every install script — including pi-courier's postinstall that downloads and sha256-verifies the E2EE native library. Install once with the scripts allowed:
+>
+> ```bash
+> npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs pi-courier
+> ```
+>
+> (Real-machine verified 2026-10-14 on a gated npm 11.19; the same flag list is what npm itself suggests in the warning.)
 
 > **⚠️ Don't use `pi install`**: the package page on pi.dev shows `pi install npm:pi-courier`. That installs pi-courier as a **pi extension** (just a `/pi-courier` usage hint inside pi) — it does **not** create the `pi-courier` command, so `pi-courier -v` will fail with "command not found". The bridge is a standalone service and must be installed with `npm install -g pi-courier`. If you already ran `pi install`, clean it up with `pi remove npm:pi-courier`.
 
@@ -61,7 +69,7 @@ npm run build
 npm link          # make the `pi-courier` command available globally
 ```
 
-**Do not use `--ignore-scripts`**: the Matrix E2EE library downloads its native binary via postinstall. On npm >= 11 the `allow-scripts` default may block that dependency's postinstall; `pi-courier`'s own postinstall self-checks for it and auto-downloads the missing native binary (one extra download on first install; since 0.1.38 the binary is cached locally and sha256-verified, so later updates skip the 21 MB download and tampered binaries are refused). If you still hit `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'` (e.g. the auto-download was skipped), run manually:
+**Do not use `--ignore-scripts`**: the Matrix E2EE library downloads its native binary via postinstall, and `pi-courier`'s own postinstall self-checks for it and auto-downloads the missing binary (since 0.1.38 the binary is cached locally and sha256-verified, so later updates skip the 21 MB download and tampered binaries are refused). One exception: on npm >= 11 machines configured with the install-scripts gate (see the warning above) **both** postinstalls are skipped silently — use the `--allow-scripts` flag from Option A for the install. If you still hit `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-*'` (any platform suffix), run the dependency's downloader manually:
 
 ```bash
 cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs
@@ -123,7 +131,7 @@ The wizard verifies the token and writes `~/.pi/pi-courier.json`. To skip the wi
 ### Step 2 — Start it
 
 ```bash
-pi-courier enable     # install a systemd service: auto-start on boot + start now
+pi-courier enable     # install a systemd service: auto-start on boot + start now (Linux; Windows → the Windows section)
 ```
 
 Or run in the foreground for a quick test: `pi-courier run` (Ctrl+C to stop).
@@ -352,7 +360,7 @@ Every sensitive action appends one JSONL line to `~/.pi/pi-courier-state/audit.j
 
 ### Multi-project rooms (project isolation)
 
-One bot account can serve multiple projects — each project gets its own private room (named after the project), its own pi process, working directory and conversation history.
+One bot account can serve multiple projects — each project gets its own private room (room name: `<project> (<instance>)`), its own pi process, working directory and conversation history.
 
 - **Management room**: with the **space feature enabled** (fresh multi-project setups default to it), the bot **creates the management room itself at startup**, inside a private Element space `π <instance>`, and invites all trusted users — no first DM needed; trusted users who join via the challenge later are invited into the management room automatically (one invite per person, failures retried by the next-start self-heal). With the space off (or if its creation fails), the classic behavior applies: the first room where the bot **successfully accepts (authorizes) a message** — a non-project, ≤2-person room — becomes the management room (renamed to `Project Management (<instance>)` — localized per the bot language — guide sent, room ID persisted to `config.managementRooms`). Either way the room is the admin console — `/pmctl` works only there — and its ID is stable afterwards.
 - **Space organization (Element)**: a purely cosmetic grouping — a private space `π <instanceName>` collects every room the bot creates (the management room and all `/pmctl new` project rooms) so they don't scatter across your room list. The space itself takes no part in authorization — who may send commands and who holds which room permissions is decided by the permission model below. `/pmctl rm` also removes the room from the space. Toggle it in `setup` ("Enable space organization?", fresh configs default on, existing configs keep their current state); creation is lazy at the next start, and any failure just falls back to the unspace'd behavior with a warning and a retry on the next start. Users who pass the challenge later are invited into the space automatically (one invite per person, ever). A space still carrying the old `pi-courier · <instance>` name is renamed to the short form by the next-start self-heal (manually renamed spaces are left alone).
@@ -441,11 +449,17 @@ pi-courier restart
 
 A pi.dev managed install (`~/.pi/agent`) is supported too: pi-courier resolves the `bin/pi` wrapper script to the current version's real JS entry automatically, so pi upgrades need no config changes (0.3.1+).
 
-## Windows notes (experimental)
+## Windows
 
-Windows support is new and not yet verified on real hardware — treat it as experimental.
+Supported since 1.0.0 and verified end-to-end on a real Windows Server 2025 machine (2026-10-14): install with native-library download + sha256 + load, setup wizard, Matrix connectivity, `!`/`!!` bash, single-instance lock, multi-project rooms with spaces, Task Scheduler autostart and a clean Ctrl+C shutdown. Everything not mentioned as a limitation below behaves as on Linux.
 
-**Requirements**: Node.js >= 22.19 (the same hard floor pi 1.x enforces). The E2EE crypto native binding ships prebuilt for `win32-x64-msvc` / `win32-ia32-msvc` / `win32-arm64-msvc` and is downloaded + sha256-verified during install.
+**Requirements**:
+
+- Node.js >= 22.19 (the same hard floor pi 1.x enforces)
+- **Git for Windows** — its bundled bash executes `!` / `!!` commands; without it they fail with a readable error
+- pi, installed globally — see the discovery note below
+
+The E2EE crypto native binding ships prebuilt for `win32-x64-msvc` / `win32-ia32-msvc` / `win32-arm64-msvc` and is downloaded + sha256-verified during install (x64 real-machine verified: the `.node` lands in `~/.cache/pi-courier/native-crypto/` and loads via N-API).
 
 **Install and run**:
 
@@ -455,21 +469,40 @@ pi-courier setup
 pi-courier run
 ```
 
-- `!` / `!!` bash commands run through the bash that ships with **Git for Windows** (matching upstream pi's Windows behaviour) — without it they fail with a readable error.
-- Autostart, three ways: Task Scheduler; wrap `pi-courier run` with [NSSM](https://nssm.cc/); or just keep a foreground session.
-- `pi-courier update` works on Windows: it launches npm through its `npm-cli.js` entry and skips the systemd stop/start choreography.
-- If pi itself cannot be found (there is no `which` on Windows), set `PI_CLI_PATH` to the `dist/cli.js` inside your pi package directory — **not** the `pi.cmd` / `pi.ps1` shim. A pi.dev `install.ps1` install under `~/.pi/agent` is detected automatically.
-- The config-file permission check (0600) is skipped on Windows: the OS cannot express POSIX modes there, so checking would warn on every start. Ctrl+Break (SIGBREAK) shuts the bridge down cleanly.
+On npm >= 11 machines with the install-scripts gate (you'll see `npm warn install-scripts`), the postinstall — including the native-library self-check — is silently skipped; install once with the scripts allowed:
 
-**Known limitations**: the service-management subcommands (`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`) are Linux-only (systemd) and exit with an explanation on other platforms.
+```powershell
+npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs pi-courier
+```
+
+Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDATA%\npm` work normally.
+
+- **pi discovery is automatic**: an npm-global `@earendil-works/pi-coding-agent` is resolved from pi-courier's own install tree, and a pi.dev `install.ps1` install under `~/.pi/agent` is detected as well. Only exotic layouts need `PI_CLI_PATH` pointing at the `dist/cli.js` inside your pi package directory — **not** the `pi.cmd` / `pi.ps1` shim.
+- **`!` / `!!` bash commands run through the Git for Windows bash** — POSIX paths (`/c/Users/...`), exit codes and error messages pass through exactly as on Linux.
+- **`pi-courier update` works on Windows**: it launches npm through its `npm-cli.js` entry and skips the systemd stop/start choreography.
+- **Autostart via Task Scheduler** (no admin needed, fires at every logon) — verified recipe:
+
+  ```powershell
+  $action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c pi-courier run >> %USERPROFILE%\pi-courier-run.log 2>&1'
+  $trigger = New-ScheduledTaskTrigger -AtLogOn
+  Register-ScheduledTask -TaskName 'pi-courier' -Action $action -Trigger $trigger
+  Start-ScheduledTask -TaskName 'pi-courier'   # start right now; it refires on every logon
+  ```
+
+  [NSSM](https://nssm.cc/) remains the option if you want a true background service without a console window; or just keep a foreground session.
+- **Ctrl+C / Ctrl+Break (SIGBREAK) shut the bridge down cleanly** — pi RPC stopped, Matrix disconnected, the single-instance lock released.
+- **Single-instance lock** works the same: a stale lock left by a crashed process is taken over by the next start, whether launched from a console or the Task Scheduler.
+- The config-file permission check (0600) is skipped on Windows: the OS cannot express POSIX modes there, so checking would warn on every start.
+
+**Known limitations**: the service-management subcommands (`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`) are Linux-only (systemd) and exit with an explanation; `pi-courier logs` filtering relies on journald (Linux). Config, sessions, attachments and state live under `%USERPROFILE%\.pi\` exactly as on Linux.
 
 ## 4. FAQ
 
 **Q: `npm install` hangs / crawls at 20-60 kB/s?**
 A: The 21 MB E2EE native library downloads from GitHub Releases and ignores npm's proxy. Set `export https_proxy=... http_proxy=...` (add to `~/.bashrc`) and reinstall.
 
-**Q: `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'`?**
-A: The native binary didn't download (postinstall blocked). Run manually: `cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs && node download-lib.js`.
+**Q: `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-…'` (any platform suffix)?**
+A: The native binary didn't download — postinstall was blocked. On npm ≥ 11 machines with the install-scripts gate this is **silent**; re-install once with `npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs pi-courier`. For a source checkout, run `cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs && node download-lib.js`.
 
 **Q: `npm install -g pi-courier` fails with EEXIST?**
 A: A previous `npm link` left a conflicting bin. `npm unlink -g pi-courier && rm -f $(npm prefix -g)/bin/pi-courier && npm install -g pi-courier`.

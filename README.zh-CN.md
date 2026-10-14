@@ -19,7 +19,7 @@ Matrix bot ←→ pi-courier ←→ pi --mode rpc(系统安装)
 - **聊天原生操控**:pi 运行中可 steer / 排队 / 打断;扩展提问在房间里直接答;登录 provider 不用离开 Matrix
 - **不捆绑 pi** —— pi 独立安装、独立升级
 - **会话持久化**到 `~/.pi/agent/sessions`,重启自动恢复
-- **一条命令的 CLI**:配置向导、systemd 开机自启(仅 Linux)、自动更新
+- **一条命令的 CLI**:配置向导、开机自启(Linux=systemd,Windows=任务计划程序)、自动更新
 
 ## 2. 怎么装
 
@@ -27,7 +27,7 @@ Matrix bot ←→ pi-courier ←→ pi --mode rpc(系统安装)
 
 | 组件 | 要求 |
 |---|---|
-| Node.js | >= 22.19(实测 24.x) |
+| Node.js | >= 22.19(实测 24.x 与 26.x) |
 | pi | >= 0.83,**全局安装** |
 
 先装 pi —— pi-courier 连接的是它:
@@ -39,7 +39,7 @@ pi --version
 
 用 nvm 的话,每个新终端先 `source ~/.nvm/nvm.sh`,确保 `pi` 和 `node` 在 PATH 里。
 
-> **⚠️ pi 1.0+ 的 Node 版本要求**:pi 1.0 起上游硬性要求 **Node ≥ 22.19**——更老的 Node 下 pi CLI 一启动就崩(缺 `fs.globSync`,报 `SyntaxError`)。pi-courier 本体仍支持 Node ≥ 20;如果必须留在 Node 20/21,请继续用 1.0 之前的 pi(如 `npm install -g @earendil-works/pi-coding-agent@0.83.0`)。pi-courier 启动时会检查这一点并给出明确提示,而不是让 pi 报天书崩溃。
+> **⚠️ Node 版本**:pi 1.0 起硬性要求 **Node ≥ 22.19**——更老的 Node 下 pi CLI 一启动就崩(缺 `fs.globSync`,报 `SyntaxError`)。pi-courier 自 1.0.0 起声明同样的下限(`engines` 为 `>=22.19`)。如果必须留在 Node 20/21,请继续用 1.0 之前的 pi(如 `npm install -g @earendil-works/pi-coding-agent@0.83.0`)搭配 pi-courier 0.7.x。
 
 ### 方式 A:普通用户 —— 一条命令
 
@@ -48,6 +48,14 @@ npm install -g pi-courier
 ```
 
 完事。验证:`pi-courier help`。
+
+> **⚠️ npm ≥ 11 开了 install-scripts 门禁的机器**:如果安装时出现 `npm warn install-scripts … not yet covered by allowScripts`,说明 npm 静默跳过了全部安装脚本——包括 pi-courier 下载并做 sha256 校验 E2EE 原生库的 postinstall。带白名单装一次:
+>
+> ```bash
+> npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs pi-courier
+> ```
+>
+> (2026-10-14 在一台开了门禁的 npm 11.19 真机实测;这份白名单正是 npm 警告里自己建议的参数。)
 
 > **⚠️ 不要用 `pi install`**:pi.dev 的包页面会显示 `pi install npm:pi-courier`。那条命令是把 pi-courier 装成 **pi 的扩展**(只在 pi 里注册一个 `/pi-courier` 用法提示),**不会**生成 `pi-courier` 命令,`pi-courier -v` 会报"命令不存在"。pi-courier 本体是独立服务,必须用 `npm install -g pi-courier` 安装。已经跑过 `pi install` 的话,用 `pi remove npm:pi-courier` 清掉即可。
 
@@ -61,7 +69,7 @@ npm run build
 npm link          # 让 `pi-courier` 命令全局可用
 ```
 
-**不要用 `--ignore-scripts`**:Matrix E2EE 库的 postinstall 会下载原生二进制。npm >= 11 的 `allow-scripts` 默认可能拦截该依赖的 postinstall;`pi-courier` 自己的 postinstall 会自检并**自动补下**缺失的原生二进制(首次安装多下载一次;0.1.38 起副本缓存到本地并做 sha256 校验,后续更新免重下,校验不符的库会被拒绝加载)。若仍报 `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'`(比如自检被跳过),再手动补:
+**不要用 `--ignore-scripts`**:Matrix E2EE 库的 postinstall 会下载原生二进制,`pi-courier` 自己的 postinstall 也会自检并**自动补下**缺失的原生二进制(0.1.38 起副本缓存到本地并做 sha256 校验,后续更新免重下,校验不符的库会被拒绝加载)。一个例外:npm >= 11 开了 install-scripts 门禁的机器(见方式 A 的警告)会**静默跳过两者**——安装时请带上方式 A 的 `--allow-scripts` 白名单。若仍报 `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-*'`(任意平台后缀),再手动补:
 
 ```bash
 cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs
@@ -123,7 +131,7 @@ pi 工作目录 [默认 /home/你/Projects]:                                    
 ### 第 2 步 —— 启动
 
 ```bash
-pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动
+pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动(Linux;Windows 见下方 Windows 章节)
 ```
 
 想先快速前台测试:`pi-courier run`(Ctrl+C 停止)。
@@ -352,7 +360,7 @@ bash 回帖(`!` / `!!` / `/bash`)发帖前会截断输出:上限 `bashOutputLimi
 
 ### 多工程房间(项目隔离)
 
-同一个 bot 账号可以服务多个项目 —— 每个项目一个私有房间(房间名=项目名),有独立的 pi 进程、工作目录和会话历史。
+同一个 bot 账号可以服务多个项目 —— 每个项目一个私有房间(房间名=`项目名(实例名)`),有独立的 pi 进程、工作目录和会话历史。
 
 - **管理房间**:开启**空间组织**时(全新多工程配置默认开启),bot 在启动时**自行创建**管理房间 —— 位于私有空间 `π <实例名>` 内,并邀请全部信任用户,无需先给 bot 发 DM;后续经验证码加入的信任用户也会被自动邀请进管理房间(每人只邀一次,失败由下次启动自愈重试)。空间关闭(或创建失败)时沿用经典行为:bot **第一次成功受理(授权通过)的、非项目的私有/2 人房间**固化为管理房间(自动改名 `项目管理(<实例名>)` 并发送使用说明,房间 ID 写入 `config.managementRooms`)。两种路径下管理房间都是"管理台"(`/pmctl` 仅在此可用),且房间 ID 之后保持稳定。
 - **空间组织(Element)**:纯展示层收纳 —— 私有空间 `π <实例名>` 收集 bot 创建的所有房间(管理房间 + `/pmctl new` 的项目房间),不再散落在房间列表里;空间本身不参与授权判定——谁能发命令、谁有什么房间权限,由下面的权限模型决定。`/pmctl rm` 删除项目时同步把房间移出空间。开关在 `setup`(`启用空间组织?`,全新配置默认开、已有配置保持现状);空间在下次启动时懒创建,失败仅警告并回退无空间行为、下次启动自动重试。后续通过验证码成为信任用户的用户会被自动邀请进空间(每人只邀请一次)。还叫旧名字 `pi-courier · <实例名>` 的空间会被下次启动自愈改成短名(手动改过名的空间不动)。
@@ -433,11 +441,17 @@ pi-courier restart
 
 pi.dev 托管安装(`~/.pi/agent`)同样支持:pi-courier 会把 `bin/pi` 包装脚本自动解析到当前版本的真实 JS 入口,pi 升级后无需改配置(0.3.1 起)。
 
-## Windows 说明(实验性)
+## Windows
 
-Windows 支持是新的,尚未经过真机验证——请按实验性对待。
+自 1.0.0 起正式支持,并已于 2026-10-14 在真实 Windows Server 2025 机器上端到端验收:安装(原生库下载 + sha256 校验 + 加载)、配置向导、Matrix 连接、`!`/`!!` bash、单实例锁、多工程房间与空间组织、任务计划程序自启、Ctrl+C 干净退出。除下文明确列出的限制外,行为与 Linux 一致。
 
-**系统要求**:Node.js >= 22.19(与 pi 1.x 的硬性下限一致)。E2EE 加密原生库对 `win32-x64-msvc` / `win32-ia32-msvc` / `win32-arm64-msvc` 提供预编译产物,安装时下载并做 sha256 校验。
+**系统要求**:
+
+- Node.js >= 22.19(与 pi 1.x 的硬性下限一致)
+- **Git for Windows** —— `!` / `!!` 命令由它自带的 bash 执行;没装的话会得到一条可读的报错
+- pi,全局安装 —— 发现方式见下
+
+E2EE 加密原生库对 `win32-x64-msvc` / `win32-ia32-msvc` / `win32-arm64-msvc` 提供预编译产物,安装时下载并做 sha256 校验(x64 已真机验证:`.node` 落在 `~/.cache/pi-courier/native-crypto/`,经 N-API 正常加载)。
 
 **安装与运行**:
 
@@ -447,21 +461,40 @@ pi-courier setup
 pi-courier run
 ```
 
-- `!` / `!!` bash 命令走 **Git for Windows** 自带的 bash(与上游 pi 的 Windows 行为一致)——没装的话会得到一条可读的报错。
-- 开机自启三种方式:任务计划程序;用 [NSSM](https://nssm.cc/) 把 `pi-courier run` 包成服务;或干脆保持前台会话。
-- `pi-courier update` 在 Windows 上可用:它通过 npm 的 `npm-cli.js` 入口启动 npm,并跳过 systemd 的停启编排。
-- 如果找不到 pi 本体(Windows 没有 `which`),把 `PI_CLI_PATH` 指到 pi 包目录里的 `dist/cli.js`——**不要**指 `pi.cmd` / `pi.ps1` 垫片。pi.dev `install.ps1` 装在 `~/.pi/agent` 的安装会被自动识别。
-- 配置文件权限检查(0600)在 Windows 上跳过:系统无法表达 POSIX 权限位,继续检查只会每次启动误报。Ctrl+Break(SIGBREAK)可干净退出。
+npm >= 11 开了 install-scripts 门禁的机器(会出现 `npm warn install-scripts` 警告)会静默跳过 postinstall——包括原生库自检;带白名单装一次:
 
-**已知限制**:服务管理子命令(`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`)仅支持 Linux(systemd),在其他平台会直接报错退出。
+```powershell
+npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs pi-courier
+```
+
+验证:`pi-courier -v`。npm 装到 `%APPDATA%\npm` 的 `.cmd` / `.ps1` 垫片照常可用。
+
+- **pi 自动发现**:npm 全局安装的 `@earendil-works/pi-coding-agent` 会从 pi-courier 自身的安装树自动解析命中;pi.dev `install.ps1` 装在 `~/.pi/agent` 的同样自动识别。只有特殊布局才需要把 `PI_CLI_PATH` 指到 pi 包目录里的 `dist/cli.js`——**不要**指 `pi.cmd` / `pi.ps1` 垫片。
+- **`!` / `!!` bash 命令走 Git for Windows 的 bash** —— POSIX 路径(`/c/Users/...`)、退出码、报错信息都与 Linux 一致地透传。
+- **`pi-courier update` 在 Windows 上可用**:它通过 npm 的 `npm-cli.js` 入口启动 npm,并跳过 systemd 的停启编排。
+- **任务计划程序自启**(无需管理员,每次登录触发)——真机验证过的配方:
+
+  ```powershell
+  $action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c pi-courier run >> %USERPROFILE%\pi-courier-run.log 2>&1'
+  $trigger = New-ScheduledTaskTrigger -AtLogOn
+  Register-ScheduledTask -TaskName 'pi-courier' -Action $action -Trigger $trigger
+  Start-ScheduledTask -TaskName 'pi-courier'   # 立即启动;此后每次登录自动拉起
+  ```
+
+  想要真正无控制台窗口的后台服务,可用 [NSSM](https://nssm.cc/) 包一层;或者干脆保持前台会话。
+- **Ctrl+C / Ctrl+Break(SIGBREAK)干净退出** —— pi RPC 停止、Matrix 断开、单实例锁释放。
+- **单实例锁**行为一致:崩溃残留的锁会被下次启动自动接管,无论从控制台还是任务计划程序启动。
+- 配置文件权限检查(0600)在 Windows 上跳过:系统无法表达 POSIX 权限位,继续检查只会每次启动误报。
+
+**已知限制**:服务管理子命令(`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`)仅支持 Linux(systemd),在其他平台会直接报错退出;`pi-courier logs` 的过滤依赖 journald(Linux)。配置、会话、附件与状态数据与 Linux 相同,都在 `%USERPROFILE%\.pi\` 下。
 
 ## 4. 常见问题
 
 **Q: `npm install` 卡住 / 只有 20-60 kB/s?**
 A: 21 MB 的 E2EE 原生库从 GitHub Releases 下载,不走 npm 代理。先 `export https_proxy=... http_proxy=...`(写进 `~/.bashrc` 永久生效)再装。
 
-**Q: 报 `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu'`?**
-A: 原生二进制没下载(postinstall 被拦)。手动补:`cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs && node download-lib.js`。
+**Q: 报 `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-…'`(任意平台后缀)?**
+A: 原生二进制没下载——postinstall 被拦。npm ≥ 11 开了 install-scripts 门禁的机器上这是**静默**的;带白名单重装一次 `npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs pi-courier`。源码方式则手动补:`cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs && node download-lib.js`。
 
 **Q: `npm install -g pi-courier` 报 EEXIST?**
 A: 之前 `npm link` 过,bin 冲突。`npm unlink -g pi-courier && rm -f $(npm prefix -g)/bin/pi-courier && npm install -g pi-courier`。
