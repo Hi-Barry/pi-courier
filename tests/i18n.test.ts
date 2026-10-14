@@ -61,36 +61,66 @@ describe('parseLocaleValue', () => {
 });
 
 describe('detectSystemLanguage', () => {
+  // 平台固定为 linux:本组钉 POSIX 语义;win32 分支见下方专组(issue #189)。
   it('respects POSIX precedence LC_ALL > LC_MESSAGES > LANG', () => {
-    expect(detectSystemLanguage({ LC_ALL: 'en_US.UTF-8', LC_MESSAGES: 'zh_CN', LANG: 'zh_CN' })).toBe('en');
-    expect(detectSystemLanguage({ LC_MESSAGES: 'zh_CN', LANG: 'en_US' })).toBe('zh');
-    expect(detectSystemLanguage({ LANG: 'zh_CN.UTF-8' })).toBe('zh');
+    expect(detectSystemLanguage({ LC_ALL: 'en_US.UTF-8', LC_MESSAGES: 'zh_CN', LANG: 'zh_CN' }, 'linux')).toBe('en');
+    expect(detectSystemLanguage({ LC_MESSAGES: 'zh_CN', LANG: 'en_US' }, 'linux')).toBe('zh');
+    expect(detectSystemLanguage({ LANG: 'zh_CN.UTF-8' }, 'linux')).toBe('zh');
   });
 
   it('skips no-information values and falls back down the chain', () => {
-    expect(detectSystemLanguage({ LC_ALL: 'C', LANG: 'zh_CN.UTF-8' })).toBe('zh');
-    expect(detectSystemLanguage({ LC_ALL: 'C', LC_MESSAGES: 'C', LANG: 'C' })).toBeNull();
-    expect(detectSystemLanguage({})).toBeNull();
+    expect(detectSystemLanguage({ LC_ALL: 'C', LANG: 'zh_CN.UTF-8' }, 'linux')).toBe('zh');
+    expect(detectSystemLanguage({ LC_ALL: 'C', LC_MESSAGES: 'C', LANG: 'C' }, 'linux')).toBeNull();
+    expect(detectSystemLanguage({}, 'linux')).toBeNull();
+  });
+
+  it('non-win32 never consults the Windows probe (POSIX behaviour unchanged)', () => {
+    let probes = 0;
+    const probe = () => { probes += 1; return 'zh-CN'; };
+    expect(detectSystemLanguage({}, 'linux', probe)).toBeNull();
+    expect(probes).toBe(0);
+  });
+
+  it('win32 + empty POSIX chain: falls back to the ICU default locale', () => {
+    expect(detectSystemLanguage({}, 'win32', () => 'zh-CN')).toBe('zh');
+    expect(detectSystemLanguage({}, 'win32', () => 'en-US')).toBe('en');
+  });
+
+  it('win32: a failing probe degrades to null, not a throw', () => {
+    expect(detectSystemLanguage({}, 'win32', () => undefined)).toBeNull();
+    expect(detectSystemLanguage({}, 'win32', () => 'C')).toBeNull();
+  });
+
+  it('win32: POSIX variables still win over the probe when set', () => {
+    let probes = 0;
+    const probe = () => { probes += 1; return 'en-US'; };
+    expect(detectSystemLanguage({ LANG: 'zh_CN.UTF-8' }, 'win32', probe)).toBe('zh');
+    expect(probes).toBe(0);
   });
 });
 
 describe('resolveLanguage chain (env > config > system > en)', () => {
   it('PI_LANGUAGE wins (env)', () => {
-    expect(resolveLanguage({ language: 'zh' }, { PI_LANGUAGE: 'en' })).toEqual({ locale: 'en', source: 'env' });
-    expect(resolveLanguage({}, { PI_LANGUAGE: 'ZH' })).toEqual({ locale: 'zh', source: 'env' });
-    expect(resolveLanguage({}, { PI_LANGUAGE: 'fr' })).toEqual({ locale: 'en', source: 'default' });
+    expect(resolveLanguage({ language: 'zh' }, { PI_LANGUAGE: 'en' }, 'linux')).toEqual({ locale: 'en', source: 'env' });
+    expect(resolveLanguage({}, { PI_LANGUAGE: 'ZH' }, 'linux')).toEqual({ locale: 'zh', source: 'env' });
+    expect(resolveLanguage({}, { PI_LANGUAGE: 'fr' }, 'linux')).toEqual({ locale: 'en', source: 'default' });
   });
 
   it('config language is second', () => {
-    expect(resolveLanguage({ language: 'zh' }, {})).toEqual({ locale: 'zh', source: 'config' });
+    expect(resolveLanguage({ language: 'zh' }, {}, 'linux')).toEqual({ locale: 'zh', source: 'config' });
   });
 
   it('system locale is third', () => {
-    expect(resolveLanguage({}, { LANG: 'zh_CN.UTF-8' })).toEqual({ locale: 'zh', source: 'system' });
+    expect(resolveLanguage({}, { LANG: 'zh_CN.UTF-8' }, 'linux')).toEqual({ locale: 'zh', source: 'system' });
   });
 
   it('default is en with source "default"', () => {
-    expect(resolveLanguage({}, {})).toEqual({ locale: 'en', source: 'default' });
+    expect(resolveLanguage({}, {}, 'linux')).toEqual({ locale: 'en', source: 'default' });
+  });
+
+  it('win32 forwards to the ICU probe: Chinese Windows yields system/zh (issue #189)', () => {
+    expect(resolveLanguage({}, {}, 'win32', () => 'zh-CN')).toEqual({ locale: 'zh', source: 'system' });
+    expect(resolveLanguage({}, {}, 'win32', () => 'en-US')).toEqual({ locale: 'en', source: 'system' });
   });
 });
 

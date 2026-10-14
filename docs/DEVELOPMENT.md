@@ -866,9 +866,9 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 - `zh.ts` —— 基准表,`as const` 定义 `MessageKey`;**0.2.x 历史中文文案逐字入表**(两处有意例外:配对码提示 0.2.x 是英文孤例、现随 locale 走;setup 向导标题固定双语),存量中文断言以它为锚
 - `en.ts` —— `Record<MessageKey, string>`,缺 key/多 key 都是编译错误,两表永不漂移
 - `index.ts` —— 全局 `setLocale`/`t()`(与 logger 同风格的单例);`{name}` 占位符插值;key 为 `MessageKey` 强类型,坏 key 在 typecheck 阶段即失败,无运行时回落路径
-- `detect.ts` / `parse.ts` —— 系统 locale 检测(`LC_ALL` > `LC_MESSAGES` > `LANG`,C/POSIX/空跳过)与取消关键词(`isCancelInput`:取消/cancel 双词永远都认)
+- `detect.ts` / `parse.ts` —— 系统 locale 检测(POSIX 链 `LC_ALL` > `LC_MESSAGES` > `LANG`,C/POSIX/空跳过;win32 且链全空时回退 ICU 默认 locale——即 Windows"区域格式"设置,issue #189)与取消关键词(`isCancelInput`:取消/cancel 双词永远都认)
 
-语言解析链:`PI_LANGUAGE` 环境变量 > config `"language"` > 系统 locale > `"en"`;`config.ts` 的 `resolveLanguage` 是单点解释,非显式配置时启动日志打一行来源。接线点三处:standalone(启动早期)、cli(非 setup 子命令)、setup 向导(首问语言,检测值作默认并持久化)。
+语言解析链:`PI_LANGUAGE` 环境变量 > config `"language"` > 系统 locale > `"en"`;`config.ts` 的 `resolveLanguage` 是单点解释(平台与 win32 探针均为可注入参数,测试跨平台确定),非显式配置时启动日志打一行来源。接线点三处:standalone(启动早期)、cli(非 setup 子命令)、setup 向导(首问语言,检测值作默认并持久化)。
 
 红线:i18n 模块不 import src/ 其他文件(零循环依赖)、零第三方运行时依赖;logger 日志与代码注释**不翻译**;语言运行中不热切换(重启生效)。tests/setup.ts 全局 `setLocale("zh")` —— 存量测试的中文断言零改动;注意 `vi.resetModules()` 会重建 i18n 模块图,此类测试须在动态 import 后重新 `setLocale("zh")`。
 
@@ -879,6 +879,7 @@ Windows 适配分三期落地(2026-10-13,依据同日跨平台深度评估),**20
 - **第一期 CI**:`.github/workflows/ci.yml` ubuntu+windows 双平台矩阵(lint/typecheck/build/test),push(master、`feat/**`)与 pull_request 触发;windows runner 上 `npm ci` 真实走一遍 postinstall 的 win32 原生库下载路径。
 - **第二期核心修复**:pi 发现链 win32 跳过 `which`(恒 ENOENT),托管安装(`~/.pi/agent` releases-v1,根目录经 install.ps1 的 Get-PiAgentDir 实证)→ `import.meta.resolve` → `PI_CLI_PATH` 三级解析;`update` 经 `src/npm-runtime.ts` 的 `resolveNpmCli()` 直启 `node npm-cli.js`(Windows 无法裸 spawn npm);e2e 原生库检查的全局前缀按平台解析(win32 = `%APPDATA%\npm\node_modules`)。
 - **第三期外围守卫**:服务管理族入口 `requireLinux()` 平台守卫(非 linux 报错退出,守卫在写 unit 文件之前);config 权限自检 win32 跳过(libuv 在 Windows 只报 0666/0444,0600 契约无意义);信号补 `SIGBREAK`(Windows Ctrl+Break)。
+- **语言检测 Windows 回退(issue #189,2026-10-14)**:Windows 不设置 POSIX locale 变量,原先语言链直落英文兜底;现 win32 且 POSIX 链全空时读 ICU 默认 locale(源自系统"区域格式"设置)映射 zh*/其余。探针失败(含 ICU 异常)降级为 null 不抛,启动链永不因检测崩。注意语义边界:读的是区域格式而非显示语言,混合配置(中文显示+英文区域)会判偏,README 已提示用 `PI_LANGUAGE` 显式指定。
 
 **win32 分支约定**:平台分支只允许两种形态——新增 `process.platform === "win32"` 专属分支,或非 linux 守卫提前拒绝;**POSIX 分支的既有顺序与语义一个字不动**(Linux 是主战场,回归零容忍)。守卫判定一律抽成纯函数(参数化 platform)以便单测;内置模块 mock 用 `vi.hoisted` + `vi.mock` 工厂(vitest 4 下 `vi.spyOn` 打不动 ESM 命名空间)。
 

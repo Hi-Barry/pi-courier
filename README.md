@@ -270,7 +270,7 @@ How the language is picked (first match wins):
 
 1. `PI_LANGUAGE=en|zh` environment variable — the most reliable option in containers/minimal deployments
 2. `"language": "zh" | "en"` in `~/.pi/pi-courier.json` (the setup wizard asks and writes it)
-3. The system locale of the service (`LC_ALL` > `LC_MESSAGES` > `LANG`; `zh*` → Chinese) — at startup the log prints one line explaining where the language came from
+3. The system locale of the service: on Linux/macOS `LC_ALL` > `LC_MESSAGES` > `LANG` (`zh*` → Chinese); on Windows (which sets none of those variables) the system regional setting is read instead — a Chinese Windows yields Chinese. At startup the log prints one line explaining where the language came from
 4. English as the final fallback
 
 Notes:
@@ -278,6 +278,7 @@ Notes:
 - Language changes take effect on restart (same as `multiProject`)
 - **Upgrading from 0.2.x and prefer Chinese?** Set `"language": "zh"` once (or re-run `pi-courier setup`) — 0.2.x deployments detected `zh_CN` locale keep Chinese with zero action; the cancel keyword stays bilingual either way (`取消` and `cancel` are both accepted in every language)
 - The zh table is Simplified Chinese; `zh_TW` / `zh_HK` locales also get Simplified
+- Windows reads the regional format setting (what "Region" in the control panel defines); a mixed configuration — Chinese display language but a non-Chinese region — can point to the wrong language. Pin `PI_LANGUAGE` (or config `language`) in that case
 - Already-created rooms keep their original names and guides — no retroactive rebranding on language change
 
 ### When a model call fails
