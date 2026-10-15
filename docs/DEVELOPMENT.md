@@ -876,7 +876,7 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 
 Windows 适配分三期落地(2026-10-13,依据同日跨平台深度评估),**2026-10-14 真机验收 7/7 全过**(Windows Server 2025:安装链路/向导/run 连 Matrix/`!` bash/enable 守卫/任务计划程序自启/Ctrl+C 优雅退出),另通过多空间多房间专项(/pmctl 双项目防串台、空间三子房收纳、头像区分、rm 销账);自 1.0.0 起随版正式支持。README 双语 Windows 章节与安装提示(含 npm ≥ 11 install-scripts 门禁的 `--allow-scripts` 白名单)已按真机实测重写:
 
-- **第一期 CI**:`.github/workflows/ci.yml` ubuntu+windows 双平台矩阵(lint/typecheck/build/test),push(master、`feat/**`)与 pull_request 触发;windows runner 上 `npm ci` 真实走一遍 postinstall 的 win32 原生库下载路径。
+- **第一期 CI**:`.github/workflows/ci.yml` ubuntu+windows 双平台矩阵(lint/typecheck/build/test),push(master、`develop`、`feat/**`)与 pull_request 触发;windows runner 上 `npm ci` 真实走一遍 postinstall 的 win32 原生库下载路径。
 - **第二期核心修复**:pi 发现链 win32 跳过 `which`(恒 ENOENT),托管安装(`~/.pi/agent` releases-v1,根目录经 install.ps1 的 Get-PiAgentDir 实证)→ `import.meta.resolve` → `PI_CLI_PATH` 三级解析;`update` 经 `src/npm-runtime.ts` 的 `resolveNpmCli()` 直启 `node npm-cli.js`(Windows 无法裸 spawn npm);e2e 原生库检查的全局前缀按平台解析(win32 = `%APPDATA%\npm\node_modules`)。
 - **第三期外围守卫**:服务管理族入口 `requireLinux()` 平台守卫(非 linux 报错退出,守卫在写 unit 文件之前);config 权限自检 win32 跳过(libuv 在 Windows 只报 0666/0444,0600 契约无意义);信号补 `SIGBREAK`(Windows Ctrl+Break)。
 - **语言检测 Windows 回退(issue #189,2026-10-14)**:Windows 不设置 POSIX locale 变量,原先语言链直落英文兜底;现 win32 且 POSIX 链全空时读 ICU 默认 locale(源自系统"区域格式"设置)映射 zh*/其余。探针失败(含 ICU 异常)降级为 null 不抛,启动链永不因检测崩。注意语义边界:读的是区域格式而非显示语言,混合配置(中文显示+英文区域)会判偏,README 已提示用 `PI_LANGUAGE` 显式指定。
