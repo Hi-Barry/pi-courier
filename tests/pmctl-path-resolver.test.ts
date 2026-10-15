@@ -1,9 +1,14 @@
+/**
+ * resolveProjectPath 路径解析直测(issue #188 收编):原驻 src/rpc/ 使
+ * 主 tsconfig 的 include:["src/**"] 把它编译进 dist 随包发布 —— 移入
+ * tests/ 后 dist 恢复无测试产物;src/**\/*.test.ts 同步加进构建 exclude 防再犯。
+ */
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { ConfigStore } from "../config.js";
-import { PmctlController } from "./pmctl-controller.js";
-import type { ProjectManager } from "./project-manager.js";
+import { ConfigStore } from "../src/config.js";
+import { PmctlController } from "../src/rpc/pmctl-controller.js";
+import type { ProjectManager } from "../src/rpc/project-manager.js";
 
 function makeController(workdir?: string): PmctlController {
   return new PmctlController({
