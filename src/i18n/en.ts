@@ -376,6 +376,16 @@ const en: Record<MessageKey, string> = {
   "label.caseClash":
     "Project name \"{name}\" differs from existing project \"{clash}\" only by letter case (log filtering matches by name and would be ambiguous)",
 
+  // ── path (Windows path guards, win32-path.ts, issue #190) ─────────────
+  "path.win32.reserved":
+    "❌ This path is unusable on Windows: \"{component}\" is a reserved device name (CON/PRN/AUX/NUL/COM1-9/LPT1-9); pick another name",
+  "path.win32.illegalChars":
+    "❌ This path is unusable on Windows: \"{component}\" contains an illegal character (one of < > : \" | ? *)",
+  "path.win32.tooLong":
+    "❌ This path is too long: {length} characters, over the Windows limit (259); use a shorter path",
+  "path.win32.dupWorkdir":
+    "❌ This path points at the same directory as another project's workdir on Windows (NTFS is case-insensitive):\n• existing project: {name} — {workdir}\nSharing one directory would share the session state; pick another path",
+
   // ── pmctl ─────────────────────────────────────────────────────────────
   "pmctl.singleProjectMode":
     "❌ This is single-project mode; project management is off.\nTo go multi-project: send `/multiproject on` and restart (pi-courier restart).",

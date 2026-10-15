@@ -1,0 +1,61 @@
+/**
+ * Windows path robustness guards (issue #190) — a win32-only sanity check for
+ * project workdirs, applied at registration time (/pmctl new, /pmctl mv) so a
+ * path that Windows cannot host is refused with a readable message BEFORE any
+ * room is created or any process spawned.
+ *
+ * Three failure classes, all observed as cryptic downstream errors otherwise:
+ *  - DOS reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with or
+ *    without an extension — "NUL.txt" is reserved too): mkdir of such a
+ *    component fails with EPERM/EINVAL deep inside the pi spawn.
+ *  - Characters illegal in NTFS names (`< > : " | ? *`, plus the drive-letter
+ *    colon as the one legal colon): a name like `a:b` silently becomes an
+ *    alternate data stream.
+ *  - Paths over the classic MAX_PATH (260): whether long paths work depends
+ *    on the machine's long-path policy (registry + process manifest), so the
+ *    prerequirement for a deterministic outcome is a readable refusal.
+ *
+ * POSIX hosts are untouched: the check is win32-gated at the call site, and
+ * these pure functions are platform-parameterized for tests. The component
+ * scanner is deliberately string-based (no path.win32 dependency) so the
+ * win32 branch is testable on any CI runner.
+ */
+
+/** OK, or one of the three refusal kinds. */
+export type Win32PathProblem =
+  | { kind: "reserved"; component: string }
+  | { kind: "illegalChars"; component: string }
+  | { kind: "tooLong"; length: number };
+
+/** 260 including the terminator — 259 usable characters is the classic limit. */
+export const MAX_PATH_LENGTH = 260;
+
+const RESERVED_COMPONENT = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
+/** Characters NTFS rejects inside a component. The drive-letter colon is
+ *  handled by splitting: a leading `X:` segment is exempt. */
+const ILLEGAL_CHARS = /[<>:"|?*]/;
+
+/** First offending problem in `workdir`, or null when Windows can host it. */
+export function win32PathProblem(workdir: string): Win32PathProblem | null {
+  if (workdir.length > MAX_PATH_LENGTH - 1) {
+    return { kind: "tooLong", length: workdir.length };
+  }
+  const segments = workdir.split(/[/\\]/);
+  for (let i = 0; i < segments.length; i += 1) {
+    const component = segments[i]!;
+    if (!component) continue; // UNC double-slash runs and leading/trailing separators
+    // A bare drive designator (C:) is legal exactly in position 0.
+    if (i === 0 && /^[A-Za-z]:$/.test(component)) continue;
+    if (RESERVED_COMPONENT.test(component)) return { kind: "reserved", component };
+    if (ILLEGAL_CHARS.test(component)) return { kind: "illegalChars", component };
+  }
+  return null;
+}
+
+/** Whether two workdirs denote the same directory on case-insensitive NTFS.
+ *  Compares folded forms; callers only use this on win32 — on POSIX the two
+ *  case variants are genuinely different directories. */
+export function win32SamePath(a: string, b: string): boolean {
+  return a.normalize("NFKC").toLowerCase() === b.normalize("NFKC").toLowerCase();
+}
