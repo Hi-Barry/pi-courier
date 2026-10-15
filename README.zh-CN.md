@@ -270,7 +270,7 @@ bash 回帖(`!` / `!!` / `/bash`)发帖前会截断输出:上限 `bashOutputLimi
 
 1. 环境变量 `PI_LANGUAGE=en|zh` —— 容器/极简部署里最稳
 2. `~/.pi/pi-courier.json` 的 `"language": "zh" | "en"`(setup 向导首问并写入)
-3. 服务的系统 locale(`LC_ALL` > `LC_MESSAGES` > `LANG`;`zh*` → 中文)—— 启动日志会打一行说明语言从哪来
+3. 服务的系统 locale:Linux/macOS 上为 `LC_ALL` > `LC_MESSAGES` > `LANG`(`zh*` → 中文);Windows 不设置这些变量,改读系统区域设置 —— 中文 Windows 即中文。启动日志会打一行说明语言从哪来
 4. 最终回落英文
 
 注意:
@@ -278,6 +278,7 @@ bash 回帖(`!` / `!!` / `/bash`)发帖前会截断输出:上限 `bashOutputLimi
 - 语言修改重启生效(与 `multiProject` 同语义)
 - **从 0.2.x 升级、想保持中文?** 配置里加一次 `"language": "zh"`(或重跑 `pi-courier setup`)即可;系统 locale 为 `zh_CN` 的 0.2.x 部署升级后零操作保持中文;无论哪种语言,取消关键词永远双语(`取消` 和 `cancel` 都认)
 - 中文表是简体;`zh_TW` / `zh_HK` locale 同样给简体
+- Windows 读的是"区域格式"设置(控制面板「区域」里定义的那个);显示语言与区域格式不一致的混合配置可能指向错误语言,此时请显式指定 `PI_LANGUAGE`(或配置 `language`)
 - 已建好的房间保持原有名称与使用说明 —— 切语言不会追溯改名
 
 ### 模型调用失败时
