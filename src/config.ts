@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { detectSystemLanguage } from "./i18n/detect.js";
+import { defaultWindowsLocale, detectSystemLanguage } from "./i18n/detect.js";
 import type { Locale } from "./i18n/index.js";
 import { adoptManagementRoomPatch } from "./management-room.js";
 import type { MsgBridgeConfig, ProjectConfig } from "./types.js";
@@ -253,19 +253,22 @@ export function projectAvatarPath(project: ProjectConfig | undefined): string | 
 
 // ── 语言解析链(issue #83)──────────────────────────────────────────
 // PI_LANGUAGE 环境变量 > config "language" > 系统 locale 检测 > "en"。
-// env 最高:容器/极简部署里最稳;系统 locale 语义见 i18n/detect.ts。
+// env 最高:容器/极简部署里最稳;系统 locale 语义见 i18n/detect.ts
+// (POSIX 变量链 + win32 的 ICU 回退,issue #189)。
 // source 供启动日志解释"语言从哪来"(非显式配置时打一行 info)。
 
 export type LanguageSource = "env" | "config" | "system" | "default";
 
 export function resolveLanguage(
   cfg: MsgBridgeConfig,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  windowsLocale: () => string | undefined = defaultWindowsLocale
 ): { locale: Locale; source: LanguageSource } {
   const envLang = env.PI_LANGUAGE?.trim().toLowerCase();
   if (envLang === "zh" || envLang === "en") return { locale: envLang, source: "env" };
   if (cfg.language === "zh" || cfg.language === "en") return { locale: cfg.language, source: "config" };
-  const detected = detectSystemLanguage(env);
+  const detected = detectSystemLanguage(env, platform, windowsLocale);
   if (detected) return { locale: detected, source: "system" };
   return { locale: "en", source: "default" };
 }
