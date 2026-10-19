@@ -541,6 +541,8 @@ const zh = {
   "startup.pairingNotice": "🔐 配对码 @{username}: {code}(2 分钟内有效,发给该用户用于配对)",
 
   // ── proxy(出网代理,spec #201 票 #202)───────────────────────────────
+  "proxy.active":
+    "🌐 出网代理: {proxy}(来源: {source};修改 ~/.pi/pi-courier.json 后重启生效)",
   "proxy.unsupportedScheme":
     "❌ 代理 \"{value}\"(来源: {origin})当前版本不支持 —— 仅支持 http/https 代理,请改用 http:// 或 https:// 开头的地址",
 } as const;

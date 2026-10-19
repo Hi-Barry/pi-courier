@@ -578,6 +578,8 @@ Note: pi itself is installed and upgraded independently on the system
   "startup.pairingNotice": "🔐 Pairing code for @{username}: {code} (valid for 2 minutes; send it to that user to pair)",
 
   // ── proxy (outbound proxy, spec #201 ticket #202) ──────────────────────
+  "proxy.active":
+    "🌐 outbound proxy: {proxy} (source: {source}; edit ~/.pi/pi-courier.json and restart to change)",
   "proxy.unsupportedScheme":
     "❌ Proxy \"{value}\" (from {origin}) is not supported in this version — only http/https proxies are supported; use an address starting with http:// or https://",
 };
