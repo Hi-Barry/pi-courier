@@ -31,6 +31,7 @@ import { truncateLine } from "./formatting.js";
 import { setLocale, t } from "./i18n/index.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
+import { applyProxySettings } from "./proxy.js";
 import { ReminderClock } from "./reminders/reminder-clock.js";
 import type { ReminderEntry } from "./reminders/reminder-store.js";
 import { ReminderStore } from "./reminders/reminder-store.js";
@@ -139,6 +140,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const cliLevel = args.logLevel ? parseLogLevel(args.logLevel) : undefined;
   const configLevel = typeof config.logLevel === "string" ? parseLogLevel(config.logLevel) : undefined;
   setLogLevel(cliLevel ?? configLevel ?? "info");
+
+  // ---- outbound proxy (spec #201 票 #203) ------------------------------------
+  // 出网代理接线必须先于任何出网:Matrix 客户端创建(底层 request 启动即读
+  // 环境变量)、pi 拉起、向导进入都在其后。顺序:解析 → 校验 → 覆写进程
+  // 环境(大小写两套)→ 装配 undici 代理调度器(桥自己的 fetch 腿)。无代
+  // 理时 applyProxySettings 零动作,行为与旧版直连逐字节一致;手编错误
+  // (如 socks5://)在此抛双语提示,进程经底部 catch 停下,不留连接超时。
+  const proxySettings = applyProxySettings(config);
+  if (proxySettings.source !== "none") {
+    logger.info(t("proxy.active", { proxy: proxySettings.proxy, source: proxySettings.source }));
+  }
 
   // ---- startup state (spec #99 票7 / #106) ----------------------------------
   // 组合根的三块启动期状态(配对码去向、收养许可、自愈编排)收进可注入

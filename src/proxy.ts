@@ -15,8 +15,11 @@
  *     才解析 NO_PROXY/no_proxy(逗号分隔标准格式,只做拆分不做匹配)。
  *  4. 校验:生效代理 URL 的 scheme 必须是 http:/https:,否则无论来自配置
  *     还是环境变量一律抛错停下(双语提示)—— 提前给人话,不留给下游连接
- *     超时去猜。本函数是纯函数(env 显式传入),抛错时机由调用方决定。
+ *     超时去猜。resolveProxySettings 是纯函数(env 显式传入),抛错时机由
+ *     调用方决定;带副作用的启动接线只有本文件底部的 applyProxySettings,
+ *     它也只消费上面的决策,不另写规则。
  */
+import * as undici from "undici";
 import { t } from "./i18n/index.js";
 
 /** 生效代理的来源标记。 */
@@ -98,4 +101,71 @@ export function resolveProxySettings(
   }
 
   return { proxy: undefined, noProxy: [], source: "none" };
+}
+
+// ── 启动接线(spec #201 票 #203)──────────────────────────────────────────
+// 把生效三元组落到进程上:覆写标准环境变量(request 腿自动认)+ 装配
+// undici 全局调度器(桥自己的 fetch 腿必须代码级装配)。pi 子进程注入
+// (票 #204)与向导默认值(票 #205)各自消费 resolveProxySettings,不走
+// 本函数。
+
+/** 出网代理的标准环境变量名,大小写两套全部写齐 —— request 的
+ *  getProxyFromURI 与 undici 都小写优先,只写大写会被 shell 遗留小写变量
+ *  抢跑,只写小写则 Windows 等大写惯例的消费方认不到。 */
+const PROXY_ENV_NAMES = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"] as const;
+
+/** 调度器装配缝:默认实现真正装配全局调度器并换装 undici fetch;测试注入
+ *  spy,断言装配时机(此刻环境已覆写完毕)与装配物(EnvHttpProxyAgent)。 */
+export type DispatcherInstaller = (agent: undici.EnvHttpProxyAgent) => void;
+
+export interface ApplyProxyOptions {
+  /** 被覆写的环境(默认 process.env;测试传假对象,不污染真实环境)。 */
+  env?: NodeJS.ProcessEnv;
+  /** 调度器装配缝(默认真实装配)。 */
+  installDispatcher?: DispatcherInstaller;
+}
+
+/** 与上游 pi 同款(http-dispatcher.ts):setGlobalDispatcher 之后把 undici
+ *  自己的 fetch 实现一并 install 到 globalThis —— 让 fetch 与调度器始终在
+ *  同一 undici 实现上,避免 Node 内置 fetch 消费 npm undici 调度器的版本
+ *  错配(新版本 Node 才修正压缩响应的解压行为)。 */
+function installGlobalProxyDispatcher(agent: undici.EnvHttpProxyAgent): void {
+  undici.setGlobalDispatcher(agent);
+  undici.install();
+}
+
+/**
+ * 把生效代理落到进程上,启动路径的唯一调用点:解析 → 校验 → 覆写环境 →
+ * 装配调度器,必须先于任何出网(Matrix 客户端创建、pi 拉起、向导进入)。
+ * 无代理时零动作 —— 环境不动、调度器不装,行为与旧版直连完全一致。
+ *
+ * noProxy 以配置为准:代理生效而未填时把环境遗留的 NO_PROXY 删掉,
+ * 「未填即无豁免」在进程环境里同样成立;填了则以逗号串写大小写两套。
+ */
+export function applyProxySettings(
+  config: ProxyConfigInput,
+  options: ApplyProxyOptions = {},
+): ProxySettings {
+  const env = options.env ?? process.env;
+  const settings = resolveProxySettings(config, env);
+  if (settings.proxy === undefined) return settings;
+
+  for (const name of PROXY_ENV_NAMES) {
+    env[name] = settings.proxy;
+  }
+  if (settings.noProxy.length > 0) {
+    const joined = settings.noProxy.join(",");
+    env.NO_PROXY = joined;
+    env.no_proxy = joined;
+  } else {
+    delete env.NO_PROXY;
+    delete env.no_proxy;
+  }
+
+  const installDispatcher = options.installDispatcher ?? installGlobalProxyDispatcher;
+  // proxyTunnel: true —— 同上游 pi:http 目标也走 CONNECT 隧道(undici 8.7
+  // 起默认改为普通代理请求;固定走隧道让桥的 fetch 腿与矩阵 request 腿的
+  // 隧道行为一致,集成测试也只验证这一种配方)。
+  installDispatcher(new undici.EnvHttpProxyAgent({ proxyTunnel: true }));
+  return settings;
 }
