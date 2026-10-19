@@ -182,6 +182,7 @@ pi 0.83.0 就绪。
 - 发送语义恒定显式(0.1.39 起):每条 `prompt` 都携带 `streamingBehavior` —— steer = Enter 语义 / followUp = Alt+Enter 排队,空闲会话自动忽略该参数,一条消息覆盖两种状态;参数经上游私有 `send` 下发(公开 `prompt()` 不暴露它),不再依赖报错文案降级
 - `get_commands` 60 秒缓存:避免频繁查询命令列表
 - 监听器队列:修复了"先注册事件监听、后启动连接"会抛错的问题
+- 出网代理 spawn 注入(spec #201 票 #204):派生 pi 时现算生效三元组合入子进程 env(规则单点见 `src/proxy.ts` 条),不依赖入口接线是否先跑,任何入口直接拉起 PiRpc 都自洽
 
 **`src/rpc/command-map.ts`** —— 命令映射表(纯 pi 命令;/pmctl 家族已移入 PmctlController)
 - `/new` `/clear` → `new_session`
@@ -319,10 +320,17 @@ pi 0.83.0 就绪。
 
 **`src/management-room.ts`** —— 管理房间文案单点组装(房间名 + 使用指南),DM 采纳与空间自建两条入口共用,杜绝文案漂移
 
+**`src/proxy.ts`** —— 出网代理决策与启动接线(spec #201,1.1.0 同车)
+- `resolveProxySettings` 纯函数(env 显式传入)是全项目代理规则的**唯一解释点**:优先级(配置 > 环境变量)、env 兜底顺序(`https_proxy` → `HTTPS_PROXY` → `http_proxy` → `HTTP_PROXY`,同义变量小写优先)、scheme 白名单(`http:`/`https:` 之外一律抛双语错并点名值与出处,含 `socks5://`)、noProxy 语义(配置出场未填 = 无豁免,压掉继承的 `NO_PROXY`;代理回落自 env 时才解析 `NO_PROXY`/`no_proxy` 逗号表)——向导默认值(setup 6.8 步)与 pi 子进程注入都消费它,永不各写一份规则
+- `applyProxySettings` 是带副作用的启动接线唯一调用点:解析 → 校验 → 覆写进程环境(`HTTP_PROXY`/`HTTPS_PROXY` 大小写两套写齐,防 shell 遗留小写变量抢跑)→ 装配 undici `EnvHttpProxyAgent` + `install()`;无代理时零动作,行为与旧版直连逐字节一致。**必须先于任何出网**(Matrix 客户端创建、pi 拉起、向导进入),接线点在 standalone 组合根与 cli 的 `cmdSetup`(向导登录腿)两处
+- **undici 依赖缘由**:Node 内置 fetch 在全部受支持版本默认不理会代理环境变量,22.19–22.20 连 `NODE_USE_ENV_PROXY` 开关都没有,必须代码级装配;与上游 pi 同款做法(`setGlobalDispatcher` + `install()`,让 fetch 与调度器在同一 undici 实现上),不抬 engines 门槛;`proxyTunnel: true` 与矩阵 request 腿的 CONNECT 隧道行为对齐
+- **pi 子进程 spawn 注入自洽**(PiRpc.proxySpawnEnv):spawn 点现算生效三元组合入子进程 env(`PiRpcOptions.proxyConfig` 优先、缺省 loadConfig 兜底),不依赖入口接线是否先跑——cli、pmctl 等任何入口直接拉起 PiRpc 都正确;因上游 spawn 按 `{...process.env, ...options.env}` 合成无法删键,「配置出场未填 noProxy」以空串压掉 shell 遗留 `NO_PROXY`,env 兜底解析不出豁免则两键不写
+- **测试三缝**:缝 A 纯函数直测(`proxy.test.ts`:优先级/env 兜底/大小写/scheme 白名单/noProxy 语义/双语报错);缝 B 注入断言(`proxy-apply.test.ts` 假 env + spy installer 断言覆写与装配时机、`pi-rpc-proxy-env.test.ts` spawn env 三态、`setup-proxy.test.ts` 假 stdin 测向导默认值/校验/跳过);缝 C 真实集成(`proxy-apply.test.ts` 内起本地假 CONNECT 代理 + 假源站,断言全局 fetch 真实经代理到达源站,全程回环零外网)
+
 **`src/standalone.ts`** —— 独立入口(组合根只接线,spec #99 票7/#106)
 - 单实例锁(lock.ts)
 - 信号优雅关闭(SIGTERM/SIGINT)
-- 初始化顺序:构造启动状态(最早,配对码槽就位)→ transports → 空间 ensure(幂等/降级,降级翻转收养许可)→ `runStartupHeals` 自愈编排 → 启动 RPC → 接线(pairing sink、事件、router)——时序不变量由"先构造后接线"的结构承载,不再靠注释
+- 初始化顺序:出网代理接线(`applyProxySettings`,spec #201——先于一切出网,代理生效时日志打一行 `proxy.active`)→ 构造启动状态(最早,配对码槽就位)→ transports → 空间 ensure(幂等/降级,降级翻转收养许可)→ `runStartupHeals` 自愈编排 → 启动 RPC → 接线(pairing sink、事件、router)——时序不变量由"先构造后接线"的结构承载,不再靠注释
 
 ### 5.2 适配 0.83.0 的坑
 
