@@ -6,11 +6,12 @@
  * `@earendil-works/pi-coding-agent` 整体 mock —— doStart 经动态 import 取
  * RpcClient,假类只记录构造参数并让 start/getState/stop 立即就绪;loadConfig
  * 同样 mock 掉,隔离开发者机器上的真实 ~/.pi/pi-courier.json。本机 shell
- * 可能预置真实代理变量(如 http_proxy),六个代理键用例前清空、用例后还原
- * (先例:proxy-apply.test.ts)。
+ * 可能预置真实代理变量(如 http_proxy),六个代理键用例前清空、用例后
+ * 还原 —— 样板在 ./proxy-env-fixture.js 共享(先例:proxy-apply.test.ts)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiRpc, type PiRpcOptions } from "../src/rpc/pi-rpc";
+import { clearProxyEnv, PROXY_ENV_KEYS, restoreProxyEnv, saveProxyEnv } from "./proxy-env-fixture.js";
 
 const { constructed, fileConfig } = vi.hoisted(() => ({
   /** 每次 new RpcClient 的构造参数(pi-rpc.ts 传给上游 spawn 的 options)。 */
@@ -48,31 +49,18 @@ function startRpc(options: PiRpcOptions = {}): Promise<PiRpc> {
 
 const lastOptions = (): Record<string, unknown> => constructed[constructed.length - 1];
 
-/** 本机 shell 可能预置真实代理变量:这六个键是注入逻辑可能读写的全部
- *  范围,用例前清空(无代理基线)、用例后逐一还原。 */
-const PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "http_proxy",
-  "HTTPS_PROXY",
-  "https_proxy",
-  "NO_PROXY",
-  "no_proxy",
-] as const;
+/** 本机 shell 可能预置真实代理变量:六个键用例前保存并清空(无代理
+ *  基线)、用例后逐一还原,实现见 ./proxy-env-fixture.js。 */
 const savedProxyEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
   constructed.length = 0;
   fileConfig.current = {};
-  for (const key of PROXY_ENV_KEYS) savedProxyEnv[key] = process.env[key];
-  for (const key of PROXY_ENV_KEYS) delete process.env[key];
+  saveProxyEnv(savedProxyEnv);
+  clearProxyEnv();
 });
 
-afterEach(() => {
-  for (const key of PROXY_ENV_KEYS) {
-    if (savedProxyEnv[key] === undefined) delete process.env[key];
-    else process.env[key] = savedProxyEnv[key];
-  }
-});
+afterEach(() => restoreProxyEnv(savedProxyEnv));
 
 describe("PiRpc spawn 代理 env 注入(票 #204 三态)", () => {
   it("配置出场:大小写两套全部覆写为生效值,带 noProxy", async () => {

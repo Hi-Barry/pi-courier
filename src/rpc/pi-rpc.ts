@@ -19,7 +19,13 @@ import { fileURLToPath } from "node:url";
 // importing process itself on Node <22.19, before any gate could run).
 import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../config.js";
-import { type ProxyConfigInput, resolveProxySettings } from "../proxy.js";
+import {
+  joinNoProxyList,
+  NO_PROXY_ENV_NAMES,
+  PROXY_ENV_NAMES,
+  type ProxyConfigInput,
+  resolveProxySettings,
+} from "../proxy.js";
 
 /** 重启前排空在途请求的兜底上限:进程终究要重启(加载新凭据/扩展),不能
  *  被一条僵死请求无限拖延;正常的桥→pi 请求远快于此。 */
@@ -35,9 +41,10 @@ export interface PiRpcOptions {
   /** Project label for tagged log lines (multi-project mode; spec #34). */
   label?: string;
   /** 出网代理配置(spec #201 票 #204):派生 pi 子进程时在 spawn 点现算
-   *  生效三元组,把覆写增量并入子进程 env。缺省读配置文件(loadConfig)
-   *  —— spawn 点自洽,不依赖入口接线(#203 applyProxySettings)是否先跑;
-   *  测试经此注入,免碰真实配置与全局状态。 */
+   *  生效三元组,把覆写增量并入子进程 env。生产主路径由组合根(standalone)
+   *  把启动时已加载的 config 经此传入 —— 与桥侧接线(#203 applyProxySettings)
+   *  同一对象,RPC 层不再自读配置盘;缺省 loadConfig 兜底,其他入口直接拉起
+   *  PiRpc 仍自洽;测试经此注入,免碰真实配置与全局状态。 */
   proxyConfig?: ProxyConfigInput;
 }
 
@@ -413,21 +420,17 @@ export class PiRpc {
   private proxySpawnEnv(): Record<string, string> | undefined {
     const settings = resolveProxySettings(this.options.proxyConfig ?? loadConfig(), process.env);
     if (settings.proxy === undefined) return undefined;
-    const env: Record<string, string> = {
-      // 大小写两套全写:消费方(request / undici)小写优先,只写大写会被
-      // shell 遗留小写变量抢跑,只写小写则 Windows 惯例的消费方认不到。
-      HTTP_PROXY: settings.proxy,
-      http_proxy: settings.proxy,
-      HTTPS_PROXY: settings.proxy,
-      https_proxy: settings.proxy,
-    };
+    const env: Record<string, string> = {};
+    // 键集与拼串与桥侧覆写(applyProxySettings)共享自 proxy.ts;第三态
+    // 语义有意不同 —— 见方法注释,不与桥侧的删键分支合并。
+    for (const name of PROXY_ENV_NAMES) {
+      env[name] = settings.proxy;
+    }
     if (settings.noProxy.length > 0) {
-      const joined = settings.noProxy.join(",");
-      env.NO_PROXY = joined;
-      env.no_proxy = joined;
+      const joined = joinNoProxyList(settings.noProxy);
+      for (const name of NO_PROXY_ENV_NAMES) env[name] = joined;
     } else if (settings.source === "config") {
-      env.NO_PROXY = "";
-      env.no_proxy = "";
+      for (const name of NO_PROXY_ENV_NAMES) env[name] = "";
     }
     return env;
   }

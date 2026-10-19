@@ -22,7 +22,7 @@ import { errorMessage } from "./errors.js";
 import { detectSystemLanguage } from "./i18n/detect.js";
 import type { Locale } from "./i18n/index.js";
 import { setLocale, t } from "./i18n/index.js";
-import { type ProxySettings, resolveProxySettings } from "./proxy.js";
+import { type ProxySettings, parseNoProxyList, resolveProxySettings } from "./proxy.js";
 import type { MsgBridgeConfig } from "./types.js";
 
 /**
@@ -401,10 +401,8 @@ export async function runSetup(): Promise<void> {
         ? t("setup.proxy.noProxy.default", { def: noProxyDefault })
         : t("setup.proxy.noProxy.plain");
       const noProxyRaw = (await ask(noProxyPrompt)).trim() || noProxyDefault;
-      noProxyList = noProxyRaw
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0);
+      // 拆分规则单一来源:proxy.ts 的 parseNoProxyList(与 env 兜底同份)。
+      noProxyList = parseNoProxyList(noProxyRaw);
     }
 
     // ---- merge & save --------------------------------------------------------

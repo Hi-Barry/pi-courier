@@ -15,6 +15,7 @@ import * as net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agent, EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { applyProxySettings, type DispatcherInstaller, type ProxySettings } from "../src/proxy.js";
+import { clearProxyEnv, restoreProxyEnv, saveProxyEnv } from "./proxy-env-fixture.js";
 
 // ── 缝 B:注入式断言(不碰 process.env)─────────────────────────────────
 
@@ -180,29 +181,19 @@ async function resetGlobalDispatcher(): Promise<void> {
   setGlobalDispatcher(new Agent());
 }
 
-/** 本机 shell 可能预置真实代理变量(如 http_proxy):这六个键是
- *  applyProxySettings 可能改动的全部范围,用例后逐一还原。 */
-const PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "http_proxy",
-  "HTTPS_PROXY",
-  "https_proxy",
-  "NO_PROXY",
-  "no_proxy",
-] as const;
+/** 本机 shell 可能预置真实代理变量(如 http_proxy):缝 C 的用例触及
+ *  process.env,六个键(全部可改动范围)用例前保存、用例后还原 —— 样板
+ *  在 ./proxy-env-fixture.js 共享。 */
 const savedProxyEnv: Record<string, string | undefined> = {};
 
 describe("applyProxySettings 缝 C:请求真实经本地假 CONNECT 代理", () => {
   afterEach(async () => {
-    for (const key of PROXY_ENV_KEYS) {
-      if (savedProxyEnv[key] === undefined) delete process.env[key];
-      else process.env[key] = savedProxyEnv[key];
-    }
+    restoreProxyEnv(savedProxyEnv);
     await resetGlobalDispatcher();
   });
 
   it("fetch 经假代理到达源站,代理侧连接计数 >= 1;配置优先于 shell 遗留变量", { timeout: 15000 }, async () => {
-    for (const key of PROXY_ENV_KEYS) savedProxyEnv[key] = process.env[key];
+    saveProxyEnv(savedProxyEnv);
     const origin = http.createServer((_req, res) => {
       res.end("hello-via-proxy");
     });
@@ -235,9 +226,9 @@ describe("applyProxySettings 缝 C:请求真实经本地假 CONNECT 代理", () 
   });
 
   it("无代理配置:fetch 直连源站,代理侧零连接", { timeout: 15000 }, async () => {
-    for (const key of PROXY_ENV_KEYS) savedProxyEnv[key] = process.env[key];
+    saveProxyEnv(savedProxyEnv);
     // 清干净包括 shell 遗留在内的全部代理变量 —— "未配置即直连"的前提
-    for (const key of PROXY_ENV_KEYS) delete process.env[key];
+    clearProxyEnv();
 
     const origin = http.createServer((_req, res) => {
       res.end("hello-direct");
