@@ -18,6 +18,8 @@ import { fileURLToPath } from "node:url";
 // doStart() — see assertPiEngineSupported for why (pi 1.0+ crashes the
 // importing process itself on Node <22.19, before any gate could run).
 import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
+import { loadConfig } from "../config.js";
+import { type ProxyConfigInput, resolveProxySettings } from "../proxy.js";
 
 /** 重启前排空在途请求的兜底上限:进程终究要重启(加载新凭据/扩展),不能
  *  被一条僵死请求无限拖延;正常的桥→pi 请求远快于此。 */
@@ -32,6 +34,11 @@ export interface PiRpcOptions {
   args?: string[];
   /** Project label for tagged log lines (multi-project mode; spec #34). */
   label?: string;
+  /** 出网代理配置(spec #201 票 #204):派生 pi 子进程时在 spawn 点现算
+   *  生效三元组,把覆写增量并入子进程 env。缺省读配置文件(loadConfig)
+   *  —— spawn 点自洽,不依赖入口接线(#203 applyProxySettings)是否先跑;
+   *  测试经此注入,免碰真实配置与全局状态。 */
+  proxyConfig?: ProxyConfigInput;
 }
 
 /** Minimal shape of a slash command returned by get_commands (duck-typed, not exported by the package) */
@@ -337,6 +344,13 @@ export class PiRpc {
 
   private async doStart(): Promise<void> {
 
+    // 出网代理注入(spec #201 票 #204):spawn 点现算生效三元组 —— 配置
+    // 优先(env 优先读 PiRpcOptions.proxyConfig,缺省 loadConfig 兜底),
+    // 不依赖入口接线(#203 applyProxySettings)是否先跑过,cli.ts、pmctl
+    // 等任何入口直接拉起 PiRpc 都自洽。配置非法(socks5 等)在此抛双语
+    // 提示,start() 失败停下,不留给子进程连接超时去猜。
+    const proxyEnv = this.proxySpawnEnv();
+
     // The workdir becomes the pi child process's cwd; spawn requires it to
     // exist, so create it on demand.
     if (this.options.cwd) {
@@ -355,6 +369,9 @@ export class PiRpc {
       cliPath,
       cwd: this.options.cwd,
       args: this.options.args,
+      // 无代理时键都不出现:上游 spawn 以 {...process.env, ...options.env}
+      // 合成子进程环境,少传 env 即与旧版逐键一致(现状直连)。
+      ...(proxyEnv ? { env: proxyEnv } : {}),
     });
 
     await client.start();
@@ -380,6 +397,39 @@ export class PiRpc {
     }
     await client.stop().catch(() => {});
     throw new Error(`pi RPC did not become ready: ${(lastError as Error)?.message}`);
+  }
+
+  /**
+   * 派生 pi 子进程的代理 env 覆写增量(spec #201 票 #204)。上游 spawn 以
+   * `{ ...process.env, ...this.options.env }` 合成子进程环境,本方法只产出
+   * 覆写键;决策规则(resolveProxySettings)全项目唯一解释,与桥自身接线
+   * (#203 applyProxySettings)同源。因 merge 语义无法删键,「无豁免」用
+   * 空串压制:
+   *  - 无代理 → undefined:不传 env,子进程环境与旧版逐键一致(现状直连)。
+   *  - 配置出场且未填 noProxy → NO_PROXY/no_proxy 置空串:压掉 shell 遗留,
+   *    「以配置为准,未填即无豁免」在子进程里同样成立。
+   *  - env 兜底且解析不出豁免 → 两键不写:父进程本就无值,不引入意外键。
+   */
+  private proxySpawnEnv(): Record<string, string> | undefined {
+    const settings = resolveProxySettings(this.options.proxyConfig ?? loadConfig(), process.env);
+    if (settings.proxy === undefined) return undefined;
+    const env: Record<string, string> = {
+      // 大小写两套全写:消费方(request / undici)小写优先,只写大写会被
+      // shell 遗留小写变量抢跑,只写小写则 Windows 惯例的消费方认不到。
+      HTTP_PROXY: settings.proxy,
+      http_proxy: settings.proxy,
+      HTTPS_PROXY: settings.proxy,
+      https_proxy: settings.proxy,
+    };
+    if (settings.noProxy.length > 0) {
+      const joined = settings.noProxy.join(",");
+      env.NO_PROXY = joined;
+      env.no_proxy = joined;
+    } else if (settings.source === "config") {
+      env.NO_PROXY = "";
+      env.no_proxy = "";
+    }
+    return env;
   }
 
   async stop(): Promise<void> {
