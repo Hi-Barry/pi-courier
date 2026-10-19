@@ -463,6 +463,13 @@ const zh = {
   "setup.space.promptYes": "启用空间组织? [Y/n](Element 空间收纳管理/项目房间,重启后自动创建): ",
   "setup.space.promptNo": "启用空间组织? [y/N](Element 空间收纳管理/项目房间,重启后自动创建): ",
   "setup.space.stateOn": "开启(重启后创建空间并收纳管理/项目房间)",
+  "setup.proxy.default": "出网代理 URL [默认 {def}](http/https;回车沿用): ",
+  "setup.proxy.plain": "出网代理 URL(可选,http/https;回车跳过): ",
+  "setup.proxy.noProxy.default": "代理豁免列表 [默认 {def}](逗号分隔,回车沿用): ",
+  "setup.proxy.noProxy.plain": "代理豁免列表(可选,逗号分隔的主机/域名/IP 段,回车跳过): ",
+  "setup.proxy.envInvalid":
+    "⚠️ 环境变量里的代理不可用,已忽略:{message}\n   (可直接输入可用的 http/https 代理地址,或回车跳过)",
+  "setup.proxy.exemptList": "豁免 {list}",
   "setup.done.title": "\n✅ 配置已写入 ~/.pi/pi-courier.json",
   "setup.done.account": "   账号: {user}",
   "setup.done.trusted": "   信任用户: {user}",
@@ -476,6 +483,8 @@ const zh = {
   "setup.done.deviceId": "   设备 ID: {id}(固定,重跑 setup 复用;想换设备就删掉此字段)",
   "setup.done.rooms": "   信任房间: {rooms}",
   "setup.done.noRooms": "无(群聊默认不回应;可后续用 /enable 添加)",
+  "setup.done.proxy": "   出网代理: {proxy}",
+  "setup.done.proxyOff": "未配置(直连)",
   "setup.next": "\n下一步: pi-courier enable(开机自启)或 pi-courier run(前台运行)",
   "setup.failed": "\n❌ 配置失败: {message}",
 
