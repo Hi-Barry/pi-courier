@@ -58,7 +58,8 @@
   },
   "dependencies": {
     "markdown-it": "^15.0.0",
-    "matrix-bot-sdk": "^0.8.0"
+    "matrix-bot-sdk": "^0.8.0",
+    "undici": "^8.12.2"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.83",

@@ -493,6 +493,14 @@ const en: Record<MessageKey, string> = {
   "setup.space.promptNo":
     "Enable the organizational space? [y/N] (groups the management/project rooms in an Element space; created on restart): ",
   "setup.space.stateOn": "on (the space will be created on restart, grouping the management/project rooms)",
+  "setup.proxy.default": "Outbound proxy URL [default {def}] (http/https; Enter keeps it): ",
+  "setup.proxy.plain": "Outbound proxy URL (optional, http/https; Enter to skip): ",
+  "setup.proxy.noProxy.default": "Proxy exemptions [default {def}] (comma-separated; Enter keeps them): ",
+  "setup.proxy.noProxy.plain":
+    "Proxy exemptions (optional; comma-separated hosts/domains/IP ranges, Enter to skip): ",
+  "setup.proxy.envInvalid":
+    "⚠️ Ignored an unusable proxy from the environment: {message}\n   (type a working http/https proxy here, or press Enter to skip)",
+  "setup.proxy.exemptList": "exempt {list}",
   "setup.done.title": "\n✅ Config written to ~/.pi/pi-courier.json",
   "setup.done.account": "   account: {user}",
   "setup.done.trusted": "   trusted user: {user}",
@@ -506,6 +514,8 @@ const en: Record<MessageKey, string> = {
   "setup.done.deviceId": "   device ID: {id} (fixed; reused when you re-run setup — delete this field to get a new device)",
   "setup.done.rooms": "   trusted rooms: {rooms}",
   "setup.done.noRooms": "none (groups are ignored by default; add them later with /enable)",
+  "setup.done.proxy": "   outbound proxy: {proxy}",
+  "setup.done.proxyOff": "not configured (direct connection)",
   "setup.next": "\nNext: pi-courier enable (auto-start on boot) or pi-courier run (foreground)",
   "setup.failed": "\n❌ Setup failed: {message}",
 
@@ -576,6 +586,12 @@ Note: pi itself is installed and upgraded independently on the system
   "startup.language.default":
     "language: {locale} (default; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",
   "startup.pairingNotice": "🔐 Pairing code for @{username}: {code} (valid for 2 minutes; send it to that user to pair)",
+
+  // ── proxy (outbound proxy, spec #201 ticket #202) ──────────────────────
+  "proxy.active":
+    "🌐 outbound proxy: {proxy} (source: {source}; edit ~/.pi/pi-courier.json and restart to change)",
+  "proxy.unsupportedScheme":
+    "❌ Proxy \"{value}\" (from {origin}) is not supported in this version — only http/https proxies are supported; use an address starting with http:// or https://",
 };
 
 export default en;

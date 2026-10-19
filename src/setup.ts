@@ -22,6 +22,7 @@ import { errorMessage } from "./errors.js";
 import { detectSystemLanguage } from "./i18n/detect.js";
 import type { Locale } from "./i18n/index.js";
 import { setLocale, t } from "./i18n/index.js";
+import { type ProxySettings, parseNoProxyList, resolveProxySettings } from "./proxy.js";
 import type { MsgBridgeConfig } from "./types.js";
 
 /**
@@ -363,6 +364,47 @@ export async function runSetup(): Promise<void> {
       spaceEnabled = spRaw === "" ? spaceDefault : spRaw === "y" || spRaw === "yes";
     }
 
+    // ---- 6.8 outbound proxy (optional, spec #201 票 #205) --------------------
+    // 校验规则全项目只有 proxy.ts 的 resolveProxySettings 一份:先用它探「当前
+    // 生效值」(配置优先,env 兜底)作为默认;env 里躺着非法代理时不阻断向导,
+    // 提示后按无默认继续。proxy 留空(且无默认)= 跳过整个步骤,不写任何键
+    // (merge 不覆盖,existing 原样保留);填了 proxy 则连同 noProxy 一起写入。
+    // 非法 scheme 当场重问,错误文案直接复用 resolveProxySettings 的双语人话。
+    let probe: ProxySettings;
+    try {
+      probe = resolveProxySettings(existing, process.env);
+    } catch (err) {
+      console.warn(t("setup.proxy.envInvalid", { message: errorMessage(err) }));
+      probe = { proxy: undefined, noProxy: [], source: "none" };
+    }
+    const proxyDefault = probe.proxy ?? "";
+    const proxyPrompt = proxyDefault
+      ? t("setup.proxy.default", { def: proxyDefault })
+      : t("setup.proxy.plain");
+    let proxyUrl = "";
+    let noProxyList: string[] = [];
+    for (;;) {
+      const proxyRaw = (await ask(proxyPrompt)).trim() || proxyDefault;
+      if (!proxyRaw) break; // 留空 = 跳过:两个键都不写,existing 的值原样保留
+      try {
+        // 仅做 scheme 白名单校验:env 显式传空,不被进程环境干扰。
+        resolveProxySettings({ proxy: proxyRaw }, {});
+        proxyUrl = proxyRaw;
+        break;
+      } catch (err) {
+        console.log(errorMessage(err));
+      }
+    }
+    if (proxyUrl) {
+      const noProxyDefault = probe.noProxy.join(",");
+      const noProxyPrompt = noProxyDefault
+        ? t("setup.proxy.noProxy.default", { def: noProxyDefault })
+        : t("setup.proxy.noProxy.plain");
+      const noProxyRaw = (await ask(noProxyPrompt)).trim() || noProxyDefault;
+      // 拆分规则单一来源:proxy.ts 的 parseNoProxyList(与 env 兜底同份)。
+      noProxyList = parseNoProxyList(noProxyRaw);
+    }
+
     // ---- merge & save --------------------------------------------------------
     // Keep untouched fields (sessionDir / cliPath / logLevel / hideToolCalls …)
     // from the existing config instead of overwriting the whole file.
@@ -380,6 +422,9 @@ export async function runSetup(): Promise<void> {
       instanceName,
       multiProject,
       attachments: { ...existing.attachments, directory: attachmentsDir, maxMb: attMb },
+      // 出网代理(票 #205):只在用户填了 proxy 时成对写入(proxy + noProxy,
+      // 空豁免也是明确语义);跳过时两个键都不出现,existing 原样保留。
+      ...(proxyUrl ? { proxy: proxyUrl, noProxy: noProxyList } : {}),
       // Single-project reruns leave the space fields exactly as they were
       // (no silent enabled flip) — the feature is multi-project-only.
       ...(multiProject ? { space: { ...existing.space, enabled: spaceEnabled } } : {}),
@@ -396,6 +441,12 @@ export async function runSetup(): Promise<void> {
     console.log(t("setup.done.workdir", { workdir }));
     console.log(t("setup.done.attachments", { dir: attachmentsDir, max: attMb }));
     console.log(t("setup.done.instance", { name: instanceName }));
+    const proxyShown = proxyUrl
+      ? noProxyList.length > 0
+        ? `${proxyUrl} (${t("setup.proxy.exemptList", { list: noProxyList.join(", ") })})`
+        : proxyUrl
+      : t("setup.done.proxyOff");
+    console.log(t("setup.done.proxy", { proxy: proxyShown }));
     console.log(
       t("setup.done.multiProject", { state: multiProject ? t("common.enabled") : t("setup.done.multiProjectOff") })
     );

@@ -75,6 +75,16 @@ describe('config', () => {
     expect(loaded.debug).toBe(false);
   });
 
+  it('saves and loads proxy settings roundtrip (spec #201 票 #202)', async () => {
+    const { loadConfig, saveConfig } = await importConfig();
+
+    saveConfig({ proxy: 'http://outbound:10809', noProxy: ['intra.example.com', '10.0.0.0/8'] });
+    const loaded = loadConfig();
+
+    expect(loaded.proxy).toBe('http://outbound:10809');
+    expect(loaded.noProxy).toEqual(['intra.example.com', '10.0.0.0/8']);
+  });
+
   // POSIX mode bits: libuv reports only 0666/0444 for regular files/dirs on
   // Windows — these assertions are meaningless there (see src/config.ts).
   it.skipIf(process.platform === "win32")('creates .pi directory with 700 permissions', async () => {

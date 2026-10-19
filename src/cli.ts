@@ -81,6 +81,14 @@ function usage(): void {
 // ===========================================================================
 
 async function cmdSetup(): Promise<void> {
+  // 代理接线(spec #201 票 #203):向导的登录/whoami fetch 要出网,调度器
+  // 必须在进入向导之前装配好。首跑配置多为空,回落认环境变量,与运行时
+  // 同一决策函数;校验失败(如 socks5://)在此抛双语错误停下,不进向导。
+  const { applyProxySettings } = await import("./proxy.js");
+  const settings = applyProxySettings(loadConfig());
+  if (settings.source !== "none") {
+    console.log(t("proxy.active", { proxy: settings.proxy, source: settings.source }));
+  }
   const { runSetup } = await import("./setup.js");
   await runSetup();
 }
