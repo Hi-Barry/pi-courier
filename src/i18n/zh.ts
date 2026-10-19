@@ -539,6 +539,10 @@ const zh = {
   "startup.language.default":
     "language: {locale}(默认值;如需固定,请在 ~/.pi/pi-courier.json 配置 \"language\" 或设 PI_LANGUAGE)",
   "startup.pairingNotice": "🔐 配对码 @{username}: {code}(2 分钟内有效,发给该用户用于配对)",
+
+  // ── proxy(出网代理,spec #201 票 #202)───────────────────────────────
+  "proxy.unsupportedScheme":
+    "❌ 代理 \"{value}\"(来源: {origin})当前版本不支持 —— 仅支持 http/https 代理,请改用 http:// 或 https:// 开头的地址",
 } as const;
 
 export type MessageKey = keyof typeof zh;

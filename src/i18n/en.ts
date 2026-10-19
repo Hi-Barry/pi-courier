@@ -576,6 +576,10 @@ Note: pi itself is installed and upgraded independently on the system
   "startup.language.default":
     "language: {locale} (default; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",
   "startup.pairingNotice": "🔐 Pairing code for @{username}: {code} (valid for 2 minutes; send it to that user to pair)",
+
+  // ── proxy (outbound proxy, spec #201 ticket #202) ──────────────────────
+  "proxy.unsupportedScheme":
+    "❌ Proxy \"{value}\" (from {origin}) is not supported in this version — only http/https proxies are supported; use an address starting with http:// or https://",
 };
 
 export default en;
