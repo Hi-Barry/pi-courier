@@ -65,16 +65,23 @@ function assertSupportedScheme(proxyUrl: string, origin: string): void {
   }
 }
 
+/** 解析标准 no_proxy 格式:逗号分隔、去空白、丢空段。只做拆分,不做匹配
+ *  (spec 拍板:匹配语义归各消费方)。env 兜底与向导(#205)共用,拆分
+ *  规则全项目只有这里一份。 */
+export function parseNoProxyList(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
 /** 解析 env 兜底的 NO_PROXY/no_proxy:逗号分隔、去空白、丢空段。只做
  *  拆分,不做匹配(spec 拍板:匹配语义归各消费方)。 */
 function envNoProxyList(env: NodeJS.ProcessEnv): string[] {
   for (const name of ENV_NO_PROXY_VARS) {
     const value = trimmedNonEmpty(env[name]);
     if (value === undefined) continue;
-    return value
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0);
+    return parseNoProxyList(value);
   }
   return [];
 }
@@ -111,8 +118,20 @@ export function resolveProxySettings(
 
 /** 出网代理的标准环境变量名,大小写两套全部写齐 —— request 的
  *  getProxyFromURI 与 undici 都小写优先,只写大写会被 shell 遗留小写变量
- *  抢跑,只写小写则 Windows 等大写惯例的消费方认不到。 */
-const PROXY_ENV_NAMES = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"] as const;
+ *  抢跑,只写小写则 Windows 等大写惯例的消费方认不到。桥侧进程覆写
+ *  (#203 applyProxySettings)与 pi 子进程注入(#204 proxySpawnEnv)共用
+ *  此键集;两处的第三态语义有意不同(删键 / 空串压制 / 不写),共享的
+ *  只是键集与拼串,不是语义分支。 */
+export const PROXY_ENV_NAMES = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"] as const;
+
+/** NO_PROXY 的标准键名,大小写两套(理由同 PROXY_ENV_NAMES)。 */
+export const NO_PROXY_ENV_NAMES = ["NO_PROXY", "no_proxy"] as const;
+
+/** 豁免列表 → 标准逗号串(条目原样 join,不改写用户输入);写大小写
+ *  两套时与 NO_PROXY_ENV_NAMES 配对使用。 */
+export function joinNoProxyList(noProxy: readonly string[]): string {
+  return noProxy.join(",");
+}
 
 /** 调度器装配缝:默认实现真正装配全局调度器并换装 undici fetch;测试注入
  *  spy,断言装配时机(此刻环境已覆写完毕)与装配物(EnvHttpProxyAgent)。 */
@@ -154,12 +173,10 @@ export function applyProxySettings(
     env[name] = settings.proxy;
   }
   if (settings.noProxy.length > 0) {
-    const joined = settings.noProxy.join(",");
-    env.NO_PROXY = joined;
-    env.no_proxy = joined;
+    const joined = joinNoProxyList(settings.noProxy);
+    for (const name of NO_PROXY_ENV_NAMES) env[name] = joined;
   } else {
-    delete env.NO_PROXY;
-    delete env.no_proxy;
+    for (const name of NO_PROXY_ENV_NAMES) delete env[name];
   }
 
   const installDispatcher = options.installDispatcher ?? installGlobalProxyDispatcher;
