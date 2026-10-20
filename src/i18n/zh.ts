@@ -377,6 +377,7 @@ const zh = {
   "pmctl.new.usage": "用法: /pmctl new <项目名> [路径]\n路径可选:缺省为工程根下同名目录(如 newapp → ~/Projects/newapp);也可用相对路径或绝对路径。",
   "pmctl.noInviteTarget": "❌ 缺少邀请对象(未配置信任用户)",
   "pmctl.new.elevationFailed": "⚠️ 房间已创建,但信任用户补权失败(可手动设置): {message}",
+  "pmctl.new.startFailed": "\n⚠️ 项目进程启动失败: {message} —— 房间已保留,首次对话会自动重试。",
   "pmctl.new.ok": "✅ 项目「{name}」创建完成!\n\n• 房间: {room}\n• 工作目录: {workdir}\n• 已邀请你进入新房间\n\n项目对话请到新房间进行(独立上下文与工作目录)。{notes}",
   "pmctl.new.failed": "❌ 创建项目失败: {message}",
   "pmctl.empty": "暂无项目(用 /pmctl new <名称> <路径> 创建)",

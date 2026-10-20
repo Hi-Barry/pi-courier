@@ -396,6 +396,7 @@ const en: Record<MessageKey, string> = {
     "Usage: /pmctl new <project name> [path]\nPath is optional: defaults to a same-named directory under the project root (e.g. newapp → ~/Projects/newapp); relative and absolute paths work too.",
   "pmctl.noInviteTarget": "❌ No invite target (no trusted users configured)",
   "pmctl.new.elevationFailed": "⚠️ Room created, but granting admin to trusted users failed (set it manually): {message}",
+  "pmctl.new.startFailed": "\n⚠️ The project process failed to start: {message} — the room is kept; the first message will retry automatically.",
   "pmctl.new.ok":
     "✅ Project \"{name}\" created!\n\n• room: {room}\n• workdir: {workdir}\n• you've been invited into the new room\n\nTalk to the project in its new room (isolated context and workdir).{notes}",
   "pmctl.new.failed": "❌ Failed to create the project: {message}",

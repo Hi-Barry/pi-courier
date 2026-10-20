@@ -179,6 +179,23 @@ describe("PmctlController", () => {
     expect(replies.at(-1)).toContain("下次启动自动补");
   });
 
+  it("starts the project pi process eagerly, after the project is registered (票 #209)", async () => {
+    await handle("/pmctl new myapp");
+    expect(pm.getRpcForRoom).toHaveBeenCalledWith("!newroom:server");
+    const registered = (pm.registerProject as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const started = (pm.getRpcForRoom as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(started).toBeGreaterThan(registered);
+  });
+
+  it("an eager-start failure keeps the project and lands as a receipt note (票 #209)", async () => {
+    (pm.getRpcForRoom as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("spawn pi ENOENT"));
+    await handle("/pmctl new myapp");
+    expect(pm.registerProject).toHaveBeenCalledWith("!newroom:server", resolve("/home/you/Projects", "myapp"), "myapp");
+    expect(replies.at(-1)).toContain("创建完成");
+    expect(replies.at(-1)).toContain("项目进程启动失败");
+    expect(replies.at(-1)).toContain("spawn pi ENOENT");
+  });
+
   // ---- label validation (spec #34 票2) ----------------------------------------
 
   it("rejects new-project names that would break the log label format", async () => {

@@ -271,8 +271,19 @@ export class PmctlController {
       if (provision.elevationError) {
         await reply(t("pmctl.new.elevationFailed", { message: provision.elevationError.message }));
       }
+      // 票 #209:new 出来的项目就是要开发的项目,进程即刻拉起(急启动),
+      // 不等首条消息;预设应用照旧走 getRpcForRoom 内部路径。失败不回滚:
+      // 房间与登记保留,首条消息的既有启动路径自然重试,原因以附注进回执
+      // (与头像失败同款机制)。
+      let startNote = "";
+      try {
+        await pm.getRpcForRoom(provision.roomId);
+      } catch (err) {
+        logger.warn(`[pmctl] 项目进程急启动失败(${provision.roomId}): ${errorMessage(err)}`);
+        startNote = t("pmctl.new.startFailed", { message: errorMessage(err) });
+      }
       // 挂链/品牌失败:单点文案附注拼进成功回执(展示层 — 不影响项目)。
-      const notes = provision.notes.map((note) => `\n⚠️ ${note}`).join("");
+      const notes = provision.notes.map((note) => `\n⚠️ ${note}`).join("") + startNote;
       await reply(
         t("pmctl.new.ok", { name: pname, room: provision.roomId, workdir: resolvedWorkdir, notes })
       );
