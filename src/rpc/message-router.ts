@@ -262,6 +262,28 @@ export function attachmentErrorReply(reason: string): string {
   return `❌ ${reason}`;
 }
 
+/**
+ * /login 族(/login /logout /auth)审计 detail 的脱敏(spec #211):指令名与
+ * provider 原样保留,第 3 个 token 仅当是方式词(oauth|api_key,忽略大小写)
+ * 时保留,其余 token 连同其后所有内容折叠为单个 `***`。确定性 token 结构
+ * 判断,不猜密钥格式 —— 任何形态的密钥都到不了审计文件。掩码必须发生在
+ * 120 截断之前,超长密钥才不会因截断漏出前半截。
+ */
+export function redactLoginDetail(text: string): string {
+  const tokens = text.replace(/\s+/g, " ").trim().split(" ");
+  const kept = tokens.slice(0, 2);
+  const rest = tokens.slice(2);
+  if (rest.length > 0) {
+    if (/^(oauth|api_key)$/i.test(rest[0]!)) {
+      kept.push(rest[0]!);
+      if (rest.length > 1) kept.push("***");
+    } else {
+      kept.push("***");
+    }
+  }
+  return kept.join(" ").slice(0, 120);
+}
+
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const { projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl, managementRoomAdoptionAllowed } = deps;
   const bindings = new WeakMap<PiRpc, RoomBinding>();
@@ -903,7 +925,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         const { msg, text } = ctx;
         if (!/^\/(login|logout|auth)(\s|$)/.test(text)) return false;
         // 审计(issue #124):认证面 —— 放行与否都记(被拒的尝试更要留痕)。
-        auditTrail(AUDIT_EVENTS.loginFlow, msg, auditDetailOf(text));
+        auditTrail(AUDIT_EVENTS.loginFlow, msg, redactLoginDetail(text));
         const loginRoomAllowed = ctx.multiProject
           ? ctx.isManagementRoom
           : !msg.isGroupChat;

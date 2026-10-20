@@ -6,7 +6,7 @@
  * source labels (attachment header + quote prefix) as pure-function pins.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withAttachmentPrefix, withQuotePrefix } from "../src/rpc/message-router";
+import { redactLoginDetail, withAttachmentPrefix, withQuotePrefix } from "../src/rpc/message-router";
 import { makeMsg, makeRouterFixture } from "./helpers";
 
 /** login 切片走逃生舱注入;其余装配全在共享工厂,不用的特性缺省即关。 */
@@ -74,10 +74,43 @@ describe("audit wiring (issue #124)", () => {
     expect(lines[1]!.detail).toBe("/pmctl rm proj-a");
   });
 
+  it("/login 带内联 key → login.flow 只落掩码形态(#211)", async () => {
+    const { router, auditLines: lines } = makeRouter();
+    await router.handleIncoming(makeMsg({ text: "/login opencode-go oc_sk_TESTSECRET" }));
+    expect(lines.find((l) => l.event === "login.flow")?.detail).toBe("/login opencode-go ***");
+    expect(JSON.stringify(lines)).not.toContain("oc_sk_TESTSECRET");
+  });
+
+  it("/login 显式方式词保持可读(#211)", async () => {
+    const { router, auditLines: lines } = makeRouter();
+    await router.handleIncoming(makeMsg({ text: "/login opencode-go api_key" }));
+    expect(lines.find((l) => l.event === "login.flow")?.detail).toBe("/login opencode-go api_key");
+  });
+
   it("ordinary conversation leaves NO audit line", async () => {
     const { router, auditLines: lines } = makeRouter();
     await router.handleIncoming(makeMsg({ text: "普通聊天" }));
     expect(lines).toHaveLength(0);
+  });
+});
+
+describe("login detail redaction (#211)", () => {
+  it("指令名+provider 保留,方式词保留,其余全掩码", () => {
+    expect(redactLoginDetail("/login")).toBe("/login");
+    expect(redactLoginDetail("/auth")).toBe("/auth");
+    expect(redactLoginDetail("/logout opencode-go")).toBe("/logout opencode-go");
+    expect(redactLoginDetail("/login opencode-go")).toBe("/login opencode-go");
+    expect(redactLoginDetail("/login opencode-go oauth")).toBe("/login opencode-go oauth");
+    expect(redactLoginDetail("/login opencode-go API_KEY")).toBe("/login opencode-go API_KEY");
+    expect(redactLoginDetail("/login opencode-go oc_sk_x")).toBe("/login opencode-go ***");
+    expect(redactLoginDetail("/login opencode-go api_key oc_sk_x")).toBe("/login opencode-go api_key ***");
+    expect(redactLoginDetail("/login opencode-go oc_sk_a b c")).toBe("/login opencode-go ***");
+  });
+
+  it("先归一空白,掩码发生在 120 截断之前", () => {
+    expect(redactLoginDetail("/login \t opencode-go \n oc_sk_x")).toBe("/login opencode-go ***");
+    expect(redactLoginDetail(`/login opencode-go ${"k".repeat(300)}`)).toBe("/login opencode-go ***");
+    expect(redactLoginDetail(`/login ${"p".repeat(200)}`)).toHaveLength(120);
   });
 });
 
