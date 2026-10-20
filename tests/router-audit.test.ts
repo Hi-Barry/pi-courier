@@ -71,20 +71,25 @@ describe("audit wiring (issue #124)", () => {
     await router.handleIncoming(makeMsg({ text: "/pmctl rm proj-a" }));
     await router.handleIncoming(makeMsg({ text: "/reload" }));
     expect(lines.map((l) => l.event)).toEqual(["login.flow", "pmctl.rm", "reload"]);
+    expect(lines[0]!.detail).toBe("/auth");
     expect(lines[1]!.detail).toBe("/pmctl rm proj-a");
   });
 
-  it("/login 带内联 key → login.flow 只落掩码形态(#211)", async () => {
+  it("/login 带内联 key → login.flow 恰一条,只落掩码形态(#211)", async () => {
     const { router, auditLines: lines } = makeRouter();
     await router.handleIncoming(makeMsg({ text: "/login opencode-go oc_sk_TESTSECRET" }));
-    expect(lines.find((l) => l.event === "login.flow")?.detail).toBe("/login opencode-go ***");
+    const loginLines = lines.filter((l) => l.event === "login.flow");
+    expect(loginLines).toHaveLength(1);
+    expect(loginLines[0]!.detail).toBe("/login opencode-go ***");
     expect(JSON.stringify(lines)).not.toContain("oc_sk_TESTSECRET");
   });
 
-  it("/login 显式方式词保持可读(#211)", async () => {
+  it("/login 显式方式词保持可读,且恰一条(#211)", async () => {
     const { router, auditLines: lines } = makeRouter();
     await router.handleIncoming(makeMsg({ text: "/login opencode-go api_key" }));
-    expect(lines.find((l) => l.event === "login.flow")?.detail).toBe("/login opencode-go api_key");
+    const loginLines = lines.filter((l) => l.event === "login.flow");
+    expect(loginLines).toHaveLength(1);
+    expect(loginLines[0]!.detail).toBe("/login opencode-go api_key");
   });
 
   it("ordinary conversation leaves NO audit line", async () => {
@@ -102,9 +107,16 @@ describe("login detail redaction (#211)", () => {
     expect(redactLoginDetail("/login opencode-go")).toBe("/login opencode-go");
     expect(redactLoginDetail("/login opencode-go oauth")).toBe("/login opencode-go oauth");
     expect(redactLoginDetail("/login opencode-go API_KEY")).toBe("/login opencode-go API_KEY");
+    expect(redactLoginDetail("/login opencode-go Oauth")).toBe("/login opencode-go Oauth");
     expect(redactLoginDetail("/login opencode-go oc_sk_x")).toBe("/login opencode-go ***");
     expect(redactLoginDetail("/login opencode-go api_key oc_sk_x")).toBe("/login opencode-go api_key ***");
     expect(redactLoginDetail("/login opencode-go oc_sk_a b c")).toBe("/login opencode-go ***");
+  });
+
+  it("结构假定边界:密钥顶到 provider 位不设防(pin 钉住语义,防误删)", () => {
+    // 按设计的结构假定,第 2 token 视为 provider 原样保留;
+    // 「/login 后漏输 provider 直接贴 key」的极端输入不在此闸门内(spec #211)。
+    expect(redactLoginDetail("/login oc_sk_x")).toBe("/login oc_sk_x");
   });
 
   it("先归一空白,掩码发生在 120 截断之前", () => {

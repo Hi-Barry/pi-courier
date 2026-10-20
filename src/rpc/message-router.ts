@@ -262,12 +262,17 @@ export function attachmentErrorReply(reason: string): string {
   return `❌ ${reason}`;
 }
 
+/** 审计 detail 的单行化契约:空白归一 + 120 截断(上限只在这里出现)。 */
+const normalizeDetailLine = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 120);
+
 /**
- * /login 族(/login /logout /auth)审计 detail 的脱敏(spec #211):指令名与
- * provider 原样保留,第 3 个 token 仅当是方式词(oauth|api_key,忽略大小写)
- * 时保留,其余 token 连同其后所有内容折叠为单个 `***`。确定性 token 结构
- * 判断,不猜密钥格式 —— 任何形态的密钥都到不了审计文件。掩码必须发生在
- * 120 截断之前,超长密钥才不会因截断漏出前半截。
+ * /login 族(/login /logout /auth)审计 detail 的脱敏(spec #211):按
+ * 「指令名 provider [方式词] [密钥…]」的结构假定脱敏 —— 指令名与 provider
+ * 原样保留,第 3 个 token 仅当是方式词(oauth|api_key,忽略大小写)时保留,
+ * 其余 token 连同其后所有内容折叠为单个 `***`。确定性 token 结构判断,不猜
+ * 密钥格式:密钥只要不出现在 provider 位(漏输前两段的极端输入,有测试 pin
+ * 钉住这一边界),就到不了审计文件。掩码必须发生在截断之前,超长密钥才不会
+ * 因截断漏出前半截。
  */
 export function redactLoginDetail(text: string): string {
   const tokens = text.replace(/\s+/g, " ").trim().split(" ");
@@ -281,7 +286,7 @@ export function redactLoginDetail(text: string): string {
       kept.push("***");
     }
   }
-  return kept.join(" ").slice(0, 120);
+  return normalizeDetailLine(kept.join(" "));
 }
 
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
@@ -332,7 +337,6 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const auditTrail = (event: string, msg: ExternalMessage, detail?: string): void => {
     deps.audit?.append(event, namespacedId(msg.userId, msg.transport), msg.chatId, detail);
   };
-  const auditDetailOf = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 120);
 
   // 模型降级链(issue #121):连败记账与耗尽提示的「只提示一次」都在
   // FallbackStreak(model-switch.ts);这里只编排链解析、切换与回执/审计。
@@ -908,7 +912,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 审计(issue #124):项目删除是最重的一刀,确认链的每一步都留痕
         //(/pmctl rm 与其确认词都命中这里);其余子命令 v1 不记。
         if (/^\/pmctl\s+rm(\s|$)/i.test(ctx.text.trim())) {
-          auditTrail(AUDIT_EVENTS.pmctlRemove, ctx.msg, auditDetailOf(ctx.text));
+          auditTrail(AUDIT_EVENTS.pmctlRemove, ctx.msg, normalizeDetailLine(ctx.text));
         }
         return await pmctl.handle(ctx.text, { chatId: ctx.msg.chatId, senderMxid: ctx.msg.userId, isManagementRoom: ctx.isManagementRoom }, async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText));
       },
@@ -1023,7 +1027,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           if (handled) {
             const cmdName = ctx.text.trim().split(/\s+/)[0]!.toLowerCase();
             const auditEvent = commandPolicy(cmdName)?.auditEvent;
-            if (auditEvent) auditTrail(auditEvent, ctx.msg, auditDetailOf(ctx.text));
+            if (auditEvent) auditTrail(auditEvent, ctx.msg, normalizeDetailLine(ctx.text));
           }
           return handled;
         } catch (err) {
