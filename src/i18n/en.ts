@@ -402,12 +402,13 @@ const en: Record<MessageKey, string> = {
   "pmctl.new.failed": "❌ Failed to create the project: {message}",
   "pmctl.new.welcomeFailed": "\n⚠️ Failed to send the welcome message: {message}",
   "welcome.project.header": "👋 **{name} is online!**",
-  "welcome.project.identity.full":
-    "I'm the coding assistant for this project, powered by pi coding agent (v{piVersion}) · pi-courier (v{courierVersion}), current model: `{model}`.",
-  "welcome.project.identity.modelOnly": "I'm the coding assistant for this project, current model: `{model}`.",
-  "welcome.project.identity.versionsOnly":
-    "I'm the coding assistant for this project, powered by pi coding agent (v{piVersion}) · pi-courier (v{courierVersion}).",
-  "welcome.project.identity.bare": "I'm the coding assistant for this project.",
+  "welcome.project.identity.model":
+    "I'm the coding assistant for this project, powered by {stack}, current model: `{model}`.",
+  "welcome.project.identity.plain": "I'm the coding assistant for this project, powered by {stack}.",
+  "welcome.project.stack.both": "pi coding agent (v{piVersion}) · pi-courier (v{courierVersion})",
+  "welcome.project.stack.piOnly": "pi coding agent (v{piVersion}) · pi-courier",
+  "welcome.project.stack.courierOnly": "pi coding agent · pi-courier (v{courierVersion})",
+  "welcome.project.stack.neither": "pi coding agent · pi-courier",
   "welcome.project.capabilities":
     "🛠️ What I can do\n" +
     "• Just message me: write code, fix bugs, answer questions — anything in this project's directory\n" +

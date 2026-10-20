@@ -382,12 +382,12 @@ const zh = {
   "pmctl.new.failed": "❌ 创建项目失败: {message}",
   "pmctl.new.welcomeFailed": "\n⚠️ 上线欢迎消息发送失败: {message}",
   "welcome.project.header": "👋 **{name} 已上线！**",
-  "welcome.project.identity.full":
-    "我是驻在这个项目里的编码助手，底层是 pi coding agent（v{piVersion}）· pi-courier（v{courierVersion}），当前模型：`{model}`。",
-  "welcome.project.identity.modelOnly": "我是驻在这个项目里的编码助手，当前模型：`{model}`。",
-  "welcome.project.identity.versionsOnly":
-    "我是驻在这个项目里的编码助手，底层是 pi coding agent（v{piVersion}）· pi-courier（v{courierVersion}）。",
-  "welcome.project.identity.bare": "我是驻在这个项目里的编码助手。",
+  "welcome.project.identity.model": "我是驻在这个项目里的编码助手，底层是 {stack}，当前模型：`{model}`。",
+  "welcome.project.identity.plain": "我是驻在这个项目里的编码助手，底层是 {stack}。",
+  "welcome.project.stack.both": "pi coding agent（v{piVersion}）· pi-courier（v{courierVersion}）",
+  "welcome.project.stack.piOnly": "pi coding agent（v{piVersion}）· pi-courier",
+  "welcome.project.stack.courierOnly": "pi coding agent · pi-courier（v{courierVersion}）",
+  "welcome.project.stack.neither": "pi coding agent · pi-courier",
   "welcome.project.capabilities":
     "🛠️ 能做什么\n" +
     "• 直接发消息：写代码、改 Bug、答疑，这个项目目录里的活都能干\n" +

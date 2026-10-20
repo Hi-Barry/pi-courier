@@ -19,22 +19,25 @@ export interface WelcomeFacts {
 }
 
 export function buildProjectWelcome(facts: WelcomeFacts): string {
-  const hasStack = Boolean(facts.piVersion && facts.courierVersion);
-  const params = {
-    name: facts.projectName,
+  // 缺谁省谁(票 #210 评审回炉):四种版本形态各走一条完整栈段模板 ——
+  // 间距是文案决策,留在 i18n 表里(· 紧贴全角括号、拉丁词两侧留空),
+  // 代码不做字符串拼接;单缺只省缺的那段版本号,名字段永远在。
+  const stackKey = facts.piVersion
+    ? facts.courierVersion
+      ? "welcome.project.stack.both"
+      : "welcome.project.stack.piOnly"
+    : facts.courierVersion
+      ? "welcome.project.stack.courierOnly"
+      : "welcome.project.stack.neither";
+  const stack = t(stackKey, {
     piVersion: facts.piVersion ?? "",
     courierVersion: facts.courierVersion ?? "",
-    model: facts.model ?? "",
-  };
+  });
   const identity = facts.model
-    ? hasStack
-      ? t("welcome.project.identity.full", params)
-      : t("welcome.project.identity.modelOnly", params)
-    : hasStack
-      ? t("welcome.project.identity.versionsOnly", params)
-      : t("welcome.project.identity.bare", params);
+    ? t("welcome.project.identity.model", { stack, model: facts.model })
+    : t("welcome.project.identity.plain", { stack });
   return [
-    t("welcome.project.header", params),
+    t("welcome.project.header", { name: facts.projectName }),
     identity,
     t("welcome.project.capabilities"),
     t("welcome.project.try"),
