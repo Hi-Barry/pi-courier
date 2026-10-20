@@ -256,16 +256,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   });
 
   // ---- message routing ------------------------------------------------------
+  // 发送内核(票 #210 评审收尾):失败必须抛出 —— 上线欢迎卡靠它把失败
+  // 带进 /pmctl new 的管理房回执附注;其余调用方一律经 sendReply 静默。
+  const sendReplyStrict = async (chatId: string, text: string): Promise<void> => {
+    const provider = matrix;
+    if (!provider) throw new Error("Transport matrix not found");
+    if (!provider.isConnected) throw new Error("Transport matrix not connected");
+    await provider.sendMessage(chatId, text);
+  };
   const sendReply = async (chatId: string, transport: string, text: string): Promise<void> => {
     try {
       // transport 参数仅诊断显示(下方日志与错误文案拼贴),不参与 adapter
       // 查找 —— C8 退役注册表后,全文已无按 transport 名寻址的消费方
       // (grep 证实:仅剩字符串插值);签名保留以维持日志口径不变。
       // ExternalMessage.transport 字段本身是路由元数据,照旧携带。
-      const provider = matrix;
-      if (!provider) throw new Error(`Transport ${transport} not found`);
-      if (!provider.isConnected) throw new Error(`Transport ${transport} not connected`);
-      await provider.sendMessage(chatId, text);
+      await sendReplyStrict(chatId, text);
       logger
         .withLabel(projectManager.labelForRoom(chatId))
         .debug(`📤 [${transport}] ${truncateLine(text, 500)}`);
@@ -278,15 +283,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     if (matrix?.isConnected) await matrix.sendTyping(chatId);
   };
   const disconnectAll = (): Promise<unknown> => (matrix ? matrix.disconnect() : Promise.resolve());
-
-  // 上线欢迎卡(票 #210)需要"失败可见":与 sendReply 的静默约定不同,
-  // 失败必须抛回调用方,才能作为附注进 /pmctl new 的管理房回执。
-  const sendReplyStrict = async (chatId: string, text: string): Promise<void> => {
-    const provider = matrix;
-    if (!provider) throw new Error("Transport matrix not found");
-    if (!provider.isConnected) throw new Error("Transport matrix not connected");
-    await provider.sendMessage(chatId, text);
-  };
 
   // 配对码去向接线(票7,spec #99 #106):落地目标此刻才存在 —— 交给启动
   // 状态模块持槽;此前到达的配对码已被缓冲,接线即按序补发。不等待:补发
@@ -308,7 +304,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     store,
     // 上线欢迎卡发送缝(票 #210):/pmctl new 成功后向新项目房发卡。
     // sendReplyStrict 声明在上方,闭包仅在运行期命令处理时触达。
-    notifyRoom: (roomId, text) => sendReplyStrict(roomId, text),
+    notifyRoom: sendReplyStrict,
   });
 
   // ---- durable state (issue #114) --------------------------------------------

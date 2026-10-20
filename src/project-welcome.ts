@@ -7,10 +7,8 @@
  * a missing entry just drops its segment of the identity line.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { t } from "./i18n/index.js";
+import { readBridgeVersion } from "./version.js";
 
 export interface WelcomeFacts {
   projectName: string;
@@ -46,7 +44,7 @@ export function buildProjectWelcome(facts: WelcomeFacts): string {
 
 /** Versions for the welcome identity line — best-effort on both entries. */
 export async function welcomeVersions(): Promise<{ piVersion?: string; courierVersion?: string }> {
-  return { piVersion: await piCodingAgentVersion(), courierVersion: courierVersion() };
+  return { piVersion: await piCodingAgentVersion(), courierVersion: readBridgeVersion() };
 }
 
 /** pi coding agent's own VERSION export (lazy import — same shape as the
@@ -56,20 +54,6 @@ async function piCodingAgentVersion(): Promise<string | undefined> {
   try {
     const mod = await import("@earendil-works/pi-coding-agent");
     return mod.VERSION || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** This bridge's own version from package.json at the project root (the
- *  cli.ts pattern: parent of the dist/ directory this file is compiled into). */
-function courierVersion(): string | undefined {
-  try {
-    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf-8")) as {
-      version?: string;
-    };
-    return pkg.version || undefined;
   } catch {
     return undefined;
   }

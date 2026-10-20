@@ -695,6 +695,9 @@ describe("PmctlController", () => {
       }),
       listProjects: vi.fn(() => Array.from(projects.entries())),
       isRunning: vi.fn().mockReturnValue(false),
+      // 票 #209 急启动:成功路径的桩(缺了它,急启动会在这些用例里假性失败,
+      // 回执混进"启动失败"附注 —— 评审修正)。
+      getRpcForRoom: vi.fn().mockResolvedValue(undefined),
     };
   }
 
