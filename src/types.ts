@@ -221,6 +221,21 @@ export interface MsgBridgeConfig {
     /** 单个附件大小上限(MB) */
     maxMb?: number;
   };
+  /**
+   * 出网代理(spec #201 票 #202):代理 URL,当前版本仅支持
+   * http:// 与 https:// 形态。配置优先:未填写时回落认标准环境变量
+   * (HTTPS_PROXY/https_proxy、HTTP_PROXY/http_proxy,大小写均认)。
+   * 优先级与 scheme 校验统一由 src/proxy.ts 的 resolveProxySettings 解释,
+   * 手编错误(如 socks5://)在启动解析时即报错停下(双语提示)。
+   */
+  proxy?: string;
+  /**
+   * 出网代理豁免列表(spec #201 票 #202):不经代理直连的目标(主机名、
+   * 域名后缀、IP/网段),透传给各消费方(request / undici)按各自惯例
+   * 解释,桥不做自己的匹配逻辑。仅在代理生效时有意义;未填写即无豁免
+   * (以配置为准,不回落环境变量 NO_PROXY)。
+   */
+  noProxy?: string[];
 }
 
 /**

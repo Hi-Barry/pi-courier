@@ -36,6 +36,15 @@ Thumbs.db
 # Private dev log (not published)
 docs/DEVLOG.md
 
+# Local-only maintainer files (never published; kept on disk only)
+AGENTS.md
+.zcodeignore
+
+# Local working reports (audit / verification deliverables, kept local)
+ocr-audit-report.md
+verification-report-*.html
+windows-compat-evaluation-*.html
+
 # Local env (secrets) — any location, not just deploy/docker: a root .env or
 # a stray *.env must never be committable (.env.example stays tracked).
 .env

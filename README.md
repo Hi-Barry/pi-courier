@@ -77,7 +77,72 @@ node download-lib.js
 cd ../..
 ```
 
-Slow download (20-60 kB/s)? The binary comes from GitHub Releases and ignores npm's proxy — set `export https_proxy=... http_proxy=...` first.
+Slow download (20-60 kB/s)? The binary comes from GitHub Releases and ignores npm's proxy — set `export https_proxy=... http_proxy=...` first. (Those variables cover the **install-time** download only; the bridge's **runtime** proxy is a separate setting — see the next section.)
+
+## Outbound proxy (runtime)
+
+Skip this section if the machine has direct internet access. Since 1.1.0 the bridge can route its **runtime** traffic through an HTTP proxy — one setting that covers all three outbound legs:
+
+- **Matrix send/receive** — the bot's connection to your homeserver;
+- **pi's LLM requests** — the effective proxy is injected into the pi subprocess environment automatically, so model calls inside pi need no extra configuration;
+- **The setup wizard's login** — `pi-courier setup` applies the same settings before its first request, so the token login goes through the proxy too.
+
+(The **install-time** downloads — `npm install` itself and the E2EE native library fetched by postinstall — are a different story: they are covered by the notes in [Install](#2-install) and the FAQ, and they ignore this section's settings.)
+
+### Two ways to configure: the config file wins
+
+**Way 1 — the config file** (recommended, one global copy): add `proxy` (a single URL) and optionally `noProxy` (exemption list) to `~/.pi/pi-courier.json`:
+
+```json
+{
+  "proxy": "http://192.0.2.10:10809",
+  "noProxy": ["192.168.1.0/24", ".internal"]
+}
+```
+
+**Way 2 — environment variables**: when the config file has no `proxy`, the bridge falls back to the standard `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`. Every spelling is recognized (upper- and lowercase); when several are set, lowercase wins over uppercase and HTTPS is checked before HTTP.
+
+When both are present **the config file wins** — a leftover shell variable can never override what you wrote in the config. With no proxy in the config and none in the environment the bridge behaves exactly as before (direct connection).
+
+### The setup wizard asks too (optional)
+
+Since 1.1.0 `pi-courier setup` has an optional outbound-proxy step (asked near the end, after the multi-project question — and the space question in multi-project mode — and just before the config is written; leave blank to skip). When a proxy is already in effect (config or env), setup announces it before the first question and offers it as the default — press Enter to keep it. This announce line always prints in English, because it appears before the wizard's first question — the language choice:
+
+```
+🌐 outbound proxy: http://192.0.2.10:10809 (source: config; edit ~/.pi/pi-courier.json and restart to change)
+```
+
+With nothing in effect the prompts are (real wizard output):
+
+```
+Outbound proxy URL (optional, http/https; Enter to skip): 
+Proxy exemptions (optional; comma-separated hosts/domains/IP ranges, Enter to skip): 
+```
+
+The end-of-setup summary always includes the outcome (or `   outbound proxy: not configured (direct connection)` when skipped):
+
+```
+   outbound proxy: http://192.0.2.10:10809 (exempt 192.168.1.0/24, .internal)
+```
+
+### Rules of the road
+
+- **Only `http://` and `https://` proxies (1.1.0)**. Anything else — `socks5://` in particular — is rejected at startup regardless of whether it came from the config or the environment, with a bilingual error naming the value and its origin. `pi-courier setup` prints it like this (real output):
+
+  ```
+  [pi-courier] fatal: ❌ Proxy "socks5://192.0.2.10:1080" (from config.proxy) is not supported in this version — only http/https proxies are supported; use an address starting with http:// or https://
+  ```
+
+  A running service logs the same error in the configured language (with a `[bridge] fatal:` prefix).
+
+- **Proxy changes take effect on restart.** The proxy is resolved once at startup (an invalid one is rejected right there); after editing the config or the env, run `pi-courier restart` (a foreground `run` just means Ctrl+C and start again). While a proxy is in effect, the service log carries one line naming it and its source (`config` or `env`).
+- **`noProxy` semantics**: the list is passed through to the underlying HTTP stacks unchanged (comma-separated `NO_PROXY` for the env consumers) — the bridge does no matching of its own, so hosts, domain suffixes and CIDR ranges behave exactly as those libraries dictate. **One behavior worth knowing**: when `proxy` comes from the config file and `noProxy` is **not** set, an inherited `NO_PROXY` environment variable is suppressed — the config is authoritative, and leaving `noProxy` out means **no exemptions** (an explicit `"noProxy": []` says the same). List your exemptions in the config to keep them. (A `noProxy` with no proxy anywhere is inert.)
+- **Authenticated proxies**: credentials embedded in the URL (`http://user:pass@192.0.2.10:3128`) are handled by the underlying HTTP stacks; there is no separate UI for them.
+- **Windows**: everything above works the same — the config file, and `HTTP_PROXY`-style env vars (uppercase is the Windows convention; both cases are recognized).
+
+### systemd: shell exports don't reach the service
+
+A proxy you `export` in your interactive shell never reaches the systemd service. Use either the config file (works everywhere) or the unit's environment file `~/.config/pi-bridge.env` (the user unit already loads it via `EnvironmentFile` — a missing file is fine; the system-level template uses `/etc/pi-bridge.env`). A line like `HTTP_PROXY=http://192.0.2.10:10809` there reaches the bridge at startup and is honored like any environment variable — the config file still wins.
 
 ## 3. Get started
 
@@ -126,7 +191,7 @@ Enable multi-project mode? [y/N] (multi-project = management room + isolated pro
 Next: pi-courier enable (auto-start on boot) or pi-courier run (foreground)
 ```
 
-The wizard verifies the token and writes `~/.pi/pi-courier.json`. To skip the wizard, create that file manually — the format is in the [FAQ](#4-faq).
+The wizard verifies the token and writes `~/.pi/pi-courier.json`. Since 1.1.0 it also asks one optional extra question — the outbound proxy (the transcript above predates that step; press Enter to skip) — see [Outbound proxy](#outbound-proxy-runtime). To skip the wizard, create that file manually — the format is in the [FAQ](#4-faq).
 
 ### Step 2 — Start it
 
@@ -270,7 +335,7 @@ How the language is picked (first match wins):
 
 1. `PI_LANGUAGE=en|zh` environment variable — the most reliable option in containers/minimal deployments
 2. `"language": "zh" | "en"` in `~/.pi/pi-courier.json` (the setup wizard asks and writes it)
-3. The system locale of the service (`LC_ALL` > `LC_MESSAGES` > `LANG`; `zh*` → Chinese) — at startup the log prints one line explaining where the language came from
+3. The system locale of the service: on Linux/macOS `LC_ALL` > `LC_MESSAGES` > `LANG` (`zh*` → Chinese); on Windows (which sets none of those variables) the system regional setting is read instead — a Chinese Windows yields Chinese. At startup the log prints one line explaining where the language came from
 4. English as the final fallback
 
 Notes:
@@ -278,6 +343,7 @@ Notes:
 - Language changes take effect on restart (same as `multiProject`)
 - **Upgrading from 0.2.x and prefer Chinese?** Set `"language": "zh"` once (or re-run `pi-courier setup`) — 0.2.x deployments detected `zh_CN` locale keep Chinese with zero action; the cancel keyword stays bilingual either way (`取消` and `cancel` are both accepted in every language)
 - The zh table is Simplified Chinese; `zh_TW` / `zh_HK` locales also get Simplified
+- Windows reads the regional format setting (what "Region" in the control panel defines); a mixed configuration — Chinese display language but a non-Chinese region — can point to the wrong language. Pin `PI_LANGUAGE` (or config `language`) in that case
 - Already-created rooms keep their original names and guides — no retroactive rebranding on language change
 
 ### When a model call fails

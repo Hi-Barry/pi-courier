@@ -77,6 +77,11 @@ function makeFixtures(opts: FixtureOptions = {}, runtime?: LoginRuntime) {
   const login = new LoginManager({
     sendReply,
     allRpcs: () => allRpcs,
+    // 假路径只为短路 getRuntime() 的 `authPath ?? (await defaultAuthPath())`:
+    // 后者会动态 import 整个 @earendil-works/pi-coding-agent(全量套件并发
+    // 下 >1s,是本文件 flaky 的根因,issue #191)。runtimeFactory 已 mock,
+    // 该路径永不触盘。
+    authPath: "/tmp/pi-courier-router-login-test/auth.json",
     runtimeFactory: async () =>
       runtime ?? {
         login: vi.fn(async () => ({ type: "api_key", key: "written" }) as Credential),
@@ -94,10 +99,14 @@ function makeFixtures(opts: FixtureOptions = {}, runtime?: LoginRuntime) {
   });
   const lastReply = () => replies.at(-1)!.text;
   const allText = () => replies.map((r) => r.text).join("\n");
+  /** Replies addressed to one room — the precise assertion seam (issue #191:
+   *  the global lastReply tail can be masked by any other/later reply). */
+  const repliesFor = (chatId: string) => replies.filter((r) => r.chatId === chatId).map((r) => r.text);
   return {
     replies,
     lastReply,
     allText,
+    repliesFor,
     extensionResponses,
     defaultRpc,
     defaultPrompt: dm.prompt,
@@ -122,12 +131,19 @@ describe("/login gates (issue #55)", () => {
 
   it("in multi-project mode only the management room may log in", async () => {
     const fx = makeFixtures({ multiProject: true });
-    // Not the management room → rejected.
+    // Not the management room → rejected, and the rejection goes back to the
+    // room that asked — never into the management room (issue #191: assert
+    // per-chatId; the global lastReply tail can be masked by later replies).
     await fx.router.handleIncoming(makeMsg({ text: "/login" }));
-    expect(fx.lastReply()).toBe("❌ 登录管理仅可在管理房间使用(单工程模式下与 bot 的私聊即可)");
-    // The management room → the listing runs.
+    expect(fx.repliesFor("!dm:server")).toEqual([
+      "❌ 登录管理仅可在管理房间使用(单工程模式下与 bot 的私聊即可)",
+    ]);
+    expect(fx.repliesFor("!mgmt:server")).toEqual([]);
+    // The management room → the listing runs, addressed to that room.
     await fx.router.handleIncoming(makeMsg({ chatId: "!mgmt:server", text: "/login" }));
-    await vi.waitFor(() => expect(fx.lastReply()).toContain("可登录 provider"));
+    await vi.waitFor(() =>
+      expect(fx.repliesFor("!mgmt:server").some((t) => t.includes("可登录 provider"))).toBe(true)
+    );
   });
 
   it("in single-project mode a DM counts as the management room; enabled group chats do not", async () => {

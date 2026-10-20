@@ -30,6 +30,7 @@ import { applyRoomCustomAvatar, ensureRoomAvatar, poolFilesForProjects } from ".
 import { pickPoolAvatarFile } from "../space-identity.js";
 import { provisionManagedRoom } from "../space-topology.js";
 import type { RoomOps } from "../transports/interface.js";
+import { win32PathProblem, win32SamePath } from "../win32-path.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
 import { PROJECT_SESSION_DIR } from "./project-manager.js";
 
@@ -47,6 +48,9 @@ export interface PmctlControllerOptions {
   /** Matrix room capability — absent outside Matrix deployments. */
   roomOps?: RoomOps;
   store: ConfigStore;
+  /** Testing seam for the win32 path guards (issue #190); production default
+   *  is the real process platform. */
+  platform?: NodeJS.Platform;
 }
 
 /** Pending /pmctl rm confirmation, keyed by the chat that issued it. A first
@@ -175,6 +179,38 @@ export class PmctlController {
     return effectiveInstanceName(this.opts.store.get());
   }
 
+  /**
+   * Windows-only workdir guard (issue #190): refuse paths Windows cannot host
+   * (DOS reserved names, NTFS-illegal characters, >259 chars) with a readable
+   * message BEFORE any side effect, and refuse a workdir that collides
+   * case-insensitively with another project (NTFS is case-insensitive, so
+   * "Foo" and "foo" are one directory — two projects would share session
+   * state). Returns an error message or null. POSIX hosts skip everything:
+   * all three situations are legitimate there, or fail with clear system
+   * errors anyway.
+   */
+  private win32WorkdirError(workdir: string, excludeRoomId?: string): string | null {
+    if ((this.opts.platform ?? process.platform) !== "win32") return null;
+    const problem = win32PathProblem(workdir);
+    if (problem) {
+      switch (problem.kind) {
+        case "reserved":
+          return t("path.win32.reserved", { component: problem.component });
+        case "illegalChars":
+          return t("path.win32.illegalChars", { component: problem.component });
+        case "tooLong":
+          return t("path.win32.tooLong", { length: problem.length });
+      }
+    }
+    const clash = this.opts.projectManager
+      .listProjects()
+      .find(([roomId, p]) => roomId !== excludeRoomId && win32SamePath(p.workdir, workdir));
+    if (clash) {
+      return t("path.win32.dupWorkdir", { name: projectLabelOf(clash[1]), workdir: clash[1].workdir });
+    }
+    return null;
+  }
+
   /** The organizational space this deployment files rooms under (shared
    *  predicate — undefined when the feature is off or the space not created). */
   private activeSpaceRoomId(): string | undefined {
@@ -197,6 +233,13 @@ export class PmctlController {
     const resolvedWorkdir = workdirArg ? this.resolveProjectPath(workdirArg) : this.resolveProjectPath(pname);
     if (resolvedWorkdir === null) {
       await reply(t("pmctl.pathEscape", { path: workdirArg ?? pname }));
+      return;
+    }
+    // win32-only: hostability + case-insensitive duplicate (issue #190) —
+    // before the label check and before any side effect.
+    const pathError = this.win32WorkdirError(resolvedWorkdir);
+    if (pathError) {
+      await reply(pathError);
       return;
     }
     // The project name becomes the log label (spec #34): validate before any
@@ -380,6 +423,13 @@ export class PmctlController {
       return;
     }
     const [roomId, entry] = found;
+    // win32-only: hostability + duplicate check against OTHER projects (the
+    // project's own current workdir is not a clash) — issue #190.
+    const pathError = this.win32WorkdirError(resolvedWorkdir, roomId);
+    if (pathError) {
+      await reply(pathError);
+      return;
+    }
     await this.opts.projectManager.updateProjectWorkdir(roomId, resolvedWorkdir);
     await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir, sessionDir: PROJECT_SESSION_DIR }));
   }

@@ -182,6 +182,7 @@ pi 0.83.0 就绪。
 - 发送语义恒定显式(0.1.39 起):每条 `prompt` 都携带 `streamingBehavior` —— steer = Enter 语义 / followUp = Alt+Enter 排队,空闲会话自动忽略该参数,一条消息覆盖两种状态;参数经上游私有 `send` 下发(公开 `prompt()` 不暴露它),不再依赖报错文案降级
 - `get_commands` 60 秒缓存:避免频繁查询命令列表
 - 监听器队列:修复了"先注册事件监听、后启动连接"会抛错的问题
+- 出网代理 spawn 注入(spec #201 票 #204):派生 pi 时现算生效三元组合入子进程 env(规则单点见 `src/proxy.ts` 条),不依赖入口接线是否先跑,任何入口直接拉起 PiRpc 都自洽
 
 **`src/rpc/command-map.ts`** —— 命令映射表(纯 pi 命令;/pmctl 家族已移入 PmctlController)
 - `/new` `/clear` → `new_session`
@@ -319,10 +320,17 @@ pi 0.83.0 就绪。
 
 **`src/management-room.ts`** —— 管理房间文案单点组装(房间名 + 使用指南),DM 采纳与空间自建两条入口共用,杜绝文案漂移
 
+**`src/proxy.ts`** —— 出网代理决策与启动接线(spec #201,1.1.0 同车)
+- `resolveProxySettings` 纯函数(env 显式传入)是全项目代理规则的**唯一解释点**:优先级(配置 > 环境变量)、env 兜底顺序(`https_proxy` → `HTTPS_PROXY` → `http_proxy` → `HTTP_PROXY`,同义变量小写优先)、scheme 白名单(`http:`/`https:` 之外一律抛双语错并点名值与出处,含 `socks5://`)、noProxy 语义(配置出场未填 = 无豁免,压掉继承的 `NO_PROXY`;代理回落自 env 时才解析 `NO_PROXY`/`no_proxy` 逗号表)——向导默认值(setup 6.8 步)与 pi 子进程注入都消费它,永不各写一份规则
+- `applyProxySettings` 是带副作用的启动接线唯一调用点:解析 → 校验 → 覆写进程环境(`HTTP_PROXY`/`HTTPS_PROXY` 大小写两套写齐,防 shell 遗留小写变量抢跑)→ 装配 undici `EnvHttpProxyAgent` + `install()`;无代理时零动作,行为与旧版直连逐字节一致。**必须先于任何出网**(Matrix 客户端创建、pi 拉起、向导进入),接线点在 standalone 组合根与 cli 的 `cmdSetup`(向导登录腿)两处
+- **undici 依赖缘由**:Node 内置 fetch 在全部受支持版本默认不理会代理环境变量,22.19–22.20 连 `NODE_USE_ENV_PROXY` 开关都没有,必须代码级装配;与上游 pi 同款做法(`setGlobalDispatcher` + `install()`,让 fetch 与调度器在同一 undici 实现上),不抬 engines 门槛;`proxyTunnel: true` 与矩阵 request 腿的 CONNECT 隧道行为对齐
+- **pi 子进程 spawn 注入自洽**(PiRpc.proxySpawnEnv):spawn 点现算生效三元组合入子进程 env(`PiRpcOptions.proxyConfig` 优先、缺省 loadConfig 兜底),不依赖入口接线是否先跑——cli、pmctl 等任何入口直接拉起 PiRpc 都正确;因上游 spawn 按 `{...process.env, ...options.env}` 合成无法删键,「配置出场未填 noProxy」以空串压掉 shell 遗留 `NO_PROXY`,env 兜底解析不出豁免则两键不写
+- **测试三缝**:缝 A 纯函数直测(`proxy.test.ts`:优先级/env 兜底/大小写/scheme 白名单/noProxy 语义/双语报错);缝 B 注入断言(`proxy-apply.test.ts` 假 env + spy installer 断言覆写与装配时机、`pi-rpc-proxy-env.test.ts` spawn env 三态、`setup-proxy.test.ts` 假 stdin 测向导默认值/校验/跳过);缝 C 真实集成(`proxy-apply.test.ts` 内起本地假 CONNECT 代理 + 假源站,断言全局 fetch 真实经代理到达源站,全程回环零外网)
+
 **`src/standalone.ts`** —— 独立入口(组合根只接线,spec #99 票7/#106)
 - 单实例锁(lock.ts)
 - 信号优雅关闭(SIGTERM/SIGINT)
-- 初始化顺序:构造启动状态(最早,配对码槽就位)→ transports → 空间 ensure(幂等/降级,降级翻转收养许可)→ `runStartupHeals` 自愈编排 → 启动 RPC → 接线(pairing sink、事件、router)——时序不变量由"先构造后接线"的结构承载,不再靠注释
+- 初始化顺序:出网代理接线(`applyProxySettings`,spec #201——先于一切出网,代理生效时日志打一行 `proxy.active`)→ 构造启动状态(最早,配对码槽就位)→ transports → 空间 ensure(幂等/降级,降级翻转收养许可)→ `runStartupHeals` 自愈编排 → 启动 RPC → 接线(pairing sink、事件、router)——时序不变量由"先构造后接线"的结构承载,不再靠注释
 
 ### 5.2 适配 0.83.0 的坑
 
@@ -866,9 +874,9 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 - `zh.ts` —— 基准表,`as const` 定义 `MessageKey`;**0.2.x 历史中文文案逐字入表**(两处有意例外:配对码提示 0.2.x 是英文孤例、现随 locale 走;setup 向导标题固定双语),存量中文断言以它为锚
 - `en.ts` —— `Record<MessageKey, string>`,缺 key/多 key 都是编译错误,两表永不漂移
 - `index.ts` —— 全局 `setLocale`/`t()`(与 logger 同风格的单例);`{name}` 占位符插值;key 为 `MessageKey` 强类型,坏 key 在 typecheck 阶段即失败,无运行时回落路径
-- `detect.ts` / `parse.ts` —— 系统 locale 检测(`LC_ALL` > `LC_MESSAGES` > `LANG`,C/POSIX/空跳过)与取消关键词(`isCancelInput`:取消/cancel 双词永远都认)
+- `detect.ts` / `parse.ts` —— 系统 locale 检测(POSIX 链 `LC_ALL` > `LC_MESSAGES` > `LANG`,C/POSIX/空跳过;win32 且链全空时回退 ICU 默认 locale——即 Windows"区域格式"设置,issue #189)与取消关键词(`isCancelInput`:取消/cancel 双词永远都认)
 
-语言解析链:`PI_LANGUAGE` 环境变量 > config `"language"` > 系统 locale > `"en"`;`config.ts` 的 `resolveLanguage` 是单点解释,非显式配置时启动日志打一行来源。接线点三处:standalone(启动早期)、cli(非 setup 子命令)、setup 向导(首问语言,检测值作默认并持久化)。
+语言解析链:`PI_LANGUAGE` 环境变量 > config `"language"` > 系统 locale > `"en"`;`config.ts` 的 `resolveLanguage` 是单点解释(平台与 win32 探针均为可注入参数,测试跨平台确定),非显式配置时启动日志打一行来源。接线点三处:standalone(启动早期)、cli(非 setup 子命令)、setup 向导(首问语言,检测值作默认并持久化)。
 
 红线:i18n 模块不 import src/ 其他文件(零循环依赖)、零第三方运行时依赖;logger 日志与代码注释**不翻译**;语言运行中不热切换(重启生效)。tests/setup.ts 全局 `setLocale("zh")` —— 存量测试的中文断言零改动;注意 `vi.resetModules()` 会重建 i18n 模块图,此类测试须在动态 import 后重新 `setLocale("zh")`。
 
@@ -876,9 +884,11 @@ Matrix 消息(transport 只做纯 I/O,不做授权判定)
 
 Windows 适配分三期落地(2026-10-13,依据同日跨平台深度评估),**2026-10-14 真机验收 7/7 全过**(Windows Server 2025:安装链路/向导/run 连 Matrix/`!` bash/enable 守卫/任务计划程序自启/Ctrl+C 优雅退出),另通过多空间多房间专项(/pmctl 双项目防串台、空间三子房收纳、头像区分、rm 销账);自 1.0.0 起随版正式支持。README 双语 Windows 章节与安装提示(含 npm ≥ 11 install-scripts 门禁的 `--allow-scripts` 白名单)已按真机实测重写:
 
-- **第一期 CI**:`.github/workflows/ci.yml` ubuntu+windows 双平台矩阵(lint/typecheck/build/test),push(master、`feat/**`)与 pull_request 触发;windows runner 上 `npm ci` 真实走一遍 postinstall 的 win32 原生库下载路径。
+- **第一期 CI**:`.github/workflows/ci.yml` ubuntu+windows 双平台矩阵(lint/typecheck/build/test),push(master、`develop`、`feat/**`)与 pull_request 触发;windows runner 上 `npm ci` 真实走一遍 postinstall 的 win32 原生库下载路径。
 - **第二期核心修复**:pi 发现链 win32 跳过 `which`(恒 ENOENT),托管安装(`~/.pi/agent` releases-v1,根目录经 install.ps1 的 Get-PiAgentDir 实证)→ `import.meta.resolve` → `PI_CLI_PATH` 三级解析;`update` 经 `src/npm-runtime.ts` 的 `resolveNpmCli()` 直启 `node npm-cli.js`(Windows 无法裸 spawn npm);e2e 原生库检查的全局前缀按平台解析(win32 = `%APPDATA%\npm\node_modules`)。
 - **第三期外围守卫**:服务管理族入口 `requireLinux()` 平台守卫(非 linux 报错退出,守卫在写 unit 文件之前);config 权限自检 win32 跳过(libuv 在 Windows 只报 0666/0444,0600 契约无意义);信号补 `SIGBREAK`(Windows Ctrl+Break)。
+- **语言检测 Windows 回退(issue #189,2026-10-14)**:Windows 不设置 POSIX locale 变量,原先语言链直落英文兜底;现 win32 且 POSIX 链全空时读 ICU 默认 locale(源自系统"区域格式"设置)映射 zh*/其余。探针失败(含 ICU 异常)降级为 null 不抛,启动链永不因检测崩。注意语义边界:读的是区域格式而非显示语言,混合配置(中文显示+英文区域)会判偏,README 已提示用 `PI_LANGUAGE` 显式指定。
+- **win32 路径守卫(issue #190,2026-10-14)**:`src/win32-path.ts` 纯函数三分类——DOS 保留名(CON/PRN/AUX/NUL/COM1-9/LPT1-9,含带扩展名形态)、NTFS 非法字符(`< > : " | ? *`,盘符冒号豁免)、超 259 字符;外加 `win32SamePath` 大小写折叠比较。接线点:/pmctl new 与 /pmctl mv(注册/迁移前拒绝,附可读文案,零副作用),POSIX 主机完全跳过(这些情形在 POSIX 合法或另有系统级报错)。`platform` 为可注入 seam,win32 分支在任何 CI runner 可测。设计取向:长路径策略开的机器理论上能跑,但行为取决于注册表+进程 manifest,确定性优先——超长一律拒绝并提示缩短。
 
 **win32 分支约定**:平台分支只允许两种形态——新增 `process.platform === "win32"` 专属分支,或非 linux 守卫提前拒绝;**POSIX 分支的既有顺序与语义一个字不动**(Linux 是主战场,回归零容忍)。守卫判定一律抽成纯函数(参数化 platform)以便单测;内置模块 mock 用 `vi.hoisted` + `vi.mock` 工厂(vitest 4 下 `vi.spyOn` 打不动 ESM 命名空间)。
 
