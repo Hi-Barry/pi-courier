@@ -380,6 +380,26 @@ const zh = {
   "pmctl.new.startFailed": "\n⚠️ 项目进程启动失败: {message} —— 房间已保留,首次对话会自动重试。",
   "pmctl.new.ok": "✅ 项目「{name}」创建完成!\n\n• 房间: {room}\n• 工作目录: {workdir}\n• 已邀请你进入新房间\n\n项目对话请到新房间进行(独立上下文与工作目录)。{notes}",
   "pmctl.new.failed": "❌ 创建项目失败: {message}",
+  "pmctl.new.welcomeFailed": "\n⚠️ 上线欢迎消息发送失败: {message}",
+  "welcome.project.header": "👋 **{name} 已上线！**",
+  "welcome.project.identity.full":
+    "我是驻在这个项目里的编码助手，底层是 pi coding agent（v{piVersion}）· pi-courier（v{courierVersion}），当前模型：`{model}`。",
+  "welcome.project.identity.modelOnly": "我是驻在这个项目里的编码助手，当前模型：`{model}`。",
+  "welcome.project.identity.versionsOnly":
+    "我是驻在这个项目里的编码助手，底层是 pi coding agent（v{piVersion}）· pi-courier（v{courierVersion}）。",
+  "welcome.project.identity.bare": "我是驻在这个项目里的编码助手。",
+  "welcome.project.capabilities":
+    "🛠️ 能做什么\n" +
+    "• 直接发消息：写代码、改 Bug、答疑，这个项目目录里的活都能干\n" +
+    "• 发图片、发文件我能看：报错截图直接甩过来\n" +
+    "• `! ls` 跑 bash 命令并把结果写进对话；`!! ls` 只跑不写进对话\n" +
+    "• `/remind 30m 泡茶` 定时提醒，重启不丢\n" +
+    "• `/stop` 随时打断；`/recap` 生成交接卡",
+  "welcome.project.try":
+    "💡 试一试\n" +
+    "• 「梳理一下这个项目的目录结构」\n" +
+    "• 发一张报错截图，问「这是哪里出了问题」",
+  "welcome.project.helpHint": "发 **/help** 看全部命令。",
   "pmctl.empty": "暂无项目(用 /pmctl new <名称> <路径> 创建)",
   "pmctl.statusRunning": "✅ 运行中",
   "pmctl.statusStopped": "⏸️ 未启动",

@@ -279,6 +279,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   };
   const disconnectAll = (): Promise<unknown> => (matrix ? matrix.disconnect() : Promise.resolve());
 
+  // 上线欢迎卡(票 #210)需要"失败可见":与 sendReply 的静默约定不同,
+  // 失败必须抛回调用方,才能作为附注进 /pmctl new 的管理房回执。
+  const sendReplyStrict = async (chatId: string, text: string): Promise<void> => {
+    const provider = matrix;
+    if (!provider) throw new Error("Transport matrix not found");
+    if (!provider.isConnected) throw new Error("Transport matrix not connected");
+    await provider.sendMessage(chatId, text);
+  };
+
   // 配对码去向接线(票7,spec #99 #106):落地目标此刻才存在 —— 交给启动
   // 状态模块持槽;此前到达的配对码已被缓冲,接线即按序补发。不等待:补发
   // 永不阻塞启动(常规路径缓冲为空,这就是一次纯赋值)。
@@ -293,7 +302,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // project-process early events.
   // 收养许可的两态(初值 !isSpaceMode,降级唯一翻转口 allowAdoption)归
   // 启动状态模块持有;router 只拿到只读查询。
-  const pmctl = new PmctlController({ projectManager, roomOps, store });
+  const pmctl = new PmctlController({
+    projectManager,
+    roomOps,
+    store,
+    // 上线欢迎卡发送缝(票 #210):/pmctl new 成功后向新项目房发卡。
+    // sendReplyStrict 声明在上方,闭包仅在运行期命令处理时触达。
+    notifyRoom: (roomId, text) => sendReplyStrict(roomId, text),
+  });
 
   // ---- durable state (issue #114) --------------------------------------------
   // ~/.pi/pi-courier-state/(0700)收桥的派生状态文件:磁盘是备份,内存是热路径。

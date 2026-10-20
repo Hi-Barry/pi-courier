@@ -26,11 +26,13 @@ import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
 import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
+import { buildProjectWelcome, welcomeVersions } from "../project-welcome.js";
 import { applyRoomCustomAvatar, ensureRoomAvatar, poolFilesForProjects } from "../room-branding.js";
 import { pickPoolAvatarFile } from "../space-identity.js";
 import { provisionManagedRoom } from "../space-topology.js";
 import type { RoomOps } from "../transports/interface.js";
 import { win32PathProblem, win32SamePath } from "../win32-path.js";
+import type { PiRpc } from "./pi-rpc.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
 import { PROJECT_SESSION_DIR } from "./project-manager.js";
 
@@ -48,6 +50,11 @@ export interface PmctlControllerOptions {
   /** Matrix room capability — absent outside Matrix deployments. */
   roomOps?: RoomOps;
   store: ConfigStore;
+  /** 上线欢迎卡的发送缝(票 #210):向指定房间主动发一条。失败必须抛出
+   *  (进管理房回执附注),不能吞 —— 与 sendReply 的静默约定不同。缺省 =
+   *  静默跳过欢迎卡(测试与无传输部署),与 ProjectManager.notifyRoom
+   *  的缺省约定同款。 */
+  notifyRoom?: (roomId: string, text: string) => Promise<void> | void;
   /** Testing seam for the win32 path guards (issue #190); production default
    *  is the real process platform. */
   platform?: NodeJS.Platform;
@@ -67,6 +74,19 @@ interface PendingRm {
 function splitFirst(s: string): [string, string] {
   const sp = s.indexOf(" ");
   return sp === -1 ? [s.trim(), ""] : [s.slice(0, sp).trim(), s.slice(sp + 1).trim()];
+}
+
+/** 票 #210:急启动后的会话状态里的当前模型 → `provider/id` 单引用。
+ *  客户端未就绪(requireClient/getState 抛)或状态缺字段 → undefined,
+ *  欢迎卡省模型行照发 —— 卡片不该被一行模型信息卡住。 */
+async function readSessionModelRef(rpc: PiRpc): Promise<string | undefined> {
+  try {
+    const model = (await rpc.requireClient().getState()).model;
+    if (model?.provider && model?.id) return `${model.provider}/${model.id}`;
+  } catch {
+    // fall through — omit the model line
+  }
+  return undefined;
 }
 
 /** /pmctl rm 确认窗(单一持有,i18n 文案插值引用 —— 审计工程批 票19)。 */
@@ -274,16 +294,36 @@ export class PmctlController {
       // 票 #209:new 出来的项目就是要开发的项目,进程即刻拉起(急启动),
       // 不等首条消息;预设应用照旧走 getRpcForRoom 内部路径。失败不回滚:
       // 房间与登记保留,首条消息的既有启动路径自然重试,原因以附注进回执
-      // (与头像失败同款机制)。
+      // (与头像失败同款机制)。启动失败则跳过欢迎卡 —— 项目没起来,不发假卡。
       let startNote = "";
+      let welcomeNote = "";
+      let rpc: PiRpc | undefined;
       try {
-        await pm.getRpcForRoom(provision.roomId);
+        rpc = await pm.getRpcForRoom(provision.roomId);
       } catch (err) {
         logger.warn(`[pmctl] 项目进程急启动失败(${provision.roomId}): ${errorMessage(err)}`);
         startNote = t("pmctl.new.startFailed", { message: errorMessage(err) });
       }
+      // 票 #210:启动成功后读真实会话模型,向新项目房发上线欢迎卡。发送
+      // 失败同样只是附注,创建流程不回滚。
+      if (rpc && this.opts.notifyRoom) {
+        try {
+          const versions = await welcomeVersions();
+          await this.opts.notifyRoom(
+            provision.roomId,
+            buildProjectWelcome({
+              projectName: pname,
+              model: await readSessionModelRef(rpc),
+              ...versions,
+            })
+          );
+        } catch (err) {
+          logger.warn(`[pmctl] 上线欢迎卡发送失败(${provision.roomId}): ${errorMessage(err)}`);
+          welcomeNote = t("pmctl.new.welcomeFailed", { message: errorMessage(err) });
+        }
+      }
       // 挂链/品牌失败:单点文案附注拼进成功回执(展示层 — 不影响项目)。
-      const notes = provision.notes.map((note) => `\n⚠️ ${note}`).join("") + startNote;
+      const notes = provision.notes.map((note) => `\n⚠️ ${note}`).join("") + startNote + welcomeNote;
       await reply(
         t("pmctl.new.ok", { name: pname, room: provision.roomId, workdir: resolvedWorkdir, notes })
       );

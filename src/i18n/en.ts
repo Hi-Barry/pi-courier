@@ -400,6 +400,26 @@ const en: Record<MessageKey, string> = {
   "pmctl.new.ok":
     "✅ Project \"{name}\" created!\n\n• room: {room}\n• workdir: {workdir}\n• you've been invited into the new room\n\nTalk to the project in its new room (isolated context and workdir).{notes}",
   "pmctl.new.failed": "❌ Failed to create the project: {message}",
+  "pmctl.new.welcomeFailed": "\n⚠️ Failed to send the welcome message: {message}",
+  "welcome.project.header": "👋 **{name} is online!**",
+  "welcome.project.identity.full":
+    "I'm the coding assistant for this project, powered by pi coding agent (v{piVersion}) · pi-courier (v{courierVersion}), current model: `{model}`.",
+  "welcome.project.identity.modelOnly": "I'm the coding assistant for this project, current model: `{model}`.",
+  "welcome.project.identity.versionsOnly":
+    "I'm the coding assistant for this project, powered by pi coding agent (v{piVersion}) · pi-courier (v{courierVersion}).",
+  "welcome.project.identity.bare": "I'm the coding assistant for this project.",
+  "welcome.project.capabilities":
+    "🛠️ What I can do\n" +
+    "• Just message me: write code, fix bugs, answer questions — anything in this project's directory\n" +
+    "• Send images or files: error screenshots welcome, I can read them\n" +
+    "• `! ls` runs a bash command and keeps the result in context; `!! ls` runs it without\n" +
+    "• `/remind 30m make tea` sets a reminder that survives restarts\n" +
+    "• `/stop` interrupts anytime; `/recap` writes a handoff card",
+  "welcome.project.try":
+    "💡 Try it\n" +
+    "• \"Give me an overview of this project's structure\"\n" +
+    "• Send an error screenshot and ask \"what's going wrong here?\"",
+  "welcome.project.helpHint": "Send **/help** to see all commands.",
   "pmctl.empty": "No projects yet (create one with /pmctl new <name> <path>)",
   "pmctl.statusRunning": "✅ running",
   "pmctl.statusStopped": "⏸️ not started",
