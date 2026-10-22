@@ -23,7 +23,7 @@ import { BANG_COMMAND } from "../command-registry.js";
 import { BASH_OUTPUT_LIMIT_DEFAULT, CONFIG_DIR } from "../config.js";
 import { errorMessage } from "../errors.js";
 import { truncateLine } from "../formatting.js";
-import { t } from "../i18n/index.js";
+import { type MessageKey, t } from "../i18n/index.js";
 import { logger } from "../logger.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
 import { MAX_REMINDERS_PER_ROOM, type ReminderEntry } from "../reminders/reminder-store.js";
@@ -470,6 +470,77 @@ async function replySessionList(rpc: PiRpc, reply: (text: string) => Promise<voi
     return `${i + 1}. ${s.file}  ${formatMtime(s.mtimeMs)}${name ? `  ${name}` : ""}`;
   });
   await reply(t("cmd.sessions.list", { lines: lines.join("\n") }));
+}
+
+// --- Skill listing (/skills — spec #214) -------------------------------------
+
+/**
+ * /skills 的最小输入形状:上游 RpcSlashCommand 的结构投影,只取展示所需
+ * 字段 —— 纯函数测试不必伪造完整 SourceInfo,真实 RpcSlashCommand[] 结构
+ * 兼容、可直接传入。
+ */
+export interface SkillCommandView {
+  /** 已含 "skill:" 前缀(如 "skill:ask-matt"),行首展示 "/skill:ask-matt"。 */
+  name: string;
+  description?: string;
+  source: string;
+  sourceInfo?: { scope?: string };
+}
+
+/** 分组展示顺序(user → project → other),标签键一一对应。 */
+const SKILL_GROUP_ORDER = ["user", "project", "other"] as const;
+type SkillGroupKey = (typeof SKILL_GROUP_ORDER)[number];
+
+const SKILL_GROUP_LABEL_KEY: Record<SkillGroupKey, MessageKey> = {
+  user: "cmd.skills.group.user",
+  project: "cmd.skills.group.project",
+  other: "cmd.skills.group.other",
+};
+
+/** scope → 分组键:只认 user/project,未知值(含上游 temporary)一律归
+ *  「其他」—— 防御性归组,不因未知枚举值崩溃。 */
+function skillGroupKey(scope: string | undefined): SkillGroupKey {
+  if (scope === "user" || scope === "project") return scope;
+  return "other";
+}
+
+/** 单行展示:`/skill:名称 — 描述`(描述单行化并约 60 字符截断);
+ *  缺描述只显名字、不带空描述段。 */
+export function formatSkillLine(entry: SkillCommandView): string {
+  const invocation = `/${entry.name}`;
+  const description = entry.description?.trim();
+  return description ? `${invocation} — ${truncateLine(description, 60)}` : invocation;
+}
+
+/**
+ * /skills 回复文本(spec #214):只列技能(source === "skill"),不混扩展
+ * 命令与提示词模板;按作用域分组、组内按名字母序,全量不设上限;零技能时
+ * 回复安装指路。纯函数,直接单测 —— 与 listSessions 同一接缝风格。
+ */
+export function formatSkillsList(commands: readonly SkillCommandView[]): string {
+  const skills = commands.filter((c) => c.source === "skill");
+  if (skills.length === 0) return t("cmd.skills.empty");
+  const groups = new Map<SkillGroupKey, SkillCommandView[]>();
+  for (const skill of skills) {
+    const key = skillGroupKey(skill.sourceInfo?.scope);
+    const bucket = groups.get(key) ?? [];
+    bucket.push(skill);
+    groups.set(key, bucket);
+  }
+  const blocks: string[] = [];
+  for (const key of SKILL_GROUP_ORDER) {
+    const bucket = groups.get(key);
+    if (!bucket) continue;
+    // 按名字母序(码元比较,确定性优先于 locale 语义 —— 技能名是标识符)。
+    bucket.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    blocks.push(
+      t("cmd.skills.group", {
+        label: t(SKILL_GROUP_LABEL_KEY[key]),
+        lines: bucket.map(formatSkillLine).join("\n"),
+      })
+    );
+  }
+  return t("cmd.skills.header", { lines: blocks.join("\n\n") });
 }
 
 /** Returns true if the command was handled (something was done / replied). */
@@ -930,6 +1001,15 @@ export async function handleSlashCommand(
         );
         await rpc.requireClient().abortBash();
         await reply(t("cmd.bashstop.ok", { count: inflight.length, lines: lines.join("\n") }));
+        return true;
+      }
+
+      // --- Skills(技能发现,spec #214)----------------------------------------
+      case "/skills": {
+        // 只列技能;无参数、不支持过滤(带参数也不产生过滤效果)。查询失败
+        // 落既有 catch 管道的 cmd.generic.error 回执,不新增错误分支。
+        const commands = await rpc.requireClient().getCommands();
+        await reply(formatSkillsList(commands));
         return true;
       }
 
