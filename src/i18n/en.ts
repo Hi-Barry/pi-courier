@@ -396,9 +396,31 @@ const en: Record<MessageKey, string> = {
     "Usage: /pmctl new <project name> [path]\nPath is optional: defaults to a same-named directory under the project root (e.g. newapp → ~/Projects/newapp); relative and absolute paths work too.",
   "pmctl.noInviteTarget": "❌ No invite target (no trusted users configured)",
   "pmctl.new.elevationFailed": "⚠️ Room created, but granting admin to trusted users failed (set it manually): {message}",
+  "pmctl.new.startFailed": "\n⚠️ The project process failed to start: {message} — the room is kept; the first message will retry automatically.",
   "pmctl.new.ok":
     "✅ Project \"{name}\" created!\n\n• room: {room}\n• workdir: {workdir}\n• you've been invited into the new room\n\nTalk to the project in its new room (isolated context and workdir).{notes}",
   "pmctl.new.failed": "❌ Failed to create the project: {message}",
+  "pmctl.new.welcomeFailed": "\n⚠️ Failed to send the welcome message: {message}",
+  "welcome.project.header": "👋 **{name} is online!**",
+  "welcome.project.identity.model":
+    "I'm the coding assistant for this project, powered by {stack}, current model: `{model}`.",
+  "welcome.project.identity.plain": "I'm the coding assistant for this project, powered by {stack}.",
+  "welcome.project.stack.both": "pi coding agent (v{piVersion}) · pi-courier (v{courierVersion})",
+  "welcome.project.stack.piOnly": "pi coding agent (v{piVersion}) · pi-courier",
+  "welcome.project.stack.courierOnly": "pi coding agent · pi-courier (v{courierVersion})",
+  "welcome.project.stack.neither": "pi coding agent · pi-courier",
+  "welcome.project.capabilities":
+    "🛠️ What I can do\n" +
+    "• Just message me: write code, fix bugs, answer questions — anything in this project's directory\n" +
+    "• Send images or files: error screenshots welcome, I can read them\n" +
+    "• `! ls` runs a bash command and keeps the result in context; `!! ls` runs it without\n" +
+    "• `/remind 30m make tea` sets a reminder that survives restarts\n" +
+    "• `/stop` interrupts anytime; `/recap` writes a handoff card",
+  "welcome.project.try":
+    "💡 Try it\n" +
+    "• \"Give me an overview of this project's structure\"\n" +
+    "• Send an error screenshot and ask \"what's going wrong here?\"",
+  "welcome.project.helpHint": "Send **/help** to see all commands.",
   "pmctl.empty": "No projects yet (create one with /pmctl new <name> <path>)",
   "pmctl.statusRunning": "✅ running",
   "pmctl.statusStopped": "⏸️ not started",

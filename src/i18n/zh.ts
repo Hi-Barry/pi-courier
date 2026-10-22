@@ -377,8 +377,29 @@ const zh = {
   "pmctl.new.usage": "用法: /pmctl new <项目名> [路径]\n路径可选:缺省为工程根下同名目录(如 newapp → ~/Projects/newapp);也可用相对路径或绝对路径。",
   "pmctl.noInviteTarget": "❌ 缺少邀请对象(未配置信任用户)",
   "pmctl.new.elevationFailed": "⚠️ 房间已创建,但信任用户补权失败(可手动设置): {message}",
+  "pmctl.new.startFailed": "\n⚠️ 项目进程启动失败: {message} —— 房间已保留,首次对话会自动重试。",
   "pmctl.new.ok": "✅ 项目「{name}」创建完成!\n\n• 房间: {room}\n• 工作目录: {workdir}\n• 已邀请你进入新房间\n\n项目对话请到新房间进行(独立上下文与工作目录)。{notes}",
   "pmctl.new.failed": "❌ 创建项目失败: {message}",
+  "pmctl.new.welcomeFailed": "\n⚠️ 上线欢迎消息发送失败: {message}",
+  "welcome.project.header": "👋 **{name} 已上线！**",
+  "welcome.project.identity.model": "我是驻在这个项目里的编码助手，底层是 {stack}，当前模型：`{model}`。",
+  "welcome.project.identity.plain": "我是驻在这个项目里的编码助手，底层是 {stack}。",
+  "welcome.project.stack.both": "pi coding agent（v{piVersion}）· pi-courier（v{courierVersion}）",
+  "welcome.project.stack.piOnly": "pi coding agent（v{piVersion}）· pi-courier",
+  "welcome.project.stack.courierOnly": "pi coding agent · pi-courier（v{courierVersion}）",
+  "welcome.project.stack.neither": "pi coding agent · pi-courier",
+  "welcome.project.capabilities":
+    "🛠️ 能做什么\n" +
+    "• 直接发消息：写代码、改 Bug、答疑，这个项目目录里的活都能干\n" +
+    "• 发图片、发文件我能看：报错截图直接甩过来\n" +
+    "• `! ls` 跑 bash 命令并把结果写进对话；`!! ls` 只跑不写进对话\n" +
+    "• `/remind 30m 泡茶` 定时提醒，重启不丢\n" +
+    "• `/stop` 随时打断；`/recap` 生成交接卡",
+  "welcome.project.try":
+    "💡 试一试\n" +
+    "• 「梳理一下这个项目的目录结构」\n" +
+    "• 发一张报错截图，问「这是哪里出了问题」",
+  "welcome.project.helpHint": "发 **/help** 看全部命令。",
   "pmctl.empty": "暂无项目(用 /pmctl new <名称> <路径> 创建)",
   "pmctl.statusRunning": "✅ 运行中",
   "pmctl.statusStopped": "⏸️ 未启动",

@@ -28,6 +28,7 @@ import { buildLogFilterArgs } from "./log-filter.js";
 import { globalNodeModulesDir, resolveNpmCli } from "./npm-runtime.js";
 import { projectLabelOf } from "./project-labels.js";
 import { busFailureHint, dirOwnerUid, serviceManagementSupported } from "./systemd-hint.js";
+import { readBridgeVersion } from "./version.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
 suppressKnownWarnings();
@@ -37,12 +38,7 @@ const SERVICE_UNIT = `${SERVICE_NAME}.service`;
 
 /** Read the installed pi-courier version from package.json. */
 function packageVersion(): string {
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(projectDir(), "package.json"), "utf-8")) as { version?: string };
-    return pkg.version ?? "unknown";
-  } catch {
-    return "unknown";
-  }
+  return readBridgeVersion() ?? "unknown";
 }
 
 /** Project root (parent of the dist/ directory this file is compiled into). */

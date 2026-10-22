@@ -19,6 +19,7 @@ describe("PmctlController", () => {
   let store: ConfigStore;
   let controller: PmctlController;
   let replies: string[];
+  let notices: Array<{ roomId: string; text: string }>;
   const reply = async (text: string) => {
     replies.push(text);
   };
@@ -31,6 +32,7 @@ describe("PmctlController", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);
     replies = [];
+    notices = [];
     const projects = new Map<string, ProjectEntry>();
     pm = {
       isMultiProject: true,
@@ -84,6 +86,9 @@ describe("PmctlController", () => {
       projectManager: pm as unknown as ProjectManager,
       roomOps: roomOps as unknown as RoomOps,
       store,
+      notifyRoom: (roomId, text) => {
+        notices.push({ roomId, text });
+      },
     });
   });
 
@@ -177,6 +182,73 @@ describe("PmctlController", () => {
     expect(replies.at(-1)).toContain("创建完成");
     expect(replies.at(-1)).toContain("头像设置失败");
     expect(replies.at(-1)).toContain("下次启动自动补");
+  });
+
+  it("starts the project pi process eagerly, after the project is registered (票 #209)", async () => {
+    await handle("/pmctl new myapp");
+    expect(pm.getRpcForRoom).toHaveBeenCalledWith("!newroom:server");
+    const registered = (pm.registerProject as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const started = (pm.getRpcForRoom as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(started).toBeGreaterThan(registered);
+  });
+
+  it("an eager-start failure keeps the project and lands as a receipt note (票 #209)", async () => {
+    (pm.getRpcForRoom as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("spawn pi ENOENT"));
+    await handle("/pmctl new myapp");
+    expect(pm.registerProject).toHaveBeenCalledWith("!newroom:server", resolve("/home/you/Projects", "myapp"), "myapp");
+    expect(replies.at(-1)).toContain("创建完成");
+    expect(replies.at(-1)).toContain("项目进程启动失败");
+    expect(replies.at(-1)).toContain("spawn pi ENOENT");
+  });
+
+  // ---- new: welcome card (spec #208 票2 / #210) --------------------------------
+
+  /** A stub rpc whose session state is `state` — enough for readSessionModelRef. */
+  const startWithState = (state: unknown) => {
+    const rpc = { requireClient: () => ({ getState: () => state }) };
+    (pm.getRpcForRoom as ReturnType<typeof vi.fn>).mockResolvedValue(rpc);
+  };
+
+  it("welcomes the new project room with the real session model (票 #210)", async () => {
+    startWithState({ model: { provider: "opencode-go", id: "deepseek-v4.1-flash" } });
+    await handle("/pmctl new myapp");
+    expect(notices).toHaveLength(1);
+    expect(notices[0].roomId).toBe("!newroom:server");
+    expect(notices[0].text).toContain("myapp 已上线");
+    expect(notices[0].text).toContain("`opencode-go/deepseek-v4.1-flash`");
+    expect(notices[0].text).toContain("/help");
+    expect(replies.at(-1)).toContain("创建完成");
+    expect(replies.at(-1)).not.toContain("欢迎消息发送失败");
+  });
+
+  it("omits the model line when the session state has none (票 #210)", async () => {
+    startWithState({});
+    await handle("/pmctl new myapp");
+    expect(notices).toHaveLength(1);
+    expect(notices[0].text).toContain("myapp 已上线");
+    expect(notices[0].text).not.toContain("当前模型");
+  });
+
+  it("a welcome send failure is a note; the project still completes (票 #210)", async () => {
+    startWithState({ model: { provider: "p", id: "m" } });
+    controller = new PmctlController({
+      projectManager: pm as unknown as ProjectManager,
+      roomOps: roomOps as unknown as RoomOps,
+      store,
+      notifyRoom: () => Promise.reject(new Error("M_FORBIDDEN")),
+    });
+    await handle("/pmctl new myapp");
+    expect(pm.registerProject).toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("创建完成");
+    expect(replies.at(-1)).toContain("欢迎消息发送失败");
+    expect(replies.at(-1)).toContain("M_FORBIDDEN");
+  });
+
+  it("a start failure skips the welcome card entirely (票 #209×#210)", async () => {
+    (pm.getRpcForRoom as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
+    await handle("/pmctl new myapp");
+    expect(notices).toHaveLength(0);
+    expect(replies.at(-1)).toContain("项目进程启动失败");
   });
 
   // ---- label validation (spec #34 票2) ----------------------------------------
@@ -623,6 +695,9 @@ describe("PmctlController", () => {
       }),
       listProjects: vi.fn(() => Array.from(projects.entries())),
       isRunning: vi.fn().mockReturnValue(false),
+      // 票 #209 急启动:成功路径的桩(缺了它,急启动会在这些用例里假性失败,
+      // 回执混进"启动失败"附注 —— 评审修正)。
+      getRpcForRoom: vi.fn().mockResolvedValue(undefined),
     };
   }
 
