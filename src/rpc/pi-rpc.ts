@@ -48,15 +48,6 @@ export interface PiRpcOptions {
   proxyConfig?: ProxyConfigInput;
 }
 
-/** Minimal shape of a slash command returned by get_commands (duck-typed, not exported by the package) */
-export interface RpcSlashCommandInfo {
-  name: string;
-  description?: string;
-  source: "extension" | "prompt" | "skill";
-  location?: string;
-  path?: string;
-}
-
 /**
  * Wire payload of an extension_ui_response (issue #54). Upstream's parse
  * step reads `value` for select/input/editor, `confirmed` for confirm and
@@ -223,7 +214,6 @@ export function assertPiEngineSupported(
 
 export class PiRpc {
   private client?: RpcClient;
-  private commandsCache?: { at: number; list: RpcSlashCommandInfo[] };
   private options: PiRpcOptions;
   /** Listeners registered before start() — attached once the client connects */
   private listeners: Array<RpcEventListener | undefined> = [];
@@ -441,7 +431,6 @@ export class PiRpc {
     this.client = undefined;
     this.wrappedClient = undefined;
     this.inFlight = 0;
-    this.commandsCache = undefined;
     this.listeners = [];
   }
 
@@ -514,19 +503,6 @@ export class PiRpc {
       this.listeners[index] = undefined;
       clientUnsub?.();
     };
-  }
-
-  /** Get available commands (extension commands, prompt templates, skills) with a short cache. */
-  async getCommands(): Promise<RpcSlashCommandInfo[]> {
-    if (this.commandsCache && Date.now() - this.commandsCache.at < 60_000) {
-      return this.commandsCache.list;
-    }
-    const list = (await this.requireClient().getCommands()) as unknown as {
-      commands: RpcSlashCommandInfo[];
-    };
-    const commands = list.commands ?? [];
-    this.commandsCache = { at: Date.now(), list: commands };
-    return commands;
   }
 
   /**
