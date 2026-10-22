@@ -155,6 +155,15 @@ const zh = {
   "cmd.bashstop.none": "💤 没有在跑的 bash 命令。",
   "cmd.bashstop.running": "(已跑 {elapsed})",
   "cmd.bashstop.ok": "⏹ 已请求中止 {count} 条在跑命令:\n{lines}\n各命令已捕获的输出随后回帖。",
+  "cmd.skills.header": "📚 已安装技能:\n{lines}",
+  "cmd.skills.group": "{label}:\n{lines}",
+  "cmd.skills.group.user": "用户级",
+  "cmd.skills.group.project": "项目级",
+  "cmd.skills.group.other": "其他",
+  "cmd.skills.empty":
+    "💤 还没有已安装的技能。把技能放进这些目录即可:\n" +
+    "• 用户级:~/.agents/skills/ 或 ~/.pi/agent/skills/\n" +
+    "• 项目级:<工作目录>/.agents/skills/ 或 <工作目录>/.pi/skills/",
   "cmd.help.group.pi":
     "**Pi 原生命令**(pi TUI 同款,经 RPC 执行):\n" +
     "\n" +
@@ -179,6 +188,9 @@ const zh = {
     "• `/switch <序号>` — 切换到 /sessions 列出的会话(流式中需先 /stop)\n" +
     "• `/last` — 复述 agent 最近一次回复\n" +
     "• `/recap` — 生成本会话交接卡(给接续会话看的摘要)\n" +
+    "\n" +
+    "【技能】\n" +
+    "• `/skills` — 列出已装技能(按用户级/项目级分组,每行即调用形态)\n" +
     "\n" +
     "【模型与思考(增强)】\n" +
     "• `/models` — 列出可用模型\n" +
@@ -205,7 +217,7 @@ const zh = {
     "【会话镜像】\n" +
     "• `/attach` — 开启 TUI ↔ Matrix 会话镜像(回复附加命令,终端跑它即可双端同步)\n" +
     "• `/detach` — 关闭会话镜像",
-  "cmd.help.passthrough": "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。",
+  "cmd.help.passthrough": "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。可用 /skills 查看技能列表。",
 
   // ── router(管道回执,message-router.ts)──────────────────────────────
   "common.unknownError": "未知错误",

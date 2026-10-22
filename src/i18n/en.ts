@@ -155,6 +155,15 @@ const en: Record<MessageKey, string> = {
   "cmd.bashstop.none": "💤 No bash commands running.",
   "cmd.bashstop.running": "(running for {elapsed})",
   "cmd.bashstop.ok": "⏹ Abort requested for {count} running command(s):\n{lines}\nCaptured output of each will follow as separate replies.",
+  "cmd.skills.header": "📚 Installed skills:\n{lines}",
+  "cmd.skills.group": "{label}:\n{lines}",
+  "cmd.skills.group.user": "User-level",
+  "cmd.skills.group.project": "Project-level",
+  "cmd.skills.group.other": "Other",
+  "cmd.skills.empty":
+    "💤 No skills installed yet. Drop skills into these directories:\n" +
+    "• User-level: ~/.agents/skills/ or ~/.pi/agent/skills/\n" +
+    "• Project-level: <workdir>/.agents/skills/ or <workdir>/.pi/skills/",
   "cmd.help.group.pi":
     "**Pi-native commands** (same as the pi TUI, executed over RPC):\n" +
     "\n" +
@@ -179,6 +188,9 @@ const en: Record<MessageKey, string> = {
     "• `/switch <number>` — switch to a session from /sessions (run /stop first while streaming)\n" +
     "• `/last` — repeat the agent's latest reply\n" +
     "• `/recap` — generate a handoff card for this session (a summary for the session that takes over)\n" +
+    "\n" +
+    "【Skills】\n" +
+    "• `/skills` — list installed skills (grouped by user/project level; each line is the invocation form)\n" +
     "\n" +
     "【Models & thinking (enhanced)】\n" +
     "• `/models` — list available models\n" +
@@ -206,7 +218,7 @@ const en: Record<MessageKey, string> = {
     "• `/attach` — enable the TUI ↔ Matrix session mirror (replies with a command to run in a terminal for two-way sync)\n" +
     "• `/detach` — stop the session mirror",
   "cmd.help.passthrough":
-    "**Passthrough**: `/skill:<name>`, prompt templates and extension commands run directly; plain text goes to the model.",
+    "**Passthrough**: `/skill:<name>`, prompt templates and extension commands run directly; plain text goes to the model. Use /skills to list installed skills.",
 
   // ── router ────────────────────────────────────────────────────────────
   "common.unknownError": "unknown error",
