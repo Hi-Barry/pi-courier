@@ -66,6 +66,9 @@ export function makeFakeRpc(): PiRpc {
     onEvent: vi.fn(),
     onRestarted: vi.fn().mockReturnValue(() => {}),
     bash: vi.fn().mockResolvedValue({ ok: true, text: "done" }),
+    compact: vi
+      .fn()
+      .mockResolvedValue({ kind: "ok", result: { tokensBefore: 1234, summary: "压缩摘要" } }),
     requireClient: vi.fn().mockReturnValue({
       abort: vi.fn().mockResolvedValue(undefined),
       waitForIdle: vi.fn().mockResolvedValue(undefined),
