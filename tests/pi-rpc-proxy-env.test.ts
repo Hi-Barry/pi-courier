@@ -38,6 +38,8 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 
 vi.mock("../src/config", () => ({
   loadConfig: () => fileConfig.current,
+  // pi-rpc.ts 顶层引用的 bash 自管通道默认值(票 #220);与真实默认同值。
+  BASH_TIMEOUT_MINUTES_DEFAULT: 10,
 }));
 
 /** cliPath 指向不存在路径:引擎门禁找不到 package.json 即跳过,动态

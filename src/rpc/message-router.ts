@@ -36,6 +36,7 @@ import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.j
 import { BacklogInbox } from "./backlog-inbox.js";
 import {
   type BashTracker,
+  bashTimeoutText,
   clearedQueuesView,
   createBashTracker,
   formatBashReply,
@@ -1066,7 +1067,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             sendReply(ctx.msg.chatId, ctx.msg.transport, formatBashReply(bang.command, result, bang.excluded, bashOutputLimit(store.get())))
           )
           .catch((err: unknown) =>
-            sendReply(ctx.msg.chatId, ctx.msg.transport, t("cmd.bash.error", { message: errorMessage(err) }))
+            // 超时弃权(票 #220)出人话(含已等待时长);其余照旧透传。
+            sendReply(ctx.msg.chatId, ctx.msg.transport, bashTimeoutText(err) ?? t("cmd.bash.error", { message: errorMessage(err) }))
           )
           .catch(() => {})
           .finally(release);

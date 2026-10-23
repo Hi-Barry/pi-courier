@@ -209,6 +209,20 @@ export function bashOutputLimit(cfg: MsgBridgeConfig): number {
   return Math.min(Math.floor(value), BASH_OUTPUT_LIMIT_MAX);
 }
 
+/** bash 执行等待上限默认值(分钟,spec #218 票 #220)。 */
+export const BASH_TIMEOUT_MINUTES_DEFAULT = 10;
+
+/** bash 执行等待上限(分钟;`!`/`!!`//`/bash` 共用):缺省/非法值/亚分钟
+ *  手编(<1,floor 后会成 0ms 立即假超时)一律回落默认。与 bashOutputLimit
+ *  同风格的手编白名单归一;不设硬顶 —— 超长任务是配置存在的意义。 */
+export function bashTimeoutMinutes(cfg: MsgBridgeConfig): number {
+  const value = cfg.bashTimeoutMinutes;
+  if (value === undefined || !Number.isFinite(value) || value < 1) {
+    return BASH_TIMEOUT_MINUTES_DEFAULT;
+  }
+  return Math.floor(value);
+}
+
 // ── 自定义头像路径派生(spec #84 v5 用户覆盖)────────────────────────
 // 空间/bot/项目三个消费位共用一条归一规则:~ 展开、相对 ~/.pi/ 解析、
 // 扩展名白名单定 mimetype。派生只有这一处解释,自愈与 /pmctl 同源。

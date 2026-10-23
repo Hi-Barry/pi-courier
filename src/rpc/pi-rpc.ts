@@ -17,8 +17,8 @@ import { fileURLToPath } from "node:url";
 // Type-only import: the runtime value (RpcClient) is loaded lazily in
 // doStart() — see assertPiEngineSupported for why (pi 1.0+ crashes the
 // importing process itself on Node <22.19, before any gate could run).
-import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
-import { loadConfig } from "../config.js";
+import type { CompactionResult, RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
+import { BASH_TIMEOUT_MINUTES_DEFAULT, loadConfig } from "../config.js";
 import {
   joinNoProxyList,
   NO_PROXY_ENV_NAMES,
@@ -30,6 +30,11 @@ import {
 /** 重启前排空在途请求的兜底上限:进程终究要重启(加载新凭据/扩展),不能
  *  被一条僵死请求无限拖延;正常的桥→pi 请求远快于此。 */
 export const RESTART_DRAIN_TIMEOUT_MS = 10_000;
+
+/** bash 自管通道(票 #220)等待上限缺省值:上游 send() 的 30s 写死超时对
+ *  长命令(构建/安装/长测试)必误杀,自管通道的超时由此默认,配置可调
+ *  (config bashTimeoutMinutes → 组合根注入)。 */
+export const BASH_TIMEOUT_MS_DEFAULT = BASH_TIMEOUT_MINUTES_DEFAULT * 60_000;
 
 export interface PiRpcOptions {
   /** Absolute path to pi's dist/cli.js (default: config.cliPath ← PI_CLI_PATH env, then local node_modules, then `which pi`) */
@@ -46,6 +51,10 @@ export interface PiRpcOptions {
    *  同一对象,RPC 层不再自读配置盘;缺省 loadConfig 兜底,其他入口直接拉起
    *  PiRpc 仍自洽;测试经此注入,免碰真实配置与全局状态。 */
   proxyConfig?: ProxyConfigInput;
+  /** bash 自管通道(票 #220)的执行等待上限(ms);缺省 BASH_TIMEOUT_MS_DEFAULT
+   *  (10 分钟)。生产主路径由组合根从 config bashTimeoutMinutes 派生注入,
+   *  与 proxyConfig 同一注入形态;测试经此注入免碰真实配置。 */
+  bashTimeoutMs?: number;
 }
 
 /**
@@ -72,6 +81,26 @@ export interface BashResultView {
   /** 超限输出的完整临时文件路径 */
   fullOutputPath?: string;
 }
+
+/** /compact 双源等待的总兜底:compaction_end 事件几乎必达(服务端 emit),
+ *  此上限只为进程死亡且重启钩子未触发时的最后保险。 */
+export const COMPACT_WAIT_TIMEOUT_MS = 10 * 60_000;
+
+/** 上游 RpcClient.send() 应答超时的报错特征(30s 写死,rpc-client.js):
+ *  `Timeout waiting for response to ${command.type}. Stderr: ...`。compact()
+ *  借它区分「慢压缩的必然超时」(吞掉,事件收尾)与「即时校验错误」(立即
+ *  failed)。上游改文案时此处同步。 */
+export const UPSTREAM_TIMEOUT_SENTINEL = "Timeout waiting for response";
+
+/** /compact 的收尾形态(spec #218 票 #219)。上游 send() 把应答超时写死
+ *  30 秒且迟到的应答被静默丢弃,慢压缩必然「假失败」——但压缩在服务端
+ *  继续并成功,结果随 compaction_end 事件独立送达。三种收尾:成功(应答
+ *  或事件,先到先赢;result 缺失=旧版对端降级)、失败(应答即时错误或事件
+ *  errorMessage)、中断(重启/被新压缩打断/兜底超时)。 */
+export type CompactOutcome =
+  | { kind: "ok"; result: CompactionResult | undefined }
+  | { kind: "failed"; message: string }
+  | { kind: "interrupted"; reason: "restarted" | "aborted" | "timeout" };
 
 /**
  * pi.dev managed install (layout "releases-v1") ships `bin/pi` as a POSIX
@@ -524,11 +553,112 @@ export class PiRpc {
    * 普通执行(! 语义)直用公开方法。
    */
   async bash(command: string, opts?: { excludeFromContext?: boolean }): Promise<BashResultView> {
+    return this.bashViaOwnChannel(command, opts?.excludeFromContext ?? false);
+  }
+
+  /**
+   * bash 自管应答通道(spec #218 票 #220,`!`/`!!`//`/bash` 共用):绕开上游
+   * send() 的 30s 写死超时 —— 服务端 bash 分支要 await 命令跑完才回应答,
+   * 长命令必被误杀。机制与 upstreamExtensionUIStdinWrite 同款:往子进程
+   * stdin 写一条带自定义 id 的 JSONL 命令,在事件流里等按 id 回来的应答
+   * (上游 handleLine 对未知 id 的 response 会派发给 eventListeners,上游
+   * 自身的 pendingRequests 不含此 id,零冲突)。应答剥离沿上游 getData 语义
+   * (success=false 抛 error)。在途计数手动入账(不经 wrapped 客户端),
+   * 重启排水不漏账;超时弃权,报 BashTimeoutError(含已等待分钟数)。
+   */
+  private async bashViaOwnChannel(command: string, excludeFromContext: boolean): Promise<BashResultView> {
     const client = this.requireClient();
-    if (opts?.excludeFromContext) {
-      return upstreamBashSend(client, command, true);
+    const stdin = upstreamClientStdin(client);
+    const id = `bridge_bash_${++bridgeBashSeq}`;
+    const timeoutMs = this.options.bashTimeoutMs ?? BASH_TIMEOUT_MS_DEFAULT;
+    this.inFlight++;
+    let cleanup: () => void = () => {};
+    try {
+      return await new Promise<BashResultView>((resolve, reject) => {
+        const offEvent = this.onEvent((event: unknown) => {
+          const data = event as { type?: string; id?: string; success?: boolean; error?: string; data?: unknown };
+          if (data.type !== "response" || data.id !== id) return;
+          if (data.success) resolve(data.data as BashResultView);
+          else reject(new Error(data.error ?? "bash failed"));
+        });
+        // 重启联动:命令随旧进程死亡,新进程不认识 bridge_bash_N —— 立即
+        // 报错让用户重跑,不等满超时(旧 send() 路径进程死即 reject 的语义)。
+        const offRestart = this.onRestarted(() => reject(new Error("pi process restarted; the bash command was aborted")));
+        const guard = setTimeout(() => reject(new BashTimeoutError(command, timeoutMs)), timeoutMs);
+        guard.unref?.();
+        cleanup = () => {
+          offEvent();
+          offRestart();
+          clearTimeout(guard);
+        };
+        try {
+          // 先挂 listener 再写:应答是异步的,写入失败(管道坏)时立即 reject。
+          stdin.write(`${JSON.stringify({ type: "bash", command, excludeFromContext, id })}\n`);
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+    } finally {
+      cleanup();
+      this.inFlight = Math.max(0, this.inFlight - 1);
     }
-    return (await client.bash(command)) as BashResultView;
+  }
+
+  /**
+   * 手动压缩(/compact,spec #218 票 #219):两段式的第二段 —— 「压缩中」
+   * 回执在 command-map。收尾判据(权威见 COMPAT 兼容层段落的上游行为记录):
+   *  - 应答 resolve → ok;应答 reject 且非 Timeout → failed(即时校验错误,
+   *    如 Already compacted,不该拖到事件/兜底);应答 30s Timeout reject →
+   *    吞掉,慢压缩在服务端继续,由事件收尾。
+   *  - compaction_end(reason=manual)→ ok/failed 按事件载荷;aborted(被
+   *    后继压缩打断、无后继事件如 extension 取消)→ interrupted,不悬挂。
+   *  - onRestarted / 兜底超时 → interrupted。
+   * 在途计数:应答腿由 wrapped 客户端自动入账,等待腿(30s Timeout 之后到
+   * 收尾之间)手动补账 —— drainInFlight 排到双源全部收尾为止。
+   */
+  async compact(customInstructions?: string): Promise<CompactOutcome> {
+    const client = this.requireClient();
+    this.inFlight = Math.max(0, this.inFlight) + 1; // 等待腿
+    let settled = false;
+    let finish!: (outcome: CompactOutcome) => void;
+    const pending = new Promise<CompactOutcome>((resolve) => {
+      finish = resolve;
+    });
+    const offEvent = this.onEvent((event) => {
+      if (event.type !== "compaction_end" || event.reason !== "manual") return;
+      if (event.aborted) settle({ kind: "interrupted", reason: "aborted" });
+      else if (event.errorMessage) settle({ kind: "failed", message: event.errorMessage });
+      else settle({ kind: "ok", result: event.result });
+    });
+    const offRestart = this.onRestarted(() => settle({ kind: "interrupted", reason: "restarted" }));
+    const guard = setTimeout(() => settle({ kind: "interrupted", reason: "timeout" }), COMPACT_WAIT_TIMEOUT_MS);
+    // timer 只是兜底:事件是主通道,不该拖住桥进程的优雅退出。
+    guard.unref?.();
+    const settle = (outcome: CompactOutcome): void => {
+      if (settled) return;
+      settled = true;
+      offEvent();
+      offRestart();
+      clearTimeout(guard);
+      this.inFlight = Math.max(0, this.inFlight - 1); // 等待腿出账(应答腿由 wrapped 客户端自出)
+      finish(outcome);
+    };
+    try {
+      // 不 await:永不 settle 的应答(慢压缩)不能堵住本方法返回 —— 调用方
+      // 必须立即拿到 pending,由事件/重启/兜底源在后台收尾。
+      void client.compact(customInstructions).then(
+        (result) => settle({ kind: "ok", result }),
+        (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          // 30s Timeout:不是压缩失败,慢压缩由事件收尾。其余(即时校验错
+          // 误如 Already compacted、进程死亡拒收)立即 failed,不等兜底。
+          if (!message.includes(UPSTREAM_TIMEOUT_SENTINEL)) settle({ kind: "failed", message });
+        }
+      );
+    } catch {
+      // 同步抛出(requireClient 前置失败):同上,不算压缩失败,交兜底源。
+    }
+    return pending;
   }
 
   /** The live upstream RpcClient (spec #72 票7/C7):命令族直用上游类型,
@@ -568,6 +698,13 @@ export class PiRpc {
 // ── 上游兼容层(spec #72 票7/C7)──────────────────────────────────────
 // 对 pi 上游私有行为的依赖(私有 send 应答通道、扩展应答 stdin 直写)集中在
 // 这几个命名函数里;上游重构时只查这里。
+// 另有三处上游行为依赖不在本段函数而在类方法体内,同样属本层管辖:
+//  - compact()(票 #219):依赖 send() 的 30s 写死超时与迟到应答静默丢弃
+//    (故须双源收尾)、compaction_end 事件载荷形状(UPSTREAM_TIMEOUT_SENTINEL
+//    借此区分超时与即时错误)。
+//  - bashViaOwnChannel()(票 #220):bash 的 stdin 直写 + 自定义 id 自管
+//    应答通道,上游兼容行为集中在方法体与 upstreamClientStdin。
+//  - respondExtensionUI():依赖子进程 stdin 直写通道(见其 JSDoc)。
 
 /**
  * COMPAT(上游 prompt 语义):公开 RpcClient.prompt() 不暴露 streamingBehavior,
@@ -601,39 +738,46 @@ export function upstreamExtensionUIStdinWrite(
   client: RpcClient,
   payload: ExtensionUIResponsePayload
 ): void {
-  const process = (client as unknown as {
-    process?: { stdin?: { write: (chunk: string) => unknown; destroyed: boolean; writable: boolean } | null };
-  }).process;
-  const stdin = process?.stdin;
-  if (!stdin || stdin.destroyed || !stdin.writable) {
-    throw new Error("pi RPC stdin is not writable");
-  }
-  stdin.write(`${JSON.stringify({ type: "extension_ui_response", ...payload })}\n`);
+  upstreamClientStdin(client).write(`${JSON.stringify({ type: "extension_ui_response", ...payload })}\n`);
 }
 
 /**
- * COMPAT(上游 bash 语义):公开 bash() 不带 excludeFromContext(TUI `!!` 的
- * "执行但不写入上下文"),而 RPC 服务端的 bash 分支原生读取该线路字段 ——
- * 走私有 send() 附带即可。应答剥离按上游 getData 的行为内联:success=false
- * 抛 error,否则返回 data。与 upstreamPromptSend 同一上游依赖面,重构同查。
+ * COMPAT(上游 bash 语义,票 #220 重构):bash 已迁入 PiRpc 自管应答通道
+ * (bashViaOwnChannel)—— 公开 bash() 不带 excludeFromContext(TUI `!!` 的
+ * 「执行但不写入上下文」),且 send() 的 30s 写死超时会误杀长命令,故
+ * `!`/`!!` 两路径合一为 stdin 直写 + 自定义 id。上游兼容行为(stdin 通道、
+ * 线路字段、应答剥离)集中在 bashViaOwnChannel 方法体与 upstreamClientStdin,
+ * 上游重构同查这里。bridgeBashSeq 是该通道的请求序号(进程内单调)。
  */
-export async function upstreamBashSend(
-  client: RpcClient,
-  command: string,
-  excludeFromContext: boolean
-): Promise<BashResultView> {
-  const send = client as unknown as {
-    send: (cmd: {
-      type: "bash";
-      command: string;
-      excludeFromContext: boolean;
-    }) => Promise<{ success: boolean; error?: string; data?: BashResultView }>;
-  };
-  const response = await send.send({ type: "bash", command, excludeFromContext });
-  if (!response.success) {
-    throw new Error(response.error ?? "bash failed");
+let bridgeBashSeq = 0;
+
+/** bash 执行等待超时(票 #220):到点弃权,报已等待时长供展示层出人话。 */
+export class BashTimeoutError extends Error {
+  constructor(
+    /** 被放弃的命令 */
+    readonly command: string,
+    /** 已等待的时长(ms) */
+    readonly waitedMs: number
+  ) {
+    super(`bash timed out after ${Math.round(waitedMs / 60_000)} min: ${command}`);
+    this.name = "BashTimeoutError";
   }
-  return response.data as BashResultView;
+}
+
+/**
+ * COMPAT(上游子进程通道):extension 应答(issue #54)与 bash 自管通道
+ * (票 #220)共用的 stdin 直写入口。上游契约:严格 JSONL 单行(LF 帧,
+ * 与上游 serializeJsonLine 一致);子进程引用挂在 client.process。
+ */
+export function upstreamClientStdin(client: RpcClient): { write: (chunk: string) => unknown } {
+  const proc = (client as unknown as {
+    process?: { stdin?: { write: (chunk: string) => unknown; destroyed: boolean; writable: boolean } | null };
+  }).process;
+  const stdin = proc?.stdin;
+  if (!stdin || stdin.destroyed || !stdin.writable) {
+    throw new Error("pi RPC stdin is not writable");
+  }
+  return stdin;
 }
 
 /**

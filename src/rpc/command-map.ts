@@ -28,8 +28,13 @@ import { logger } from "../logger.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
 import { MAX_REMINDERS_PER_ROOM, type ReminderEntry } from "../reminders/reminder-store.js";
 import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
-import { upstreamClearQueueSend } from "./pi-rpc.js";
+import { BashTimeoutError, upstreamClearQueueSend } from "./pi-rpc.js";
 import { RecapBusyError, RecapEmptyError } from "./recap.js";
+
+/** 上游「已压缩过」的即时校验错误,两通道各一形态(票 #219):应答 error
+ *  为裸串,事件 errorMessage 带 Compaction failed: 前缀。精确集合匹配,
+ *  防真失败消息偶然含该词组被误吞;上游改词时此处同步。 */
+const UPSTREAM_ALREADY_COMPACTED = new Set(["Already compacted", "Compaction failed: Already compacted"]);
 
 /** Mirror of the upstream steering/followUp queues (router's queue_update view). */
 export interface QueueSnapshot {
@@ -168,6 +173,17 @@ export function formatElapsed(ms: number): string {
   const seconds = totalSeconds % 60;
   if (minutes === 0) return `${seconds}s`;
   return `${minutes}m${String(seconds).padStart(2, "0")}s`;
+}
+
+/** bash 超时的人话文案(票 #220):BashTimeoutError 时返回本地化提示
+ *  (含已等待分钟数与调法),其他错误返回 undefined 走各自原路径。
+ *  /bash 与 `!`/`!!` 两处 catch 共用,判定只有这一份。 */
+export function bashTimeoutText(err: unknown): string | undefined {
+  if (!(err instanceof BashTimeoutError)) return undefined;
+  return t("cmd.bash.timeout", {
+    command: err.command,
+    minutes: Math.max(1, Math.round(err.waitedMs / 60_000)),
+  });
 }
 
 /** bash 结果的统一回帖(/bash 与 `!`/`!!` 共用):命令行 + 代码块输出 +
@@ -599,13 +615,41 @@ export async function handleSlashCommand(
       }
 
       case "/compact": {
-        const result = await rpc.requireClient().compact(args || undefined);
-        const line = [
-          t("cmd.compact.ok"),
-          t("cmd.compact.tokens", { before: result.tokensBefore }),
-          t("cmd.compact.summary", { summary: result.summary.slice(0, 500) }),
-        ].join("");
-        await reply(line);
+        // 两段式(spec #218 票 #219):先「压缩中」回执,结果由 PiRpc.compact
+        // 双源(RPC 应答 / compaction_end 事件)收尾 —— 上游 send() 应答超时
+        // 写死 30s,慢压缩走旧路径必然假失败,重试又撞 Already compacted。
+        await reply(t("cmd.compact.generating"));
+        const outcome = await rpc.compact(args || undefined);
+        switch (outcome.kind) {
+          case "ok": {
+            if (!outcome.result) {
+              // 旧版对端:事件无 result 载荷,能确认压缩完成即收。
+              await reply(t("cmd.compact.okSimple"));
+              break;
+            }
+            const line = [
+              t("cmd.compact.ok"),
+              t("cmd.compact.tokens", { before: outcome.result.tokensBefore }),
+              t("cmd.compact.summary", { summary: outcome.result.summary.slice(0, 500) }),
+            ].join("");
+            await reply(line);
+            break;
+          }
+          case "failed": {
+            // 事件 errorMessage 带「Compaction failed: 」前缀,应答 error 不带
+            // —— 展示前剥掉。Already compacted 是正常重入(两通道各一形态,
+            // 精确匹配防真失败消息含该词组被误吞),人话提示而非报错。
+            if (UPSTREAM_ALREADY_COMPACTED.has(outcome.message)) {
+              await reply(t("cmd.compact.alreadyCompacted"));
+            } else {
+              await reply(t("cmd.generic.error", { message: outcome.message.replace(/^Compaction failed: /, "") }));
+            }
+            break;
+          }
+          case "interrupted":
+            await reply(t("cmd.compact.interrupted"));
+            break;
+        }
         return true;
       }
 
@@ -985,6 +1029,14 @@ export async function handleSlashCommand(
           const result = await rpc.bash(args);
           await reply(formatBashReply(args, result, false, ctx.bashOutputLimit));
           return true;
+        } catch (err) {
+          // 超时弃权(票 #220):报已等待时长与调法,其余照旧透传外层。
+          const timeoutText = bashTimeoutText(err);
+          if (timeoutText) {
+            await reply(timeoutText);
+            return true;
+          }
+          throw err;
         } finally {
           release?.();
         }
