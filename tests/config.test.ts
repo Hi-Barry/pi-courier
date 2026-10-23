@@ -437,10 +437,11 @@ describe('config 派生函数族 — bashTimeoutMinutes(默认 10,分钟,spec #2
     expect(bashTimeoutMinutes({ bashTimeoutMinutes: 10.9 })).toBe(10);
   });
 
-  it('手编杂值白名单归一:非正数/非有限数按缺省处理', async () => {
+  it('手编杂值白名单归一:非正数/非有限数/亚分钟小数(<1 会 floor 成 0ms 假超时)按缺省处理', async () => {
     const { bashTimeoutMinutes } = await import('../src/config');
     expect(bashTimeoutMinutes({ bashTimeoutMinutes: 0 })).toBe(10);
     expect(bashTimeoutMinutes({ bashTimeoutMinutes: -1 })).toBe(10);
+    expect(bashTimeoutMinutes({ bashTimeoutMinutes: 0.5 })).toBe(10);
     expect(bashTimeoutMinutes({ bashTimeoutMinutes: Number.NaN })).toBe(10);
     expect(bashTimeoutMinutes({ bashTimeoutMinutes: Number.POSITIVE_INFINITY })).toBe(10);
   });

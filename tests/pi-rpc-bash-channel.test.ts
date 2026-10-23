@@ -150,6 +150,37 @@ describe("PiRpc bash 自管应答通道(票 #220)", () => {
     }
   });
 
+  it("长命令(应答 35s 后才回)不再被 30 秒误杀,照常成功(票核心场景)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rpc, client } = withFakeChannel();
+      const pending = rpc.bash("make all");
+      const settled = pending.then(
+        (r) => r,
+        () => "REJECTED"
+      ); // 先挂 handler 再推时钟
+      await vi.advanceTimersByTimeAsync(35_000); // 跨过上游 send() 的 30s 界限
+      expect(client.stdinWrite).toHaveBeenCalledTimes(1); // 期间未弃权
+      client.fire(respond(String(client.written().id)));
+      expect(await settled).toEqual(BASH_RESULT);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("重启 → 立即报错让用户重跑,不等满超时", async () => {
+    const { rpc } = withFakeChannel();
+    const pending = rpc.bash("make all");
+    const settled = pending.then(
+      (r) => r,
+      (e: unknown) => e
+    );
+    const restartListeners = (rpc as unknown as { restartListeners: Set<(rpc: PiRpc) => void> }).restartListeners;
+    for (const listener of restartListeners) listener(rpc);
+    expect(await settled).toBeInstanceOf(Error);
+    expect(String(await settled)).toContain("restarted");
+  });
+
   it("stdin 不可写 → 立即报错,在途出账", async () => {
     const { rpc } = withFakeChannel({ brokenStdin: true });
     await expect(rpc.bash("ls")).rejects.toThrow("stdin is not writable");

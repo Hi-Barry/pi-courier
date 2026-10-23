@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 // doStart() — see assertPiEngineSupported for why (pi 1.0+ crashes the
 // importing process itself on Node <22.19, before any gate could run).
 import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
-import { loadConfig } from "../config.js";
+import { BASH_TIMEOUT_MINUTES_DEFAULT, loadConfig } from "../config.js";
 import {
   joinNoProxyList,
   NO_PROXY_ENV_NAMES,
@@ -26,7 +26,6 @@ import {
   type ProxyConfigInput,
   resolveProxySettings,
 } from "../proxy.js";
-import { BASH_TIMEOUT_MINUTES_DEFAULT } from "../config.js";
 
 /** 重启前排空在途请求的兜底上限:进程终究要重启(加载新凭据/扩展),不能
  *  被一条僵死请求无限拖延;正常的桥→pi 请求远快于此。 */
@@ -562,10 +561,14 @@ export class PiRpc {
           if (data.success) resolve(data.data as BashResultView);
           else reject(new Error(data.error ?? "bash failed"));
         });
+        // 重启联动:命令随旧进程死亡,新进程不认识 bridge_bash_N —— 立即
+        // 报错让用户重跑,不等满超时(旧 send() 路径进程死即 reject 的语义)。
+        const offRestart = this.onRestarted(() => reject(new Error("pi process restarted; the bash command was aborted")));
         const guard = setTimeout(() => reject(new BashTimeoutError(command, timeoutMs)), timeoutMs);
         guard.unref?.();
         cleanup = () => {
           offEvent();
+          offRestart();
           clearTimeout(guard);
         };
         try {
@@ -664,10 +667,8 @@ export function upstreamExtensionUIStdinWrite(
  * 「执行但不写入上下文」),且 send() 的 30s 写死超时会误杀长命令,故
  * `!`/`!!` 两路径合一为 stdin 直写 + 自定义 id。上游兼容行为(stdin 通道、
  * 线路字段、应答剥离)集中在 bashViaOwnChannel 方法体与 upstreamClientStdin,
- * 上游重构同查这里。
+ * 上游重构同查这里。bridgeBashSeq 是该通道的请求序号(进程内单调)。
  */
-
-/** bash 自管通道的请求序号(进程内单调,bridge_bash_N 应答 id)。 */
 let bridgeBashSeq = 0;
 
 /** bash 执行等待超时(票 #220):到点弃权,报已等待时长供展示层出人话。 */
