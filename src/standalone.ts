@@ -18,6 +18,7 @@ import { ChallengeAuth } from "./auth/challenge-auth.js";
 import {
   attachmentsDirectory,
   attachmentsMaxBytes,
+  bashTimeoutMinutes,
   CONFIG_DIR,
   ConfigStore,
   inboxMode,
@@ -230,6 +231,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // 组合根传参(票 #202-#206 评审收尾):生产主路径把已加载的 config 交给
     // RPC 层,spawn 点不再自读配置盘;loadConfig 兜底只留给其他入口自洽。
     proxyConfig: config,
+    // bash 自管通道等待上限(票 #220):config bashTimeoutMinutes 派生注入。
+    bashTimeoutMs: bashTimeoutMinutes(config) * 60_000,
   });
 
   // ---- multi-project routing -------------------------------------------------
@@ -241,7 +244,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // does not rely on hoisting.
   const projectManager = new ProjectManager({
     defaultRpc: rpc,
-    baseOptions: { cliPath, args: ["--continue"], proxyConfig: config },
+    baseOptions: { cliPath, args: ["--continue"], proxyConfig: config, bashTimeoutMs: bashTimeoutMinutes(config) * 60_000 },
     onRoomEvent: (_roomId, event, rpc) => {
       router.handleEvent(event, rpc);
     },

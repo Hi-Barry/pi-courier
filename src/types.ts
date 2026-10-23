@@ -212,6 +212,13 @@ export interface MsgBridgeConfig {
    */
   bashOutputLimit?: number;
   /**
+   * `!`/`!!`//`/bash` 的执行等待上限(分钟,默认 10)。走自管应答通道
+   * (spec #218 票 #220):不经上游 send() 的 30s 写死超时,长命令(构建/
+   * 安装/长测试)不再被误报失败。到点后命令被放弃并报超时(含已等待时长)。
+   * 非正数/非有限数视为缺省。不进 setup 向导,手编配置 + 重启生效。
+   */
+  bashTimeoutMinutes?: number;
+  /**
    * Matrix 附件输入(issue #66):媒体事件的下载落盘配置。
    * directory 缺省 ~/.pi/pi-courier/attachments;maxMb 缺省 10。
    */

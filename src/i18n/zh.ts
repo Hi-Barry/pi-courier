@@ -56,6 +56,7 @@ const zh = {
   "cmd.bash.notWritten": "(结果未写入上下文)",
   "cmd.bash.excludedNote": "(结果不写入上下文)",
   "cmd.bash.aborted": "⏹ 已中止: {command}{suffix}",
+  "cmd.bash.timeout": "⏹ bash 执行超时(等了 {minutes} 分钟): {command}\n要跑更久的命令,在配置里调大 bashTimeoutMinutes 后重启。",
   "cmd.queue.warning": "⚠️ 队列中仍有 {count} 条消息将在下一轮生效:\n{lines}",
   "cmd.rpc.defaultName": "默认",
   "cmd.reloadAll.restarted": "✅ 已重启 {count} 个空闲进程: {names}",

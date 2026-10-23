@@ -13,6 +13,7 @@ import {
   parseBangCommand,
 } from "../src/rpc/command-map";
 import type { BashResultView, PiRpc } from "../src/rpc/pi-rpc";
+import { BashTimeoutError } from "../src/rpc/pi-rpc";
 import { makeMsg, makeRouterFixture } from "./helpers";
 
 describe("parseBangCommand — 触发规则", () => {
@@ -180,6 +181,19 @@ describe("bashBang 管道阶段", () => {
     await router.handleIncoming(makeMsg({ text: "! boom", messageId: "m1" }));
     await flush();
     expect(replies.join("\n")).toContain("❌ bash 执行失败: pi RPC not connected");
+  });
+
+  it("bash 超时弃权回帖人话(含已等待分钟数与调法),不再走通用报错", async () => {
+    const { router, bash, replies } = makeFixtures();
+    bash.mockRejectedValue(new BashTimeoutError("make all", 10 * 60_000));
+    await router.handleIncoming(makeMsg({ text: "!! make all", messageId: "m1" }));
+    await flush();
+    const text = replies.join("\n");
+    expect(text).toContain("bash 执行超时");
+    expect(text).toContain("10 分钟");
+    expect(text).toContain("make all");
+    expect(text).toContain("bashTimeoutMinutes");
+    expect(text).not.toContain("❌");
   });
 
   it("被中止的结果回帖『已中止』", async () => {

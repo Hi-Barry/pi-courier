@@ -53,6 +53,7 @@ const en: Record<MessageKey, string> = {
   "cmd.bash.notWritten": "(output not written to context)",
   "cmd.bash.excludedNote": "(output not written to context)",
   "cmd.bash.aborted": "⏹ Aborted: {command}{suffix}",
+  "cmd.bash.timeout": "⏹ bash timed out after {minutes} min: {command}\nFor longer-running commands, raise bashTimeoutMinutes in the config and restart.",
   "cmd.queue.warning": "⚠️ {count} queued message(s) will take effect on the next turn:\n{lines}",
   "cmd.rpc.defaultName": "default",
   "cmd.reloadAll.restarted": "✅ Restarted {count} idle process(es): {names}",

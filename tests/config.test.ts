@@ -422,6 +422,30 @@ describe('config 派生函数族 — bashOutputLimit(默认 30000,64KB 钳制)',
   });
 });
 
+describe('config 派生函数族 — bashTimeoutMinutes(默认 10,分钟,spec #218 票 #220)', () => {
+  it('缺省回落默认值 10 分钟', async () => {
+    const { bashTimeoutMinutes, BASH_TIMEOUT_MINUTES_DEFAULT } = await import('../src/config');
+    expect(BASH_TIMEOUT_MINUTES_DEFAULT).toBe(10);
+    expect(bashTimeoutMinutes({})).toBe(10);
+    expect(bashTimeoutMinutes({ bashTimeoutMinutes: undefined })).toBe(10);
+  });
+
+  it('合法值取整通过;不设硬顶(超长任务是配置存在的意义)', async () => {
+    const { bashTimeoutMinutes } = await import('../src/config');
+    expect(bashTimeoutMinutes({ bashTimeoutMinutes: 1 })).toBe(1);
+    expect(bashTimeoutMinutes({ bashTimeoutMinutes: 120 })).toBe(120);
+    expect(bashTimeoutMinutes({ bashTimeoutMinutes: 10.9 })).toBe(10);
+  });
+
+  it('手编杂值白名单归一:非正数/非有限数按缺省处理', async () => {
+    const { bashTimeoutMinutes } = await import('../src/config');
+    expect(bashTimeoutMinutes({ bashTimeoutMinutes: 0 })).toBe(10);
+    expect(bashTimeoutMinutes({ bashTimeoutMinutes: -1 })).toBe(10);
+    expect(bashTimeoutMinutes({ bashTimeoutMinutes: Number.NaN })).toBe(10);
+    expect(bashTimeoutMinutes({ bashTimeoutMinutes: Number.POSITIVE_INFINITY })).toBe(10);
+  });
+});
+
 describe('custom avatar path derive (spec #84 v5)', () => {
   let tmpDir: string;
 
