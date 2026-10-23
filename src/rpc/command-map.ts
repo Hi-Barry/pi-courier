@@ -28,7 +28,7 @@ import { logger } from "../logger.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
 import { MAX_REMINDERS_PER_ROOM, type ReminderEntry } from "../reminders/reminder-store.js";
 import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
-import { upstreamClearQueueSend } from "./pi-rpc.js";
+import { BashTimeoutError, upstreamClearQueueSend } from "./pi-rpc.js";
 import { RecapBusyError, RecapEmptyError } from "./recap.js";
 
 /** 上游「已压缩过」的即时校验错误,两通道各一形态(票 #219):应答 error
@@ -173,6 +173,17 @@ export function formatElapsed(ms: number): string {
   const seconds = totalSeconds % 60;
   if (minutes === 0) return `${seconds}s`;
   return `${minutes}m${String(seconds).padStart(2, "0")}s`;
+}
+
+/** bash 超时的人话文案(票 #220):BashTimeoutError 时返回本地化提示
+ *  (含已等待分钟数与调法),其他错误返回 undefined 走各自原路径。
+ *  /bash 与 `!`/`!!` 两处 catch 共用,判定只有这一份。 */
+export function bashTimeoutText(err: unknown): string | undefined {
+  if (!(err instanceof BashTimeoutError)) return undefined;
+  return t("cmd.bash.timeout", {
+    command: err.command,
+    minutes: Math.max(1, Math.round(err.waitedMs / 60_000)),
+  });
 }
 
 /** bash 结果的统一回帖(/bash 与 `!`/`!!` 共用):命令行 + 代码块输出 +
@@ -1018,6 +1029,14 @@ export async function handleSlashCommand(
           const result = await rpc.bash(args);
           await reply(formatBashReply(args, result, false, ctx.bashOutputLimit));
           return true;
+        } catch (err) {
+          // 超时弃权(票 #220):报已等待时长与调法,其余照旧透传外层。
+          const timeoutText = bashTimeoutText(err);
+          if (timeoutText) {
+            await reply(timeoutText);
+            return true;
+          }
+          throw err;
         } finally {
           release?.();
         }
