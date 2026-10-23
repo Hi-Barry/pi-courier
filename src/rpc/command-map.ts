@@ -599,13 +599,40 @@ export async function handleSlashCommand(
       }
 
       case "/compact": {
-        const result = await rpc.requireClient().compact(args || undefined);
-        const line = [
-          t("cmd.compact.ok"),
-          t("cmd.compact.tokens", { before: result.tokensBefore }),
-          t("cmd.compact.summary", { summary: result.summary.slice(0, 500) }),
-        ].join("");
-        await reply(line);
+        // 两段式(spec #218 票 #219):先「压缩中」回执,结果由 PiRpc.compact
+        // 双源(RPC 应答 / compaction_end 事件)收尾 —— 上游 send() 应答超时
+        // 写死 30s,慢压缩走旧路径必然假失败,重试又撞 Already compacted。
+        await reply(t("cmd.compact.generating"));
+        const outcome = await rpc.compact(args || undefined);
+        switch (outcome.kind) {
+          case "ok": {
+            if (!outcome.result) {
+              // 旧版对端:事件无 result 载荷,能确认压缩完成即收。
+              await reply(t("cmd.compact.okSimple"));
+              break;
+            }
+            const line = [
+              t("cmd.compact.ok"),
+              t("cmd.compact.tokens", { before: outcome.result.tokensBefore }),
+              t("cmd.compact.summary", { summary: outcome.result.summary.slice(0, 500) }),
+            ].join("");
+            await reply(line);
+            break;
+          }
+          case "failed": {
+            // 事件 errorMessage 带「Compaction failed: 」前缀,应答 error 不带
+            // —— 展示前剥掉;Already compacted 是正常重入,人话提示而非报错。
+            if (outcome.message.includes("Already compacted")) {
+              await reply(t("cmd.compact.alreadyCompacted"));
+            } else {
+              await reply(t("cmd.generic.error", { message: outcome.message.replace(/^Compaction failed: /, "") }));
+            }
+            break;
+          }
+          case "interrupted":
+            await reply(t("cmd.compact.interrupted"));
+            break;
+        }
         return true;
       }
 
