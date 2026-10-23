@@ -77,7 +77,7 @@ const en: Record<MessageKey, string> = {
   "cmd.compact.summary": "\nSummary: {summary}",
   "cmd.compact.okSimple": "✅ Compacted",
   "cmd.compact.alreadyCompacted": "ℹ️ Session was just compacted — nothing to do",
-  "cmd.compact.interrupted": "⏹ Compaction interrupted (process restart or wait timeout) — try /compact again",
+  "cmd.compact.interrupted": "⏹ Compaction did not finish (superseded, process restart, or wait timeout) — try /compact again",
   "cmd.stop.ok": "🛑 All tasks stopped. Awaiting your next instruction.",
   "cmd.remind.unavailable": "❌ Reminders are unavailable (the state directory is not usable).",
   "cmd.remind.usage": "Usage: /remind <time> <text> — time formats: 30m / 2h / 1d, HH:MM (rolls to tomorrow if past), ISO (e.g. 2026-10-09T09:00). Example: /remind 30m brew tea",

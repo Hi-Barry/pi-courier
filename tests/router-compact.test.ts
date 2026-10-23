@@ -32,12 +32,21 @@ describe("/compact 两段式(票 #219)", () => {
     expect(fx.sendReply.mock.calls[1]?.[2]).toBe("✅ 已压缩");
   });
 
-  it("Already compacted → 人话提示,不再是 ❌ 报错", async () => {
+  it("Already compacted → 人话提示,不再是 ❌ 报错(事件通道带前缀形态)", async () => {
     const fx = makeRouterFixture();
     (fx.rpc.compact as ReturnType<typeof vi.fn>).mockResolvedValue({
       kind: "failed",
       message: "Compaction failed: Already compacted",
     });
+    await fx.router.handleIncoming(makeMsg({ text: "/compact" }));
+    const final = fx.sendReply.mock.calls[1]?.[2] as string;
+    expect(final).toContain("刚压缩过");
+    expect(final).not.toContain("❌");
+  });
+
+  it("Already compacted → 人话提示(应答通道裸串形态)", async () => {
+    const fx = makeRouterFixture();
+    (fx.rpc.compact as ReturnType<typeof vi.fn>).mockResolvedValue({ kind: "failed", message: "Already compacted" });
     await fx.router.handleIncoming(makeMsg({ text: "/compact" }));
     const final = fx.sendReply.mock.calls[1]?.[2] as string;
     expect(final).toContain("刚压缩过");
@@ -56,11 +65,11 @@ describe("/compact 两段式(票 #219)", () => {
     expect(final).not.toContain("Compaction failed:");
   });
 
-  it("中断(重启/兜底超时):中断提示文案", async () => {
+  it("中断(被打断/重启/兜底超时):未完成提示文案", async () => {
     const fx = makeRouterFixture();
     (fx.rpc.compact as ReturnType<typeof vi.fn>).mockResolvedValue({ kind: "interrupted", reason: "restarted" });
     await fx.router.handleIncoming(makeMsg({ text: "/compact" }));
-    expect(fx.sendReply.mock.calls[1]?.[2]).toContain("压缩中断");
+    expect(fx.sendReply.mock.calls[1]?.[2]).toContain("压缩未完成");
   });
 
   it("customInstructions 透传:/compact 精简一点", async () => {

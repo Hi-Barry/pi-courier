@@ -87,12 +87,22 @@ describe("PiRpc.compact 双源等待(票 #219)", () => {
     expect(await outcomePromise).toEqual({ kind: "ok", result: undefined });
   });
 
-  it("aborted 事件(被后继压缩打断)不收尾,后续正常事件收尾", async () => {
+  it("aborted 事件(被后继压缩打断/extension 取消)→ interrupted:aborted", async () => {
     const { rpc, client } = withFakeClient(() => new Promise(() => {}));
     const outcomePromise = rpc.compact();
     client.fire(compactionEnd({ aborted: true, result: undefined }));
-    client.fire(compactionEnd());
-    expect(await outcomePromise).toEqual({ kind: "ok", result: COMPACTION_RESULT });
+    expect(await outcomePromise).toEqual({ kind: "interrupted", reason: "aborted" });
+  });
+
+  it("应答即时失败(非 Timeout,如 Already compacted)→ 立即 failed,不等事件/兜底", async () => {
+    const { rpc, client } = withFakeClient(
+      () => new Promise((_, reject) => reject(new Error("Already compacted")))
+    );
+    const outcomePromise = rpc.compact();
+    expect(await outcomePromise).toEqual({ kind: "failed", message: "Already compacted" });
+    // 迟到事件不得改变已定的结果
+    client.fire(compactionEnd({ result: undefined, errorMessage: "Compaction failed: Already compacted" }));
+    expect(await outcomePromise).toEqual({ kind: "failed", message: "Already compacted" });
   });
 
   it("reason 非 manual(自动压缩)的事件被忽略", async () => {
@@ -131,14 +141,17 @@ describe("PiRpc.compact 双源等待(票 #219)", () => {
     }
   });
 
-  it("在途计数:等待期间 inFlight 入账,收尾后出账(排水语义不漏)", async () => {
-    let release!: (r: unknown) => void;
-    const { rpc } = withFakeClient(() => new Promise((resolve) => (release = resolve)));
+  it("在途计数:双腿入账——应答 reject(30s Timeout)后等待腿仍在账,事件收尾才出账", async () => {
+    const { rpc, client } = withFakeClient(
+      () => new Promise((_, reject) => reject(new Error("Timeout waiting for response to compact. Stderr: ")))
+    );
     const inner = rpc.requireClient();
     void inner; // 触发 wrapClient 缓存
     const outcomePromise = rpc.compact();
-    expect((rpc as unknown as { inFlight: number }).inFlight).toBe(1);
-    release(COMPACTION_RESULT);
+    expect((rpc as unknown as { inFlight: number }).inFlight).toBe(2); // 应答腿 + 等待腿
+    await new Promise((r) => setTimeout(r, 0)); // 让应答腿的 reject 分支跑完
+    expect((rpc as unknown as { inFlight: number }).inFlight).toBe(1); // 应答腿已出,等待腿在账
+    client.fire(compactionEnd());
     await outcomePromise;
     expect((rpc as unknown as { inFlight: number }).inFlight).toBe(0);
   });

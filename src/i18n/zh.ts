@@ -78,7 +78,7 @@ const zh = {
   "cmd.compact.summary": "\n摘要: {summary}",
   "cmd.compact.okSimple": "✅ 已压缩",
   "cmd.compact.alreadyCompacted": "ℹ️ 会话刚压缩过,无需重复",
-  "cmd.compact.interrupted": "⏹ 压缩中断(进程重启或等待超时),请重试 /compact",
+  "cmd.compact.interrupted": "⏹ 压缩未完成(已被打断、进程重启或等待超时),请重试 /compact",
   "cmd.stop.ok": "🛑 已停止所有任务,等待下一步指示。",
   "cmd.remind.unavailable": "❌ 提醒功能未装配(状态目录不可用)。",
   "cmd.remind.usage": "用法: /remind <时间> <内容> — 时间支持 30m / 2h / 1d、HH:MM(已过顺延明天)、ISO(如 2026-10-09T09:00)。例:/remind 30m 泡茶",

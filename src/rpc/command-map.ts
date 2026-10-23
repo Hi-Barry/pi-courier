@@ -31,6 +31,11 @@ import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
 import { upstreamClearQueueSend } from "./pi-rpc.js";
 import { RecapBusyError, RecapEmptyError } from "./recap.js";
 
+/** 上游「已压缩过」的即时校验错误,两通道各一形态(票 #219):应答 error
+ *  为裸串,事件 errorMessage 带 Compaction failed: 前缀。精确集合匹配,
+ *  防真失败消息偶然含该词组被误吞;上游改词时此处同步。 */
+const UPSTREAM_ALREADY_COMPACTED = new Set(["Already compacted", "Compaction failed: Already compacted"]);
+
 /** Mirror of the upstream steering/followUp queues (router's queue_update view). */
 export interface QueueSnapshot {
   steering: string[];
@@ -621,8 +626,9 @@ export async function handleSlashCommand(
           }
           case "failed": {
             // 事件 errorMessage 带「Compaction failed: 」前缀,应答 error 不带
-            // —— 展示前剥掉;Already compacted 是正常重入,人话提示而非报错。
-            if (outcome.message.includes("Already compacted")) {
+            // —— 展示前剥掉。Already compacted 是正常重入(两通道各一形态,
+            // 精确匹配防真失败消息含该词组被误吞),人话提示而非报错。
+            if (UPSTREAM_ALREADY_COMPACTED.has(outcome.message)) {
               await reply(t("cmd.compact.alreadyCompacted"));
             } else {
               await reply(t("cmd.generic.error", { message: outcome.message.replace(/^Compaction failed: /, "") }));

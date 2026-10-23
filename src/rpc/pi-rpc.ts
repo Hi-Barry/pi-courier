@@ -77,15 +77,21 @@ export interface BashResultView {
  *  此上限只为进程死亡且重启钩子未触发时的最后保险。 */
 export const COMPACT_WAIT_TIMEOUT_MS = 10 * 60_000;
 
+/** 上游 RpcClient.send() 应答超时的报错特征(30s 写死,rpc-client.js):
+ *  `Timeout waiting for response to ${command.type}. Stderr: ...`。compact()
+ *  借它区分「慢压缩的必然超时」(吞掉,事件收尾)与「即时校验错误」(立即
+ *  failed)。上游改文案时此处同步。 */
+export const UPSTREAM_TIMEOUT_SENTINEL = "Timeout waiting for response";
+
 /** /compact 的收尾形态(spec #218 票 #219)。上游 send() 把应答超时写死
  *  30 秒且迟到的应答被静默丢弃,慢压缩必然「假失败」——但压缩在服务端
  *  继续并成功,结果随 compaction_end 事件独立送达。三种收尾:成功(应答
- *  或事件,先到先赢;result 缺失=旧版对端降级)、失败(事件 errorMessage)、
- *  中断(重启/兜底超时)。 */
+ *  或事件,先到先赢;result 缺失=旧版对端降级)、失败(应答即时错误或事件
+ *  errorMessage)、中断(重启/被新压缩打断/兜底超时)。 */
 export type CompactOutcome =
   | { kind: "ok"; result: CompactionResult | undefined }
   | { kind: "failed"; message: string }
-  | { kind: "interrupted"; reason: "restarted" | "timeout" };
+  | { kind: "interrupted"; reason: "restarted" | "aborted" | "timeout" };
 
 /**
  * pi.dev managed install (layout "releases-v1") ships `bin/pi` as a POSIX
@@ -547,49 +553,57 @@ export class PiRpc {
 
   /**
    * 手动压缩(/compact,spec #218 票 #219):两段式的第二段 —— 「压缩中」
-   * 回执在 command-map。上游 send() 把应答超时写死 30s,慢压缩必超时,且
-   * 迟到的应答被上游 handleLine 静默丢弃(pendingRequests 已删 id),等迟到
-   * 应答拿不到结果。所以结果从两条通道收:RPC 应答(快路径)与 compaction_end
-   * 事件(慢路径,载荷与应答同构,result 缺失=旧版对端),先到先赢;30s
-   * Timeout reject 在此吞掉 —— 不是压缩失败。aborted 事件(被后继压缩打断)
-   * 不收尾,等下一次 compaction_end;重启与兜底超时以中断收尾,不悬挂。
-   * 在途计数由 wrapped compact 自动入账,重启排水语义不变。
+   * 回执在 command-map。收尾判据(权威见 COMPAT 兼容层段落的上游行为记录):
+   *  - 应答 resolve → ok;应答 reject 且非 Timeout → failed(即时校验错误,
+   *    如 Already compacted,不该拖到事件/兜底);应答 30s Timeout reject →
+   *    吞掉,慢压缩在服务端继续,由事件收尾。
+   *  - compaction_end(reason=manual)→ ok/failed 按事件载荷;aborted(被
+   *    后继压缩打断、无后继事件如 extension 取消)→ interrupted,不悬挂。
+   *  - onRestarted / 兜底超时 → interrupted。
+   * 在途计数:应答腿由 wrapped 客户端自动入账,等待腿(30s Timeout 之后到
+   * 收尾之间)手动补账 —— drainInFlight 排到双源全部收尾为止。
    */
   async compact(customInstructions?: string): Promise<CompactOutcome> {
     const client = this.requireClient();
+    this.inFlight = Math.max(0, this.inFlight) + 1; // 等待腿
     let settled = false;
     let finish!: (outcome: CompactOutcome) => void;
     const pending = new Promise<CompactOutcome>((resolve) => {
       finish = resolve;
     });
     const offEvent = this.onEvent((event) => {
-      if (event.type !== "compaction_end" || event.reason !== "manual" || event.aborted) return;
-      if (event.errorMessage) settle({ kind: "failed", message: event.errorMessage });
+      if (event.type !== "compaction_end" || event.reason !== "manual") return;
+      if (event.aborted) settle({ kind: "interrupted", reason: "aborted" });
+      else if (event.errorMessage) settle({ kind: "failed", message: event.errorMessage });
       else settle({ kind: "ok", result: event.result });
     });
     const offRestart = this.onRestarted(() => settle({ kind: "interrupted", reason: "restarted" }));
     const guard = setTimeout(() => settle({ kind: "interrupted", reason: "timeout" }), COMPACT_WAIT_TIMEOUT_MS);
     // timer 只是兜底:事件是主通道,不该拖住桥进程的优雅退出。
     guard.unref?.();
-    function settle(outcome: CompactOutcome): void {
+    const settle = (outcome: CompactOutcome): void => {
       if (settled) return;
       settled = true;
       offEvent();
       offRestart();
       clearTimeout(guard);
+      this.inFlight = Math.max(0, this.inFlight - 1); // 等待腿出账(应答腿由 wrapped 客户端自出)
       finish(outcome);
-    }
+    };
     try {
       // 不 await:永不 settle 的应答(慢压缩)不能堵住本方法返回 —— 调用方
       // 必须立即拿到 pending,由事件/重启/兜底源在后台收尾。
       void client.compact(customInstructions).then(
         (result) => settle({ kind: "ok", result }),
-        () => {
-          // 30s Timeout(或进程死亡拒收)不是压缩失败:事件/重启/兜底源收尾。
+        (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          // 30s Timeout:不是压缩失败,慢压缩由事件收尾。其余(即时校验错
+          // 误如 Already compacted、进程死亡拒收)立即 failed,不等兜底。
+          if (!message.includes(UPSTREAM_TIMEOUT_SENTINEL)) settle({ kind: "failed", message });
         }
       );
     } catch {
-      // 同步抛出(requireClient/写 stdin 前置失败):同上,不算压缩失败。
+      // 同步抛出(requireClient 前置失败):同上,不算压缩失败,交兜底源。
     }
     return pending;
   }
@@ -631,6 +645,11 @@ export class PiRpc {
 // ── 上游兼容层(spec #72 票7/C7)──────────────────────────────────────
 // 对 pi 上游私有行为的依赖(私有 send 应答通道、扩展应答 stdin 直写)集中在
 // 这几个命名函数里;上游重构时只查这里。
+// 另有两处上游行为依赖不在本段函数而在类方法体内,同样属本层管辖:
+//  - compact()(票 #219):依赖 send() 的 30s 写死超时与迟到应答静默丢弃
+//    (故须双源收尾)、compaction_end 事件载荷形状(UPSTREAM_TIMEOUT_SENTINEL
+//    借此区分超时与即时错误)。
+//  - respondExtensionUI():依赖子进程 stdin 直写通道(见其 JSDoc)。
 
 /**
  * COMPAT(上游 prompt 语义):公开 RpcClient.prompt() 不暴露 streamingBehavior,
