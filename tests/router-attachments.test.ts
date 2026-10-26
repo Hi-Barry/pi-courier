@@ -7,12 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  attachmentLedgerKey,
-  attachmentSavedReply,
-  withAttachmentPrefix,
-} from "../src/rpc/message-router";
-import type { PersistedAttachmentEntry } from "../src/rpc/message-router";
+import type { PersistedAttachmentEntry } from "../src/rpc/attachment-ledger";
+import { attachmentLedgerKey } from "../src/rpc/attachment-ledger";
+import { attachmentSavedReply, withAttachmentPrefix } from "../src/rpc/message-router";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import { JsonStateFile } from "../src/state/json-file";
 import type { MessageAttachment } from "../src/types";
