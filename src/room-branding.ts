@@ -93,6 +93,33 @@ function refsDiffer(a: AvatarCustomRef | undefined, b: AvatarCustomRef): boolean
   return a?.sha256 !== b.sha256 || a?.mxc !== b.mxc;
 }
 
+/** 自定义头像期望态内核(2026-10-27 扫描批次 D 收敛):room/space/bot 三个
+ *  apply*CustomAvatar 同形 —— 读文件+哈希 →「记账 ref 与文件内容(sha256)、
+ *  目标当前头像(mxc)双比对」才重传 → 成功才记账;仅三处不同:当前头像
+ *  读取、设置动作、记账键(room 是 per-room map,space/bot 是标量),经
+ *  currentMxc/apply/book 注入。维护不变量(比对才重传、成功才记账)一份
+ *  直测,改规则不再三处同步。Throws on failure —— 回落策略归调用方。 */
+async function applyCustomAvatar(opts: {
+  roomOps: RoomOps;
+  store: ConfigStore;
+  filePath: string;
+  booked: AvatarCustomRef | undefined;
+  currentMxc: () => Promise<string | undefined | null>;
+  apply: (mxcUrl: string, info: Record<string, unknown>) => Promise<void>;
+  book: (ref: AvatarCustomRef) => void;
+}): Promise<"kept" | "set"> {
+  const { data, mime } = readCustomAvatar(opts.filePath);
+  const sha256 = sha256Hex(data);
+  if (opts.booked && opts.booked.sha256 === sha256 && (await opts.currentMxc()) === opts.booked.mxc) {
+    return "kept";
+  }
+  const mxcUrl = await opts.roomOps.uploadMedia(data, mime);
+  await opts.apply(mxcUrl, avatarInfo(data, mime));
+  const ref: AvatarCustomRef = { sha256, mxc: mxcUrl };
+  if (refsDiffer(opts.booked, ref)) opts.book(ref);
+  return "set";
+}
+
 /** Custom-avatar desired state for ONE project room: keep when the booked ref
  *  still matches both the file content (sha256) and the room's current avatar
  *  URL; re-upload + overwrite + re-book (config.roomAvatarRefs) otherwise.
@@ -105,21 +132,19 @@ export async function applyRoomCustomAvatar(
   roomId: string,
   filePath: string,
 ): Promise<"kept" | "set"> {
-  const { data, mime } = readCustomAvatar(filePath);
-  const sha256 = sha256Hex(data);
-  const booked = store.get().roomAvatarRefs?.[roomId];
-  if (booked && booked.sha256 === sha256 && (await roomOps.getRoomAvatar(roomId)) === booked.mxc) {
-    return "kept";
-  }
-  const mxcUrl = await roomOps.uploadMedia(data, mime);
-  await roomOps.setRoomAvatar(roomId, mxcUrl, avatarInfo(data, mime));
-  const ref: AvatarCustomRef = { sha256, mxc: mxcUrl };
-  if (refsDiffer(booked, ref)) {
-    const refs = { ...(store.get().roomAvatarRefs ?? {}) };
-    refs[roomId] = ref;
-    store.update({ roomAvatarRefs: refs });
-  }
-  return "set";
+  return applyCustomAvatar({
+    roomOps,
+    store,
+    filePath,
+    booked: store.get().roomAvatarRefs?.[roomId],
+    currentMxc: () => roomOps.getRoomAvatar(roomId),
+    apply: (mxcUrl, info) => roomOps.setRoomAvatar(roomId, mxcUrl, info),
+    book: (ref) => {
+      const refs = { ...(store.get().roomAvatarRefs ?? {}) };
+      refs[roomId] = ref;
+      store.update({ roomAvatarRefs: refs });
+    },
+  });
 }
 
 /** Dedup-aware bundled picks for every configured project room, in config
@@ -289,17 +314,15 @@ async function applySpaceCustomAvatar(
   spaceId: string,
   filePath: string,
 ): Promise<"kept" | "set"> {
-  const { data, mime } = readCustomAvatar(filePath);
-  const sha256 = sha256Hex(data);
-  const booked = store.get().spaceAvatarRef;
-  if (booked && booked.sha256 === sha256 && (await roomOps.getRoomAvatar(spaceId)) === booked.mxc) {
-    return "kept";
-  }
-  const mxcUrl = await roomOps.uploadMedia(data, mime);
-  await roomOps.setRoomAvatar(spaceId, mxcUrl, avatarInfo(data, mime));
-  const ref: AvatarCustomRef = { sha256, mxc: mxcUrl };
-  if (refsDiffer(booked, ref)) store.update({ spaceAvatarRef: ref });
-  return "set";
+  return applyCustomAvatar({
+    roomOps,
+    store,
+    filePath,
+    booked: store.get().spaceAvatarRef,
+    currentMxc: () => roomOps.getRoomAvatar(spaceId),
+    apply: (mxcUrl, info) => roomOps.setRoomAvatar(spaceId, mxcUrl, info),
+    book: (ref) => store.update({ spaceAvatarRef: ref }),
+  });
 }
 
 /** Startup self-heal for the bot account's own face (spec #84 ticket 2): the
@@ -357,15 +380,13 @@ async function applyBotCustomAvatar(
   store: ConfigStore,
   filePath: string,
 ): Promise<"kept" | "set"> {
-  const { data, mime } = readCustomAvatar(filePath);
-  const sha256 = sha256Hex(data);
-  const booked = store.get().botAvatarRef;
-  if (booked && booked.sha256 === sha256 && (await roomOps.getProfileAvatarUrl()) === booked.mxc) {
-    return "kept";
-  }
-  const mxcUrl = await roomOps.uploadMedia(data, mime);
-  await roomOps.setProfileAvatar(mxcUrl);
-  const ref: AvatarCustomRef = { sha256, mxc: mxcUrl };
-  if (refsDiffer(booked, ref)) store.update({ botAvatarRef: ref });
-  return "set";
+  return applyCustomAvatar({
+    roomOps,
+    store,
+    filePath,
+    booked: store.get().botAvatarRef,
+    currentMxc: () => roomOps.getProfileAvatarUrl(),
+    apply: (mxcUrl) => roomOps.setProfileAvatar(mxcUrl),
+    book: (ref) => store.update({ botAvatarRef: ref }),
+  });
 }
