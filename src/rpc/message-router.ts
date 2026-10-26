@@ -259,7 +259,7 @@ export function attachmentSavedReply(attachment: MessageAttachment): string {
 }
 
 /** 附件失败回执:transport 给出的原因原样透传(下载/解密/超限各有文案)。 */
-export function attachmentErrorReply(reason: string): string {
+function attachmentErrorReply(reason: string): string {
   return `❌ ${reason}`;
 }
 

@@ -90,7 +90,7 @@ export const COMPACT_WAIT_TIMEOUT_MS = 10 * 60_000;
  *  `Timeout waiting for response to ${command.type}. Stderr: ...`。compact()
  *  借它区分「慢压缩的必然超时」(吞掉,事件收尾)与「即时校验错误」(立即
  *  failed)。上游改文案时此处同步。 */
-export const UPSTREAM_TIMEOUT_SENTINEL = "Timeout waiting for response";
+const UPSTREAM_TIMEOUT_SENTINEL = "Timeout waiting for response";
 
 /** /compact 的收尾形态(spec #218 票 #219)。上游 send() 把应答超时写死
  *  30 秒且迟到的应答被静默丢弃,慢压缩必然「假失败」——但压缩在服务端
@@ -711,7 +711,7 @@ export class PiRpc {
  * 走私有 send() 发送。上游契约:私有 send 会用自己的 req_N 覆盖命令 id 并等待
  * 应答 —— 换成公开方法前必须核对上游 rpc-client 的行为。
  */
-export async function upstreamPromptSend(
+async function upstreamPromptSend(
   client: RpcClient,
   message: string,
   streamingBehavior: "steer" | "followUp"
@@ -734,7 +734,7 @@ export async function upstreamPromptSend(
  * 且其通用 send() 会覆盖命令 id(上游用 req_N)——必须把应答作为一条严格
  * JSONL 行(LF 帧,与上游 serializeJsonLine 一致)直写子进程 stdin。
  */
-export function upstreamExtensionUIStdinWrite(
+function upstreamExtensionUIStdinWrite(
   client: RpcClient,
   payload: ExtensionUIResponsePayload
 ): void {
@@ -769,7 +769,7 @@ export class BashTimeoutError extends Error {
  * (票 #220)共用的 stdin 直写入口。上游契约:严格 JSONL 单行(LF 帧,
  * 与上游 serializeJsonLine 一致);子进程引用挂在 client.process。
  */
-export function upstreamClientStdin(client: RpcClient): { write: (chunk: string) => unknown } {
+function upstreamClientStdin(client: RpcClient): { write: (chunk: string) => unknown } {
   const proc = (client as unknown as {
     process?: { stdin?: { write: (chunk: string) => unknown; destroyed: boolean; writable: boolean } | null };
   }).process;
