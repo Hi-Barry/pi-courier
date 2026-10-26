@@ -101,7 +101,6 @@ function refsDiffer(a: AvatarCustomRef | undefined, b: AvatarCustomRef): boolean
  *  直测,改规则不再三处同步。Throws on failure —— 回落策略归调用方。 */
 async function applyCustomAvatar(opts: {
   roomOps: RoomOps;
-  store: ConfigStore;
   filePath: string;
   booked: AvatarCustomRef | undefined;
   currentMxc: () => Promise<string | undefined | null>;
@@ -134,7 +133,6 @@ export async function applyRoomCustomAvatar(
 ): Promise<"kept" | "set"> {
   return applyCustomAvatar({
     roomOps,
-    store,
     filePath,
     booked: store.get().roomAvatarRefs?.[roomId],
     currentMxc: () => roomOps.getRoomAvatar(roomId),
@@ -316,7 +314,6 @@ async function applySpaceCustomAvatar(
 ): Promise<"kept" | "set"> {
   return applyCustomAvatar({
     roomOps,
-    store,
     filePath,
     booked: store.get().spaceAvatarRef,
     currentMxc: () => roomOps.getRoomAvatar(spaceId),
@@ -382,7 +379,6 @@ async function applyBotCustomAvatar(
 ): Promise<"kept" | "set"> {
   return applyCustomAvatar({
     roomOps,
-    store,
     filePath,
     booked: store.get().botAvatarRef,
     currentMxc: () => roomOps.getProfileAvatarUrl(),
