@@ -41,9 +41,9 @@ export function buildManagementRoomHelp(
  *  收窄形状):已有管理房(列表非空)→ undefined 拒绝再写;空/未配置 →
  *  单元素新列表。原来这条不变量靠调用方先查 managementRoomId 的纪律维持
  *  (config 注释自称「两条写路径都保证」,而原实现是 append),现结构化于
- *  此——config 的 adoptManagementRoom 委托本函数并翻译为 patch 形状,未来
- *  新写路径不可能悄悄破坏不变量。返回窄形状:新列表或 undefined(拒绝),
- *  patch 装配知识归 config 侧单一适配器,不再让每个调用方懂展开语义。
+ *  此——ConfigStore.adoptManagementRoom 域入口委托本函数,未来新写路径
+ *  不可能悄悄破坏不变量。返回窄形状:新列表或 undefined(拒绝),
+ *  读-改-写与落盘归 store 单一写路径。
  *  读侧语义不变:managementRoomId 取首个(权威读取器,仍在 config);
  *  手编残留的全表容忍归 power-heal 的 managedRoomIds(spec #99 评审修复)。 */
 export function nextManagementRooms(

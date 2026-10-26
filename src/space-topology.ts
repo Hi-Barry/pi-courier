@@ -21,7 +21,7 @@
  * management DM gets linked instead of duplicated.
  */
 
-import { activeSpaceRoomId, adoptManagementRoom, type ConfigStore, effectiveInstanceName, effectiveWorkdir, isSpaceMode, managementRoomId, nativeMxid, projectAvatarPath } from "./config.js";
+import { activeSpaceRoomId, type ConfigStore, effectiveInstanceName, effectiveWorkdir, isSpaceMode, managementRoomId, nativeMxid, projectAvatarPath } from "./config.js";
 import { errorMessage } from "./errors.js";
 import { t } from "./i18n/index.js";
 import { logger } from "./logger.js";
@@ -30,7 +30,7 @@ import { elevateTrustedUsersInRoom } from "./power-heal.js";
 import { applyRoomCustomAvatar, ensureRoomAvatar, poolFilesForProjects } from "./room-branding.js";
 import { managementAvatarFile, pickPoolAvatarFile, spaceDisplayName } from "./space-identity.js";
 import type { RoomOps } from "./transports/interface.js";
-import type { ExternalMessage } from "./types.js";
+import type { ExternalMessage, SpaceConfig } from "./types.js";
 
 export interface SpaceEnsureDeps {
   roomOps: RoomOps;
@@ -59,12 +59,11 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
       // createRoom's invite list covers every trusted user — record them all
       // so neither the self-heal below nor challenge-pass invites re-ping
       // anyone (decliners included: one invite per user, ever).
-      store.update({
-        space: {
-          ...cfg.space,
-          roomId: spaceId,
-          invitedUsers: cfg.auth?.trustedUsers ?? [],
-        },
+      // 域深更新(扫描批次 C):不再展开 createSpace await 窗口前 capture 的
+      // cfg.space 陈旧快照 —— 并发写方的字段不再被静默丢掉。
+      store.updateSpace({
+        roomId: spaceId,
+        invitedUsers: cfg.auth?.trustedUsers ?? [],
       });
       logger.info(`[space] 空间已创建: ${spaceId}`);
     }
@@ -83,15 +82,11 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
           // Creation's invite list covered every trusted user — record them in
           // the management bookkeeping too (mirror of invitedUsers above) so
           // the self-heal never re-invites them (Matrix rejects re-invites).
-          store.update({
-            // The guard above means the list was empty here — adopting the
-            // freshly created room is the single-element write this used to be.
-            ...adoptManagementRoom(cfg, roomId),
-            space: {
-              ...(store.get().space ?? {}),
-              managementInvitedUsers: cfg.auth?.trustedUsers ?? [],
-            },
-          });
+          // 两个域写各走各的入口(扫描批次 C/G):收养先落盘 —— 「房间已
+          // 存在」的崩溃安全点先于可选簿记;两写之间崩溃只丢 managementInvited
+          // Users,自愈重邀被 Matrix 拒绝,无害。
+          store.adoptManagementRoom(roomId);
+          store.updateSpace({ managementInvitedUsers: cfg.auth?.trustedUsers ?? [] });
         },
       });
       mgmtRoomId = provisioned.roomId;
@@ -179,7 +174,8 @@ export async function maybeInitManagementRoom(
     await roomOps.setRoomName(msg.chatId, roomName);
     await sendReply(msg.chatId, msg.transport, buildManagementRoomHelp(instanceName, botAccount, workdir));
     // The guards above mean the list was empty — adopt writes the single entry.
-    store.update(adoptManagementRoom(cfg, msg.chatId));
+    // 域入口(扫描批次 G):读-改-写收进 store,不再持 cfg 快照判定。
+    store.adoptManagementRoom(msg.chatId);
     logger.info(`[project] 管理房间已初始化: ${msg.chatId} (${roomName})`);
   } catch (err) {
     // Non-matrix transport or transient failure — skip branding, try again
@@ -325,17 +321,21 @@ export async function provisionManagedRoom(
 /** Shared invite outcome (issue #62): whether the invite went out or the
  *  user was already in the room, the bookkeeping write is the same — one
  *  list key gets the user appended. Already-in-room logs at info with its
- *  own phrasing so the two cases stay distinguishable in the journal. */
+ *  own phrasing so the two cases stay distinguishable in the journal.
+ *  追加读-改-写收进 updateSpace 函数式 patch(扫描批次 C):追加基于此刻
+ *  权威列表,不再展开 await 邀请窗口前 capture 的快照 —— 两个并发邀请
+ *  不再互相覆盖。 */
 function recordInvited(
   store: ConfigStore,
   listKey: "invitedUsers" | "managementInvitedUsers",
-  invited: string[],
   namespacedUser: string,
   already: boolean,
   where: string
 ): true {
-  store.update({
-    space: { ...(store.get().space ?? {}), [listKey]: [...invited, namespacedUser] },
+  store.updateSpace((space) => {
+    const patch: Partial<SpaceConfig> = {};
+    patch[listKey] = [...(space[listKey] ?? []), namespacedUser];
+    return patch;
   });
   logger.info(
     already
@@ -343,6 +343,32 @@ function recordInvited(
       : `[space] 信任用户已邀请进${where}: ${namespacedUser}`
   );
   return true;
+}
+
+/** 邀请孪生收敛(2026-10-27 扫描批次 G):空间/管理房两路同形 —— 目标守卫
+ *  → 邀请 → M_FORBIDDEN 即记账;目标房 id、簿记键与场景名注入。失败不记账
+ *  (启动自愈重试);已在房(issue #62)记账后视为成功。 */
+async function inviteOnceToRoom(
+  roomOps: RoomOps,
+  store: ConfigStore,
+  namespacedUser: string,
+  target: { roomId: string | undefined; listKey: "invitedUsers" | "managementInvitedUsers"; where: string }
+): Promise<boolean> {
+  if (!target.roomId) return false;
+  const invited = store.get().space?.[target.listKey] ?? [];
+  if (invited.includes(namespacedUser)) return false;
+  try {
+    await roomOps.inviteUser(target.roomId, nativeMxid(namespacedUser));
+    return recordInvited(store, target.listKey, namespacedUser, false, target.where);
+  } catch (err) {
+    if (isAlreadyInRoomError(err)) {
+      // Issue #62: the invite's goal state is already reached — record it so
+      // the startup self-heal stops re-inviting (and failing) on every boot.
+      return recordInvited(store, target.listKey, namespacedUser, true, target.where);
+    }
+    logger.warn(`[space] 邀请 ${namespacedUser} 进${target.where}失败(下次启动自愈): ${errorMessage(err)}`);
+    return false;
+  }
 }
 
 /** Fire-once space invite for ONE namespaced user. Bookkeeping: space.
@@ -356,22 +382,11 @@ export async function inviteUserToSpaceOnce(
   store: ConfigStore,
   namespacedUser: string
 ): Promise<boolean> {
-  const spaceId = activeSpaceRoomId(store.get());
-  if (!spaceId) return false;
-  const invited = store.get().space?.invitedUsers ?? [];
-  if (invited.includes(namespacedUser)) return false;
-  try {
-    await roomOps.inviteUser(spaceId, nativeMxid(namespacedUser));
-    return recordInvited(store, "invitedUsers", invited, namespacedUser, false, "空间");
-  } catch (err) {
-    if (isAlreadyInRoomError(err)) {
-      // Issue #62: the invite's goal state is already reached — record it so
-      // the startup self-heal stops re-inviting (and failing) on every boot.
-      return recordInvited(store, "invitedUsers", invited, namespacedUser, true, "空间");
-    }
-    logger.warn(`[space] 邀请 ${namespacedUser} 进空间失败(下次启动自愈): ${errorMessage(err)}`);
-    return false;
-  }
+  return inviteOnceToRoom(roomOps, store, namespacedUser, {
+    roomId: activeSpaceRoomId(store.get()),
+    listKey: "invitedUsers",
+    where: "空间",
+  });
 }
 
 /** Fire-once management-room invite for ONE namespaced user — the issue #43
@@ -390,22 +405,11 @@ export async function inviteUserToManagementRoomOnce(
   namespacedUser: string
 ): Promise<boolean> {
   const cfg = store.get();
-  if (!activeSpaceRoomId(cfg)) return false;
-  const mgmtRoomId = managementRoomId(cfg);
-  if (!mgmtRoomId) return false;
-  const invited = cfg.space?.managementInvitedUsers ?? [];
-  if (invited.includes(namespacedUser)) return false;
-  try {
-    await roomOps.inviteUser(mgmtRoomId, nativeMxid(namespacedUser));
-    return recordInvited(store, "managementInvitedUsers", invited, namespacedUser, false, "管理房间");
-  } catch (err) {
-    if (isAlreadyInRoomError(err)) {
-      // Issue #62: same as the space twin — already in the room means done.
-      return recordInvited(store, "managementInvitedUsers", invited, namespacedUser, true, "管理房间");
-    }
-    logger.warn(`[space] 邀请 ${namespacedUser} 进管理房间失败(下次启动自愈): ${errorMessage(err)}`);
-    return false;
-  }
+  return inviteOnceToRoom(roomOps, store, namespacedUser, {
+    roomId: activeSpaceRoomId(cfg) ? managementRoomId(cfg) : undefined,
+    listKey: "managementInvitedUsers",
+    where: "管理房间",
+  });
 }
 
 /** Issue #62: an M_FORBIDDEN "already in the room" rejection means the
