@@ -70,6 +70,97 @@ describe('splitMessage', () => {
   });
 });
 
+describe('splitMessage 代码围栏感知(spec issue #223)', () => {
+  /** 数一段文本里的 ``` 围栏行数(含带 info string 的开围栏)。 */
+  const fenceCount = (chunk: string): number =>
+    (chunk.match(/^ {0,3}```/gm) ?? []).length;
+
+  it('切点落进装得下的代码块 → 回退到块前,块整体留在同一段', () => {
+    const block = '```ts\nconst a = 1\n```';
+    const text = 'a'.repeat(40) + '\n' + block + '\n' + 'c'.repeat(60);
+    const chunks = splitMessage(text, 50);
+    // 块必须完整出现在某一段里,不允许两段各持半截围栏
+    // (块后可粘普通文本 —— 段填充优先,粘着不破坏渲染)
+    expect(chunks.some((c) => c.includes(block))).toBe(true);
+    for (const chunk of chunks.slice(0, -1)) {
+      expect(fenceCount(chunk) % 2).toBe(0);
+    }
+  });
+
+  it('块在段首且装得下 → 前推切点到块尾,块独占整段', () => {
+    const block = '```\nX\n```';
+    const text = block + '\n' + 'q'.repeat(50);
+    const chunks = splitMessage(text, 10);
+    expect(chunks[0]).toBe(block);
+  });
+
+  it('单块超长 → 块内下刀补围栏,两半各自配对且语言标记复现', () => {
+    const body = 'b'.repeat(100);
+    const text = 'head\n```ts\n' + body + '\n```\ntail';
+    const chunks = splitMessage(text, 40);
+    // 精确期望:首段含块前文本,后续每段以复现语言标记的开围栏起头
+    expect(chunks).toEqual([
+      'head\n```ts\n' + 'b'.repeat(40) + '\n```',
+      '```ts\n' + 'b'.repeat(40) + '\n```',
+      '```ts\n' + 'b'.repeat(20) + '\n```\ntail',
+    ]);
+  });
+
+  it('~~~ 围栏与 ``` 同等对待', () => {
+    const block = '~~~\npycode\n~~~';
+    const text = 'a'.repeat(40) + '\n' + block + '\n' + 'c'.repeat(60);
+    const chunks = splitMessage(text, 50);
+    expect(chunks.some((c) => c.includes(block))).toBe(true);
+    for (const chunk of chunks.slice(0, -1)) {
+      expect(fenceCount(chunk) % 2).toBe(0);
+    }
+  });
+
+  it('多块与长文本交错 → 各块完整、每段围栏成对', () => {
+    const block1 = '```m1\nA\n```';
+    const block2 = '```m2\nB\n```';
+    const text = block1 + '\n' + 'y'.repeat(80) + '\n' + block2 + '\n' + 'z'.repeat(80);
+    const chunks = splitMessage(text, 50);
+    expect(chunks.some((c) => c.includes(block1))).toBe(true);
+    expect(chunks.some((c) => c.includes(block2))).toBe(true);
+    for (const chunk of chunks.slice(0, -1)) {
+      expect(fenceCount(chunk) % 2).toBe(0);
+    }
+  });
+
+  it('超长未闭合块 → 不死循环,补闭围栏让各段合法', () => {
+    const text = '```\n' + 'd'.repeat(5000);
+    const chunks = splitMessage(text, 100);
+    expect(chunks.length).toBeGreaterThan(10);
+    for (const chunk of chunks.slice(0, -1)) {
+      expect(fenceCount(chunk) % 2).toBe(0);
+    }
+  });
+
+  it('围栏感知不扰动纯文本切分:无围栏时与旧算法结果一致', () => {
+    const text = 'aaaa\nbbbb\ncccc\ndddd\neeee';
+    expect(splitMessage(text, 9)).toEqual(splitMessageNaive(text, 9));
+  });
+
+  /** 旧算法参照实现(改造前的 splitMessage 逻辑),用于回归对照。 */
+  function splitMessageNaive(text: string, maxLen: number): string[] {
+    const chunks: string[] = [];
+    let remaining = text;
+    while (remaining.length > 0) {
+      if (remaining.length <= maxLen) {
+        chunks.push(remaining);
+        break;
+      }
+      let breakAt = remaining.lastIndexOf('\n', maxLen);
+      if (breakAt < maxLen * 0.5) breakAt = remaining.lastIndexOf(' ', maxLen);
+      if (breakAt < maxLen * 0.3) breakAt = maxLen;
+      chunks.push(remaining.substring(0, breakAt));
+      remaining = remaining.substring(breakAt).trimStart();
+    }
+    return chunks;
+  }
+});
+
 describe('formatToolCalls', () => {
   it('formats tool calls with arguments', () => {
     const msg = {
