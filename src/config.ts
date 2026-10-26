@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { defaultWindowsLocale, detectSystemLanguage } from "./i18n/detect.js";
 import type { Locale } from "./i18n/index.js";
-import { adoptManagementRoomPatch } from "./management-room.js";
+import { nextManagementRooms } from "./management-room.js";
 import type { MsgBridgeConfig, ProjectConfig } from "./types.js";
 
 /** 桥的配置目录 ~/.pi(单一持有:Matrix 客户端存储路径等从这里取 —— 审计工程批 票19)。 */
@@ -308,7 +308,7 @@ export function activeSpaceRoomId(cfg: MsgBridgeConfig): string | undefined {
 
 /** 管理房间 ID(spec #99 票6 / issue #102):config 以列表存储,但公开语义
  *  是单管理房 —— "取首个"是有意为之。「列表至多一个元素」
- *  的写侧不变量结构化于 management-room.ts 的 adoptManagementRoomPatch
+ *  的写侧不变量结构化于 management-room.ts 的 nextManagementRooms
  *  (架构候选4),收养(router)与自建(space ensure)两条写路径经
  *  adoptManagementRoom 委托之。未配置或空列表返回 undefined,即
  *  "还没有管理房";其余所有"管理房是哪个"的读取都走这里,不再手写
@@ -422,12 +422,14 @@ export function presetProblems(cfg: MsgBridgeConfig): PresetProblem[] {
 
 /** 收养写侧(与 managementRoomId 同族):收养第一个成功授权的 DM(router
  *  收养路径)与空间自建管理房(space ensure)共用这一个写入解释 —— 语义
- *  委托 management-room.ts 的 adoptManagementRoomPatch(架构候选4):已有
- *  管理房返回空 patch 拒绝再写,空列表写单元素。幂等:重复收养同一房间
- *  返回空 patch。返回 patch 形状,供 store.update 直接消费,也可展开后与
- *  其它字段合并为一次原子 update。 */
+ *  委托 management-room.ts 的 nextManagementRooms(架构候选4):已有管理房
+ *  拒绝再写(译为空 patch),空列表写单元素。幂等:重复收养同一房间返回
+ *  空 patch。返回 patch 形状,供 store.update 直接消费,也可展开后与其它
+ *  字段合并为一次原子 update;patch 装配是本函数的职责,收养判定本身
+ *  住在 management-room 的窄形状之后。 */
 export function adoptManagementRoom(cfg: MsgBridgeConfig, chatId: string): Partial<MsgBridgeConfig> {
-  return adoptManagementRoomPatch(cfg.managementRooms, chatId);
+  const rooms = nextManagementRooms(cfg.managementRooms, chatId);
+  return rooms === undefined ? {} : { managementRooms: rooms };
 }
 
 /**

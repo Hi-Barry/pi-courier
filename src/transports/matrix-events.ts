@@ -81,9 +81,9 @@ export function createEventTranslator(ports: EventTranslatorPorts) {
     }
 
     // ── text pipeline ──────────────────────────────────────────────
-    const chatId = roomId;
-    const userId = event.sender; // e.g. @user:matrix.org
-    const username = extractUsername(userId);
+    // envelope 复用(2026-10-27 扫描机械批):七字段信封不再手抄,文本分支
+    // 只补 wasMentioned(信封默认 false)与 text payload,字段演进不再两处改。
+    const username = extractUsername(event.sender);
     const messageText = event.content.body;
     const messageId = event.event_id;
     const isGroupChat = await resolveIsGroupChat(roomId);
@@ -110,13 +110,7 @@ export function createEventTranslator(ports: EventTranslatorPorts) {
     if (!cleanContent) return {};
     return {
       message: {
-        chatId,
-        transport: transportType,
-        username,
-        userId,
-        timestamp: new Date(event.origin_server_ts || Date.now()),
-        messageId,
-        isGroupChat,
+        ...envelope(roomId, event, isGroupChat),
         wasMentioned,
         payload: {
           kind: "text",
