@@ -13,8 +13,8 @@
  * 变 module 直测。
  */
 
-import type { JsonStateFile } from "../state/json-file.js";
 import { logger } from "../logger.js";
+import type { JsonStateFile } from "../state/json-file.js";
 import type { MessageAttachment } from "../types.js";
 
 /** 房间+发送者 → 账本键。`\u0000` 作分隔:两个分量都不会含它,拆分无歧义。 */
