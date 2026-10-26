@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { nextFallbackTarget, setModelByRef } from "../src/rpc/model-switch";
+import { findModelMatch, nextFallbackTarget, sameModel, setModelByRef } from "../src/rpc/model-switch";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 
 function fakeRpc(models: Array<{ provider: string; id: string }>) {
@@ -35,6 +35,25 @@ describe("setModelByRef (issues #119 / #121)", () => {
   it("throws a replyable message when a bare id matches nothing", async () => {
     const { rpc } = fakeRpc([{ provider: "zai", id: "glm-5.3" }]);
     await expect(setModelByRef(rpc, "nope")).rejects.toThrow("model not found: nope");
+  });
+});
+
+describe("findModelMatch / sameModel(2026-10-27 扫描批次聚拢,spec #225)", () => {
+  const models = [
+    { provider: "zai", id: "glm-5.3" },
+    { provider: "opencode", id: "glm-5.3-air" },
+  ];
+
+  it("精确 id 优先于子串兜底 —— 防 glm-5.3 误切 glm-5.3-air(审计工程批 票21 锚定)", () => {
+    expect(findModelMatch(models, "glm-5.3")).toEqual({ provider: "zai", id: "glm-5.3" });
+    expect(findModelMatch(models, "5.3-air")).toEqual({ provider: "opencode", id: "glm-5.3-air" });
+    expect(findModelMatch(models, "nope")).toBeUndefined();
+  });
+
+  it("sameModel provider+id 双比较:同名 id 不同 provider 不算当前", () => {
+    expect(sameModel({ provider: "zai", id: "glm-5.3" }, { provider: "zai", id: "glm-5.3" })).toBe(true);
+    expect(sameModel({ provider: "zai", id: "glm-5.3" }, { provider: "opencode", id: "glm-5.3" })).toBe(false);
+    expect(sameModel({ provider: "zai", id: "glm-5.3" }, undefined)).toBe(false);
   });
 });
 
