@@ -395,6 +395,28 @@ async function clearQueuesBeforeAbort(
   return { snapshot, cleared, clearFailed };
 }
 
+/** /stop 与 //interrupt 共用的清队回执梯子(2026-10-27 扫描批次去重):
+ *  四形态 = 有清掉条目 / 清成功但已空(上游权威空,无陈旧警告)/ 上游拒清
+ *  (降级警告)/ 无队列可清。base 是各自命令的完成语;cleared 行格式两命令
+ *  不同(stop 单串,interrupt 完成语换行拼接),经 formatCleared 注入。
+ *  #115 钉零时点语义不动(见 clearQueuesBeforeAbort),这里只收口"回执文本
+ *  怎么选"。 */
+function reportClearOutcome(shape: {
+  base: string;
+  cleared: UpstreamQueues | undefined;
+  clearFailed: boolean;
+  snapshot: QueueSnapshot | undefined;
+  formatCleared: (view: { count: number; lines: string }) => string;
+}): string {
+  const view = shape.cleared ? clearedQueuesView(shape.cleared) : null;
+  if (view) return shape.formatCleared(view);
+  if (shape.cleared) return shape.base;
+  if (shape.clearFailed) {
+    return withQueueWarning(`${shape.base}\n${t("cmd.queue.clearUnsupported")}`, shape.snapshot);
+  }
+  return withQueueWarning(shape.base, shape.snapshot);
+}
+
 // --- Session directory scanning (/sessions, /switch — issue #56 票5) ----------
 
 export interface SessionSummary {
@@ -672,19 +694,15 @@ export async function handleSlashCommand(
           const clearedCount = cleared.steering.length + cleared.followUp.length;
           ctx.audit?.("queue.clear", `${commandWord} cleared ${clearedCount} queued message(s)`);
         }
-        const view = cleared ? clearedQueuesView(cleared) : null;
-        if (view) {
-          await reply(t("cmd.stop.cleared", view));
-        } else if (cleared) {
-          // Clear succeeded with nothing left (the turn consumed the queue
-          // between our mirror snapshot and the clear) — upstream is
-          // authoritatively empty; a stale mirror must not resurrect it.
-          await reply(t("cmd.stop.ok"));
-        } else if (clearFailed) {
-          await reply(withQueueWarning(`${t("cmd.stop.ok")}\n${t("cmd.queue.clearUnsupported")}`, snapshot));
-        } else {
-          await reply(withQueueWarning(t("cmd.stop.ok"), snapshot));
-        }
+        await reply(
+          reportClearOutcome({
+            base: t("cmd.stop.ok"),
+            cleared,
+            clearFailed,
+            snapshot,
+            formatCleared: (view) => t("cmd.stop.cleared", view),
+          })
+        );
         return true;
       }
 
@@ -774,17 +792,15 @@ export async function handleSlashCommand(
         await rpc.prompt(args);
         // 与 /stop 同款钉零(issue #115):清队成功后不等 queue_update 推送。
         if (cleared) setQueueMirror?.({ steering: [], followUp: [] });
-        const view = cleared ? clearedQueuesView(cleared) : null;
-        if (view) {
-          await reply(`${t("cmd.interrupt.done")}\n${t("cmd.interrupt.cleared", view)}`);
-        } else if (cleared) {
-          // Authoritatively empty upstream (see /stop) — no stale warning.
-          await reply(t("cmd.interrupt.done"));
-        } else if (clearFailed) {
-          await reply(withQueueWarning(`${t("cmd.interrupt.done")}\n${t("cmd.queue.clearUnsupported")}`, snapshot));
-        } else {
-          await reply(withQueueWarning(t("cmd.interrupt.done"), snapshot));
-        }
+        await reply(
+          reportClearOutcome({
+            base: t("cmd.interrupt.done"),
+            cleared,
+            clearFailed,
+            snapshot,
+            formatCleared: (view) => `${t("cmd.interrupt.done")}\n${t("cmd.interrupt.cleared", view)}`,
+          })
+        );
         return true;
       }
 
