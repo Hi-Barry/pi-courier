@@ -933,8 +933,8 @@ export async function handleSlashCommand(
           await reply(t("cmd.model.list", { list }));
           return true;
         }
-        // 解析规则单点(2026-10-27 扫描批次):引用判定与裸 id 匹配都落在
-        // model-switch(与预设/降级链共用),这里只管回执与 setModel。
+        // 解析规则单点(2026-10-27 扫描批次):引用判定走 config.parseModelRef,
+        // 裸 id 匹配落 model-switch(与预设/降级链共用),这里只管回执与 setModel。
         const parsed = parseModelRef(args);
         let applied: { provider: string; id: string };
         if (parsed) {
