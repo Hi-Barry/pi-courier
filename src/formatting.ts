@@ -90,6 +90,11 @@ function parseFenceLine(line: string): FenceMarker | null {
   return { char, len: match[1].length, info };
 }
 
+/** marker 行能否闭合 open 开的代码块:同字符、长度不小于开围栏、不带 info。 */
+function closesFence(open: FenceMarker, marker: FenceMarker): boolean {
+  return marker.char === open.char && marker.len >= open.len && marker.info === "";
+}
+
 /**
  * 扫描 text[0, end) 结尾处的围栏状态:是否处于未闭合代码块内,及开围栏信息。
  * 块内的围栏行是文本不是围栏,只有块外才开新围栏;闭围栏要求同字符、
@@ -107,7 +112,7 @@ function scanFences(
     const lineEnd = nl === -1 ? text.length : Math.min(nl, end);
     const marker = parseFenceLine(text.slice(pos, lineEnd));
     if (marker) {
-      if (open && marker.char === open.char && marker.len >= open.len && marker.info === "") {
+      if (open && closesFence(open, marker)) {
         open = null;
       } else if (!open) {
         open = marker;
@@ -137,7 +142,7 @@ function findFenceCloseEnd(
     const nl = text.indexOf("\n", pos);
     const lineEnd = nl === -1 ? text.length : nl;
     const marker = parseFenceLine(text.slice(pos, lineEnd));
-    if (marker && marker.char === open.char && marker.len >= open.len && marker.info === "") {
+    if (marker && closesFence(open, marker)) {
       return lineEnd;
     }
     if (nl === -1) break;
@@ -175,36 +180,40 @@ export function splitMessage(text: string, maxLen: number): string[] {
       breakAt = safeMax;
     }
 
-    const prefix = scanFences(remaining, breakAt);
-    if (prefix.inFence) {
+    // 候选切点处的围栏状态:切进未闭合块内就不能裸切
+    const fenceAtCut = scanFences(remaining, breakAt);
+    if (fenceAtCut.inFence) {
       const closeEnd = findFenceCloseEnd(
         remaining,
-        prefix.open,
-        prefix.openLineStart,
-        prefix.openLineStart + safeMax,
+        fenceAtCut.open,
+        fenceAtCut.openLineStart,
+        fenceAtCut.openLineStart + safeMax,
       );
       if (closeEnd === -1) {
         // 块整体装不进一段:在块内容里下刀,段尾补闭围栏,剩余头保留开围栏
         // 行(语言标记随之复现),两半各自围栏配对(issue #223 方案 B)。
-        const lineEnd = remaining.indexOf("\n", prefix.openLineStart);
+        const lineEnd = remaining.indexOf("\n", fenceAtCut.openLineStart);
         if (lineEnd !== -1) {
           const contentStart = lineEnd + 1;
           let cut = remaining.lastIndexOf("\n", contentStart + safeMax);
           // 切点必须让块内容净推进 ≥1 字符(换行会被 trimStart 吃掉),
           // 否则重建的剩余与上一轮相同,死循环。
           if (cut < contentStart + 2) cut = contentStart + safeMax;
-          chunks.push(`${remaining.slice(0, cut)}\n${prefix.open.char.repeat(prefix.open.len)}`);
+          chunks.push(
+            `${remaining.slice(0, cut)}\n${fenceAtCut.open.char.repeat(fenceAtCut.open.len)}`,
+          );
           // 剩余头只保留开围栏行本身(语言标记随之复现);若连切点前的
           // 普通前缀一起留下,下一轮会原样重切,死循环。
           remaining =
-            remaining.slice(prefix.openLineStart, contentStart) + remaining.slice(cut).trimStart();
+            remaining.slice(fenceAtCut.openLineStart, contentStart) +
+            remaining.slice(cut).trimStart();
           continue;
         }
         // 开围栏行就是文本尾,块内容为空:无从下刀,放行普通切。
       } else {
         // 块装得进一段:切点让路 —— 块前有文本就回退到块前,块在段首就
         // 前推到块尾,让块整体留在同一段(issue #223 方案 A)。
-        breakAt = prefix.openLineStart > 0 ? prefix.openLineStart : closeEnd;
+        breakAt = fenceAtCut.openLineStart > 0 ? fenceAtCut.openLineStart : closeEnd;
       }
     }
 
