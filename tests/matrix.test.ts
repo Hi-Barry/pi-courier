@@ -110,9 +110,10 @@ describe("formatForMatrix win32 backslash escaping", () => {
     expect(result.body).toBe(text);
   });
 
-  it("no longer honors \\* as a markdown escape on win32 (accepted trade-off)", () => {
-    // 预转义把 `\*` 双写后,markdown-it 不再当转义 —— 星号进入强调解析。
-    // spec #233 拍板:Windows 下特意写 `\*` 转义的用法极少见,路径可读性优先。
+  it("no longer honors \\* as a markdown escape on win32 (known deviation from spec story 5)", () => {
+    // 预转义把 `\*` 双写后,markdown-it 不再当转义 —— win32 下用户特意写的
+    // `\*` 转义失效(spec #233 用户故事 5 的已知偏差:无法从文本区分"路径
+    // 反斜杠"与"用户转义意图",路径可读性优先;偏差已在 issue #233 记录)。
     const result = formatForMatrix("not italic \\*really\\*", "win32");
     expect(result.formattedBody).not.toContain("*really*");
   });
@@ -123,9 +124,10 @@ describe("formatForMatrix win32 backslash escaping", () => {
   });
 
   it("leaves backslashes before letters/digits untouched", () => {
-    const text = "字母后随 C:\\Users\\p4th 原样保留";
+    const text = "字母数字后随 C:\\Users\\p4th 与 C:\\U5ers 原样保留";
     const result = formatForMatrix(text, "win32");
     expect(result.formattedBody).toContain("C:\\Users\\p4th");
+    expect(result.formattedBody).toContain("C:\\U5ers");
   });
 
   it("does not touch fenced code block contents", () => {

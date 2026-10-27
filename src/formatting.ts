@@ -70,7 +70,7 @@ export function truncate(str: string, maxLen: number): string {
 /**
  * 一条围栏行的形状:围栏字符、长度、开围栏的 info string(如 ```ts 的 "ts")。
  */
-export interface FenceMarker {
+interface FenceMarker {
   char: "`" | "~";
   len: number;
   info: string;
@@ -81,7 +81,8 @@ export interface FenceMarker {
  * ``` 行的 info string 里含反引号时按 CommonMark 不算围栏(markdown-it 同判)
  * ——切分的围栏判定必须与渲染器对齐,否则会切在渲染器不认为是边界的地方。
  */
-export function parseFenceLine(line: string): FenceMarker | null {  const match = /^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/.exec(line);
+function parseFenceLine(line: string): FenceMarker | null {
+  const match = /^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/.exec(line);
   if (!match) return null;
   const char = match[1][0] as "`" | "~";
   const info = match[2].trim();
