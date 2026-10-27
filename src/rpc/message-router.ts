@@ -411,16 +411,22 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   }
   const liveCards = new WeakMap<PiRpc, LiveCardState>();
 
-  // 活卡代次(spec #242 意见2):agent_start 与终答回合两个清卡点递增。
+  // 活卡代次(spec #242 意见2):凡是清活卡的路径都递增。
   // 活卡出站链上的步骤是异步结算的 —— 开卡/编辑挂起期间若恰好跨越清卡点
   // (前一序列中止后立即开新对话的亚秒窗口),完成后的状态写回凭代次作废,
   // 杜绝「在途开卡把刚清掉的活卡写回新对话」。步骤在发起时捕获代次、
   // 写回前校验,窗口内的迟到结果一律丢弃,下一中间回合自然重开卡。
   const liveCardGenerations = new WeakMap<PiRpc, number>();
-  const bumpLiveCardGeneration = (rpc: PiRpc): number => {
-    const next = (liveCardGenerations.get(rpc) ?? 0) + 1;
-    liveCardGenerations.set(rpc, next);
-    return next;
+  const bumpLiveCardGeneration = (rpc: PiRpc): void => {
+    liveCardGenerations.set(rpc, (liveCardGenerations.get(rpc) ?? 0) + 1);
+  };
+  // 清卡单一入口(spec #242 评审整改):凡是清活卡的路径(轮次边界、终答
+  // 收敛、交接卡捕获收敛、子进程重启回调)一律经此 —— 删除与代次递增
+  // 同进同出,任何一个清卡点之后在途步骤的迟到写回都作废,不留
+  // 「只删不递增」的复活窗口。
+  const clearLiveCard = (rpc: PiRpc): void => {
+    liveCards.delete(rpc);
+    bumpLiveCardGeneration(rpc);
   };
 
   /** 聚合启用 = 配置开(缺省 true)+ 编辑缝双双注入 + hideToolCalls 关闭。
@@ -476,7 +482,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         if (stale()) return;
         if (!liveCardRestartWatched.has(rpc)) {
           liveCardRestartWatched.add(rpc);
-          rpc.onRestarted?.(() => liveCards.delete(rpc));
+          rpc.onRestarted?.(() => clearLiveCard(rpc));
         }
         liveCards.set(rpc, { card: { eventId, text }, degraded: false });
         return;
@@ -1364,8 +1370,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // 标志,杜绝跨对话误追加旧卡;代次随之递增(spec #242),作废在途
       // 步骤的迟到写回。重启失效另由 onRestarted 订阅兜底。
       if (event.type === "agent_start") {
-        liveCards.delete(rpc);
-        bumpLiveCardGeneration(rpc);
+        clearLiveCard(rpc);
         return;
       }
 
@@ -1399,7 +1404,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           log.debug(`[agent] turn_end captured by recap: ${settleVerdict}`);
           // 终答被捕获 = 工具循环结束(issue #235 票2):一并清活卡;中间轮
           // 捕获("wait")不动活卡 —— 工具循环还在继续。
-          if (settleVerdict === "settled") liveCards.delete(rpc);
+          if (settleVerdict === "settled") clearLiveCard(rpc);
           return;
         }
 
@@ -1446,9 +1451,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
         // 终答回合收敛(issue #235 票2):活卡随之清空 —— 终答永远不进活卡,
         // 下一次工具循环开新卡。同步原位结算,与绑定释放同款不等派发;
-        // 代次递增作废在途步骤的迟到写回(spec #242)。
-        liveCards.delete(rpc);
-        bumpLiveCardGeneration(rpc);
+        // 清卡单一入口含代次递增,作废在途步骤的迟到写回(spec #242)。
+        clearLiveCard(rpc);
 
         // A completed conversational turn releases unpinned bindings (the
         // shared default rpc) so late events never reply to a stale chat.
