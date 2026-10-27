@@ -33,6 +33,8 @@ import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
+import type { PersistedAttachmentEntry } from "./attachment-ledger.js";
+import { AttachmentLedger } from "./attachment-ledger.js";
 import { BacklogInbox } from "./backlog-inbox.js";
 import {
   type BashTracker,
@@ -84,7 +86,8 @@ export interface MessageRouterDeps {
   /** Durable pending-attachment ledger (issue #114): injected by the
    *  composition root, absent in tests/legacy deployments. Injected → the
    *  ledger survives restarts (24h TTL); absent → pure in-memory, byte-for-byte
-   *  the pre-#114 behaviour. */
+   *  the pre-#114 behaviour. 磁盘形状与状态机在 attachment-ledger module
+   *  (2026-10-27 扫描批次 A),这里只注入存储。 */
   attachmentsLedger?: JsonStateFile<PersistedAttachmentEntry[]>;
   /** Chat reminders (/remind, issue #117): the ReminderClock (also the
    *  ReminderController). The router binds each command invocation to the
@@ -105,19 +108,6 @@ export interface MessageRouterDeps {
   /** 离线积压结算冻结信号(#136 修法B):装配根在 transport 连接阶段
    *  结束(成功或已处理的失败)后 resolve。缺省 = 已就绪,旧语义。 */
   backlogTransportsReady?: Promise<void>;
-}
-
-/** Disk shape of one pending-attachment entry (issue #114). An array of
- *  entries — not a keyed map — keeps the `\u0000` ledger-key separator out of
- *  JSON object keys, where it would be hostile to hand editing and to some
- *  JSON tooling. */
-export interface PersistedAttachmentEntry {
-  chatId: string;
-  userId: string;
-  /** Epoch ms when the first attachment for this room+sender was parked —
-   *  drives the 24h TTL on load. */
-  at: number;
-  attachments: MessageAttachment[];
 }
 
 /**
@@ -248,18 +238,13 @@ export function withAttachmentPrefix(
   return `${header}\n${lines.join("\n")}\n\n${text}`;
 }
 
-/** 附件清单的记账键:房间 + 发送者(群聊里甲的图不被乙的消息消耗)。 */
-export function attachmentLedgerKey(chatId: string, userId: string): string {
-  return `${chatId}\u0000${userId}`;
-}
-
 /** 保存成功回执(issue #66 票1):路径可见,清单状态不静默。 */
 export function attachmentSavedReply(attachment: MessageAttachment): string {
   return t("router.attach.saved", { path: attachment.path, bytes: formatBytes(attachment.bytes) });
 }
 
 /** 附件失败回执:transport 给出的原因原样透传(下载/解密/超限各有文案)。 */
-export function attachmentErrorReply(reason: string): string {
+function attachmentErrorReply(reason: string): string {
   return `❌ ${reason}`;
 }
 
@@ -448,53 +433,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     }
   };
 
-  // 待处理附件清单(issue #66 票1):按 房间+发送者 记账。消耗规则:该发送
-  // 者在同一条管道里真正发给 pi 的下一条对话消息(prompt 唯一注入点)一次性
+  // 待处理附件清单(issue #66 票1):按 房间+发送者 记账,2026-10-27 扫描
+  // 批次 A 自此出门为 AttachmentLedger(与 BacklogInbox / ExtensionQuestions
+  // / RecapLedger 同构)—— TTL、\u0000 键编码、落盘形状都在 module 里,
+  // 管道三阶段只调用:media 停车 / prompt 成功消费 / 房间销账清空。消耗
+  // 规则不变:该发送者在同一条管道里真正发给 pi 的下一条对话消息一次性
   // 带上全部并清空;管理命令、登录/extension-ui 应答捕获都在注入点之前
   // return,天然不消耗。
-  const pendingAttachments = new Map<string, MessageAttachment[]>();
-  // 首次停车时间(落盘 TTL 的依据,issue #114):只记第一次,后来追加的附件
-  // 不顺延 —— 挂了 24h 没被消费的条目在下次启动装载时过期。
-  const parkedAt = new Map<string, number>();
-
-  // 落盘账本(issue #114):磁盘只做备份,内存 Map 仍是唯一热路径(ConfigStore
-  // 单写者哲学)。注入 ledger 则启动装载一次(24h TTL,过期/残缺条目静默跳过),
-  // 记账与消耗两处变更后原子落盘;写失败仅 warn(内存仍是权威,退回 0.3.8
-  // 行为)。不注入 = 纯内存,行为与 0.3.8 逐字节一致。
-  const LEDGER_TTL_MS = 24 * 60 * 60 * 1000;
-  if (deps.attachmentsLedger) {
-    const now = Date.now();
-    let restored = 0;
-    for (const entry of deps.attachmentsLedger.load()) {
-      if (!entry || typeof entry.chatId !== "string" || typeof entry.userId !== "string") continue;
-      if (!Array.isArray(entry.attachments) || entry.attachments.length === 0) continue;
-      if (typeof entry.at !== "number" || now - entry.at > LEDGER_TTL_MS) continue;
-      pendingAttachments.set(attachmentLedgerKey(entry.chatId, entry.userId), entry.attachments);
-      parkedAt.set(attachmentLedgerKey(entry.chatId, entry.userId), entry.at);
-      restored += entry.attachments.length;
-    }
-    if (restored > 0) {
-      logger.info(
-        `restored ${restored} parked attachment(s) across ${pendingAttachments.size} room+sender entries from disk`
-      );
-    }
-  }
-  const persistLedger = (): void => {
-    const ledger = deps.attachmentsLedger;
-    if (!ledger) return;
-    const entries: PersistedAttachmentEntry[] = [];
-    for (const [key, attachments] of pendingAttachments) {
-      const sep = key.indexOf("\u0000");
-      if (sep <= 0) continue; // malformed key never reaches disk
-      entries.push({
-        chatId: key.slice(0, sep),
-        userId: key.slice(sep + 1),
-        at: parkedAt.get(key) ?? Date.now(),
-        attachments,
-      });
-    }
-    ledger.save(entries);
-  };
+  const attachmentLedger = new AttachmentLedger(deps.attachmentsLedger);
 
   // 在跑 bash 记账(/bashstop 的数据源):/bash 与 `!`/`!!` 共用一份,
   // 按 pi 进程记账,promise 落定自动销账(见 createBashTracker)。
@@ -662,15 +608,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             );
             return true;
           case "media": {
-            const key = attachmentLedgerKey(ctx.msg.chatId, ctx.msg.userId);
-            const ledger = pendingAttachments.get(key) ?? [];
+            attachmentLedger.park(ctx.msg.chatId, ctx.msg.userId, ctx.msg.payload.saved);
             for (const attachment of ctx.msg.payload.saved) {
-              ledger.push(attachment);
               await sendReply(ctx.msg.chatId, ctx.msg.transport, attachmentSavedReply(attachment));
             }
-            pendingAttachments.set(key, ledger);
-            parkedAt.set(key, parkedAt.get(key) ?? Date.now());
-            persistLedger();
             return true;
           }
         }
@@ -1130,9 +1071,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           // 接力检查的任何意外不得挡住 prompt 本身。
         }
         try {
-          const key = attachmentLedgerKey(ctx.msg.chatId, ctx.msg.userId);
-          const carried = pendingAttachments.get(key);
-          const pending = carried?.length ? carried : undefined;
+          // 两段式消费(AttachmentLedger 契约):peek 不动账,prompt 成功才
+          // release —— 失败不消耗,重试仍带上(消费即清空是成功语义)。
+          const pending = attachmentLedger.peek(ctx.msg.chatId, ctx.msg.userId);
           const quoted = ctx.msg.payload.kind === "text" ? ctx.msg.payload.quoted : undefined;
           // 来源标注(issue #124):附件与引用进 prompt 时带「谁发的」——
           // 第三方内容以数据身份入上下文,不冒充指令。
@@ -1142,9 +1083,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
               room: ctx.msg.chatId,
             })
           );
-          pendingAttachments.delete(key);
-          parkedAt.delete(key);
-          persistLedger();
+          attachmentLedger.release(ctx.msg.chatId, ctx.msg.userId);
         } catch (err) {
           // rpc 已在此前 roomRpc() 解析,本段不可能产生 RPC_ABORT(审计工程批 票20)
           await sendReply(ctx.msg.chatId, ctx.msg.transport, t("router.prompt.failed", { message: errorMessage(err) }));
@@ -1161,19 +1100,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     },
 
     /** 房间销账(/pmctl rm 确认后由组合根调用):清掉该房间全部停车附件并
-     *  落盘,返回条数。房间删除后其清单条目已无人能消费 —— 意图随房间销账,
-     *  不等 24h TTL 自然过期。 */
+     *  落盘,返回条数。语义归 AttachmentLedger.purgeRoom(房间删除后其
+     *  清单条目已无人能消费 —— 意图随房间销账,不等 24h TTL 自然过期)。 */
     purgeRoomAttachments(roomId: string): number {
-      let removed = 0;
-      for (const key of [...pendingAttachments.keys()]) {
-        if (key.slice(0, key.indexOf("\u0000")) === roomId) {
-          pendingAttachments.delete(key);
-          parkedAt.delete(key);
-          removed++;
-        }
-      }
-      if (removed > 0) persistLedger();
-      return removed;
+      return attachmentLedger.purgeRoom(roomId);
     },
 
     async handleIncoming(msg: ExternalMessage): Promise<void> {

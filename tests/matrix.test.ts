@@ -96,6 +96,62 @@ describe("formatForMatrix", () => {
   });
 });
 
+// ─── formatForMatrix win32 反斜杠预转义(spec #233)──────────────
+
+describe("formatForMatrix win32 backslash escaping", () => {
+  const savedPath =
+    "C:\\Users\\admin\\.pi\\pi-courier-attachments\\_zGJpSHcPOKcZnHqSaa_matrix.purplelin.com-fed114e5\\3ded3b3f1b01-5198862 CRPS1300D3 specification-241108.pdf";
+
+  it("keeps every backslash of a windows path in the rendered html", () => {
+    const text = `📎 附件已保存: ${savedPath}(3.2 MB)\n下一条消息发送时会自动附上它。`;
+    const result = formatForMatrix(text, "win32");
+    // 验证锚:渲染后的 HTML 与纯文本 body 路径逐字符一致
+    expect(result.formattedBody).toContain(savedPath);
+    expect(result.body).toBe(text);
+  });
+
+  it("no longer honors \\* as a markdown escape on win32 (known deviation from spec story 5)", () => {
+    // 预转义把 `\*` 双写后,markdown-it 不再当转义 —— win32 下用户特意写的
+    // `\*` 转义失效(spec #233 用户故事 5 的已知偏差:无法从文本区分"路径
+    // 反斜杠"与"用户转义意图",路径可读性优先;偏差已在 issue #233 记录)。
+    const result = formatForMatrix("not italic \\*really\\*", "win32");
+    expect(result.formattedBody).not.toContain("*really*");
+  });
+
+  it("still honors \\* as a markdown escape on non-win32", () => {
+    const result = formatForMatrix("not italic \\*really\\*", "linux");
+    expect(result.formattedBody).toContain("*really*");
+  });
+
+  it("leaves backslashes before letters/digits untouched", () => {
+    const text = "字母数字后随 C:\\Users\\p4th 与 C:\\U5ers 原样保留";
+    const result = formatForMatrix(text, "win32");
+    expect(result.formattedBody).toContain("C:\\Users\\p4th");
+    expect(result.formattedBody).toContain("C:\\U5ers");
+  });
+
+  it("does not touch fenced code block contents", () => {
+    const text = "```\nC:\\path\\_x\\.y\n```";
+    const result = formatForMatrix(text, "win32");
+    expect(result.formattedBody).toContain("C:\\path\\_x\\.y");
+  });
+
+  it("does not touch inline code spans", () => {
+    const result = formatForMatrix("行内 `C:\\a\\.b` 不动", "win32");
+    // 行内代码里的反斜杠本就不被 markdown-it 吞,预转义不碰它;
+    // HTML 里 `<code>` 内容仅做实体转义,`\` 原样出现。
+    expect(result.formattedBody).toContain("C:\\a\\.b");
+  });
+  it("is a no-op on non-win32 platforms (current behavior pinned)", () => {
+    const text = `📎 附件已保存: ${savedPath}(3.2 MB)`;
+    const result = formatForMatrix(text, "linux");
+    // 非 win32 维持 CommonMark 现状:`\.`/`\_` 的反斜杠被吞(Linux 路径无 `\`,无实际影响)
+    expect(result.formattedBody).not.toContain("\\.pi");
+    expect(result.formattedBody).toContain("admin.pi");
+    expect(result.body).toBe(text);
+  });
+});
+
 // ─── shouldSkipEvent ──────────────────────────────────────────
 
 describe("shouldSkipEvent", () => {

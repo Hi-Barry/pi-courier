@@ -37,17 +37,19 @@ export function buildManagementRoomHelp(
   return t("mgmt.help", { instanceName, botAccount, workdir });
 }
 
-/** 「管理房至多一个」的收养写侧不变量(架构候选4):已有管理房(列表
- *  非空)→ 空 patch 拒绝再写;空/未配置 → 单元素列表。原来这条不变量靠
- *  调用方先查 managementRoomId 的纪律维持(config 注释自称「两条写路径
- *  都保证」,而原实现是 append),现结构化于此——config 的
- *  adoptManagementRoom 委托本函数,未来新写路径不可能悄悄破坏不变量。
+/** 「管理房至多一个」的收养写侧不变量(架构候选4,2026-10-27 扫描批次
+ *  收窄形状):已有管理房(列表非空)→ undefined 拒绝再写;空/未配置 →
+ *  单元素新列表。原来这条不变量靠调用方先查 managementRoomId 的纪律维持
+ *  (config 注释自称「两条写路径都保证」,而原实现是 append),现结构化于
+ *  此——ConfigStore.adoptManagementRoom 域入口委托本函数,未来新写路径
+ *  不可能悄悄破坏不变量。返回窄形状:新列表或 undefined(拒绝),
+ *  读-改-写与落盘归 store 单一写路径。
  *  读侧语义不变:managementRoomId 取首个(权威读取器,仍在 config);
  *  手编残留的全表容忍归 power-heal 的 managedRoomIds(spec #99 评审修复)。 */
-export function adoptManagementRoomPatch(
+export function nextManagementRooms(
   current: readonly string[] | undefined,
   roomId: string
-): { managementRooms: string[] } | {} {
-  if (current && current.length > 0) return {};
-  return { managementRooms: [roomId] };
+): string[] | undefined {
+  if (current && current.length > 0) return undefined;
+  return [roomId];
 }

@@ -22,7 +22,7 @@ export async function setModelByRef(rpc: PiRpc, ref: string): Promise<{ provider
     return parsed;
   }
   const models = await rpc.requireClient().getAvailableModels();
-  const match = models.find((m) => m.id === ref.trim()) ?? models.find((m) => m.id.includes(ref.trim()));
+  const match = findModelMatch(models, ref.trim());
   if (!match) {
     throw new Error(`model not found: ${ref.trim()}`);
   }
@@ -30,10 +30,23 @@ export async function setModelByRef(rpc: PiRpc, ref: string): Promise<{ provider
   return { provider: match.provider, id: match.id };
 }
 
-const sameModel = (
+/** 「当前模型」标记判定(2026-10-27 扫描批次自 command-map 聚拢):provider
+ *  与 id 双比较 —— 同名模型(如 glm-5.3)常在多家 provider 目录并存,单比
+ *  id 会同时标记两行。/model、/models 列表与降级链推进共用这一份谓词。 */
+export const sameModel = (
   a: { provider: string; id: string },
   b: { provider?: string; id?: string } | undefined
 ): boolean => !!b && a.provider === b.provider && a.id === b.id;
+
+/** 可用模型列表里的引用匹配(2026-10-27 扫描批次自 command-map 聚拢):
+ *  精确 id 优先,子串兜底 —— 防 glm-5.3 误切 glm-5.3-air(审计工程批 票21)。
+ *  /model 裸 id 与 setModelByRef 共用这一份解析规则,防两路语义漂移。 */
+export function findModelMatch(
+  models: readonly { provider: string; id: string }[],
+  ref: string
+): { provider: string; id: string } | undefined {
+  return models.find((m) => m.id === ref) ?? models.find((m) => m.id.includes(ref));
+}
 
 /** Next fallback target (issue #121): the first chain entry AFTER the current
  *  model's position that differs from it; a current model absent from the

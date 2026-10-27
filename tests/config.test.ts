@@ -335,6 +335,54 @@ describe('ConfigStore', () => {
     writeFileSync(join(piDir, 'pi-courier.json'), JSON.stringify({ workdir: '/changed' }));
     expect(store.get().workdir).toBe('/from/disk');
   });
+
+  it('adoptManagementRoom: 未配置/空列表时收养为首个条目(域入口,读-改-写收进 store)', async () => {
+    const { ConfigStore } = await importConfig();
+    const empty = new ConfigStore({});
+    expect(empty.adoptManagementRoom('!dm:server')).toBe(true);
+    expect(empty.get().managementRooms).toEqual(['!dm:server']);
+
+    const blank = new ConfigStore({ managementRooms: [] });
+    expect(blank.adoptManagementRoom('!dm:server')).toBe(true);
+    expect(blank.get().managementRooms).toEqual(['!dm:server']);
+  });
+
+  it('adoptManagementRoom: 已有管理房拒绝再写(架构候选4 不变量);重复收养幂等不产生重复条目', async () => {
+    const { ConfigStore } = await importConfig();
+    const store = new ConfigStore({ managementRooms: ['!a:server'] });
+    expect(store.adoptManagementRoom('!dm:server')).toBe(false);
+    expect(store.get().managementRooms).toEqual(['!a:server']);
+    // 收养已列内的房间同样拒绝(列表非空即拒),无重复条目
+    expect(store.adoptManagementRoom('!a:server')).toBe(false);
+    expect(store.get().managementRooms).toEqual(['!a:server']);
+  });
+
+  it('updateSpace: 对象 patch 浅合并进现有 space,兄弟字段不丢', async () => {
+    const { ConfigStore } = await importConfig();
+    const store = new ConfigStore({ space: { enabled: true, roomId: '!s:server' } });
+    store.updateSpace({ invitedUsers: ['matrix:@u:server'] });
+    expect(store.get().space).toEqual({
+      enabled: true,
+      roomId: '!s:server',
+      invitedUsers: ['matrix:@u:server'],
+    });
+  });
+
+  it('updateSpace: 函数式 patch 基于此刻权威 space —— 两个先后追加不互相覆盖', async () => {
+    const { ConfigStore } = await importConfig();
+    const store = new ConfigStore({});
+    store.updateSpace((space) => {
+      const patch: Record<string, string[]> = {};
+      patch.invitedUsers = [...(space.invitedUsers ?? []), 'matrix:@a:server'];
+      return patch;
+    });
+    store.updateSpace((space) => {
+      const patch: Record<string, string[]> = {};
+      patch.invitedUsers = [...(space.invitedUsers ?? []), 'matrix:@b:server'];
+      return patch;
+    });
+    expect(store.get().space?.invitedUsers).toEqual(['matrix:@a:server', 'matrix:@b:server']);
+  });
 });
 
 describe('config 派生函数族 — 管理房间(spec #99 票6 / issue #102)', () => {
@@ -352,42 +400,6 @@ describe('config 派生函数族 — 管理房间(spec #99 票6 / issue #102)', 
     const { managementRoomId } = await import('../src/config');
     expect(managementRoomId({ managementRooms: ['!a:server', '!b:server'] })).toBe('!a:server');
     expect(managementRoomId({ managementRooms: ['!mgmt:server'] })).toBe('!mgmt:server');
-  });
-
-  it('adoptManagementRoom: 未配置时追加为首个条目', async () => {
-    const { adoptManagementRoom } = await import('../src/config');
-    expect(adoptManagementRoom({}, '!dm:server')).toEqual({ managementRooms: ['!dm:server'] });
-  });
-
-  it('adoptManagementRoom: 空列表追加', async () => {
-    const { adoptManagementRoom } = await import('../src/config');
-    expect(adoptManagementRoom({ managementRooms: [] }, '!dm:server')).toEqual({
-      managementRooms: ['!dm:server'],
-    });
-  });
-
-  it('adoptManagementRoom: 已有管理房时拒绝再写(架构候选4:不变量结构化,原 append 靠调用方纪律维持)', async () => {
-    const { adoptManagementRoom } = await import('../src/config');
-    expect(adoptManagementRoom({ managementRooms: ['!a:server'] }, '!dm:server')).toEqual({});
-  });
-
-  it('adoptManagementRoom: 重复收养同一房间幂等 — 返回空 patch,不产生重复条目', async () => {
-    const { adoptManagementRoom } = await import('../src/config');
-    expect(adoptManagementRoom({ managementRooms: ['!dm:server'] }, '!dm:server')).toEqual({});
-    expect(adoptManagementRoom({ managementRooms: ['!a:server', '!dm:server'] }, '!dm:server')).toEqual({});
-  });
-
-  it('adoptManagementRoom: 返回 patch 形状,可与其它字段展开合并为一次原子 update', async () => {
-    const { adoptManagementRoom } = await import('../src/config');
-    const cfg = { managementRooms: [] as string[], space: { enabled: true } as Record<string, unknown> };
-    const patch = {
-      ...adoptManagementRoom(cfg, '!dm:server'),
-      space: { ...cfg.space, managementInvitedUsers: ['matrix:@u:server'] },
-    };
-    expect(patch).toEqual({
-      managementRooms: ['!dm:server'],
-      space: { enabled: true, managementInvitedUsers: ['matrix:@u:server'] },
-    });
   });
 });
 

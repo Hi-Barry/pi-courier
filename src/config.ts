@@ -3,8 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { defaultWindowsLocale, detectSystemLanguage } from "./i18n/detect.js";
 import type { Locale } from "./i18n/index.js";
-import { adoptManagementRoomPatch } from "./management-room.js";
-import type { MsgBridgeConfig, ProjectConfig } from "./types.js";
+import { nextManagementRooms } from "./management-room.js";
+import type { MsgBridgeConfig, ProjectConfig, SpaceConfig } from "./types.js";
 
 /** 桥的配置目录 ~/.pi(单一持有:Matrix 客户端存储路径等从这里取 —— 审计工程批 票19)。 */
 export const CONFIG_DIR = path.join(os.homedir(), ".pi");
@@ -308,7 +308,7 @@ export function activeSpaceRoomId(cfg: MsgBridgeConfig): string | undefined {
 
 /** 管理房间 ID(spec #99 票6 / issue #102):config 以列表存储,但公开语义
  *  是单管理房 —— "取首个"是有意为之。「列表至多一个元素」
- *  的写侧不变量结构化于 management-room.ts 的 adoptManagementRoomPatch
+ *  的写侧不变量结构化于 management-room.ts 的 nextManagementRooms
  *  (架构候选4),收养(router)与自建(space ensure)两条写路径经
  *  adoptManagementRoom 委托之。未配置或空列表返回 undefined,即
  *  "还没有管理房";其余所有"管理房是哪个"的读取都走这里,不再手写
@@ -420,15 +420,10 @@ export function presetProblems(cfg: MsgBridgeConfig): PresetProblem[] {
   return problems;
 }
 
-/** 收养写侧(与 managementRoomId 同族):收养第一个成功授权的 DM(router
- *  收养路径)与空间自建管理房(space ensure)共用这一个写入解释 —— 语义
- *  委托 management-room.ts 的 adoptManagementRoomPatch(架构候选4):已有
- *  管理房返回空 patch 拒绝再写,空列表写单元素。幂等:重复收养同一房间
- *  返回空 patch。返回 patch 形状,供 store.update 直接消费,也可展开后与
- *  其它字段合并为一次原子 update。 */
-export function adoptManagementRoom(cfg: MsgBridgeConfig, chatId: string): Partial<MsgBridgeConfig> {
-  return adoptManagementRoomPatch(cfg.managementRooms, chatId);
-}
+/** 收养写侧语义(与 managementRoomId 同族)已结构化于 management-room.ts
+ *  的 nextManagementRooms(架构候选4);写路径归 ConfigStore.adoptManagementRoom
+ *  域入口(2026-10-27 扫描批次)—— 读-改-写收进单一写路径,调用方不再持
+ *  cfg 快照判定。 */
 
 /**
  * Runtime config store — loaded once at startup, injected into every module
@@ -465,5 +460,29 @@ export class ConfigStore {
     } catch (err) {
       console.warn(`config persist failed (memory copy stays authoritative): ${(err as Error).message}`);
     }
+  }
+
+  /** space 域深更新(2026-10-27 扫描批次 C):space 是唯一由多个调用方分域
+   *  簿记的嵌套对象(roomId / invitedUsers / managementInvitedUsers),此前
+   *  各写点手动展开 space 对象 —— 展开陈旧快照(await 窗口里 capture 的
+   *  cfg)会把并发写方的字段静默丢掉。patch 可以是对象或函数:函数式拿到
+   *  此刻权威 space,返回段立即合并;读-改-写收进单一写路径,中间无 await
+   *  可插。其余嵌套对象无此问题:matrix/auth 由 setup 向导与 auth 模块整体
+   *  持有(authoritative 全量替换),不走这里。 */
+  updateSpace(patch: Partial<SpaceConfig> | ((space: SpaceConfig) => Partial<SpaceConfig>)): void {
+    const current = this.config.space ?? {};
+    const slice = typeof patch === "function" ? patch(current) : patch;
+    this.update({ space: { ...current, ...slice } });
+  }
+
+  /** 管理房收养域入口(扫描批次 G 收尾):读-改-写收进 store,写方不再
+   *  持 cfg 快照做判定(陈旧快照会让并发收养互相踩)。判定委托
+   *  management-room.ts 的 nextManagementRooms;false = 已有管理房,拒绝
+   *  再写(与真写一样落盘持久化,幂等语义不变)。 */
+  adoptManagementRoom(roomId: string): boolean {
+    const rooms = nextManagementRooms(this.config.managementRooms, roomId);
+    if (rooms === undefined) return false;
+    this.update({ managementRooms: rooms });
+    return true;
   }
 }

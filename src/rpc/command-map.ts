@@ -20,13 +20,14 @@ import * as path from "node:path";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
 import { BANG_COMMAND } from "../command-registry.js";
-import { BASH_OUTPUT_LIMIT_DEFAULT, CONFIG_DIR } from "../config.js";
+import { BASH_OUTPUT_LIMIT_DEFAULT, CONFIG_DIR, parseModelRef } from "../config.js";
 import { errorMessage } from "../errors.js";
 import { truncateLine } from "../formatting.js";
 import { type MessageKey, t } from "../i18n/index.js";
 import { logger } from "../logger.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
 import { MAX_REMINDERS_PER_ROOM, type ReminderEntry } from "../reminders/reminder-store.js";
+import { findModelMatch, sameModel } from "./model-switch.js";
 import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
 import { BashTimeoutError, upstreamClearQueueSend } from "./pi-rpc.js";
 import { RecapBusyError, RecapEmptyError } from "./recap.js";
@@ -394,6 +395,28 @@ async function clearQueuesBeforeAbort(
   return { snapshot, cleared, clearFailed };
 }
 
+/** /stop 与 //interrupt 共用的清队回执梯子(2026-10-27 扫描批次去重):
+ *  四形态 = 有清掉条目 / 清成功但已空(上游权威空,无陈旧警告)/ 上游拒清
+ *  (降级警告)/ 无队列可清。base 是各自命令的完成语;cleared 行格式两命令
+ *  不同(stop 单串,interrupt 完成语换行拼接),经 formatCleared 注入。
+ *  #115 钉零时点语义不动(见 clearQueuesBeforeAbort),这里只收口"回执文本
+ *  怎么选"。 */
+function reportClearOutcome(shape: {
+  base: string;
+  cleared: UpstreamQueues | undefined;
+  clearFailed: boolean;
+  snapshot: QueueSnapshot | undefined;
+  formatCleared: (view: { count: number; lines: string }) => string;
+}): string {
+  const view = shape.cleared ? clearedQueuesView(shape.cleared) : null;
+  if (view) return shape.formatCleared(view);
+  if (shape.cleared) return shape.base;
+  if (shape.clearFailed) {
+    return withQueueWarning(`${shape.base}\n${t("cmd.queue.clearUnsupported")}`, shape.snapshot);
+  }
+  return withQueueWarning(shape.base, shape.snapshot);
+}
+
 // --- Session directory scanning (/sessions, /switch — issue #56 票5) ----------
 
 export interface SessionSummary {
@@ -671,19 +694,15 @@ export async function handleSlashCommand(
           const clearedCount = cleared.steering.length + cleared.followUp.length;
           ctx.audit?.("queue.clear", `${commandWord} cleared ${clearedCount} queued message(s)`);
         }
-        const view = cleared ? clearedQueuesView(cleared) : null;
-        if (view) {
-          await reply(t("cmd.stop.cleared", view));
-        } else if (cleared) {
-          // Clear succeeded with nothing left (the turn consumed the queue
-          // between our mirror snapshot and the clear) — upstream is
-          // authoritatively empty; a stale mirror must not resurrect it.
-          await reply(t("cmd.stop.ok"));
-        } else if (clearFailed) {
-          await reply(withQueueWarning(`${t("cmd.stop.ok")}\n${t("cmd.queue.clearUnsupported")}`, snapshot));
-        } else {
-          await reply(withQueueWarning(t("cmd.stop.ok"), snapshot));
-        }
+        await reply(
+          reportClearOutcome({
+            base: t("cmd.stop.ok"),
+            cleared,
+            clearFailed,
+            snapshot,
+            formatCleared: (view) => t("cmd.stop.cleared", view),
+          })
+        );
         return true;
       }
 
@@ -773,17 +792,15 @@ export async function handleSlashCommand(
         await rpc.prompt(args);
         // 与 /stop 同款钉零(issue #115):清队成功后不等 queue_update 推送。
         if (cleared) setQueueMirror?.({ steering: [], followUp: [] });
-        const view = cleared ? clearedQueuesView(cleared) : null;
-        if (view) {
-          await reply(`${t("cmd.interrupt.done")}\n${t("cmd.interrupt.cleared", view)}`);
-        } else if (cleared) {
-          // Authoritatively empty upstream (see /stop) — no stale warning.
-          await reply(t("cmd.interrupt.done"));
-        } else if (clearFailed) {
-          await reply(withQueueWarning(`${t("cmd.interrupt.done")}\n${t("cmd.queue.clearUnsupported")}`, snapshot));
-        } else {
-          await reply(withQueueWarning(t("cmd.interrupt.done"), snapshot));
-        }
+        await reply(
+          reportClearOutcome({
+            base: t("cmd.interrupt.done"),
+            cleared,
+            clearFailed,
+            snapshot,
+            formatCleared: (view) => `${t("cmd.interrupt.done")}\n${t("cmd.interrupt.cleared", view)}`,
+          })
+        );
         return true;
       }
 
@@ -927,28 +944,28 @@ export async function handleSlashCommand(
           }
           const current = await rpc.requireClient().getState();
           const list = models
-            .map((m) => `• ${m.provider}/${m.id}${isCurrentModel(m, current.model) ? t("cmd.model.currentMarker") : ""}`)
+            .map((m) => `• ${m.provider}/${m.id}${sameModel(m, current.model) ? t("cmd.model.currentMarker") : ""}`)
             .join("\n");
           await reply(t("cmd.model.list", { list }));
           return true;
         }
-        const parsed = parseModelArg(args);
-        if (!parsed.provider) {
-          // Bare id — try to find a matching model and use its provider
+        // 解析规则单点(2026-10-27 扫描批次):引用判定走 config.parseModelRef,
+        // 裸 id 匹配落 model-switch(与预设/降级链共用),这里只管回执与 setModel。
+        const parsed = parseModelRef(args);
+        let applied: { provider: string; id: string };
+        if (parsed) {
+          applied = parsed;
+        } else {
           const models = await rpc.requireClient().getAvailableModels();
-          // 精确 id 优先,子串兜底 —— 防 glm-5.3 误切 glm-5.3-air(审计工程批 票21)
-          const match =
-            models.find((m) => m.id === parsed.modelId) ??
-            models.find((m) => m.id.includes(parsed.modelId));
+          const match = findModelMatch(models, args.trim());
           if (!match) {
-            await reply(t("cmd.model.notFound", { id: parsed.modelId }));
+            await reply(t("cmd.model.notFound", { id: args.trim() }));
             return true;
           }
-          parsed.provider = match.provider;
-          parsed.modelId = match.id;
+          applied = match;
         }
-        const result = (await rpc.requireClient().setModel(parsed.provider, parsed.modelId)) as { id?: string };
-        await reply(t("cmd.model.ok", { model: result.id ?? `${parsed.provider}/${parsed.modelId}` }));
+        const result = (await rpc.requireClient().setModel(applied.provider, applied.id)) as { id?: string };
+        await reply(t("cmd.model.ok", { model: result.id ?? `${applied.provider}/${applied.id}` }));
         return true;
       }
 
@@ -961,7 +978,7 @@ export async function handleSlashCommand(
         const current = await rpc.requireClient().getState();
         await reply(
           models
-            .map((m) => `• ${m.provider}/${m.id}${isCurrentModel(m, current.model) ? t("cmd.model.currentMarker") : ""}`)
+            .map((m) => `• ${m.provider}/${m.id}${sameModel(m, current.model) ? t("cmd.model.currentMarker") : ""}`)
             .join("\n")
         );
         return true;
@@ -1087,22 +1104,6 @@ export async function handleSlashCommand(
     await reply(t("cmd.generic.error", { message: errorMessage(err) }));
     return true;
   }
-}
-
-/** 「当前模型」标记判定:provider 与 id 双比较 —— 同名模型(如 glm-5.3)常在
- *  多家 provider 目录并存,单比 id 会同时标记两行。 */
-function isCurrentModel(model: { provider: string; id: string }, current: { provider?: string; id?: string } | undefined): boolean {
-  return !!current && model.provider === current.provider && model.id === current.id;
-}
-
-/** Parse "/model <provider>/<modelId>" or a bare id; bare ids keep the current provider. */
-function parseModelArg(arg: string): { provider: string; modelId: string } {
-  const trimmed = arg.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash > 0) {
-    return { provider: trimmed.slice(0, slash), modelId: trimmed.slice(slash + 1) };
-  }
-  return { provider: "", modelId: trimmed };
 }
 
 /** 统一 /help 文本:Pi 原生组 → 桥增强组 → 透传说明 → 管理组(auth 侧拥有,
