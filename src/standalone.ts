@@ -49,6 +49,8 @@ import { AttachmentStore } from "./transports/attachments.js";
 import { FileEventLedger } from "./transports/event-ledger.js";
 import type { RoomOps } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
+import { consumePendingUpdate, PendingUpdateStore } from "./update/pending-update.js";
+import { UpdateOrchestrator } from "./update/updater.js";
 import { suppressKnownWarnings } from "./warnings.js";
 import { resolveWorkdir } from "./workdir.js";
 
@@ -341,6 +343,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     new JsonStateFile<QueueSnapshotEntry[]>(path.join(stateDir, "queue-snapshots.json"), [])
   );
 
+  // ---- /update 热更新(桥自更新 spec §5.5/§5.6):pending-update.json ------
+  // 换血完成后、触发重启「之前」由编排器写入(可感知成功,写失败放弃自动
+  // 重启);新进程启动时经下方启动消费发「更新完成」回执并销账(consume-once)。
+  const pendingUpdateStore = new PendingUpdateStore(path.join(stateDir, "pending-update.json"));
+
+  // ---- /update 编排器(spec §8 组合根):进程内单例状态机 ----------------------
+  // 全部执行缝用模块默认实现(undici fetch / 真实 spawn / process.getuid /
+  // process.platform / command-map 的全实例探测与等待);唯一必填的 pendingUpdate
+  // 指向 stateDir。测试缝在 tests/update-orchestrator.test.ts 单独构造。
+  const updateOrchestrator = new UpdateOrchestrator({ pendingUpdate: pendingUpdateStore });
+
   // ---- audit log (issue #124):敏感动作的追加式证据 ----------------------------
   // audit.jsonl 只追加不改写(排查即证据),10MB 轮转留 2 份;写失败计数到
   // 阈值向管理房告警一次(审计故障不放大成可用性故障,但一定可见)。启动
@@ -407,6 +420,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     reminders: reminderClock,
     queueSnapshots,
     audit: auditLog,
+    // /update 热更新(桥自更新 spec §8):编排器经 router 的 slashCommands
+    // 阶段按消息预绑定 IO 接入;adminRoom 映射在 router 侧(login 先例)。
+    updater: updateOrchestrator,
     backlogTransportsReady,
   });
 
@@ -474,6 +490,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       },
     }).catch((err: unknown) => {
       logger.warn(`queue snapshot consumption failed: ${errorMessage(err)}`);
+    });
+
+    // ---- pending-update consumption(桥自更新 spec §5.6)----------------------
+    // 上个进程换血后留下的「更新完成」回执,此刻补发并销账(consume-once:
+    // 发送失败也销账,错过一条通知好过永远重试)。同样以 isConnected 为前置
+    // —— 连不上留待下次成功启动,与队列快照同契约。单工程(managementRoomId
+    // 为 undefined)内部自会跳过发送、审计照落、照旧销账。
+    consumePendingUpdate(pendingUpdateStore, {
+      send: async (roomId, text) => {
+        await matrix.sendMessage(roomId, text);
+      },
+      audit: (event, actor, chatId, detail) => auditLog.append(event, actor, chatId, detail),
+      managementRoomId: managementRoomId(store.get()),
     });
   }
 

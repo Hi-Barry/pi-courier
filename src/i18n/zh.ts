@@ -208,6 +208,7 @@ const zh = {
     "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)\n" +
     "• `/interrupt <新指令>` — 打断当前任务并立即下发新指令(一条消息完成)\n" +
     "• `/queue [文本]` — 无参:查看队列;带文本:排队不打断当前任务(≈ Alt+Enter)\n" +
+    "• `/update [check|force|cancel]` — 任务不中断的桥自更新(check 查新版 / force 跳过忙等 / cancel 取消等待;仅管理房)\n" +
     "\n" +
     "【Shell 执行】\n" +
     "• `/bash <命令>` — 执行 shell 命令(写入上下文)\n" +
@@ -223,6 +224,34 @@ const zh = {
     "• `/attach` — 开启 TUI ↔ Matrix 会话镜像(回复附加命令,终端跑它即可双端同步)\n" +
     "• `/detach` — 关闭会话镜像",
   "cmd.help.passthrough": "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。可用 /skills 查看技能列表。",
+
+  // ── cmd.update(/update 热更新命令族,spec:hot-update-command)─────────
+  "cmd.update.unavailable": "ℹ️ /update 未装配(当前部署不支持)。",
+  "cmd.update.notManagementRoom": "❌ /update 仅可在管理房使用。",
+  "cmd.update.rootDenied": "❌ 桥正以 root 运行,/update 拒绝执行(npm 脚本提权风险)。请改用停机更新:pi-courier update。",
+  "cmd.update.rejectedArgs": "❌ /update 不接受版本号、URL 或路径等参数(唯一来源:npm 的 latest 标签)。可用:/update、/update check、/update force、/update cancel。",
+  "cmd.update.check.upToDate": "✅ 已是最新版本(v{version})。",
+  "cmd.update.check.hasNew": "🆕 发现新版本:v{from} → v{to}。发送 /update 开始更新(任务不中断)。",
+  "cmd.update.check.failed": "❌ 版本检查失败:{message}",
+  "cmd.update.started": "🚀 开始更新:v{from} → v{to}(升级期间任务照常服务,完成后自动重启)。",
+  "cmd.update.busyWaiting": "⏳ {count} 个任务在跑,全部完成后自动开始更新(超 {minutes} 分钟未空闲则取消;期间新消息照常排队)。",
+  "cmd.update.unreachableNote": "(另有 {count} 个实例暂不可查询——pi 重启窗口,同样等待其就绪。)",
+  "cmd.update.waitProgress": "⏳ 更新等待中:{count} 个任务仍在跑(已等 {minutes} 分钟)。",
+  "cmd.update.waitingUnreachableOnly": "⏳ 暂无法确认全部实例空闲({count} 个实例查询失败或正处重启窗口),就绪后自动开始更新(超 {minutes} 分钟未确认则取消;期间新消息照常排队)。",
+  "cmd.update.restartWait": "🔄 新代码已上磁盘,等待全部任务空闲后自动重启(超 {minutes} 分钟未空闲则取消,可随时手动 pi-courier restart)。",
+  "cmd.update.restartProgress": "🔄 重启等待中:{count} 个任务仍在跑(已等 {minutes} 分钟)。",
+  "cmd.update.waitTimeout": "⏰ 等待空闲超时({minutes} 分钟),本次更新已取消。任务结束后可用 /update force 重试。",
+  "cmd.update.cancelled": "🛑 已取消更新等待。",
+  "cmd.update.noPending": "ℹ️ 当前没有进行中的更新。",
+  "cmd.update.inProgress": "⏳ 更新已在进行中,请等待完成(等待期可 /update cancel)。",
+  "cmd.update.npmFailed": "❌ 升级失败:{message}\n旧版继续运行,桥未受影响。",
+  "cmd.update.installed": "📦 新代码已写入磁盘:v{from} → v{to}(当前进程仍跑旧版)。",
+  "cmd.update.restarting": "🔄 全部任务已空闲,正在重启服务以加载新版本…",
+  "cmd.update.restartFailed": "⚠️ 自动重启失败({message}):新代码已在磁盘,请手动执行 pi-courier restart。",
+  "cmd.update.manualRestart": "ℹ️ 新代码已写入磁盘(v{from} → v{to})。本桥未由活动的 systemd 单元管理(或平台无 systemd),请手动执行 pi-courier restart 生效。",
+  "cmd.update.manualRestartHint": "⚠️ 新代码已写入磁盘(v{from} → v{to}),但任务未空闲/等待已取消。空闲后请手动执行 pi-courier restart(重启后仍会收到完成回执)。",
+  "cmd.update.done": "✅ 更新完成:v{from} → v{to}。",
+  "cmd.update.doneVersionMismatch": "⚠️ 磁盘实际版本(v{actual})与预期(v{to})不一致,更新可能未生效,请检查。",
 
   // ── router(管道回执,message-router.ts)──────────────────────────────
   "common.unknownError": "未知错误",
