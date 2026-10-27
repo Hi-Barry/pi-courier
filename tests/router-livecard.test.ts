@@ -334,6 +334,83 @@ describe("活卡聚合主路径(issue #235 票2)", () => {
   });
 });
 
+describe("边界加固(spec #242)", () => {
+  it("溢出滚动开新卡失败:定稿旧卡不再被编辑,下一中间回合重试开新卡(失败即不留状态)", async () => {
+    let open = 0;
+    const fx = await makeLiveCardFixture({}, {
+      sendLiveCard: vi.fn(async () => {
+        open += 1;
+        return open === 2 ? undefined : `$card-${open}`; // 第 2 次(滚动开卡)失败
+      }),
+    });
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("x".repeat(100)) }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("A".repeat(3900)) }, fx.rpc);
+    await flush();
+    expect(fx.editReply).toHaveBeenCalledTimes(1); // 只有那次定稿
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
+    expect(fx.replies).toEqual([]); // 单片全留给开卡,无直发
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第三轮") }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(3);
+    expect(fx.editReply).toHaveBeenCalledTimes(1); // 旧卡零新增编辑
+    expect(fx.sendLiveCard.mock.calls[2]![2]).toContain("第三轮");
+  });
+
+  it("开卡在途跨越 agent_start 清卡:迟到结果不写回,下一回合按新对话重开卡", async () => {
+    let release!: (id: string) => void;
+    const pending = new Promise<string>((resolve) => { release = resolve; });
+    let call = 0;
+    const fx = await makeLiveCardFixture({}, {
+      sendLiveCard: vi.fn(async () => {
+        call += 1;
+        if (call === 1) return pending; // 首卡挂起在途
+        return `$card-${call}`;
+      }),
+    });
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第一步") }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1); // 在途挂起中
+
+    fx.router.handleEvent({ type: "agent_start" }, fx.rpc);
+    release("$card-1");
+    await flush();
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("新对话") }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
+    expect(fx.editReply).not.toHaveBeenCalled();
+  });
+
+  it("编辑在途失败跨越 agent_start:降级标志不写回新对话,失败回合文本照旧补发", async () => {
+    let fail!: (err: Error) => void;
+    const pending = new Promise<void>((_resolve, reject) => { fail = reject; });
+    const fx = await makeLiveCardFixture({}, {
+      editReply: vi.fn(() => pending),
+    });
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第一步") }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第二步") }, fx.rpc);
+    await flush();
+    fx.router.handleEvent({ type: "agent_start" }, fx.rpc);
+    fail(new Error("network gone"));
+    await flush();
+    expect(fx.replies).toEqual([turnText("第二步")]);
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("新对话") }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("聚合旁路(缺省 = 现状逐字节一致)", () => {
   it("hideToolCalls=true 聚合整体旁路:中间回合维持现状直发", async () => {
     const fx = await makeLiveCardFixture({ hideToolCalls: true });

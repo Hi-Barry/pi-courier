@@ -411,6 +411,24 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   }
   const liveCards = new WeakMap<PiRpc, LiveCardState>();
 
+  // 活卡代次(spec #242 意见2):凡是清活卡的路径都递增。
+  // 活卡出站链上的步骤是异步结算的 —— 开卡/编辑挂起期间若恰好跨越清卡点
+  // (前一序列中止后立即开新对话的亚秒窗口),完成后的状态写回凭代次作废,
+  // 杜绝「在途开卡把刚清掉的活卡写回新对话」。步骤在发起时捕获代次、
+  // 写回前校验,窗口内的迟到结果一律丢弃,下一中间回合自然重开卡。
+  const liveCardGenerations = new WeakMap<PiRpc, number>();
+  const bumpLiveCardGeneration = (rpc: PiRpc): void => {
+    liveCardGenerations.set(rpc, (liveCardGenerations.get(rpc) ?? 0) + 1);
+  };
+  // 清卡单一入口(spec #242 评审整改):凡是清活卡的路径(轮次边界、终答
+  // 收敛、交接卡捕获收敛、子进程重启回调)一律经此 —— 删除与代次递增
+  // 同进同出,任何一个清卡点之后在途步骤的迟到写回都作废,不留
+  // 「只删不递增」的复活窗口。
+  const clearLiveCard = (rpc: PiRpc): void => {
+    liveCards.delete(rpc);
+    bumpLiveCardGeneration(rpc);
+  };
+
   /** 聚合启用 = 配置开(缺省 true)+ 编辑缝双双注入 + hideToolCalls 关闭。
    *  配置现读现判:运行时改配置(手编 + 重启,或 / 系命令写路径)即时生效。 */
   const liveCardAggregation = (): boolean =>
@@ -440,6 +458,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     const sendLiveCard = deps.sendLiveCard;
     if (!editReply || !sendLiveCard) return Promise.resolve();
     return (async () => {
+      // 代次捕获(spec #242 意见2):本步骤全程以此为准,写回前校验。
+      const generation = liveCardGenerations.get(rpc) ?? 0;
+      const stale = (): boolean => (liveCardGenerations.get(rpc) ?? 0) !== generation;
       const state = liveCards.get(rpc);
       if (state?.degraded) {
         // 降级中的序列退回逐条直发(旧行为;与聚合关闭时的中间回合同路)。
@@ -453,15 +474,17 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // Matrix transport)仅记日志、不进活卡状态 —— 下一中间回合自然重试
         // 开卡(票3:发新卡失败仅记日志、不进活卡状态)。
         const eventId = await sendLiveCard(target.chatId, target.transport, text).catch(() => undefined);
-        if (eventId) {
-          if (!liveCardRestartWatched.has(rpc)) {
-            liveCardRestartWatched.add(rpc);
-            rpc.onRestarted?.(() => liveCards.delete(rpc));
-          }
-          liveCards.set(rpc, { card: { eventId, text }, degraded: false });
-        } else {
+        if (!eventId) {
           logger.debug(`live card: no event_id for ${target.chatId} — next turn retries opening one`);
+          return;
         }
+        // 在途跨越清卡点:卡片可能已发出,但状态一律不写回(作废)。
+        if (stale()) return;
+        if (!liveCardRestartWatched.has(rpc)) {
+          liveCardRestartWatched.add(rpc);
+          rpc.onRestarted?.(() => clearLiveCard(rpc));
+        }
+        liveCards.set(rpc, { card: { eventId, text }, degraded: false });
         return;
       }
       const card = state.card;
@@ -478,7 +501,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         } catch (err) {
           // 定稿失败 = 编辑失败同语义:降级 + 本回合文本逐条直发补上。
           logger.warn(`live card finalize failed for ${target.chatId}: ${errorMessage(err)}`);
-          liveCards.set(rpc, { degraded: true });
+          if (!stale()) liveCards.set(rpc, { degraded: true });
           for (const chunk of chunks) {
             await sendReply(target.chatId, target.transport, chunk).catch(() => {});
           }
@@ -489,11 +512,17 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         }
         const lastChunk = chunks[chunks.length - 1]!;
         const eventId = await sendLiveCard(target.chatId, target.transport, lastChunk).catch(() => undefined);
-        if (eventId) {
-          liveCards.set(rpc, { card: { eventId, text: lastChunk }, degraded: false });
-        } else {
+        if (!eventId) {
+          // 滚动开卡失败(spec #242 意见1):旧卡已定稿不再可编辑,清掉活卡
+          // 状态让下一中间回合走「无活卡→开卡」自然重试 —— 与无卡开卡失败
+          // 分支同一不变量:失败即不留状态;否则会拿已定稿旧卡的 event_id
+          // 继续编辑,违反「任意时刻只有最新一张卡可被编辑」。
+          liveCards.delete(rpc);
           logger.debug(`live card: no event_id for rolled-over card (${target.chatId}) — next turn retries opening one`);
+          return;
         }
+        if (stale()) return;
+        liveCards.set(rpc, { card: { eventId, text: lastChunk }, degraded: false });
         return;
       }
       try {
@@ -504,7 +533,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // agent_start 随活卡一并清零重新聚合。本回合文本逐条直发补上:活卡
         // 停在旧累积,新增内容不能丢(User story 7「不丢回复」)。
         logger.warn(`live card edit failed for ${target.chatId}: ${errorMessage(err)}`);
-        liveCards.set(rpc, { degraded: true });
+        if (!stale()) liveCards.set(rpc, { degraded: true });
         for (const chunk of splitMessage(text, 4000)) {
           await sendReply(target.chatId, target.transport, chunk).catch(() => {});
         }
@@ -1338,9 +1367,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
 
       // 轮次边界(issue #235 票2):新一轮对话永远开新卡 —— 清活卡与降级
-      // 标志,杜绝跨对话误追加旧卡。重启失效另由 onRestarted 订阅兜底。
+      // 标志,杜绝跨对话误追加旧卡;代次随之递增(spec #242),作废在途
+      // 步骤的迟到写回。重启失效另由 onRestarted 订阅兜底。
       if (event.type === "agent_start") {
-        liveCards.delete(rpc);
+        clearLiveCard(rpc);
         return;
       }
 
@@ -1374,7 +1404,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           log.debug(`[agent] turn_end captured by recap: ${settleVerdict}`);
           // 终答被捕获 = 工具循环结束(issue #235 票2):一并清活卡;中间轮
           // 捕获("wait")不动活卡 —— 工具循环还在继续。
-          if (settleVerdict === "settled") liveCards.delete(rpc);
+          if (settleVerdict === "settled") clearLiveCard(rpc);
           return;
         }
 
@@ -1420,8 +1450,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         void dispatch();
 
         // 终答回合收敛(issue #235 票2):活卡随之清空 —— 终答永远不进活卡,
-        // 下一次工具循环开新卡。同步原位结算,与绑定释放同款不等派发。
-        liveCards.delete(rpc);
+        // 下一次工具循环开新卡。同步原位结算,与绑定释放同款不等派发;
+        // 清卡单一入口含代次递增,作废在途步骤的迟到写回(spec #242)。
+        clearLiveCard(rpc);
 
         // A completed conversational turn releases unpinned bindings (the
         // shared default rpc) so late events never reply to a stale chat.
