@@ -206,27 +206,116 @@ describe("活卡聚合主路径(issue #235 票2)", () => {
     expect(fx.editReply).toHaveBeenCalledTimes(1);
   });
 
-  it("编辑失败不炸(无 unhandled rejection),累积照记、下一回合补上完整内容", async () => {
+  it("编辑抛错:清活卡置降级,本回合补发,同轮后续回合逐条直发,agent_start 重置重新聚合", async () => {
     const fx = await makeLiveCardFixture({}, {
-      // 第一次 editReply 调用 = 中间轮 2(轮 1 走的是 sendLiveCard):失败;
-      // 第二次 = 中间轮 3:成功。editReply 恰被调 2 次。
-      editReply: vi.fn()
-        .mockRejectedValueOnce(new Error("M_LIMIT_EXCEEDED"))
-        .mockResolvedValueOnce(undefined),
+      editReply: vi.fn().mockRejectedValueOnce(new Error("M_LIMIT_EXCEEDED")),
     });
 
+    // 轮 1:正常开卡
     fx.router.handleEvent({ type: "turn_end", message: toolTurn("一") }, fx.rpc);
     await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+
+    // 轮 2:编辑抛错(不分类不重试)→ 活卡清空 + 降级,本回合文本直发补上
     fx.router.handleEvent({ type: "turn_end", message: toolTurn("二") }, fx.rpc);
-    await flush(); // 这次编辑 reject —— 被吞,不炸
+    await flush(); // reject 被吞,无 unhandled rejection
+    expect(fx.editReply).toHaveBeenCalledTimes(1);
+    expect(fx.replies).toEqual([turnText("二")]);
+
+    // 轮 3:同轮后续中间回合全部逐条直发(旧行为),不再碰编辑缝
     fx.router.handleEvent({ type: "turn_end", message: toolTurn("三") }, fx.rpc);
     await flush();
+    expect(fx.editReply).toHaveBeenCalledTimes(1);
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+    expect(fx.replies).toEqual([turnText("二"), turnText("三")]);
 
+    // 下一轮对话开始:agent_start 重置降级,重新尝试聚合(开新卡)
+    fx.router.handleEvent({ type: "agent_start" }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("新一轮") }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
+    expect(fx.sendLiveCard.mock.calls[1]![2]).toContain("新一轮");
+    expect(fx.editReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("溢出滚动(新回合文本不超限):旧卡定稿、整体开新卡,旧卡不再被编辑", async () => {
+    const fx = await makeLiveCardFixture({});
+
+    // 轮 1:开卡,累积较小
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("x".repeat(100)) }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+
+    // 轮 2:「累积 + 新回合文本」超 4000,新回合文本本身 ≤4000(单片)
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("A".repeat(3900)) }, fx.rpc);
+    await flush();
+    // 旧卡收到最后一次「定稿」编辑,内容 = 既有累积(不含新回合文本)
+    expect(fx.editReply).toHaveBeenCalledTimes(1);
+    expect(fx.editReply.mock.calls[0]![2]).toBe("$card-1");
+    expect(fx.editReply.mock.calls[0]![3]).toBe(turnText("x".repeat(100)));
+    expect(fx.replies).toEqual([]); // 无直发片
+    // 唯一片开新卡作新活卡
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
+    expect(fx.sendLiveCard.mock.calls[1]![2]).toBe(turnText("A".repeat(3900)));
+
+    // 只有最新一张卡可被编辑:后续中间回合编辑 $card-2,旧卡 event_id 不再出现
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("后续") }, fx.rpc);
+    await flush();
     expect(fx.editReply).toHaveBeenCalledTimes(2);
-    // 累积与「应该显示的内容」一致:失败的编辑在下一次成功编辑里补全
-    expect(fx.editReply.mock.calls[1]![3]).toBe(
-      `${turnText("一")}\n\n${turnText("二")}\n\n${turnText("三")}`
-    );
+    expect(fx.editReply.mock.calls[1]![2]).toBe("$card-2");
+    expect(fx.editReply.mock.calls[1]![3]).toBe(`${turnText("A".repeat(3900))}\n\n${turnText("后续")}`);
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
+  });
+
+  it("溢出滚动(新回合文本超限):定稿后前 n-1 片普通直发、最后一片开新卡,内容不丢", async () => {
+    const fx = await makeLiveCardFixture({});
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("短") }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+
+    // 轮 2:新回合文本本身超 4000 → 按现行拆分口径切成 3 片(无分隔符硬切)
+    const long = "B".repeat(8500);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn(long) }, fx.rpc);
+    await flush();
+    // 旧卡定稿
+    expect(fx.editReply).toHaveBeenCalledTimes(1);
+    expect(fx.editReply.mock.calls[0]![2]).toBe("$card-1");
+    expect(fx.editReply.mock.calls[0]![3]).toBe(turnText("短"));
+    // 前 n-1 片普通新消息直发
+    expect(fx.replies).toEqual(["B".repeat(4000), "B".repeat(4000)]);
+    // 最后一片开新卡作新活卡(8500 = 4000 + 4000 + 500,工具行随最后一片)
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
+    expect(fx.sendLiveCard.mock.calls[1]![2]).toBe(turnText("B".repeat(500)));
+    // 内容不丢:三段 B 合计 = 原文全文
+    const totalB =
+      (fx.replies[0] as string).length + (fx.replies[1] as string).length +
+      (fx.sendLiveCard.mock.calls[1]![2] as string).split("\n\n")[0]!.length;
+    expect(totalB).toBe(8500);
+  });
+
+  it("溢出时定稿编辑失败:全部切片逐条直发补上,不开新卡并转入降级", async () => {
+    const fx = await makeLiveCardFixture({}, {
+      editReply: vi.fn().mockRejectedValueOnce(new Error("M_LIMIT_EXCEEDED")),
+    });
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("短") }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+
+    // 轮 2 溢出,定稿编辑抛错 → 本回合全部切片直发(单片 = 1 条),不开新卡
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("A".repeat(3900)) }, fx.rpc);
+    await flush();
+    expect(fx.editReply).toHaveBeenCalledTimes(1); // 只有失败的那次定稿尝试
+    expect(fx.replies).toEqual([turnText("A".repeat(3900))]);
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1); // 不开新卡
+
+    // 已入降级:下一中间回合仍逐条直发
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("下一轮") }, fx.rpc);
+    await flush();
+    expect(fx.replies).toEqual([turnText("A".repeat(3900)), turnText("下一轮")]);
+    expect(fx.editReply).toHaveBeenCalledTimes(1);
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
   });
 
   it("发新卡拿不到 event_id:仅记日志不进活卡,下一中间回合重试开卡", async () => {

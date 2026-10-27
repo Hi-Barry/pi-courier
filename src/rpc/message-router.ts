@@ -404,8 +404,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   }
   interface LiveCardState {
     card?: LiveCard;
-    /** 序列级降级标志:agent_start 清零(spec 票2);置位与退回逐条直发的
-     *  完整行为在票3 接上 —— 主路径先持有状态与轮次边界清零。 */
+    /** 序列级降级标志(issue #235 票3):编辑抛错置位 —— 同轮对话内后续
+     *  中间回合全部逐条直发(旧行为);下一轮 agent_start 随活卡一并清零,
+     *  重新尝试聚合。 */
     degraded: boolean;
   }
   const liveCards = new WeakMap<PiRpc, LiveCardState>();
@@ -450,7 +451,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       if (!state?.card) {
         // 无活卡:发新卡并记录 event_id。拿不到 event_id(发送失败被吞/非
         // Matrix transport)仅记日志、不进活卡状态 —— 下一中间回合自然重试
-        // 开卡(与票3 的发新卡失败语义同款;票3 接降级时细化兜底)。
+        // 开卡(票3:发新卡失败仅记日志、不进活卡状态)。
         const eventId = await sendLiveCard(target.chatId, target.transport, text).catch(() => undefined);
         if (eventId) {
           if (!liveCardRestartWatched.has(rpc)) {
@@ -463,16 +464,53 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         }
         return;
       }
-      const merged = `${state.card.text}\n\n${text}`;
-      try {
-        await editReply(target.chatId, target.transport, state.card.eventId, merged);
-      } catch (err) {
-        // 主路径只保证编辑失败不炸(unhandled rejection 会杀进程,issue #110
-        // 的教训);累积照记 —— 下一次成功的编辑按「设为全文」语义把完整内容
-        // 补上(编辑收敛到最终态)。清卡 + 降级标志 + 后续逐条直发在票3 接上。
-        logger.warn(`live card edit failed for ${target.chatId}: ${errorMessage(err)}`);
+      const card = state.card;
+      const merged = `${card.text}\n\n${text}`;
+      // 溢出滚动(票3):「活卡累积 + 新回合文本」超单条上限 → 先对旧卡做
+      // 最后一次编辑(定稿为既有累积内容),再将新回合文本按现行拆分口径
+      // 切片 —— 前 n-1 片普通新消息直发,最后一片开新卡作新活卡(新文本
+      // 本身不超限时只有这一片 = 定稿后整体开新卡)。任意时刻只有最新一张
+      // 卡可被编辑:旧卡 event_id 不再出现在后续编辑调用里。
+      if (splitMessage(merged, 4000).length > 1) {
+        const chunks = splitMessage(text, 4000);
+        try {
+          await editReply(target.chatId, target.transport, card.eventId, card.text);
+        } catch (err) {
+          // 定稿失败 = 编辑失败同语义:降级 + 本回合文本逐条直发补上。
+          logger.warn(`live card finalize failed for ${target.chatId}: ${errorMessage(err)}`);
+          liveCards.set(rpc, { degraded: true });
+          for (const chunk of chunks) {
+            await sendReply(target.chatId, target.transport, chunk).catch(() => {});
+          }
+          return;
+        }
+        for (const chunk of chunks.slice(0, -1)) {
+          await sendReply(target.chatId, target.transport, chunk).catch(() => {});
+        }
+        const lastChunk = chunks[chunks.length - 1]!;
+        const eventId = await sendLiveCard(target.chatId, target.transport, lastChunk).catch(() => undefined);
+        if (eventId) {
+          liveCards.set(rpc, { card: { eventId, text: lastChunk }, degraded: false });
+        } else {
+          logger.debug(`live card: no event_id for rolled-over card (${target.chatId}) — next turn retries opening one`);
+        }
+        return;
       }
-      state.card.text = merged;
+      try {
+        await editReply(target.chatId, target.transport, card.eventId, merged);
+      } catch (err) {
+        // 失败降级(票3):编辑抛错(不分类、不重试)→ 清活卡 + 置序列级
+        // 降级标志 —— 同轮对话内后续中间回合全部逐条直发(旧行为),下一轮
+        // agent_start 随活卡一并清零重新聚合。本回合文本逐条直发补上:活卡
+        // 停在旧累积,新增内容不能丢(User story 7「不丢回复」)。
+        logger.warn(`live card edit failed for ${target.chatId}: ${errorMessage(err)}`);
+        liveCards.set(rpc, { degraded: true });
+        for (const chunk of splitMessage(text, 4000)) {
+          await sendReply(target.chatId, target.transport, chunk).catch(() => {});
+        }
+        return;
+      }
+      card.text = merged;
     })();
   };
 
