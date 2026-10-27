@@ -382,6 +382,26 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     roomOps,
     store,
     pmctl,
+    // 活卡聚合接线(spec #235 票4):Matrix transport 的编辑原语(票1:
+    // sendMessage 穿出 event_id + editMessage)适配成 router 的可选编辑缝
+    // (票2/票3)。未配置 Matrix 时整个不注入 = 聚合禁用,行为与旧版逐字节
+    // 一致。transport 参数仅与 sendReply 形状对齐(诊断口径),不参与适配;
+    // 编辑与普通消息走同一条 per-room FIFO 发送通道,E2EE 房间由加密层自动
+    // 加密,无需特殊处理。
+    ...(matrix
+      ? {
+          sendLiveCard: (chatId: string, transport: string, text: string) => {
+            void transport;
+            return matrix!.sendMessage(chatId, text);
+          },
+          editReply: async (chatId: string, transport: string, messageId: string, text: string) => {
+            void transport;
+            // editMessage 穿出的替换事件 event_id,router 侧无消费方:显式
+            // 吞掉保持 editReply 的 Promise<void> 契约。
+            await matrix!.editMessage(chatId, messageId, text);
+          },
+        }
+      : {}),
     managementRoomAdoptionAllowed: () => startup.managementRoomAdoptionAllowed(),
     attachmentsLedger,
     reminders: reminderClock,
