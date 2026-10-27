@@ -292,7 +292,7 @@ rc_message:
 或只给 bot 账号豁免(Admin API,两项设 0 = 不限;移除豁免对同路径发 `DELETE`):
 
 ```
-PUT /_synapse/admin/v1/users/<bot账号>/override_ratelimit
+POST /_synapse/admin/v1/users/<bot账号>/override_ratelimit
 Authorization: Bearer <管理员 access_token>
 
 { "messages_per_second": 0, "burst_count": 0 }

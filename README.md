@@ -292,7 +292,7 @@ rc_message:
 or exempt just the bot account via the Admin API (`0` = unlimited; `DELETE` on the same path removes the exemption):
 
 ```
-PUT /_synapse/admin/v1/users/<bot account>/override_ratelimit
+POST /_synapse/admin/v1/users/<bot account>/override_ratelimit
 Authorization: Bearer <admin access token>
 
 { "messages_per_second": 0, "burst_count": 0 }
