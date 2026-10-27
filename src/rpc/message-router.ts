@@ -13,7 +13,7 @@ import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
 import { commandPolicy } from "../command-registry.js";
-import { bashOutputLimit, type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
+import { aggregateToolTurns, bashOutputLimit, type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
 import { errorMessage } from "../errors.js";
 import {
   extractTextFromMessage,
@@ -108,6 +108,20 @@ export interface MessageRouterDeps {
   /** 离线积压结算冻结信号(#136 修法B):装配根在 transport 连接阶段
    *  结束(成功或已处理的失败)后 resolve。缺省 = 已就绪,旧语义。 */
   backlogTransportsReady?: Promise<void>;
+  /**
+   * 活卡编辑缝(issue #235 票2):由组合根接到发送适配层的编辑方法
+   * (Matrix transport 的 editMessage)。与 sendLiveCard **双双注入**聚合
+   * 才启用;缺省未注入 = 聚合整体禁用,行为与现状逐字节一致(旧部署、
+   * 既有测试零影响)。
+   */
+  editReply?: (chatId: string, transport: string, messageId: string, text: string) => Promise<void>;
+  /**
+   * 发一张「活卡」新卡并取回底层 event_id(Matrix 的 sendMessage 穿出值,
+   * 票1)——后续中间回合凭它对同一事件就地编辑。返回 undefined(非 Matrix
+   * transport、发送失败被吞)= 本回合不进活卡状态,下一中间回合自然重试
+   * 开卡。缺省未注入 = 聚合整体禁用(与 editReply 同门)。
+   */
+  sendLiveCard?: (chatId: string, transport: string, text: string) => Promise<string | undefined>;
 }
 
 /**
@@ -374,6 +388,131 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 交接卡(issue #122):轮数记账与在途捕获槽都在 RecapLedger(recap.ts);
   // 这里只编排门控(忙拒/空会话)、投递与 /new 联动。
   const recapLedger = new RecapLedger();
+
+  // ── 活卡状态机(issue #235 票2)────────────────────────────────────
+  // 工具循环的中间回合聚合进同一张「工作中」卡片:首回合发新卡(sendLiveCard
+  // 取回 event_id),后续中间回合对同一事件就地编辑追加(editReply,回合间
+  // 以空行连接),终答回合与轮次边界(agent_start)清卡。状态按「rpc 的绑定」
+  // 同一 WeakMap 生命周期模型记账;绑定释放逻辑不动,活卡生命周期由回合语义
+  // 与轮次边界驱动。缺省未注入 editReply/sendLiveCard = 聚合整体禁用,行为
+  // 与现状逐字节一致(旧部署、既有测试零影响)。
+  interface LiveCard {
+    /** 活卡新卡的底层 event_id —— 本序列的后续编辑都指向它。 */
+    eventId: string;
+    /** 已累积文本:编辑是「设为全文」语义,累积在这里维护。 */
+    text: string;
+  }
+  interface LiveCardState {
+    card?: LiveCard;
+    /** 序列级降级标志(issue #235 票3):编辑抛错置位 —— 同轮对话内后续
+     *  中间回合全部逐条直发(旧行为);下一轮 agent_start 随活卡一并清零,
+     *  重新尝试聚合。 */
+    degraded: boolean;
+  }
+  const liveCards = new WeakMap<PiRpc, LiveCardState>();
+
+  /** 聚合启用 = 配置开(缺省 true)+ 编辑缝双双注入 + hideToolCalls 关闭。
+   *  配置现读现判:运行时改配置(手编 + 重启,或 / 系命令写路径)即时生效。 */
+  const liveCardAggregation = (): boolean =>
+    aggregateToolTurns(store.get())
+    && !store.get().hideToolCalls
+    && deps.editReply !== undefined
+    && deps.sendLiveCard !== undefined;
+
+  // 活卡出站链(per-rpc FIFO,与 transport 的 enqueueSend 同构):中间回合的
+  // 「开卡/编辑」严格按 turn_end 到达顺序结算 —— 后一回合的决策(有无活卡)
+  // 必须看到前一回合的结果,连发的两个中间回合才不会各开一张卡。step 自吞错,
+  // 链上每步独立结算、失败不传染。
+  const liveCardChains = new WeakMap<PiRpc, Promise<void>>();
+  const enqueueLiveCardTurn = (rpc: PiRpc, step: () => Promise<void>): void => {
+    const prev = liveCardChains.get(rpc) ?? Promise.resolve();
+    const run = prev.then(step, step);
+    liveCardChains.set(rpc, run.then(() => undefined, () => undefined));
+  };
+
+  // 重启失效(spec #235:旧 event_id 不可能再被编辑):首次记活卡时懒订阅
+  // 重启生命周期,子进程回来即清卡 —— 与 RpcTransientState 同一接缝。
+  const liveCardRestartWatched = new WeakSet<PiRpc>();
+
+  /** 中间回合的活卡出站(在出站链上结算):无卡开卡、有卡编辑追加。 */
+  const liveCardTurn = (rpc: PiRpc, target: ReplyTarget, text: string): Promise<void> => {
+    const editReply = deps.editReply;
+    const sendLiveCard = deps.sendLiveCard;
+    if (!editReply || !sendLiveCard) return Promise.resolve();
+    return (async () => {
+      const state = liveCards.get(rpc);
+      if (state?.degraded) {
+        // 降级中的序列退回逐条直发(旧行为;与聚合关闭时的中间回合同路)。
+        for (const chunk of splitMessage(text, 4000)) {
+          await sendReply(target.chatId, target.transport, chunk).catch(() => {});
+        }
+        return;
+      }
+      if (!state?.card) {
+        // 无活卡:发新卡并记录 event_id。拿不到 event_id(发送失败被吞/非
+        // Matrix transport)仅记日志、不进活卡状态 —— 下一中间回合自然重试
+        // 开卡(票3:发新卡失败仅记日志、不进活卡状态)。
+        const eventId = await sendLiveCard(target.chatId, target.transport, text).catch(() => undefined);
+        if (eventId) {
+          if (!liveCardRestartWatched.has(rpc)) {
+            liveCardRestartWatched.add(rpc);
+            rpc.onRestarted?.(() => liveCards.delete(rpc));
+          }
+          liveCards.set(rpc, { card: { eventId, text }, degraded: false });
+        } else {
+          logger.debug(`live card: no event_id for ${target.chatId} — next turn retries opening one`);
+        }
+        return;
+      }
+      const card = state.card;
+      const merged = `${card.text}\n\n${text}`;
+      // 溢出滚动(票3):「活卡累积 + 新回合文本」超单条上限 → 先对旧卡做
+      // 最后一次编辑(定稿为既有累积内容),再将新回合文本按现行拆分口径
+      // 切片 —— 前 n-1 片普通新消息直发,最后一片开新卡作新活卡(新文本
+      // 本身不超限时只有这一片 = 定稿后整体开新卡)。任意时刻只有最新一张
+      // 卡可被编辑:旧卡 event_id 不再出现在后续编辑调用里。
+      if (splitMessage(merged, 4000).length > 1) {
+        const chunks = splitMessage(text, 4000);
+        try {
+          await editReply(target.chatId, target.transport, card.eventId, card.text);
+        } catch (err) {
+          // 定稿失败 = 编辑失败同语义:降级 + 本回合文本逐条直发补上。
+          logger.warn(`live card finalize failed for ${target.chatId}: ${errorMessage(err)}`);
+          liveCards.set(rpc, { degraded: true });
+          for (const chunk of chunks) {
+            await sendReply(target.chatId, target.transport, chunk).catch(() => {});
+          }
+          return;
+        }
+        for (const chunk of chunks.slice(0, -1)) {
+          await sendReply(target.chatId, target.transport, chunk).catch(() => {});
+        }
+        const lastChunk = chunks[chunks.length - 1]!;
+        const eventId = await sendLiveCard(target.chatId, target.transport, lastChunk).catch(() => undefined);
+        if (eventId) {
+          liveCards.set(rpc, { card: { eventId, text: lastChunk }, degraded: false });
+        } else {
+          logger.debug(`live card: no event_id for rolled-over card (${target.chatId}) — next turn retries opening one`);
+        }
+        return;
+      }
+      try {
+        await editReply(target.chatId, target.transport, card.eventId, merged);
+      } catch (err) {
+        // 失败降级(票3):编辑抛错(不分类、不重试)→ 清活卡 + 置序列级
+        // 降级标志 —— 同轮对话内后续中间回合全部逐条直发(旧行为),下一轮
+        // agent_start 随活卡一并清零重新聚合。本回合文本逐条直发补上:活卡
+        // 停在旧累积,新增内容不能丢(User story 7「不丢回复」)。
+        logger.warn(`live card edit failed for ${target.chatId}: ${errorMessage(err)}`);
+        liveCards.set(rpc, { degraded: true });
+        for (const chunk of splitMessage(text, 4000)) {
+          await sendReply(target.chatId, target.transport, chunk).catch(() => {});
+        }
+        return;
+      }
+      card.text = merged;
+    })();
+  };
 
   /** 卡片投递:当前房间必发;多工程下有管理房且不同于本房间时抄送一份
    *  「📋 <项目名> 交接卡」,沉淀为该项目的干活日志时间线。 */
@@ -1198,6 +1337,13 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         return;
       }
 
+      // 轮次边界(issue #235 票2):新一轮对话永远开新卡 —— 清活卡与降级
+      // 标志,杜绝跨对话误追加旧卡。重启失效另由 onRestarted 订阅兜底。
+      if (event.type === "agent_start") {
+        liveCards.delete(rpc);
+        return;
+      }
+
       if (event.type === "turn_start") {
         if (target) {
           sendTyping(target.chatId, target.transport).catch(() => {});
@@ -1226,6 +1372,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         const settleVerdict = recapLedger.settleCapture(rpc, turn);
         if (settleVerdict !== "none") {
           log.debug(`[agent] turn_end captured by recap: ${settleVerdict}`);
+          // 终答被捕获 = 工具循环结束(issue #235 票2):一并清活卡;中间轮
+          // 捕获("wait")不动活卡 —— 工具循环还在继续。
+          if (settleVerdict === "settled") liveCards.delete(rpc);
           return;
         }
 
@@ -1238,8 +1387,19 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           // No content this turn — keep the binding for a follow-up turn
           return;
         }
+        // 局部提取(turn.text 的 null 收窄不跨闭包边界,下方出站链回调要用)。
+        const replyText: string = turn.text;
 
-        const chunks = splitMessage(turn.text, 4000);
+        // 活卡聚合(issue #235 票2):聚合启用的中间回合交给出站链决策
+        // (无卡开卡 / 有卡编辑追加 / 降级逐条直发),出站顺序 = 事件到达
+        // 顺序。hideToolCalls、配置关、编辑缝未注入都落到下方现行派发路径
+        // —— 与现状逐字节一致。
+        if (turn.pendingTools && liveCardAggregation()) {
+          enqueueLiveCardTurn(rpc, () => liveCardTurn(rpc, target, replyText));
+          return;
+        }
+
+        const chunks = splitMessage(replyText, 4000);
         // 回复末尾状态脚注:仅收敛终答(pendingTools=false)挂 —— 工具循环
         // 中间消息不挂(否则 N 步任务挂 N 条);失败回复(stopReason=error)
         // 与正文同路,一并携带。数据现拉现用(collectStatusFooter 永不抛,
@@ -1258,6 +1418,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           }
         };
         void dispatch();
+
+        // 终答回合收敛(issue #235 票2):活卡随之清空 —— 终答永远不进活卡,
+        // 下一次工具循环开新卡。同步原位结算,与绑定释放同款不等派发。
+        liveCards.delete(rpc);
 
         // A completed conversational turn releases unpinned bindings (the
         // shared default rpc) so late events never reply to a stale chat.

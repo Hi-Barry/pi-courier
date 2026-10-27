@@ -89,6 +89,12 @@ export interface MsgBridgeConfig {
     channels?: Record<string, { enabled: boolean; mode: "all" | "mentions" | "trusted-only" }>;
   };
   hideToolCalls?: boolean;
+  /**
+   * 工具循环中间回合聚合(issue #235):默认开启 —— 中间回合不再逐条刷屏,
+   * 而是聚合进同一张「工作中」的活卡持续就地刷新(Matrix MSC2676 消息编辑),
+   * 终答回合仍是独立新消息。false = 完全旁路,与旧版逐条发送逐字节一致。
+   */
+  aggregateToolTurns?: boolean;
   autoConnect?: boolean;
   showWidget?: boolean;
   debug?: boolean;

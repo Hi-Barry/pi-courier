@@ -333,6 +333,12 @@ export function recapOnNew(cfg: MsgBridgeConfig): boolean {
   return cfg.recap?.onNew === true;
 }
 
+/** 工具循环中间回合聚合(issue #235):默认开 —— 聚合进同一张持续刷新的
+ *  活卡;false = 完全旁路,退回逐条旧行为(与旧版逐字节一致)。 */
+export function aggregateToolTurns(cfg: MsgBridgeConfig): boolean {
+  return cfg.aggregateToolTurns !== false;
+}
+
 // ── 模型预设与降级链(issues #119 / #121)────────────────────────────
 // 语法单一解释:provider/id 引用、思考级别取值、链条目归一,配置校验、
 // 预设应用、降级切换三方共用,永不各写一份。

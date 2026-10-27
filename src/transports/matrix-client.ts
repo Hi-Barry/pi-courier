@@ -39,12 +39,21 @@ export interface MatrixClientCrypto {
   decryptMedia(file: EncryptedMediaFile): Promise<Buffer>;
 }
 
-/** Outgoing room message content (the shape sendMessage is called with). */
+/** Outgoing room message content (the shape sendMessage is called with).
+ *  The MSC2676 edit fields (m.new_content / m.relates_to) ride the same
+ *  outbound channel — edits are just room message content with two extra
+ *  keys (issue #235 票1). */
 export interface MatrixMessageContent {
   msgtype: string;
   body: string;
   format?: string;
   formatted_body?: string;
+  /** MSC2676 replacement payload — present only on edit events; same
+   *  structure as an ordinary message's content. */
+  "m.new_content"?: MatrixMessageContent;
+  /** MSC2676 relation — rel_type "m.replace" pointing at the original
+   *  event_id being replaced. */
+  "m.relates_to"?: { rel_type: string; event_id: string };
 }
 
 /** Events the adapters subscribe to. room.join / room.leave deliver only
