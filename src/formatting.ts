@@ -223,3 +223,47 @@ export function splitMessage(text: string, maxLen: number): string[] {
 
   return chunks;
 }
+
+/**
+ * win32 出站的反斜杠预转义(spec #233):CommonMark 把 `\`+ASCII 标点当转义
+ * 序列,markdown-it 渲染时反斜杠被吞 —— Windows 路径如 `C:\Users\admin\.pi`
+ * 显示成 `C:\Users\admin.pi`。这里把会被吞的 `\` 补成 `\\`,渲染后还原为
+ * 字面反斜杠;`\`+字母/数字不属 CommonMark 转义,原样保留不碰。
+ *
+ * 逐行且代码围栏感知:围栏行与围栏内部不动;行内代码 span(`` `…` ``)内
+ * 的 `\.` 本就不被 markdown-it 吞,同样不碰。围栏判定复用 parseFenceLine,
+ * 与 splitMessage/markdown-it 同一套口径。
+ */
+export function escapeBackslashesOutsideFences(text: string): string {
+  const lines = text.split("\n");
+  let open: FenceMarker | null = null;
+  for (let i = 0; i < lines.length; i += 1) {
+    const marker = parseFenceLine(lines[i]!);
+    if (marker) {
+      if (open && closesFence(open, marker)) {
+        open = null;
+      } else if (!open) {
+        open = marker;
+      }
+      continue; // 围栏行(开/闭)与其内部行都不转义
+    }
+    if (open) continue; // 围栏内部不转义
+    lines[i] = escapeBackslashesOutsideInlineCode(lines[i]!);
+  }
+  return lines.join("\n");
+}
+
+/** CommonMark 可转义集:`\`+这些标点会被渲染器吞,需要双写还原。 */
+const ESCAPABLE = /[\\!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~]/;
+
+/** 单行内跳过行内代码 span(`` `…` ``)后转义剩余部分的反斜杠。
+ *  成对反引号外的内容才处理;反引号个数不成对时尾部全按代码外处理。 */
+function escapeBackslashesOutsideInlineCode(line: string): string {
+  const parts = line.split("`");
+  for (let i = 0; i < parts.length; i += 2) {
+    parts[i] = parts[i]!.replace(/\\(.)/g, (pair, next: string) =>
+      ESCAPABLE.test(next) ? `\\${pair}` : pair
+    );
+  }
+  return parts.join("`");
+}
