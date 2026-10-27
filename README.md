@@ -277,6 +277,33 @@ Since 0.1.39 sending mirrors pi's TUI. A plain text message is always sent with 
 
 **What happens to the queue, stated up front**: since 0.3.8 `/stop` and `/interrupt` mirror the TUI's Esc — the queue is cleared **before** the abort, and the reply lists exactly which queued messages were dropped, so nothing disappears unseen. On a pi older than 0.84.4 (no `clear_queue` RPC) the old behaviour applies: the queue survives and fires on the **next** turn; the reply says so explicitly (`⚠️ N queued message(s) will take effect on the next turn:`). Since 0.5.0 even **involuntary** loss is visible: if the queue is non-empty when the subprocess restarts (/reload or a crash respawn), the bot proactively posts `⚠️ Subprocess restarted — N queued message(s) never ran` with the full list — a queue you cleared yourself via `/stop` never triggers the warning. Service-level restarts (systemd/machine) are covered too, for **project rooms in multi-project mode**: the snapshot lives in `~/.pi/pi-courier-state/queue-snapshots.json`, and the next start posts `⚠️ Service restarted — N queued message(s) never ran` per project room before wiping it (a queue already reported by `/reload` is never reported twice; the single-project default process is out of scope — its room binding is a runtime DM).
 
+### Tool-loop aggregation: one "working" card, continuously refreshed
+
+While the agent works through long tasks, the **intermediate tool-loop turns no longer flood the room**: the first turn posts a single "working" card, and every following turn edits **that same card in place** (Matrix message edits, MSC2676; Element X / Element Web / FluffyChat all render edits in place) — one card keeps updating, progress is visible at a glance, and phones stop getting pinged by every intermediate turn. The **final answer** is still its own standalone message (with the status footer), so the notification that matters is never swallowed by an edit. On a client without edit support you'll see the full text with a `* ` prefix (the classic fallback — nothing is lost). When content approaches the single-message ceiling (4000 characters) the old card is finalized and a new one continues (only the newest card is ever edited); if an edit fails, the bridge automatically **falls back to the old one-message-per-turn behaviour**, so nothing is ever lost. With `/toggletools` (hideToolCalls) hiding tool lines, aggregation is bypassed entirely — byte-for-byte the old behaviour.
+
+**Deployment note (Synapse rate limiting)**: aggregation raises the bot's posting rate considerably (one N-turn tool loop ≈ N edits). Synapse rate-limits accounts by default via `rc_message` (0.2 messages/second, burst 10) — when throttled, the worst case is **edits arriving late**: the card refreshes slower but still converges to the final state, losing nothing (and the automatic fallback covers outright failures). Self-hosting? Either raise the global limit in `homeserver.yaml`:
+
+```yaml
+rc_message:
+  per_second: 0.5
+  burst_count: 15
+```
+
+or exempt just the bot account via the Admin API (`0` = unlimited; `DELETE` on the same path removes the exemption):
+
+```
+POST /_synapse/admin/v1/users/<bot account>/override_ratelimit
+Authorization: Bearer <admin access token>
+
+{ "messages_per_second": 0, "burst_count": 0 }
+```
+
+**Prefer the old one-message-per-turn mode?** Add `aggregateToolTurns: false` by hand (not in the setup wizard), then `pi-courier restart` — byte-for-byte the old behaviour:
+
+```json
+{ "aggregateToolTurns": false }
+```
+
 ### Session handoff cards: /recap
 
 `/recap` asks the current session to summarize itself — goal, what got done, what's left, in ≤5 bullets — and posts a `📋 Handoff card` right in the room, so `/new` stops being an act of amnesia. `/recap` refuses honestly when there's nothing to summarize (fewer than two completed turns) or when a task is still running (it never races a live task with steering semantics). In multi-project mode the card is also copied to the management room as `📋 <project> handoff card (project log)` — a running "what has this project been doing" timeline.

@@ -240,15 +240,20 @@ export class MatrixProvider {
     logger.info("[Matrix] Disconnected");
   }
 
-  async sendMessage(chatId: string, text: string): Promise<void> {
+  /**
+   * 发送一条文本消息,返回底层服务器分配的 event_id(issue #235 票1:返回值
+   * 从「无」穿出为事件 ID 字符串,调用方——后续票的活卡状态机——凭它发起
+   * 编辑)。空白文本仍是既有行为:不发送、早退返回空串(无事件可指)。
+   */
+  async sendMessage(chatId: string, text: string): Promise<string> {
     if (!this.client) {
       throw new Error("Matrix client not connected");
     }
-    if (!text?.trim()) return;
+    if (!text?.trim()) return "";
 
     const { body, formattedBody } = formatForMatrix(text);
 
-    await this.enqueueSend(chatId, () => {
+    return this.enqueueSend(chatId, () => {
       // 排队期间可能已 disconnect(client 置空):报可读错误而非 TypeError。
       if (!this.client) throw new Error("Matrix client not connected");
       return this.client.sendMessage(chatId, {
@@ -263,6 +268,45 @@ export class MatrixProvider {
   }
 
   /**
+   * 就地编辑一条已发出的消息(MSC2676,已入正式规范 v1.3+;issue #235 票1):
+   * 向 `messageId` 指向的原事件发一条 rel_type "m.replace" 的替换事件——
+   * 支持编辑的客户端把原消息就地替换,旧客户端退回顶层 fallback 文本
+   * (带 `* ` 前缀)。`m.new_content` 与普通消息同构:复用 sendMessage 的
+   * formatForMatrix 口径(markdown→HTML 富文本、win32 平台反斜杠预转义),
+   * 纯文本 body 始终是原文。返回替换事件自己的 event_id。未连接时报与
+   * sendMessage 相同的可读错误。编辑与相邻消息走同一条 per-room FIFO:
+   * 入队顺序 = 房间事件流顺序 = 客户端展示顺序。
+   */
+  async editMessage(chatId: string, messageId: string, text: string): Promise<string> {
+    if (!this.client) {
+      throw new Error("Matrix client not connected");
+    }
+
+    const { body, formattedBody } = formatForMatrix(text);
+
+    return this.enqueueSend(chatId, () => {
+      // 排队期间可能已 disconnect(client 置空):报可读错误而非 TypeError。
+      if (!this.client) throw new Error("Matrix client not connected");
+      return this.client.sendMessage(chatId, {
+        msgtype: "m.text",
+        body: `* ${body}`,
+        "m.new_content": {
+          msgtype: "m.text",
+          body,
+          ...(formattedBody && {
+            format: "org.matrix.custom.html",
+            formatted_body: formattedBody,
+          }),
+        },
+        "m.relates_to": {
+          rel_type: "m.replace",
+          event_id: messageId,
+        },
+      });
+    });
+  }
+
+  /**
    * Per-room FIFO 发送链(issue #195):homeserver 按收到顺序把事件排进
    * 房间事件流(txnId 只做幂等去重不参与排序),并发 PUT 即乱序 —— 分片
    * 回复、终答与紧随的回执都可能颠倒。这里让同房间的消息严格按入队顺序
@@ -270,11 +314,12 @@ export class MatrixProvider {
    *
    * - 不同房间各持一条链,互不阻塞(单房间网络抖动不拖累其他房间);
    * - 单条失败照常 reject 给调用方记账,但链上后续消息照发(断链传播);
-   * - 只管房间文本消息:typing、媒体上传、state 事件、房间管理操作不进队列。
+   * - 只管房间文本消息:typing、媒体上传、state 事件、房间管理操作不进队列;
+   * - 底层返回值(事件 event_id)原样穿出给调用方(issue #235 票1)。
    */
   private sendQueues = new Map<string, Promise<void>>();
 
-  private enqueueSend(chatId: string, send: () => Promise<unknown>): Promise<void> {
+  private enqueueSend<T>(chatId: string, send: () => Promise<T>): Promise<T> {
     const prev = this.sendQueues.get(chatId) ?? Promise.resolve();
     // 上一步的失败不传染本步:链上每条独立结算。
     const run = prev.then(send, send);
@@ -289,7 +334,7 @@ export class MatrixProvider {
     void next.then(() => {
       if (this.sendQueues.get(chatId) === next) this.sendQueues.delete(chatId);
     });
-    return run.then(() => undefined);
+    return run;
   }
 
   async sendTyping(chatId: string): Promise<void> {
