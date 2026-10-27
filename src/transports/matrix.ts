@@ -1,5 +1,6 @@
 import MarkdownIt from "markdown-it";
 import type { InboxMode } from "../config.js";
+import { escapeBackslashesOutsideFences } from "../formatting.js";
 import { t } from "../i18n/index.js";
 import { logger, suppressLogLines } from "../logger.js";
 import { buildGroupJoinHint } from "../management-room.js";
@@ -446,9 +447,19 @@ export class MatrixProvider {
 // linkify turns bare URLs into links.
 const md = new MarkdownIt({ html: false, breaks: true, linkify: true });
 
-/** Convert markdown to Matrix HTML. Returns plain body (fallback) + formatted HTML. */
-export function formatForMatrix(text: string): { body: string; formattedBody?: string } {
-  return { body: text, formattedBody: md.render(text).trim() };
+/**
+ * Convert markdown to Matrix HTML. Returns plain body (fallback) + formatted HTML.
+ *
+ * win32 门控的反斜杠预转义(spec #233):CommonMark 转义会在渲染时吞掉
+ * Windows 路径里 `\`+标点 的反斜杠(`\.`、`\_`),发送端先补成 `\\` 让
+ * 渲染还原;纯文本 body 始终是原文。非 win32 平台零变化。
+ */
+export function formatForMatrix(
+  text: string,
+  platform: NodeJS.Platform = process.platform,
+): { body: string; formattedBody?: string } {
+  const source = platform === "win32" ? escapeBackslashesOutsideFences(text) : text;
+  return { body: text, formattedBody: md.render(source).trim() };
 }
 
 /**
