@@ -68,6 +68,21 @@ function collectMessages() {
   return { received, wire: (provider: MatrixProvider) => provider.onMessage((m) => received.push(m)) };
 }
 
+/** 可控挂点:每条 sendMessage 在 gates 里登记一个放行柄,不放行不结算。
+ *  出站串行队列与消息编辑两处 describe 共用。 */
+function gatedSend(client: FakeMatrixClient) {
+  const bodies: string[] = [];
+  const gates: Array<(v: string) => void> = [];
+  client.sendMessage.mockImplementation((_roomId: string, content: { body: string }) => {
+    bodies.push(content.body);
+    return new Promise<string>((resolve) => gates.push(resolve));
+  });
+  return {
+    bodies,
+    release: (i: number) => gates[i]("$ok"),
+  };
+}
+
 /** 附件管线用的假 MediaSource(计数)+ 临时目录 store。 */
 function storeWithSource() {
   const source: MediaSource & { calls: string[] } = {
@@ -443,7 +458,7 @@ describe("MatrixProvider 出站", () => {
   });
 });
 
-describe("MatrixProvider 出站串行队列(issue #195)", () => {
+describe("MatrixProvider 消息编辑(MSC2676,issue #235 票1)", () => {
   beforeEach(() => {
     captureConsole();
   });
@@ -451,19 +466,102 @@ describe("MatrixProvider 出站串行队列(issue #195)", () => {
     vi.restoreAllMocks();
   });
 
-  /** 可控挂点:每条 sendMessage 在 gates 里登记一个放行柄,不放行不结算。 */
-  function gatedSend(client: FakeMatrixClient) {
-    const bodies: string[] = [];
-    const gates: Array<(v: string) => void> = [];
-    client.sendMessage.mockImplementation((_roomId: string, content: { body: string }) => {
-      bodies.push(content.body);
-      return new Promise<string>((resolve) => gates.push(resolve));
+  it("sendMessage 穿出底层 event_id(返回值从无改为事件 ID 字符串)", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    clients[0].sendMessage.mockResolvedValue("$orig-1");
+    await expect(provider.sendMessage(ROOM, "原文")).resolves.toBe("$orig-1");
+  });
+
+  it("editMessage 事件形状:顶层 `* ` 前缀 fallback、m.new_content 同构、m.replace 指向原事件", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const client = clients[0];
+    client.sendMessage.mockResolvedValue("$edit-1");
+
+    const returned = await provider.editMessage(ROOM, "$orig-1", "**改后** 文本");
+    expect(returned).toBe("$edit-1"); // 穿出替换事件自己的 event_id
+
+    const [roomId, content] = client.sendMessage.mock.calls[0];
+    expect(roomId).toBe(ROOM);
+    expect(content.msgtype).toBe("m.text");
+    // 顶层 fallback:不支持编辑的旧客户端读到的全文(带 `* ` 前缀)
+    expect(content.body).toBe("* **改后** 文本");
+    // m.new_content 与普通消息同构(markdown→HTML 富文本同一口径)
+    expect(content["m.new_content"]).toEqual({
+      msgtype: "m.text",
+      body: "**改后** 文本",
+      format: "org.matrix.custom.html",
+      formatted_body: expect.stringContaining("<strong>改后</strong>"),
     });
-    return {
-      bodies,
-      release: (i: number) => gates[i]("$ok"),
-    };
-  }
+    // 替换关系指向原事件
+    expect(content["m.relates_to"]).toEqual({ rel_type: "m.replace", event_id: "$orig-1" });
+  });
+
+  it("m.new_content 与 sendMessage 的出站内容同构:同文本逐键一致(富文本与转义同一口径)", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const text = "**加粗** 与 `code` 和 https://example.com";
+
+    await provider.sendMessage(ROOM, text);
+    await provider.editMessage(ROOM, "$orig-1", text);
+
+    const [normalContent, editContent] = clients[0].sendMessage.mock.calls.map(
+      (call) => call[1] as Record<string, unknown>
+    );
+    expect(editContent["m.new_content"]).toEqual(normalContent);
+  });
+
+  it("编辑与相邻消息同一条 per-room FIFO:普通消息结算前编辑不出手,顺序 = 入队顺序", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const gate = gatedSend(clients[0]);
+
+    const first = provider.sendMessage(ROOM, "原文");
+    const second = provider.editMessage(ROOM, "$orig-1", "编辑后");
+
+    await flush();
+    // 编辑在队尾排队:前一条未结算前不出手
+    expect(gate.bodies).toEqual(["原文"]);
+
+    gate.release(0);
+    await first;
+    await vi.waitFor(() => expect(gate.bodies).toEqual(["原文", "* 编辑后"]));
+
+    gate.release(1);
+    await second;
+  });
+
+  it("编辑在排队期间断连:以可读错误结算(与 sendMessage 同契约)", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const gate = gatedSend(clients[0]);
+
+    const first = provider.sendMessage(ROOM, "断连前在途");
+    const edit = provider.editMessage(ROOM, "$orig-1", "排队中的编辑");
+    await flush();
+
+    await provider.disconnect();
+    gate.release(0);
+    await first;
+    await expect(edit).rejects.toThrow("Matrix client not connected");
+  });
+
+  it("editMessage 未连接抛可读错误(不静默)", async () => {
+    const { provider } = makeProvider();
+    await expect(provider.editMessage(ROOM, "$evt", "text")).rejects.toThrow(
+      "Matrix client not connected"
+    );
+  });
+});
+
+describe("MatrixProvider 出站串行队列(issue #195)", () => {
+  beforeEach(() => {
+    captureConsole();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it("同房间并发发送按入队顺序 FIFO 串行:前一条结算前下一条不出手", async () => {
     const { provider, clients } = makeProvider();

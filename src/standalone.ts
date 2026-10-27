@@ -447,7 +447,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   if (matrix?.isConnected) {
     await consumeQueueSnapshots(queueSnapshots, {
       isProjectRoom: (roomId) => projectManager.isProjectRoom(roomId),
-      send: (roomId, text) => matrix.sendMessage(roomId, text),
+      send: async (roomId, text) => {
+        // sendMessage 自 #235 票1 起穿出 event_id,此处消费方仍只要完成
+        // 语义,显式吞掉返回值保持 Promise<void> 契约。
+        await matrix.sendMessage(roomId, text);
+      },
     }).catch((err: unknown) => {
       logger.warn(`queue snapshot consumption failed: ${errorMessage(err)}`);
     });
