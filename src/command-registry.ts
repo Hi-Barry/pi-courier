@@ -47,8 +47,9 @@ export const COMMAND_REGISTRY: readonly CommandPolicy[] = [
   { name: "/login", guest: "blocked" },
   { name: "/logout", guest: "blocked" },
   { name: "/auth", guest: "blocked" },
-  // 生命周期(访客禁;reload 另是敏感审计面)
+  // 生命周期(访客禁;reload 另是敏感审计面;/update 是桥自更新的敏感审计面)
   { name: "/reload", guest: "blocked", auditEvent: "reload" },
+  { name: "/update", guest: "blocked", auditEvent: "update" },
   { name: "/stop", guest: "blocked" },
   { name: "/abort", guest: "blocked" },
   { name: "/interrupt", guest: "blocked" },

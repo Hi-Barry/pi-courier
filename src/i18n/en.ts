@@ -318,6 +318,7 @@ const en: Record<MessageKey, string> = {
     "• `/stop` — stop all tasks immediately (≈ TUI Esc; alias `/abort`)\n" +
     "• `/interrupt <new instruction>` — interrupt the current task and send the new one (single message)\n" +
     "• `/queue [text]` — no args: view the queue; with text: queue without interrupting (≈ Alt+Enter)\n" +
+    "• `/update [check|force|cancel]` — self-update without interrupting tasks (check for a new version / force past the busy wait / cancel the wait; management room only)\n" +
     "\n" +
     "【Shell execution】\n" +
     "• `/bash <command>` — run a shell command (written to context)\n" +
@@ -342,6 +343,39 @@ const en: Record<MessageKey, string> = {
     "• `/detach` — stop the session mirror",
   "cmd.help.passthrough":
     "**Passthrough**: `/skill:<name>`, prompt templates and extension commands run directly; plain text goes to the model. Use /skills to list installed skills.",
+
+  // ── cmd.update (/update hot-update command family) ────────────────────
+  "cmd.update.unavailable": "ℹ️ /update is not available in this deployment.",
+  "cmd.update.notManagementRoom": "❌ /update can only be used in the management room.",
+  "cmd.update.rootDenied":
+    "❌ The bridge is running as root; /update refuses to proceed (npm script privilege risk). Use the stop-the-world update instead: pi-courier update.",
+  "cmd.update.rejectedArgs":
+    "❌ /update takes no version, URL or path arguments (single source: npm's latest tag). Valid: /update, /update check, /update force, /update cancel.",
+  "cmd.update.check.upToDate": "✅ Already up to date (v{version}).",
+  "cmd.update.check.hasNew": "🆕 New version available: v{from} → v{to}. Send /update to start (running tasks are not interrupted).",
+  "cmd.update.check.failed": "❌ Version check failed: {message}",
+  "cmd.update.started": "🚀 Update started: v{from} → v{to} (tasks keep running during the upgrade; an idle restart follows).",
+  "cmd.update.busyWaiting": "⏳ {count} task(s) running; the update starts automatically once idle (cancelled after {minutes} min; queued messages keep flowing).",
+  "cmd.update.unreachableNote": "({count} instance(s) not queryable right now — pi restart window; waiting for them too.)",
+  "cmd.update.waitProgress": "⏳ Still waiting for the update: {count} task(s) running ({minutes} min elapsed).",
+  "cmd.update.waitingUnreachableOnly":
+    "⏳ Cannot confirm all instances idle right now ({count} instance(s) failed to query or are in a restart window); the update starts automatically once they are (cancelled after {minutes} min; queued messages keep flowing).",
+  "cmd.update.restartWait": "🔄 New code is on disk; the service restarts automatically once all tasks are idle (cancelled after {minutes} min — pi-courier restart works manually anytime).",
+  "cmd.update.restartProgress": "🔄 Waiting to restart: {count} task(s) running ({minutes} min elapsed).",
+  "cmd.update.waitTimeout": "⏰ Gave up waiting for idle after {minutes} min — update cancelled. Retry with /update force once tasks finish.",
+  "cmd.update.cancelled": "🛑 Update wait cancelled.",
+  "cmd.update.noPending": "ℹ️ No update in progress.",
+  "cmd.update.inProgress": "⏳ An update is already in progress (use /update cancel to cancel the wait).",
+  "cmd.update.npmFailed": "❌ Upgrade failed: {message}\nThe old version keeps running; the bridge is unaffected.",
+  "cmd.update.installed": "📦 New code is on disk: v{from} → v{to} (this process still runs the old version).",
+  "cmd.update.restarting": "🔄 All tasks idle — restarting the service to load the new version…",
+  "cmd.update.restartFailed": "⚠️ Automatic restart failed ({message}): the new code is on disk — run pi-courier restart manually.",
+  "cmd.update.manualRestart":
+    "ℹ️ New code is on disk (v{from} → v{to}). This bridge is not managed by an active systemd unit (or no systemd) — run pi-courier restart manually to apply.",
+  "cmd.update.manualRestartHint":
+    "⚠️ New code is on disk (v{from} → v{to}) but tasks never went idle / the wait was cancelled. Run pi-courier restart when idle (the completion notice still arrives after the restart).",
+  "cmd.update.done": "✅ Update complete: v{from} → v{to}.",
+  "cmd.update.doneVersionMismatch": "⚠️ On-disk version (v{actual}) differs from the expected v{to} — the update may not have applied.",
 
   // ── router ────────────────────────────────────────────────────────────
   "common.unknownError": "unknown error",

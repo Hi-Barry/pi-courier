@@ -50,6 +50,7 @@ describe("guest policy blocklist (issue #120)", () => {
         "/thinking",
         "/toggletools",
         "/trusted",
+        "/update",
       ].sort()
     );
   });
@@ -67,6 +68,8 @@ describe("guest policy blocklist (issue #120)", () => {
     expect(commandPolicy("/bash")?.auditEvent).toBe(AUDIT_EVENTS.bashExec);
     expect(commandPolicy("/bashstop")?.auditEvent).toBe(AUDIT_EVENTS.bashStop);
     expect(commandPolicy("/reload")?.auditEvent).toBe(AUDIT_EVENTS.reload);
+    // /update 热更新(桥自更新 spec §7):发起审计经登记表 auditEvent 位落账。
+    expect(commandPolicy("/update")?.auditEvent).toBe(AUDIT_EVENTS.update);
     expect(commandPolicy("/help")).toBeUndefined();
     expect(commandPolicy("/status")?.auditEvent).toBeUndefined();
   });
@@ -78,7 +81,7 @@ describe("guest policy blocklist (issue #120)", () => {
   });
 
   it("dangerous commands are blocked with the exact trigger word", () => {
-    for (const cmd of ["/bash ls", "/stop", "/pmctl list", "/pmctl", "/interrupt", "/trusted", "/remind 30m 喝水", "/LOGOUT", "/mcp", "/mcp list", "/MCP add x --url https://x"]) {
+    for (const cmd of ["/bash ls", "/stop", "/pmctl list", "/pmctl", "/interrupt", "/trusted", "/remind 30m 喝水", "/LOGOUT", "/mcp", "/mcp list", "/MCP add x --url https://x", "/update", "/update check", "/UPDATE force"]) {
       const verdict = guestCommandVerdict(cmd);
       expect(verdict.blocked, cmd).toBe(true);
       expect(verdict.command, cmd).toBe(cmd.trim().split(/\s+/)[0]!.toLowerCase());
