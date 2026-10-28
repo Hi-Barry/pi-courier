@@ -270,4 +270,27 @@ describe("POSIX 壳语法门禁(bash -n,spec #247 票06)", () => {
     const result = execFileSync("bash", ["-n", script], { encoding: "utf-8" });
     expect(result).toBe("");
   });
+
+  it("PI_COURIER_ALERT 自定义命令模板真正生效(评审)", () => {
+    if (process.platform === "win32") return;
+    const bin = path.join(dir, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "systemctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const out = path.join(dir, "custom-alert.txt");
+    const heartbeat = writeHeartbeat({ ts: NOW - 200_000, pid: 4_000_000_000 });
+
+    execFileSync("bash", [path.resolve(__dirname, "../deploy/watchdog/watchdog-posix.sh")], {
+      env: {
+        ...process.env,
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        PI_COURIER_HEARTBEAT: heartbeat,
+        PI_COURIER_SERVICE: "pi-pi-courier",
+        PI_COURIER_ALERT: `printf '%s' {message} > ${out}`,
+      },
+      stdio: "pipe",
+    });
+
+    // 自定义模板收到的是核心安全引用后的消息(含括号)
+    expect(fs.readFileSync(out, "utf-8")).toContain("DEAD (pid gone)");
+  });
 });

@@ -40,8 +40,9 @@
 # 可覆盖的环境变量/参数:
 #   PI_COURIER_SERVICE   systemd 服务名(默认 pi-pi-courier,与 user unit 一致)
 #   PI_COURIER_HEARTBEAT 心跳文件路径(默认 ~/.pi/pi-courier-state/heartbeat.json)
-#   PI_COURIER_ALERT     告警命令前缀(默认调同目录 matrix-alert.mjs;置空
-#                        PI_COURIER_ALERT=off 可关闭告警)
+#   PI_COURIER_ALERT     自定义告警命令模板(含 {message} 占位;{message} 由
+#                        判定核心按宿主 shell 安全引用)。默认调同目录
+#                        matrix-alert.mjs;置 off / 空串关闭告警
 #   --stale-seconds <n>  过期秒覆盖(命令行参数优先于默认 180)
 
 set -u
@@ -72,9 +73,19 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ -z "${PI_COURIER_ALERT+x}" ]; then
+  # 未设置:走内置轻量告警脚本
+  ALERT_COMMAND="node \"$SCRIPT_DIR/matrix-alert.mjs\" --message {message}"
+elif [ -z "$PI_COURIER_ALERT" ] || [ "$PI_COURIER_ALERT" = "off" ]; then
+  ALERT_COMMAND=""
+else
+  # 自定义命令模板(含 {message} 占位);核心负责加引号
+  ALERT_COMMAND="$PI_COURIER_ALERT"
+fi
+
 ALERT_ARGS=()
-if [ "${PI_COURIER_ALERT:-}" != "off" ]; then
-  ALERT_ARGS=(--alert-command "node \"$SCRIPT_DIR/matrix-alert.mjs\" --message {message}")
+if [ -n "$ALERT_COMMAND" ]; then
+  ALERT_ARGS=(--alert-command "$ALERT_COMMAND")
 fi
 
 exec node "$SCRIPT_DIR/watchdog-core.mjs" \

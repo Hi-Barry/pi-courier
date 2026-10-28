@@ -554,7 +554,7 @@ systemd 管不了**僵死**:进程还在、PID 还在,但事件循环卡住不�
 * * * * * XDG_RUNTIME_DIR=/run/user/1000 /opt/pi-courier/deploy/watchdog/watchdog-posix.sh >> ~/.pi/pi-courier-state/watchdog.log 2>&1
 ```
 
-方式二:systemd timer(两个 unit 文件,`systemctl --user enable --now pi-courier-watchdog.timer`)。服务名默认 `pi-pi-courier`(与 `deploy/pi-courier.user.service` 安装后的名字一致),用 `PI_COURIER_SERVICE` 覆盖;`PI_COURIER_ALERT=off` 关闭告警,`PI_COURIER_HEARTBEAT` 覆盖心跳路径。脚本按 **user unit** 写死 `systemctl --user`;若你用的是系统级 unit,请把脚本里的 `--user` 去掉并用 `PI_COURIER_SERVICE` 指定服务名。卸载:先停看门狗(`systemctl --user disable --now pi-courier-watchdog.timer` 并删除两个 unit 文件,或删掉 crontab 行),再 `pi-courier disable`;否则看门狗会在停止窗口过后把服务重新拉起。
+方式二:systemd timer(两个 unit 文件,`systemctl --user enable --now pi-courier-watchdog.timer`)。服务名默认 `pi-pi-courier`(与 `deploy/pi-courier.user.service` 安装后的名字一致),用 `PI_COURIER_SERVICE` 覆盖;`PI_COURIER_ALERT=off` 关闭告警,也可以设成自定义命令模板(含 `{message}` 占位,由看门狗做 shell 安全引用);`PI_COURIER_HEARTBEAT` 覆盖心跳路径。脚本按 **user unit** 写死 `systemctl --user`;若你用的是系统级 unit,请把脚本里的 `--user` 去掉并用 `PI_COURIER_SERVICE` 指定服务名。卸载:先停看门狗(`systemctl --user disable --now pi-courier-watchdog.timer` 并删除两个 unit 文件,或删掉 crontab 行),再 `pi-courier disable`;否则看门狗会在停止窗口过后把服务重新拉起。
 
 **磁盘持续满盘的熔断**:桥在启动期、连接任何网络之前检查磁盘硬阈值(默认 512MB),低于即写一行死因日志退出、不发管理房留言。磁盘一直不清理时 systemd 会反复拉起,每轮只多一行本地日志。在 unit 的 `[Unit]` 段加熔断参数让它停手:
 
