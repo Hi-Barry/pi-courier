@@ -42,3 +42,28 @@ export function clearManualStop(filePath: string): void {
     // 清不掉(权限/只读盘)不阻断启动:看门狗侧下一轮仍会跳过,人工删掉即可
   }
 }
+
+/**
+ * 一次人工停止的标记句柄(CLI stop/disable/update 统一使用):
+ *  - written=false:标记没落盘(权限/磁盘),调用方应告警;
+ *  - settle(stopped):systemctl 结果确认后调用。服务没停成时回滚标记,
+ *    避免看门狗对一个仍在运行的服务失明;停成才保留标记。
+ */
+export interface ManualStopIntent {
+  markerPath: string;
+  written: boolean;
+  settle(stopped: boolean): void;
+}
+
+/** 写标记并返回回滚句柄(路径拼接与回滚单点,便于单测)。 */
+export function beginManualStopIntent(stateDir: string): ManualStopIntent {
+  const markerPath = manualStopMarkerPath(stateDir);
+  const written = markManualStop(markerPath);
+  return {
+    markerPath,
+    written,
+    settle(stopped: boolean): void {
+      if (!stopped) clearManualStop(markerPath);
+    },
+  };
+}

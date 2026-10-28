@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   MANUAL_STOP_MARKER,
+  beginManualStopIntent,
   clearManualStop,
   manualStopMarkerPath,
   markManualStop,
@@ -47,6 +48,29 @@ describe("人工停止标记(spec #247 评审)", () => {
     const locked = path.join(dir, "locked");
     fs.mkdirSync(locked, { mode: 0o500 });
     expect(markManualStop(path.join(locked, MANUAL_STOP_MARKER))).toBe(false);
+    fs.chmodSync(locked, 0o700);
+  });
+
+  it("beginManualStopIntent:成功保留、未确认停止回滚(第3轮评审)", () => {
+    const intent = beginManualStopIntent(dir);
+    expect(intent.written).toBe(true);
+    expect(intent.markerPath).toBe(manualStopMarkerPath(dir));
+    expect(fs.existsSync(intent.markerPath)).toBe(true);
+
+    intent.settle(true); // 已确认停止:标记保留
+    expect(fs.existsSync(intent.markerPath)).toBe(true);
+
+    intent.settle(false); // 未确认停止:回滚,看门狗不失明
+    expect(fs.existsSync(intent.markerPath)).toBe(false);
+  });
+
+  it("beginManualStopIntent:写失败时 written=false,回滚也不抛", () => {
+    if (process.platform === "win32") return;
+    const locked = path.join(dir, "locked");
+    fs.mkdirSync(locked, { mode: 0o500 });
+    const intent = beginManualStopIntent(locked);
+    expect(intent.written).toBe(false);
+    expect(() => intent.settle(false)).not.toThrow();
     fs.chmodSync(locked, 0o700);
   });
 });
