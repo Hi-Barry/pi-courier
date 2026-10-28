@@ -304,6 +304,24 @@ Authorization: Bearer <管理员 access_token>
 { "aggregateToolTurns": false }
 ```
 
+### 工作流进度活卡
+
+pi 跑动态工作流(多阶段、带子代理)时,bot 只发**一张活卡**并随进度就地刷新 —— 标题行是状态图标 + 工作流名 + 阶段进度(`x/y`)+ 累计 tokens/成本;阶段链(`✅ Alpha  ⏳ Beta  ○ Gamma`)按首见顺序记录各阶段;Markdown 表格列出子代理的阶段、状态与 token 计数。完成/跳过的子代理不会从卡上消失:运行中的始终全保留,另加最近完成的 4 个 —— 更早的折叠成一行计数,卡片永远不会滚开成新消息。终态时卡片附上运行结果预览,留在房间里作为记录。
+
+操控工作流用**自然语言**即可 —— 直接回复「暂停」「继续」「停止」等,消息会路由给正在跑的工作流。
+
+**想关掉?** 手动加 `workflowProgressCard: false`(不在 setup 向导里),然后 `pi-courier restart` —— 工作流进度事件将被完全忽略:
+
+```json
+{ "workflowProgressCard": false }
+```
+
+就地刷新有节流(默认每 3 秒一次;状态翻转与终态立即编辑)。可用 `workflowProgressCardThrottleMs` 调整:
+
+```json
+{ "workflowProgressCardThrottleMs": 5000 }
+```
+
 ### 会话交接卡:/recap
 
 `/recap` 让当前会话给自己写摘要 —— 目标、干完的事、未尽事项,不超过 5 个要点 —— 以 `📋 交接卡` 发回本房间,`/new` 从此不再是失忆开关。会话没聊出什么(完成对话不足两轮)或还有任务在跑时,`/recap` 会如实拒绝(它绝不和在跑任务抢 steering 语义)。多工程模式下卡片还会抄送管理房间,沉淀为 `📋 <项目名> 交接卡(项目干活日志)` —— 一条"这项目最近在干嘛"的时间线。

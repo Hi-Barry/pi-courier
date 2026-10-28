@@ -13,7 +13,7 @@ import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
 import { commandPolicy } from "../command-registry.js";
-import { aggregateToolTurns, bashOutputLimit, type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
+import { aggregateToolTurns, bashOutputLimit, type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew, WORKFLOW_CARD_DEGRADED_RETRY_MS_DEFAULT, workflowCardThrottleMs, workflowProgressCard } from "../config.js";
 import { errorMessage } from "../errors.js";
 import {
   extractTextFromMessage,
@@ -33,6 +33,9 @@ import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
+import { parseWorkflowProgress } from "../workflow/adapter.js";
+import { renderWorkflowProgress, workflowCardLabels } from "../workflow/render.js";
+import { isTerminal, type WorkflowProgressIR, type WorkflowRunStatus } from "../workflow/types.js";
 import type { PersistedAttachmentEntry } from "./attachment-ledger.js";
 import { AttachmentLedger } from "./attachment-ledger.js";
 import { BacklogInbox } from "./backlog-inbox.js";
@@ -451,6 +454,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 重启失效(spec #235:旧 event_id 不可能再被编辑):首次记活卡时懒订阅
   // 重启生命周期,子进程回来即清卡 —— 与 RpcTransientState 同一接缝。
   const liveCardRestartWatched = new WeakSet<PiRpc>();
+  // 工作流卡同一房子规则:子进程重启 = 旧 event_id 全部失效,清账本 +
+  // 递增代次(在途出站写回作废);首次记账时懒订阅。
+  const workflowRestartWatched = new WeakSet<PiRpc>();
 
   /** 中间回合的活卡出站(在出站链上结算):无卡开卡、有卡编辑追加。 */
   const liveCardTurn = (rpc: PiRpc, target: ReplyTarget, text: string): Promise<void> => {
@@ -540,6 +546,177 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         return;
       }
       card.text = merged;
+    })();
+  };
+
+  // ── 工作流进度活卡(工作流状态机票3)────────────────────────────────
+  // dwf 进度快照聚合进同一张活卡就地刷新;与上方工具循环活卡完全并列、
+  // 互不触碰 —— 本账本不进 clearLiveCard,clearLiveCard 也不动本账本
+  // (agent_start / turn_end 的清卡是工具循环活卡的轮次语义,工作流卡的
+  // 生命周期由 runId 驱动)。输入只有内部 IR(parseWorkflowProgress 产出),
+  // 渲染只有 renderWorkflowProgress;本文件不出现 dwf 事件字符串与快照
+  // 字段名(spec 验收项)。
+  interface WorkflowCard {
+    /** 卡片 event_id,同 runId 的后续编辑都指向它 */
+    eventId: string;
+    /** 已渲染文本(最后一次成功出站的完整内容) */
+    text: string;
+    /** 终态已落卡:永不再编辑(不复活) */
+    finalized: boolean;
+    /** 编辑失败置位:后续快照按放大间隔重试,不降级逐条直发 */
+    degraded: boolean;
+    /** 上次成功编辑时间(Date.now()),节流基准 */
+    lastEditAt: number;
+  }
+  interface WorkflowCardLedger {
+    cards: Map<string, WorkflowCard>;
+    /** 当前活跃 run:新 runId 到来且旧卡未终态时,旧卡补一次中断编辑 */
+    activeRunId?: string;
+  }
+  const workflowLedgers = new WeakMap<PiRpc, WorkflowCardLedger>();
+  /** 工作流卡代次(与 liveCardGenerations 同源房子规则):子进程重启清账本
+   *  并递增,在途出站的迟到写回一律作废。 */
+  const workflowGenerations = new WeakMap<PiRpc, number>();
+  const bumpWorkflowGeneration = (rpc: PiRpc): void => {
+    workflowGenerations.set(rpc, (workflowGenerations.get(rpc) ?? 0) + 1);
+    workflowLedgers.delete(rpc);
+  };
+
+  /** 工作流卡启用 = 配置开(缺省 true)+ 出站缝双双注入。现读现判。 */
+  const workflowCardEnabled = (): boolean =>
+    workflowProgressCard(store.get()) && deps.editReply !== undefined && deps.sendLiveCard !== undefined;
+
+  /** 降级重试间隔(毫秒):编辑失败后按此放大间隔重试,不逐条直发。
+   *  数值单一来源在 config(与节流默认值同住),路由层只引用。 */
+  const WORKFLOW_DEGRADED_RETRY_MS = WORKFLOW_CARD_DEGRADED_RETRY_MS_DEFAULT;
+
+  /** 累积合并的底稿(按 rpc+runId):快照的 agents 是活动视图,新快照
+   *  以此为底 upsert,完成/跳过的子代理才不会从卡片上消失。 */
+  const workflowLastIr = new WeakMap<PiRpc, Map<string, WorkflowProgressIR>>();
+  /** 上次渲染的归一状态(按 rpc+runId):状态翻转检测的记账。 */
+  const workflowLastStatus = new WeakMap<PiRpc, Map<string, WorkflowRunStatus>>();
+  // 文案组装:路由层一次组装(当前 locale),渲染器只消费 labels。
+  const workflowLabels = workflowCardLabels();
+
+  /** 进度快照 → 工作流卡(编辑链异步结算,fire-and-forget;失败只记账)。 */
+  const handleWorkflowProgress = (rpc: PiRpc, rawEntry: unknown): void => {
+    if (!workflowCardEnabled()) return;
+    const target = bindings.get(rpc)?.replyTarget;
+    // 无 target(replay / 未绑定):安全旁路 —— 解析都不做,不留任何状态。
+    if (!target) return;
+    const editReply = deps.editReply;
+    const sendLiveCard = deps.sendLiveCard;
+    if (!editReply || !sendLiveCard) return;
+
+    // adapter 判别:非进度条目(undefined)→ 维持现状 debug 日志路径。
+    // 两段解析:先裸解析取 runId(纯函数,无副作用),再带上一份 IR 累积合并
+    // —— router 不触碰快照内部字段,runId 只从 IR 读回。
+    const bare = parseWorkflowProgress(rawEntry);
+    if (!bare) {
+      logger.debug("[agent] session entry written");
+      return;
+    }
+    const lastIrMap = workflowLastIr.get(rpc) ?? new Map<string, WorkflowProgressIR>();
+    workflowLastIr.set(rpc, lastIrMap);
+    const ir = parseWorkflowProgress(rawEntry, lastIrMap.get(bare.runId)) ?? bare;
+    lastIrMap.set(ir.runId, ir);
+
+    const generation = workflowGenerations.get(rpc) ?? 0;
+    const stale = (): boolean => (workflowGenerations.get(rpc) ?? 0) !== generation;
+    const ledger = workflowLedgers.get(rpc) ?? { cards: new Map<string, WorkflowCard>() };
+    workflowLedgers.set(rpc, ledger);
+    if (!workflowRestartWatched.has(rpc)) {
+      workflowRestartWatched.add(rpc);
+      rpc.onRestarted?.(() => bumpWorkflowGeneration(rpc));
+    }
+
+    const prevCard = ledger.cards.get(ir.runId);
+    // finalized 卡永不复活:终态后同 runId 的迟到快照直接忽略。
+    if (prevCard?.finalized) return;
+
+    // 状态翻转 = 与上次渲染的归一状态不同(首见快照不算翻转)。
+    const prevStatus = workflowLastStatus.get(rpc)?.get(ir.runId);
+    const statusFlipped = prevStatus !== undefined && prevStatus !== ir.status;
+    const terminal = isTerminal(ir.status);
+
+    const supersededRunId = ledger.activeRunId !== undefined && ledger.activeRunId !== ir.runId
+      ? ledger.activeRunId
+      : undefined;
+    const supersededCard = supersededRunId !== undefined ? ledger.cards.get(supersededRunId) : undefined;
+    const supersededPending = supersededCard !== undefined && !supersededCard.finalized;
+
+    const text = renderWorkflowProgress(ir, workflowLabels);
+    const throttleMs = workflowCardThrottleMs(store.get());
+
+    // 降级中的卡:按放大间隔用最新文本重试编辑(不逐条直发)。
+    if (prevCard?.degraded) {
+      if (Date.now() - prevCard.lastEditAt < WORKFLOW_DEGRADED_RETRY_MS) return;
+      void (async () => {
+        try {
+          await editReply(target.chatId, target.transport, prevCard.eventId, text);
+        } catch (err) {
+          logger.warn(`workflow card degraded retry failed for ${target.chatId}: ${errorMessage(err)}`);
+          return;
+        }
+        if (stale()) return;
+        prevCard.text = text;
+        prevCard.degraded = false;
+        prevCard.lastEditAt = Date.now();
+        if (terminal) prevCard.finalized = true;
+      })();
+      return;
+    }
+
+    // 节流:进度刷新类快照距上次编辑 < throttleMs 跳过;状态翻转与终态立即编辑。
+    if (prevCard && !statusFlipped && !terminal && Date.now() - prevCard.lastEditAt < throttleMs) return;
+
+    ledger.activeRunId = ir.runId;
+    const statusMap = workflowLastStatus.get(rpc) ?? new Map<string, WorkflowRunStatus>();
+    statusMap.set(ir.runId, ir.status);
+    workflowLastStatus.set(rpc, statusMap);
+
+    void (async () => {
+      // 新 runId 且旧活跃卡非终态:先补一次「已中断,另起新卡」编辑再开新卡
+      // (spec 票3:顺序约束 —— 旧卡收敛在前,新卡出站在后)。
+      if (supersededPending && supersededCard) {
+        supersededCard.finalized = true;
+        try {
+          await editReply(target.chatId, target.transport, supersededCard.eventId, `${supersededCard.text}\n\n${t("workflow.card.superseded")}`);
+        } catch (err) {
+          // 旧卡补编辑失败不阻塞新卡:旧卡就地定稿失败,标记降级即可。
+          logger.warn(`workflow card interrupt-edit failed for ${target.chatId}: ${errorMessage(err)}`);
+          supersededCard.finalized = true;
+          supersededCard.degraded = true;
+        }
+        if (stale()) return;
+      }
+      if (!prevCard) {
+        const eventId = await sendLiveCard(target.chatId, target.transport, text).catch(() => undefined);
+        if (!eventId) {
+          // 开卡失败不留状态:下一快照自然重试开卡。
+          logger.debug(`workflow card: no event_id for ${target.chatId} — next snapshot retries opening one`);
+          return;
+        }
+        if (stale()) return;
+        const card: WorkflowCard = { eventId, text, finalized: terminal, degraded: false, lastEditAt: Date.now() };
+        ledger.cards.set(ir.runId, card);
+        return;
+      }
+      try {
+        await editReply(target.chatId, target.transport, prevCard.eventId, text);
+      } catch (err) {
+        // 失败降级:保留最后一次成功 text,置 degraded,放大间隔重试。
+        logger.warn(`workflow card edit failed for ${target.chatId}: ${errorMessage(err)}`);
+        if (!stale()) {
+          prevCard.degraded = true;
+          prevCard.lastEditAt = Date.now();
+        }
+        return;
+      }
+      if (stale()) return;
+      prevCard.text = text;
+      prevCard.lastEditAt = Date.now();
+      if (terminal) prevCard.finalized = true;
     })();
   };
 
@@ -1476,6 +1653,18 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // Error visibility (issue #52): auto-retry progress reaches the room so
       // a failing round is never silent. Same guard as turn_start's typing:
       // only with a live binding (logAgentEvent above already logs both).
+      // 工作流进度活卡(工作流状态机票3):entry_appended 里的进度快照聚合
+      // 进一张就地刷新的卡;非进度条目在 adapter 判别后维持现状 debug 日志,
+      // 行为逐字节不变。与上方工具循环活卡完全并列、互不触碰。
+      if (event.type === "entry_appended") {
+        // wire 形状(真机实测):{"type":"entry_appended","entry":{type:"custom",
+        // customType,data,...}} —— adapter 消费的是 entry 本体。畸形缺 entry
+        // 时原样传入,adapter 判 undefined,落 debug 日志旁路。
+        const entry = (rawEvent as { entry?: unknown }).entry;
+        handleWorkflowProgress(rpc, entry ?? rawEvent);
+        return;
+      }
+
       if (event.type === "auto_retry_start") {
         if (target) {
           sendReply(
