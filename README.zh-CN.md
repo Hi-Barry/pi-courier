@@ -541,7 +541,7 @@ systemd unit 自带 `Restart=on-failure` + `RestartSec=5`:进程**崩溃**(非�
 systemd 管不了**僵死**:进程还在、PID 还在,但事件循环卡住不干活。unit 仍显示 active,journal 没有新日志,桥也不再回消息。补这个缺口的是独立看门狗 `deploy/watchdog/watchdog-posix.sh`:
 
 - 每分钟由 cron / systemd timer 触发,读 `~/.pi/pi-courier-state/heartbeat.json`(桥每 30 秒原子写一次,同时记录磁盘与堆水位);
-- 心跳超过 **180 秒**(= 6 × 30 秒;过期秒单点归属脚本常量,`--stale-seconds` 可覆盖)或心跳里的 PID 不存在 → `systemctl --user restart` 重启服务;
+- 心跳超过 **180 秒**(= 6 × 30 秒;过期秒单点归属脚本常量,`--stale-seconds` 可覆盖)或心跳里的 PID 不存在 → `systemctl --user restart` 重启服务。PID 不存在时会先等一个心跳间隔(默认 30 秒,`--heartbeat-interval-seconds` 可覆盖)再判死,避免重启窗口里上一实例的旧心跳把正在启动的新实例再踢一次;
 - 重启后用同目录的 `matrix-alert.mjs` 直读 `~/.pi/pi-courier.json` 的 Matrix 凭据与管理房 ID(`managementRooms[0]`,缺省回落 `space.roomId`),直接调 homeserver 的房间发送 API 发一条告警;冷却窗口默认 30 分钟(时间戳落在 `~/.pi/pi-courier-state/watchdog-alert-stamp`),发送失败不落戳、下一分钟重试。告警不依赖桥进程 —— bot 死了告警照样出得去;
 - 心跳文件不存在(桥还没跑过 first run)按安装错误处理:不告警、不动作。
 - **人工停止不会被拉回**:`pi-courier stop` 会先写 `~/.pi/pi-courier-state/watchdog-paused` 再调 systemctl(即使进程已经僵死、信号处理器跑不到,标记也能落盘),看门狗看到标记就跳过本轮判定;下次桥启动自动清除。`pi-courier restart` 由进程收到 SIGTERM 时写标记,随后新实例启动即清。直接 `systemctl stop`、`kill -9` 这类强杀不写标记,看门狗仍按失能拉起 —— 维护时请用 `pi-courier stop`,或先停看门狗。
@@ -611,7 +611,7 @@ npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs p
   这是**登录触发型**任务:只在每次登录时拉起。进程中途崩溃、被杀死或僵死,任务都不会重新拉起;进程死掉后任务状态还可能停留在 Running。补自愈有两条路线:
 
   - **auto-logon(自动登录桌面)**:让机器重启后自动登录,计划任务随之触发。代价是凭据与桌面会话留在无人值守的机器上(安全风险);而且它只解决「重启后没人登录」,仍然发现不了进程僵死。
-  - **看门狗(推荐)**:独立计划任务每分钟运行 `deploy/watchdog/watchdog-windows.ps1`,读 `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`。心跳超过 **180 秒**(= 6 × 30 秒,`-StaleSeconds` 可覆盖)或心跳里的 PID 不存在 → ① PID 仍存活(僵死)时先 `taskkill /F /PID` 杀旧实例(单实例锁不抢占活进程,不先杀新实例会秒退);② `schtasks /end` 终止卡住的任务实例(end 失败不阻断下一步);③ `schtasks /run` 拉起。随后用同目录的 `matrix-alert.mjs` 直读 `%USERPROFILE%\.pi\pi-courier.json` 的凭据与管理房,发一条 Matrix 告警(默认 30 分钟冷却)。心跳文件不存在按安装错误处理:不告警、不动作。看门狗自身需要 `node` 在 PATH 上。
+  - **看门狗(推荐)**:独立计划任务每分钟运行 `deploy/watchdog/watchdog-windows.ps1`,读 `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`。心跳超过 **180 秒**(= 6 × 30 秒,`-StaleSeconds` 可覆盖)或心跳里的 PID 不存在(PID 消失同样等一个心跳间隔,默认 30 秒)→ ① PID 仍存活(僵死)时先 `taskkill /F /PID` 杀旧实例(单实例锁不抢占活进程,不先杀新实例会秒退);② `schtasks /end` 终止卡住的任务实例(end 失败不阻断下一步);③ `schtasks /run` 拉起。随后用同目录的 `matrix-alert.mjs` 直读 `%USERPROFILE%\.pi\pi-courier.json` 的凭据与管理房,发一条 Matrix 告警(默认 30 分钟冷却)。心跳文件不存在按安装错误处理:不告警、不动作。看门狗自身需要 `node` 在 PATH 上。
 
     安装(桥的任务名默认 `pi-courier`,与上面的配方一致;把脚本路径换成你的实际安装目录,npm 全局安装通常在 `%APPDATA%\npm\node_modules\pi-courier\deploy\watchdog\`):
 

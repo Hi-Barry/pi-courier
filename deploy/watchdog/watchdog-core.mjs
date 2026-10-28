@@ -14,7 +14,9 @@
  *     不动作,stderr 记一行即可。
  *   - 心跳时间戳未过期且 PID 仍存活:进程活着且在干活,零动作。
  *   - PID 已不存在(无论心跳是否过期):进程死亡,直接重启 —— 「进程刚死、
- *     心跳还新鲜」也要立刻拉起,不必等满过期窗口。
+ *     心跳还新鲜」也要立刻拉起,不必等满过期窗口;但心跳年龄不足一个心跳
+ *     间隔时先给重启中的新实例一个宽限期(旧心跳 + 已死 PID 正是
+ *     systemd RestartSec 窗口的形态,立即重启会把正在启动的实例再踢一次)。
  *   - 心跳过期但 PID 仍存活:僵死(活着不干活)。Windows 序列必须先杀
  *     (单实例锁不抢占,不杀则新实例秒退,看门狗陷入「每分钟拉起→秒退」
  *     死循环);POSIX 的 `systemctl --user restart` 天然先 stop 后 start,
@@ -43,6 +45,10 @@ import * as path from "node:path";
 
 /** 心跳过期默认秒数:180 = 6 × 30 秒心跳间隔(换算关系见文件头)。 */
 export const DEFAULT_STALE_SECONDS = 180;
+
+/** 心跳间隔默认秒数(与桥 config resilience.heartbeatIntervalSeconds 一致):
+ *  「心跳仍新鲜但 PID 消失」的宽限期,避免重启窗口拿上一实例的旧心跳误判。 */
+export const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30;
 
 /** 默认心跳文件路径(桥的派生状态目录,票02 的写侧契约)。 */
 export function defaultHeartbeatPath() {
@@ -110,6 +116,7 @@ export function fillCommand(template, vars, opts = {}) {
  * opts 字段:
  *   heartbeatPath    心跳文件路径
  *   pauseMarkerPath  人工停止标记路径(默认:心跳同目录/watchdog-paused)
+ *   heartbeatIntervalSeconds 心跳间隔秒(默认 30;新鲜心跳+PID 死的宽限期)
  *   staleSeconds     过期秒(默认 DEFAULT_STALE_SECONDS;壳从命令行透传)
  *   nowMs            时间源(测试注入 fake 时钟)
  *   readHeartbeatFn  读心跳缝(测试注入;默认 readHeartbeat)
@@ -160,6 +167,17 @@ export function runWatchdogCore(opts) {
   //   expired + alive  → stale(僵死,需要先杀)
   //   !expired + !alive → dead(进程刚死,立刻拉起,不等过期)
   if (!expired && alive) {
+    return { verdict: "ok", actions: [] };
+  }
+
+  // 重启宽限:旧实例已死但心跳还不足一个心跳间隔 —— 很可能是 systemd
+  // RestartSec / stop→start 窗口里的上一份心跳,新实例尚未来得及写。
+  // 此时重启会把正在启动的实例再踢一次,并误发一条 DEAD 告警;等下一轮。
+  const graceMs = (opts.heartbeatIntervalSeconds ?? DEFAULT_HEARTBEAT_INTERVAL_SECONDS) * 1000;
+  if (!expired && !alive && ageMs < graceMs) {
+    process.stderr.write(
+      `[watchdog] heartbeat is fresh (${ageMs}ms) but pid ${beat.pid} is gone — within the one-heartbeat restart grace (${graceMs}ms); waiting for the next round.\n`
+    );
     return { verdict: "ok", actions: [] };
   }
 
@@ -219,6 +237,7 @@ export function runWatchdogCore(opts) {
  * CLI 参数解析(壳透传;导出以便测试直测)。
  *   --heartbeat <path>       心跳文件(默认 ~/.pi/pi-courier-state/heartbeat.json)
  *   --pause-marker <path>    人工停止标记(默认与心跳同目录/watchdog-paused)
+ *   --heartbeat-interval-seconds <n>  心跳间隔秒(默认 30;PID 消失后的宽限)
  *   --stale-seconds <n>      过期秒(默认 180 = 6 × 30s 心跳间隔)
  *   --restart-command <cmd>  重启命令(必填)
  *   --kill-command <cmd>     杀旧命令(可选,Windows 壳专用;{pid} 占位)
@@ -237,6 +256,9 @@ export function parseCoreArgs(argv) {
         break;
       case "--stale-seconds":
         result.staleSeconds = Number.parseInt(argv[++i] ?? "", 10);
+        break;
+      case "--heartbeat-interval-seconds":
+        result.heartbeatIntervalSeconds = Number.parseInt(argv[++i] ?? "", 10);
         break;
       case "--restart-command":
         result.restartCommand = argv[++i];
@@ -264,6 +286,9 @@ export function parseCoreArgs(argv) {
     ...(result.pauseMarkerPath ? { pauseMarkerPath: result.pauseMarkerPath } : {}),
     ...(result.staleSeconds !== undefined && Number.isFinite(result.staleSeconds)
       ? { staleSeconds: result.staleSeconds }
+      : {}),
+    ...(result.heartbeatIntervalSeconds !== undefined && Number.isFinite(result.heartbeatIntervalSeconds)
+      ? { heartbeatIntervalSeconds: result.heartbeatIntervalSeconds }
       : {}),
     restartCommand: result.restartCommand,
     ...(result.killCommand ? { killCommand: result.killCommand } : {}),

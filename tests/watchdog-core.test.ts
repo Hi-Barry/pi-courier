@@ -95,9 +95,9 @@ describe("看门狗判定核心三分支(spec #247 票06)", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("心跳仍新鲜但 PID 不存在 → 立即 dead 重启,不等过期窗口(评审)", () => {
+  it("心跳未过期但 PID 已死超过一个心跳间隔 → dead 重启(评审)", () => {
     const { run, opts } = core({
-      heartbeatPath: writeHeartbeat({ ts: NOW - 1_000, pid: 4242 }),
+      heartbeatPath: writeHeartbeat({ ts: NOW - 60_000, pid: 4242 }),
       pidAliveFn: () => false,
     });
     const result = runWatchdogCore(opts);
@@ -105,6 +105,26 @@ describe("看门狗判定核心三分支(spec #247 票06)", () => {
     expect(result.verdict).toBe("dead");
     expect(result.actions).toEqual(["restart"]);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("心跳新鲜 + PID 消失:宽限期内不动作,避免重启窗口二次重启(评审)", () => {
+    const { run, opts } = core({
+      heartbeatPath: writeHeartbeat({ ts: NOW - 10_000, pid: 4242 }),
+      pidAliveFn: () => false,
+    });
+    const result = runWatchdogCore(opts);
+
+    expect(result.verdict).toBe("ok");
+    expect(result.actions).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+
+    // 宽限期可用 --heartbeat-interval-seconds 覆盖(桥改心跳间隔时同步)
+    const { opts: shorter } = core({
+      heartbeatPath: writeHeartbeat({ ts: NOW - 10_000, pid: 4242 }),
+      pidAliveFn: () => false,
+      heartbeatIntervalSeconds: 5,
+    });
+    expect(runWatchdogCore(shorter).verdict).toBe("dead");
   });
 
   it("心跳文件缺失 → missing:不告警、不动作(安装错误,不是进程死亡)", () => {
