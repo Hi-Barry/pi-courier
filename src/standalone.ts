@@ -164,7 +164,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     notify: (message) => {
       const mgmtRoom = managementRoomId(store.get());
       if (!mgmtRoom || !matrix?.isConnected) return;
-      void sendReplyStrict(mgmtRoom, message);
+      // 必须接 catch:sendReplyStrict 在未连接/发送失败时 reject,而
+      // process 上的 unhandledRejection 崩溃守卫会把一条软告警发送失败
+      // 升级成非零退出(可能形成崩溃循环)。同文件其他同类调用一律静默。
+      void sendReplyStrict(mgmtRoom, message).catch(() => {});
     },
     onHardExit: (message) => {
       const mgmtRoom = managementRoomId(store.get());
