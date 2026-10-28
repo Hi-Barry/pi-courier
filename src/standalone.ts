@@ -42,6 +42,7 @@ import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
 import { consumeQueueSnapshots, type QueueSnapshotEntry, QueueSnapshotStore } from "./rpc/queue-snapshots.js";
+import { createShutdownChain } from "./shutdown-chain.js";
 import { ensureSpaceAndManagementRoom } from "./space-topology.js";
 import { createStartupState, runStartupHeals } from "./startup-state.js";
 import { JsonStateFile } from "./state/json-file.js";
@@ -517,23 +518,23 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
 
   // ---- shutdown ----------------------------------------------------------------
-  let shuttingDown = false;
-  const shutdown = async (signal: string): Promise<void> => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    logger.info(`🛑 ${signal} received — shutting down`);
-    await rpc.stop().catch(() => {});
-    await disconnectAll();
-    releaseLock();
-    process.exit(0);
-  };
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  process.on("SIGINT", () => void shutdown("SIGINT"));
+  // 共享优雅退出链(spec #247 票01):停 pi RPC → 断 transport → 放单实例锁
+  // → 退出。信号路径缺省退出码 0,与历史逐字节一致;崩溃守卫(票03)与
+  // 磁盘硬阈值(票04)携带非零码走同一条链,重入标志归链持有。
+  const shutdownChain = createShutdownChain({
+    stopRpc: () => rpc.stop(),
+    disconnectAll,
+    releaseLock,
+    exit: (code) => process.exit(code),
+    log: (message) => logger.info(message),
+  });
+  process.on("SIGTERM", () => void shutdownChain.shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdownChain.shutdown("SIGINT"));
   // Windows delivers Ctrl+Break (and some service-stop handoffs) as SIGBREAK
   // — SIGTERM never arrives there (evaluation 2026-10-13). POSIX defines the
   // signal too, where it essentially never fires; same shutdown path, so
   // registering it is harmless everywhere.
-  process.on("SIGBREAK", () => void shutdown("SIGBREAK"));
+  process.on("SIGBREAK", () => void shutdownChain.shutdown("SIGBREAK"));
 
   logger.info("🚀 pi-courier ready. Waiting for messages...");
 }
