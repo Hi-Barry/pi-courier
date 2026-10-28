@@ -83,15 +83,28 @@ describe("看门狗判定核心三分支(spec #247 票06)", () => {
     expect(run).toHaveBeenCalledWith("systemctl --user restart pi-pi-courier");
   });
 
-  it("心跳未过期 → 零动作(ok)", () => {
+  it("心跳未过期且 PID 存活 → 零动作(ok)", () => {
     const { run, opts } = core({
       heartbeatPath: writeHeartbeat({ ts: NOW - 60_000, pid: 4242 }),
+      pidAliveFn: () => true,
     });
     const result = runWatchdogCore(opts);
 
     expect(result.verdict).toBe("ok");
     expect(result.actions).toEqual([]);
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it("心跳仍新鲜但 PID 不存在 → 立即 dead 重启,不等过期窗口(评审)", () => {
+    const { run, opts } = core({
+      heartbeatPath: writeHeartbeat({ ts: NOW - 1_000, pid: 4242 }),
+      pidAliveFn: () => false,
+    });
+    const result = runWatchdogCore(opts);
+
+    expect(result.verdict).toBe("dead");
+    expect(result.actions).toEqual(["restart"]);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("心跳文件缺失 → missing:不告警、不动作(安装错误,不是进程死亡)", () => {
@@ -166,6 +179,7 @@ describe("过期秒(spec #247 票06:默认 180 = 6 × 30s 心跳间隔,可覆盖
     const { opts: fresh } = core({
       heartbeatPath: writeHeartbeat({ ts: NOW - 4_999, pid: 1 }),
       staleSeconds: 5,
+      pidAliveFn: () => true,
     });
     expect(runWatchdogCore(fresh).verdict).toBe("ok");
   });

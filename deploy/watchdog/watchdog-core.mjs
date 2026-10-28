@@ -12,7 +12,9 @@
  *     信号退出前写、下次启动清除 —— 运维主动停掉的服务不拉起、不告警。
  *   - 心跳文件读不到(首次运行前):安装错误,不是进程死亡 —— 不告警、
  *     不动作,stderr 记一行即可。
- *   - 心跳时间戳未过期:进程活着且在干活,零动作。
+ *   - 心跳时间戳未过期且 PID 仍存活:进程活着且在干活,零动作。
+ *   - PID 已不存在(无论心跳是否过期):进程死亡,直接重启 —— 「进程刚死、
+ *     心跳还新鲜」也要立刻拉起,不必等满过期窗口。
  *   - 心跳过期但 PID 仍存活:僵死(活着不干活)。Windows 序列必须先杀
  *     (单实例锁不抢占,不杀则新实例秒退,看门狗陷入「每分钟拉起→秒退」
  *     死循环);POSIX 的 `systemctl --user restart` 天然先 stop 后 start,
@@ -150,11 +152,15 @@ export function runWatchdogCore(opts) {
     return { verdict: "missing", actions: [] };
   }
   const ageMs = (opts.nowMs ?? Date.now()) - beat.ts;
-  if (ageMs < staleSeconds * 1000) {
+  const alive = (opts.pidAliveFn ?? defaultPidAlive)(beat.pid);
+  const expired = ageMs >= staleSeconds * 1000;
+  // 心跳新鲜 + PID 活 = 健康。其余两种失能形态都继续:
+  //   expired + alive  → stale(僵死,需要先杀)
+  //   !expired + !alive → dead(进程刚死,立刻拉起,不等过期)
+  if (!expired && alive) {
     return { verdict: "ok", actions: [] };
   }
 
-  const alive = (opts.pidAliveFn ?? defaultPidAlive)(beat.pid);
   const verdict = alive ? "stale" : "dead";
   const actions = [];
   const run = opts.runFn ?? ((command) => execSync(command, { stdio: "pipe" }));
