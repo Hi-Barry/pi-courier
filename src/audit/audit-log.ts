@@ -47,6 +47,12 @@ export const AUDIT_EVENTS = {
   backlogExecute: "backlog.execute",
   guestDenied: "guest.denied",
   modelFallback: "model.fallback",
+  // /mcp 指令族(spec #246):MCP 服务器的配置突变面。事件由命令层经
+  // ctx.audit 缝按真实结果上报(服务器名入账;--env/--header 的值不落账)。
+  mcpAdd: "mcp.add",
+  mcpRemove: "mcp.remove",
+  mcpLogin: "mcp.login",
+  mcpLogout: "mcp.logout",
 } as const;
 
 export interface AuditLogOptions {

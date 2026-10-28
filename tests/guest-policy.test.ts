@@ -34,6 +34,7 @@ describe("guest policy blocklist (issue #120)", () => {
         "/interrupt",
         "/login",
         "/logout",
+        "/mcp",
         "/model",
         "/multiproject",
         "/name",
@@ -77,7 +78,7 @@ describe("guest policy blocklist (issue #120)", () => {
   });
 
   it("dangerous commands are blocked with the exact trigger word", () => {
-    for (const cmd of ["/bash ls", "/stop", "/pmctl list", "/pmctl", "/interrupt", "/trusted", "/remind 30m 喝水", "/LOGOUT"]) {
+    for (const cmd of ["/bash ls", "/stop", "/pmctl list", "/pmctl", "/interrupt", "/trusted", "/remind 30m 喝水", "/LOGOUT", "/mcp", "/mcp list", "/MCP add x --url https://x"]) {
       const verdict = guestCommandVerdict(cmd);
       expect(verdict.blocked, cmd).toBe(true);
       expect(verdict.command, cmd).toBe(cmd.trim().split(/\s+/)[0]!.toLowerCase());

@@ -17,6 +17,7 @@ const en: Record<MessageKey, string> = {
   "common.truncated": "…(truncated)",
   "common.noOutput": "(no output)",
   "common.exitCode": "exit code: {code}",
+  "common.unknown": "unknown",
   "common.listSep": ", ",
 
   // ── cmd ───────────────────────────────────────────────────────────────
@@ -169,6 +170,108 @@ const en: Record<MessageKey, string> = {
     "💤 No skills installed yet. Drop skills into these directories:\n" +
     "• User-level: ~/.agents/skills/ or ~/.pi/agent/skills/\n" +
     "• Project-level: <workdir>/.agents/skills/ or <workdir>/.pi/skills/",
+  // ── /mcp command family (spec #246: MCP server management, command-map.ts)
+  // Reply-safety rule: --env/--header values never reach a reply (redacted in
+  // the command layer); these templates only take server names and
+  // pre-formatted diagnostics.
+  "cmd.mcp.unavailable":
+    "❌ MCP management unavailable ({detail}).\nThe local pi may be missing or too old: the mcp subcommand requires pi ≥ 1.0.",
+  "cmd.mcp.unwired": "❌ MCP management is not enabled in this deployment.",
+  "cmd.mcp.forbidden": "❌ /mcp is admin-only (in multi-project mode, management room only).",
+  "cmd.mcp.usage":
+    "Usage:\n" +
+    "• /mcp — show MCP server status\n" +
+    "• /mcp add <name> (--url <address> | -- <command> [args...])\n" +
+    "• /mcp remove <name>\n" +
+    "• /mcp login <name> [--timeout seconds]\n" +
+    "• /mcp logout <name>\n" +
+    "• /mcp help — details",
+  "cmd.mcp.help":
+    "**MCP server management** (executed via the pi mcp subcommand):\n" +
+    "\n" +
+    "• `/mcp` or `/mcp list` — server status card (connection/tools/scope; needs-auth servers include a login hint)\n" +
+    "• `/mcp add <name> --url <address>` — add a remote server\n" +
+    "• `/mcp add <name> -- <command> [args...]` — add a local server (everything after `--` is passed through verbatim)\n" +
+    "  Optional: `--env K=V`, `--header K=V` (repeatable), `--cwd <dir>`, `--description <text>`, `--exposure <mode>`\n" +
+    "  ⚠️ `--env`/`--header` values are never echoed to the chat and never reach the audit log\n" +
+    "• `/mcp remove <name>` — remove a server\n" +
+    "• `/mcp login <name> [--timeout seconds]` — authorize a login (default 300s, cap 600s; the link is posted to this room)\n" +
+    "• `/mcp logout <name>` — log out a server\n" +
+    "\n" +
+    "Semantics: **logins take effect immediately** (running sessions pick them up on the next turn — no /reload needed);\n" +
+    "**adds/removals need /reload** (use /reload all for multiple projects).",
+  "cmd.mcp.list.checking": "⏳ Checking MCP server status…",
+  "cmd.mcp.list.failed": "❌ Failed to fetch MCP server status: {message}",
+  "cmd.mcp.add.usage":
+    "Usage: /mcp add <name> (--url <address> | -- <command> [args...])\n" +
+    "Examples: /mcp add docs --url https://mcp.example.com/mcp\n" +
+    "          /mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp\n" +
+    "Optional: --env K=V, --header K=V (both repeatable), --cwd <dir>, --description <text>, --exposure <mode>",
+  "cmd.mcp.add.localUnsupported": "❌ The --local scope is not supported yet: remove the option and retry.",
+  "cmd.mcp.add.ok":
+    "✅ MCP server \"{name}\" added.\nSend /reload to apply (use /reload all for multiple projects); check status with /mcp list.",
+  "cmd.mcp.add.failed": "❌ Failed to add the MCP server: {message}",
+  "cmd.mcp.remove.usage": "Usage: /mcp remove <name> (see /mcp list for names)",
+  "cmd.mcp.remove.ok": "✅ MCP server \"{name}\" removed.\nSend /reload to apply (use /reload all for multiple projects).",
+  "cmd.mcp.remove.failed": "❌ Failed to remove the MCP server: {message}",
+  "cmd.mcp.login.usage": "Usage: /mcp login <name> [--timeout seconds] (default 300s, cap 600s)",
+  "cmd.mcp.login.started": "🔑 Starting the login for MCP server \"{server}\"… the authorization link will follow in this room.",
+  "cmd.mcp.login.busy": "⚠️ A login is already in progress: \"{server}\". Wait for it to finish or time out before starting another.",
+  "cmd.mcp.login.authUrl":
+    "🌐 Open the link below in a browser to authorize MCP server \"{server}\":\n" +
+    "{url}\n\n" +
+    "⚠️ The redirect may point at 127.0.0.1: if pi runs on a remote machine (SSH scenario), set up port forwarding first (e.g. `ssh -L <port>:127.0.0.1:<port> <host>`) before opening the link.\n" +
+    "A receipt arrives automatically once authorization completes; logins take effect immediately — no /reload needed.",
+  "cmd.mcp.login.done": "✅ MCP server \"{server}\" signed in. Takes effect immediately: running sessions pick it up on the next turn — no /reload needed.",
+  "cmd.mcp.login.already": "ℹ️ MCP server \"{server}\" is already signed in — nothing to do.",
+  "cmd.mcp.login.failed": "❌ MCP server \"{server}\" sign-in failed{codeSuffix}: {message}",
+  "cmd.mcp.login.failedCode": " (exit code {code})",
+  "cmd.mcp.login.expired": "⌛ MCP server \"{server}\" sign-in timed out ({timeoutSec}s). Retry with /mcp login {server} once the network is reachable.",
+  "cmd.mcp.logout.usage": "Usage: /mcp logout <name> (see /mcp list for names)",
+  "cmd.mcp.logout.ok": "✅ MCP server \"{server}\" signed out. Send /mcp login {server} when re-authorization is needed.",
+  "cmd.mcp.logout.failed": "❌ Failed to sign out the MCP server: {message}",
+  // Tokenizer errors (reach the chat via the add/remove/logout usage receipts).
+  "cmd.mcp.tokenize.unclosedSingle": "A single quote is not closed",
+  "cmd.mcp.tokenize.unclosedDouble": "A double quote is not closed",
+  "cmd.mcp.tokenize.danglingBackslash": "A backslash has no following character",
+  // Status card (/mcp list → formatMcpStatusCard): all via t(), zh is the key-set baseline.
+  "cmd.mcp.card.empty":
+    "No MCP servers configured yet.\n" +
+    "Add a remote server: /mcp add <name> --url <address>\n" +
+    "Add a local server: /mcp add <name> -- <command> [args...]\n" +
+    "Send /reload afterwards to apply (use /reload all for multiple projects).",
+  "cmd.mcp.card.header": "MCP servers ({count}):",
+  "cmd.mcp.card.server": "• {name} — {state} | {exposure} | {scope}",
+  "cmd.mcp.card.transport": "  transport: {transport}",
+  "cmd.mcp.card.needsAuth": "  sign-in required: send /mcp login {server} to get an authorization link",
+  "cmd.mcp.card.tools": "  tools ({count}): {tools}{more}",
+  "cmd.mcp.card.toolsMore": " …and {count} more",
+  "cmd.mcp.card.resources": "  resources: {count}, URI templates: {templates}",
+  "cmd.mcp.card.serverError": "  ⚠ {error}",
+  "cmd.mcp.card.errorsHeader": "Config errors:",
+  "cmd.mcp.card.errorLine": "• {message}",
+  "cmd.mcp.card.note": "Note: {note}",
+  // Localized state words for pi list --json; unknown states pass through in code, not here.
+  "cmd.mcp.state.connected": "connected",
+  "cmd.mcp.state.needsAuth": "needs auth",
+  "cmd.mcp.state.disabled": "disabled",
+  "cmd.mcp.state.connecting": "connecting",
+  "cmd.mcp.state.unknown": "unknown",
+  // Execution-seam diagnostic prefixes (mcp-cli / mcp-login-flow feed {message}/{detail}).
+  "cmd.mcp.detail.spawnFailed": "Failed to start the pi CLI: {message}",
+  "cmd.mcp.detail.unknownSubcommand": "pi does not know this mcp subcommand: {detail}",
+  "cmd.mcp.detail.cliLocate": "Cannot locate the pi CLI: {message}",
+  "cmd.mcp.login.seamError": "The login execution seam threw: {message}",
+  "cmd.mcp.login.noSuccessMark": "pi exited without printing a sign-in success marker",
+  "cmd.mcp.login.exitCode": "pi mcp login exited with code {code}",
+  // Downgrade hint for a mutating command that exited 0 with no confirmation shape
+  // (an older pi treated the command as a prompt).
+  "cmd.mcp.add.unverified":
+    "⚠️ pi's output lacks the expected add confirmation: an older pi (<1.0) may have treated this command as a plain prompt and done nothing. Verify with /mcp list; upgrade pi to ≥ 1.0 if it is outdated.",
+  "cmd.mcp.remove.unverified":
+    "⚠️ pi's output lacks the expected removal confirmation: an older pi (<1.0) may have treated this command as a plain prompt and done nothing. Verify with /mcp list; upgrade pi to ≥ 1.0 if it is outdated.",
+  "cmd.mcp.logout.unverified":
+    "⚠️ pi's output lacks the expected sign-out confirmation: an older pi (<1.0) may have treated this command as a plain prompt and done nothing. Send /mcp login {server} again — an \"already signed in\" reply means the credentials are still there; upgrade pi to ≥ 1.0 if it is outdated.",
   "cmd.help.group.pi":
     "**Pi-native commands** (same as the pi TUI, executed over RPC):\n" +
     "\n" +
@@ -218,6 +321,14 @@ const en: Record<MessageKey, string> = {
     "【Timed reminders】\n" +
     "• `/remind <time> <text>` — a timed reminder (persisted before it runs, survives restarts; e.g. /remind 30m brew tea)\n" +
     "• `/remind list` / `/remind rm <n>` — view / cancel this room's reminders\n" +
+    "\n" +
+    "【MCP servers】\n" +
+    "• `/mcp` — show MCP server status (connection/tools/scope)\n" +
+    "• `/mcp add <name> (--url <address> | -- <command> [args...])` — add a server (--env/--header values are never echoed)\n" +
+    "• `/mcp remove <name>` — remove a server (send /reload after adds/removals; /reload all for multiple projects)\n" +
+    "• `/mcp login <name> [--timeout seconds]` — authorize a login (link posted to this room; takes effect immediately, no /reload)\n" +
+    "• `/mcp logout <name>` — sign out a server\n" +
+    "• `/mcp help` — MCP command details\n" +
     "\n" +
     "【Session mirror】\n" +
     "• `/attach` — enable the TUI ↔ Matrix session mirror (replies with a command to run in a terminal for two-way sync)\n" +

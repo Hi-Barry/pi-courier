@@ -259,6 +259,7 @@ You are now a trusted user (the first trusted user also becomes admin). In multi
 | `/sessions` / `/switch <n>` | List recent sessions / switch to one (rejected while streaming) |
 | `/autocompact on\|off` / `/autoretry on\|off` | Toggle pi's auto-compaction / auto-retry (writes pi's global settings — affects every pi process on this machine, survives restarts) |
 | `/login` / `/logout <provider>` / `/auth` | Provider login management (admin + management room only) |
+| `/mcp <subcommand>` | MCP server management: list / add / remove / login / logout (admin + management room only) |
 | `/reload` | Restart pi (after installing extensions/config); `/reload all` restarts every idle pi process of the instance |
 | `/help` | Full help |
 
@@ -403,6 +404,43 @@ No shell needed to (re-)login a provider:
 - `/auth` — the authenticated providers
 
 Gate: admin + management room only (single-project mode: your DM with the bot). On success the **idle** pi processes restart automatically so the new credential loads; busy ones are told to `/reload` later. Credentials go straight into pi's standard credential file (`~/.pi/agent/auth.json`), shared with every pi process on the machine — pi-courier itself neither stores nor displays them.
+
+### Manage MCP servers from chat: `/mcp`
+
+MCP (Model Context Protocol) servers are the plugboard that gives the AI extra tools. Since pi 1.0, MCP configuration belongs to pi, and `/mcp` brings the `pi mcp` command family into chat — no SSH into the bridge host needed to check status, add/remove servers, or complete an OAuth login:
+
+| Command | Action |
+|---|---|
+| `/mcp` (same as `/mcp list`) | One status card listing every server: connection state / transport / tool count / scope; servers needing login get a `/mcp login` hint, an empty list gets add guidance. A "checking…" notice arrives first when probing is slow |
+| `/mcp add <name> --url <url>` | Add a remote HTTP server (`--header` may repeat) |
+| `/mcp add <name> <command> [args…]` | Add a local stdio server; `--env` / `--header` / `--cwd` / `--description` / `--exposure` pass through with pi CLI semantics |
+| `/mcp remove <name>` | Remove a server; `/mcp add` with the same name replaces it — no remove-first dance |
+| `/mcp login <name> [--timeout sec]` | OAuth login: the bot posts the authorization link into the room; open it in a browser and approve (default 300 s, bridge-side hard cap 600 s) |
+| `/mcp logout <name>` | Clear that server's OAuth credential (account switch / revocation) |
+| `/mcp help` | Subcommand usage |
+
+Commands are tokenized shell-style (quotes respected); everything after `--` passes through verbatim. Missing arguments or unknown options get a usage reply — never fed to the model as a chat turn.
+
+**Permissions & safety**: admin + management room only (single-project mode: your DM with the bot); guests are hard-blocked. The four sensitive actions — add / remove / login / logout — land in the audit log (`list` is read-only and not logged). The **values** of `--env` / `--header` are never echoed in any reply (keys only) — secrets stay out of the chat history.
+
+**When changes take effect** (every reply says which):
+
+- **Login / logout: effective immediately** — running pi sessions pick up the credential on their next turn, no `/reload` needed;
+- **Add / remove: needs `/reload`**; multi-project deployments send `/reload all` to restart every idle pi process.
+
+**OAuth redirect limitation (read this for remote deployments)**: pi's OAuth callback is bound to the **bridge host's** loopback (`127.0.0.1`). `/mcp login` posts the authorization link into the room, but **the browser that opens the link must be able to reach the redirect address on the bridge host** — if the bridge runs on a server and you tap the link on your phone, the phone's browser cannot reach the server's `127.0.0.1`, and the authorization page spins until timeout. Either fix works:
+
+```bash
+# From your local machine, open an SSH tunnel that forwards the redirect
+# port on the bridge host to the same local port
+ssh -L <port>:127.0.0.1:<port> <user>@<bridge-host>
+```
+
+or make that port on the bridge host reachable from your browser (firewall rules etc. — your network call). The login reply includes this reminder too.
+
+**v1 manages the global config only**: every `/mcp` change lands in the global `~/.pi/agent/mcp.json`, shared by every pi process on the machine (all projects). Project-level `.pi/mcp.json` is not supported yet: it sits behind pi's project trust gate, which silently rejects untrusted projects in the UI-less RPC mode — trust cannot be confirmed from chat. The global config already covers every project; project-level support stays as a future extension.
+
+**Version requirement**: pi ≥ 1.0 (older pi builds have no `pi mcp` subcommand; `/mcp` replies with an upgrade hint instead of a mysterious error).
 
 ### Replying to an earlier message
 

@@ -43,6 +43,7 @@ import {
   createBashTracker,
   formatBashReply,
   handleSlashCommand,
+  type McpOrchestration,
   parseBangCommand,
   type QueueSnapshot,
   resolveSessionDir,
@@ -105,6 +106,10 @@ export interface MessageRouterDeps {
    *  The wiring points are pinned by tests via the shared AUDIT_EVENTS
    *  registry. Absent = zero auditing (tests/legacy deployments). */
   audit?: AuditLog;
+  /** /mcp 指令族(spec #246):MCP 服务器管理的编排槽(pi CLI 执行缝 +
+   *  登录单飞编排器,组合根经 createMcpOrchestration 装配)。Absence =
+   *  /mcp 回复「未启用」,行为与未实现一致。 */
+  mcp?: McpOrchestration;
   /** 离线积压结算冻结信号(#136 修法B):装配根在 transport 连接阶段
    *  结束(成功或已处理的失败)后 resolve。缺省 = 已就绪,旧语义。 */
   backlogTransportsReady?: Promise<void>;
@@ -1130,6 +1135,18 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
               rebase: (sessionFile) => mirrors.rebase(rpc, sessionFile),
               currentSessionFile: async () => (await rpc.requireClient().getState()).sessionFile,
             },
+            // /mcp 指令族(spec #246):编排槽 + adminRoom 守卫按本消息预绑定
+            // (命令层不接触 chatId/userId)。口径与 /login 族一致:管理员,
+            // 且多工程限管理房间 / 单工程限私聊 —— 配 MCP = 给 agent 加工具
+            // 与外发通道,授权面从紧。
+            mcp: deps.mcp
+              ? {
+                  ...deps.mcp,
+                  adminAllowed:
+                    auth.isAdminUser(ctx.msg.userId, ctx.msg.transport) &&
+                    (ctx.multiProject ? ctx.isManagementRoom : !ctx.msg.isGroupChat),
+                }
+              : undefined,
           });
           // 审计(issue #124):命令面按登记表落账 —— 只记敏感动作
           //(登记表 auditEvent 位;清队走上面的 audit 缝,由命令层按真实
