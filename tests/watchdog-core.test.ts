@@ -190,6 +190,23 @@ describe("读心跳与判活默认实现", () => {
   it("fillCommand:pid 与 message 占位替换", () => {
     expect(fillCommand("kill {pid} --say {message}", { pid: 7, message: "hi" })).toBe("kill 7 --say hi");
   });
+
+  it("告警消息含括号也能经真实 execSync 发出(评审:POSIX 壳 alertCommand)", () => {
+    if (process.platform === "win32") return;
+    const out = path.join(dir, "alert.txt");
+    const result = runWatchdogCore({
+      heartbeatPath: writeHeartbeat({ ts: NOW - 200_000, pid: 4_000_000_000 }),
+      staleSeconds: 180,
+      nowMs: NOW,
+      pidAliveFn: () => false,
+      // 不注入 runFn → 走真实 execSync(/bin/sh -c),复现括号语法错场景
+      restartCommand: "true",
+      alertCommand: `printf '%s' {message} > ${JSON.stringify(out)}`,
+    });
+
+    expect(result.actions).toEqual(["restart", "alert"]);
+    expect(fs.readFileSync(out, "utf-8")).toBe("pi-courier watchdog: service was DEAD (pid gone) and has been restarted.");
+  });
 });
 
 describe("POSIX 壳语法门禁(bash -n,spec #247 票06)", () => {

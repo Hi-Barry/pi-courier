@@ -75,9 +75,23 @@ export function readHeartbeat(filePath) {
   }
 }
 
-/** 命令模板占位符替换:{pid}=心跳 PID,{message}=告警文本(壳传入)。 */
-export function fillCommand(template, vars) {
-  return template.replaceAll("{pid}", String(vars.pid)).replaceAll("{message}", vars.message ?? "");
+/** 按宿主 shell 给单个值加引号(告警消息可能含空格/括号)。
+ *  POSIX:单引号包裹,内部 ' 转义为 '\'';Windows(cmd.exe):双引号包裹,
+ *  内部 " 转义为 \"。平台壳的模板不含引号,由这里统一负责。 */
+export function shellQuote(value) {
+  const text = String(value);
+  if (process.platform === "win32") return `"${text.replaceAll('"', '\\"')}"`;
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+/** 命令模板占位符替换:{pid}=心跳 PID,{message}=告警文本(壳传入)。
+ *  quoteMessage=true 时 {message} 按宿主 shell 加引号(告警命令专用;
+ *  默认英文消息含 `STALE (heartbeat frozen, pid alive)` 这类括号,裸替换
+ *  会让 /bin/sh -c 报语法错,告警直接丢失)。 */
+export function fillCommand(template, vars, opts = {}) {
+  const rawMessage = vars.message ?? "";
+  const message = opts.quoteMessage ? shellQuote(rawMessage) : rawMessage;
+  return template.replaceAll("{pid}", String(vars.pid)).replaceAll("{message}", message);
 }
 
 /**
@@ -142,7 +156,9 @@ export function runWatchdogCore(opts) {
       opts.alertMessage ??
       `pi-courier watchdog: service was ${verdict === "stale" ? "STALE (heartbeat frozen, pid alive)" : "DEAD (pid gone)"} and has been restarted.`;
     try {
-      run(fillCommand(opts.alertCommand, { pid: beat.pid, message }));
+      // {message} 必须按宿主 shell 加引号:默认消息含括号/空格,裸替换会
+      // 让 /bin/sh -c 语法错,告警在「最需要通知」时静默丢失。
+      run(fillCommand(opts.alertCommand, { pid: beat.pid, message }, { quoteMessage: true }));
       actions.push("alert");
     } catch (err) {
       process.stderr.write(`[watchdog] alert command failed (restart already done): ${String(err)}\n`);
