@@ -17,6 +17,11 @@
  *     两形态都成立,不需要额外步骤 —— 壳是否传 --kill-command 决定差异。
  *   - 心跳过期且 PID 已不存在:进程死亡,直接重启。
  *
+ * 结束任务命令(end-command,可选,Windows 壳专用):在杀旧之后、重启之前
+ * 无条件执行一次;失败只记 stderr 不阻断 —— `schtasks /end` 对未运行的
+ * 任务会返回非零,而「已死」分支恰恰常见,若把它和 `/run` 串成 `&&`,
+ * 重启会被永远跳过。POSIX 壳不传此参数(`systemctl restart` 自己完成 stop)。
+ *
  * 「多久算死」的过期秒数单点归属本脚本(桥的韧性配置段刻意不含此键):
  *   默认 180 秒 = 6 × 30 秒心跳间隔。桥侧改 config
  *   resilience.heartbeatIntervalSeconds 时,此处(--stale-seconds 或安装
@@ -85,6 +90,7 @@ export function fillCommand(template, vars) {
  *   pidAliveFn       判活缝(测试注入;默认 defaultPidAlive)
  *   runFn            任务控制命令缝(测试注入 fake;默认 execSync)
  *   killCommand      僵死分支杀旧命令(POSIX 留空;Windows 传 taskkill,票07)
+ *   endCommand       结束任务命令(可选;Windows 传 schtasks /end,失败不阻断)
  *   restartCommand   重启命令(必填;{pid} 占位)
  *   alertCommand     告警命令(可选;{message}/{pid} 占位;失败只记 stderr)
  *   alertMessage     告警文本(核心按判定结果拼默认值,英文 —— 公开仓库
@@ -117,6 +123,17 @@ export function runWatchdogCore(opts) {
     run(fillCommand(opts.killCommand, { pid: beat.pid }));
     actions.push("kill");
   }
+  // 结束任务实例(Windows):任务可能在进程死后仍卡 Running,不先 end,
+  // 随后的 run 会被「禁止同任务并行实例」拒绝。end 对未运行任务返回非零
+  // 属预期(已死分支),失败只记 stderr,绝不阻断 run。
+  if (opts.endCommand) {
+    try {
+      run(fillCommand(opts.endCommand, { pid: beat.pid }));
+      actions.push("end");
+    } catch (err) {
+      process.stderr.write(`[watchdog] end command failed (continuing to restart): ${String(err)}\n`);
+    }
+  }
   run(fillCommand(opts.restartCommand, { pid: beat.pid }));
   actions.push("restart");
 
@@ -140,6 +157,7 @@ export function runWatchdogCore(opts) {
  *   --stale-seconds <n>      过期秒(默认 180 = 6 × 30s 心跳间隔)
  *   --restart-command <cmd>  重启命令(必填)
  *   --kill-command <cmd>     杀旧命令(可选,Windows 壳专用;{pid} 占位)
+ *   --end-command <cmd>      结束任务命令(可选,Windows 壳专用;失败不阻断)
  *   --alert-command <cmd>    告警命令(可选;{message}/{pid} 占位)
  */
 export function parseCoreArgs(argv) {
@@ -157,6 +175,9 @@ export function parseCoreArgs(argv) {
         break;
       case "--kill-command":
         result.killCommand = argv[++i];
+        break;
+      case "--end-command":
+        result.endCommand = argv[++i];
         break;
       case "--alert-command":
         result.alertCommand = argv[++i];
@@ -177,6 +198,7 @@ export function parseCoreArgs(argv) {
       : {}),
     restartCommand: result.restartCommand,
     ...(result.killCommand ? { killCommand: result.killCommand } : {}),
+    ...(result.endCommand ? { endCommand: result.endCommand } : {}),
     ...(result.alertCommand ? { alertCommand: result.alertCommand } : {}),
   };
 }

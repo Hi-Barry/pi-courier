@@ -12,7 +12,9 @@
 #      已死分支自动跳过,直接进入②③。)
 #   ② `schtasks /end /tn <任务名>` 终止计划任务实例:事故实录里进程死后
 #      任务状态仍卡 Running,调度器默认禁止同任务并行实例,不先 end 则
-#      随后的 run 被直接拒绝。
+#      随后的 run 被直接拒绝。end 由判定核心单独执行:对未运行的任务
+#      schtasks 会返回非零(「已死」分支的常态),失败只记 stderr,绝不
+#      阻断下一步 run(把 end 与 run 串成 `&&` 会让重启被永远跳过)。
 #   ③ `schtasks /run /tn <任务名>` 拉起。杀完到起新之间无需等锁:旧进程
 #      死透后锁文件可被新实例直接接管(既有锁语义)。
 #
@@ -59,14 +61,16 @@ if (-not $nodeCommand) {
 }
 
 # Windows 序列模板(占位符由判定核心替换:{pid}=心跳 PID,{message}=告警文本;
-# && 由核心 execSync 的 cmd.exe 解释 —— 与壳的 PowerShell 版本无关):
+# 三条命令分开传给核心,核心按 kill → end → run 次序执行):
 $killCommand = "taskkill /F /PID {pid}"
-$restartCommand = "schtasks /end /tn $TaskName && schtasks /run /tn $TaskName"
+$endCommand = "schtasks /end /tn $TaskName"
+$restartCommand = "schtasks /run /tn $TaskName"
 
 $coreArgs = @(
   "--heartbeat", $HeartbeatPath,
   "--stale-seconds", "$StaleSeconds",
   "--kill-command", $killCommand,
+  "--end-command", $endCommand,
   "--restart-command", $restartCommand
 )
 if (-not $NoAlert) {

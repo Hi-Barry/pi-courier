@@ -85,19 +85,19 @@ describe("Windows 重启序列注入测试(票07:僵死必测)", () => {
       nowMs: NOW,
       pidAliveFn: () => true,
       killCommand: psStringVar("killCommand"),
+      endCommand: psStringVar("endCommand"),
       restartCommand: psStringVar("restartCommand"),
       runFn: run,
     });
 
     expect(result.verdict).toBe("stale");
-    expect(result.actions).toEqual(["kill", "restart"]);
+    expect(result.actions).toEqual(["kill", "end", "restart"]);
     const calls = run.mock.calls.map((call) => String(call[0]));
     expect(calls).toEqual([
       "taskkill /F /PID 4242",
-      "schtasks /end /tn pi-courier && schtasks /run /tn pi-courier",
+      "schtasks /end /tn pi-courier",
+      "schtasks /run /tn pi-courier",
     ]);
-    // 重启命令内部:/end 必须早于 /run(调度器禁止同任务并行实例)
-    expect(calls[1].indexOf("/end")).toBeLessThan(calls[1].indexOf("/run"));
   });
 
   it("已死(PID 不存在)→ 跳过 taskkill,直接 /end → /run", () => {
@@ -108,24 +108,43 @@ describe("Windows 重启序列注入测试(票07:僵死必测)", () => {
       nowMs: NOW,
       pidAliveFn: () => false,
       killCommand: psStringVar("killCommand"),
+      endCommand: psStringVar("endCommand"),
       restartCommand: psStringVar("restartCommand"),
       runFn: run,
     });
 
     expect(result.verdict).toBe("dead");
-    expect(result.actions).toEqual(["restart"]);
+    expect(result.actions).toEqual(["end", "restart"]);
     const calls = run.mock.calls.map((call) => String(call[0]));
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).not.toContain("taskkill");
-    expect(calls[0].indexOf("/end")).toBeLessThan(calls[0].indexOf("/run"));
+    expect(calls).toEqual(["schtasks /end /tn pi-courier", "schtasks /run /tn pi-courier"]);
   });
 
-  it("模板里 taskkill 只杀心跳 PID,不夹带 end/run;重启模板 end 在 run 前", () => {
-    const kill = psStringVar("killCommand");
-    const restart = psStringVar("restartCommand");
-    expect(kill).toBe("taskkill /F /PID {pid}");
-    expect(kill).not.toContain("schtasks");
-    expect(restart).toBe("schtasks /end /tn pi-courier && schtasks /run /tn pi-courier");
+  it("end 失败(任务本就没在跑)不阻断 run —— 不能把 end 与 run 串成 &&", () => {
+    const calls: string[] = [];
+    const run = vi.fn((command: string) => {
+      calls.push(String(command));
+      if (String(command).includes("schtasks /end")) throw new Error("task is not running");
+    });
+    const result = runWatchdogCore({
+      heartbeatPath: writeHeartbeat({ ts: NOW - 200_000, pid: 4242 }),
+      staleSeconds: 180,
+      nowMs: NOW,
+      pidAliveFn: () => false,
+      endCommand: psStringVar("endCommand"),
+      restartCommand: psStringVar("restartCommand"),
+      runFn: run,
+    });
+
+    expect(result.actions).toEqual(["restart"]);
+    expect(calls).toEqual(["schtasks /end /tn pi-courier", "schtasks /run /tn pi-courier"]);
+  });
+
+  it("模板里 taskkill 只杀心跳 PID,不夹带 end/run;end 与 run 是两条独立命令", () => {
+    expect(psStringVar("killCommand")).toBe("taskkill /F /PID {pid}");
+    expect(psStringVar("killCommand")).not.toContain("schtasks");
+    expect(psStringVar("endCommand")).toBe("schtasks /end /tn pi-courier");
+    expect(psStringVar("restartCommand")).toBe("schtasks /run /tn pi-courier");
+    expect(psStringVar("restartCommand")).not.toContain("&&");
   });
 });
 
@@ -136,8 +155,9 @@ describe("Windows 壳脚本契约(票07:部署产物与安装注释)", () => {
     expect(SHELL).toContain('[string]$TaskName = "pi-courier"');
   });
 
-  it("核心参数接线:kill/restart 模板透传,告警可关闭且带 {message} 占位", () => {
+  it("核心参数接线:kill/end/restart 模板透传,告警可关闭且带 {message} 占位", () => {
     expect(SHELL).toContain('"--kill-command", $killCommand');
+    expect(SHELL).toContain('"--end-command", $endCommand');
     expect(SHELL).toContain('"--restart-command", $restartCommand');
     expect(SHELL).toContain('--alert-command", "node `"$alert`" --message {message}');
     expect(SHELL).toContain('if (-not $NoAlert)');
@@ -203,7 +223,7 @@ describe.skipIf(!POWERSHELL)("Windows 壳端到端(pwsh + 假 taskkill/schtasks)
   it("僵死:真实调用次序为 taskkill → /end → /run", () => {
     const { result, commands } = runShell(writeHeartbeat({ ts: NOW - 200_000, pid: process.pid }));
     expect(result.verdict).toBe("stale");
-    expect(result.actions).toEqual(["kill", "restart"]);
+    expect(result.actions).toEqual(["kill", "end", "restart"]);
     expect(commands).toEqual([
       `taskkill /F /PID ${process.pid}`,
       "schtasks /end /tn pi-courier",
