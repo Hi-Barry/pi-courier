@@ -1,9 +1,11 @@
 /**
- * 活卡状态机主路径(issue #235 票2):工具循环中间回合聚合进同一张持续
- * 刷新的卡片 —— 首回合经 sendLiveCard 开卡取 event_id,后续中间回合经
- * editReply 对同一事件就地编辑追加(回合间空行连接);终答回合照旧独立
- * 新消息并清活卡;agent_start 轮次边界清卡;交接卡捕获回合不进卡、终答
- * 被捕获一并清卡;hideToolCalls / 配置关 / 缺省 deps 全部旁路退回逐条。
+ * 活卡状态机主路径(issue #235 票2;内容契约修订 spec #248):工具循环中间
+ * 回合聚合进同一张持续刷新的卡片 —— 卡片只装工具行,旁白文本独立成卡并
+ * 断开聚合链(spec #248:旧卡定稿 → 旁白直发 → 工具行开新卡)。首回合经
+ * sendLiveCard 开卡取 event_id,后续中间回合经 editReply 对同一事件就地
+ * 编辑追加(回合间空行连接);终答回合照旧独立新消息并清活卡;agent_start
+ * 轮次边界清卡;交接卡捕获回合不进卡、终答被捕获一并清卡;hideToolCalls /
+ * 配置关 / 缺省 deps 全部旁路退回逐条。
  *
  * 只断言房间可见行为(出站调用记录:sendLiveCard / editReply / sendReply
  * 收到了什么),不断言内部状态字段。缺省 deps 回归底线由既有全部测试零
@@ -18,15 +20,22 @@ import { makeFakeRpc, makeMsg, makeRouterFixture } from "./helpers";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-/** 现行回合拼装口径(buildTurnReply 产出):文本 + 空行 + 🔧 工具行。
- *  聚合卡片的内容就是它 —— 各回合完整拼装以空行连接(spec:零新增文案键)。 */
-const turnText = (text: string) => `${text}\n\n🔧 \`bash\` (cmd=ls)`;
+/** 单条工具调用行(formatToolCalls 产出,arguments 取 50 截断前的短形)。
+ *  卡片内容契约(spec #248):活卡里只有工具行,旁白永远不进卡。 */
+const TOOL_LINE = "🔧 `bash` (cmd=ls)";
 
-/** 中间轮:文本(可选)+ 工具调用(hasToolCalls → pendingTools=true)。 */
-function toolTurn(text?: string): AssistantMessage {
+/** N 条工具行的回合拼装(行间单换行)—— 溢出用例的长度配方:旁白会断链,
+ *  堆长度只能靠多条工具调用。 */
+const toolBlock = (n: number) => Array.from({ length: n }, () => TOOL_LINE).join("\n");
+
+/** 中间轮:旁白文本(可选)+ 工具调用(hasToolCalls → pendingTools=true)。
+ *  calls 控制工具调用条数(溢出用例靠它堆长度)。 */
+function toolTurn(text?: string, calls = 1): AssistantMessage {
   const content: Array<Record<string, unknown>> = [];
   if (text !== undefined) content.push({ type: "text", text });
-  content.push({ type: "toolCall", name: "bash", arguments: { cmd: "ls" } });
+  for (let i = 0; i < calls; i += 1) {
+    content.push({ type: "toolCall", name: "bash", arguments: { cmd: "ls" } });
+  }
   return { role: "assistant", content, stopReason: "stop" } as unknown as AssistantMessage;
 }
 
@@ -35,10 +44,15 @@ function finalTurn(text: string): AssistantMessage {
   return { role: "assistant", content: [{ type: "text", text }], stopReason: "stop" } as unknown as AssistantMessage;
 }
 
+type EditReplyFn = NonNullable<MessageRouterDeps["editReply"]>;
+type SendLiveCardFn = NonNullable<MessageRouterDeps["sendLiveCard"]>;
+
 interface LiveCardFixture {
   router: ReturnType<typeof makeRouterFixture>["router"];
   rpc: PiRpc;
   replies: string[];
+  /** 房间可见出站的统一时序记录(reply:/open:/edit: 前缀),供顺序断言。 */
+  order: string[];
   editReply: ReturnType<typeof vi.fn>;
   sendLiveCard: ReturnType<typeof vi.fn>;
 }
@@ -51,60 +65,66 @@ async function makeLiveCardFixture(
   } = {}
 ): Promise<LiveCardFixture> {
   const replies: string[] = [];
+  const order: string[] = [];
   let cardSeq = 0;
-  const editReply = vi.fn(overrides.editReply ?? (async () => {}));
-  const sendLiveCard = vi.fn(
-    overrides.sendLiveCard ?? (async () => `$card-${(cardSeq += 1)}`)
-  );
+  const editReplyRaw = overrides.editReply ?? (async () => {});
+  const sendLiveCardRaw = overrides.sendLiveCard ?? (async () => `$card-${(cardSeq += 1)}`);
+  const editReply = vi.fn(async (...args: Parameters<EditReplyFn>) => {
+    order.push(`edit:${args[2]}`);
+    await editReplyRaw(...args);
+  });
+  const sendLiveCard = vi.fn(async (...args: Parameters<SendLiveCardFn>) => {
+    const eventId = await sendLiveCardRaw(...args);
+    order.push(`open:${eventId ?? "none"}`);
+    return eventId;
+  });
   const { router, rpc } = makeRouterFixture({
     rpc: makeFakeRpc(),
     store: new ConfigStore(storeOpts),
     sendReply: async (_chatId: string, _transport: string, text: string) => {
       replies.push(text);
+      order.push(`reply:${text.slice(0, 8)}`);
     },
     extra: { editReply, sendLiveCard } as Partial<MessageRouterDeps>,
   });
   // 建立绑定:回复目标 = 默认 DM(makeMsg 的 !dm:server)。
   await router.handleIncoming(makeMsg({ text: "do work" }));
-  return { router, rpc, replies, editReply, sendLiveCard };
+  return { router, rpc, replies, order, editReply, sendLiveCard };
 }
 
 describe("活卡聚合主路径(issue #235 票2)", () => {
   it("首回合开新卡 → 中间回合编辑追加 → 终答直发并清活卡(下一循环开新卡)", async () => {
     const fx = await makeLiveCardFixture();
 
-    // 中间轮 1:无活卡 → 开新卡,内容 = 现行回合拼装产出(文本 + 工具行)
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第一步") }, fx.rpc);
+    // 中间轮 1:无活卡 → 开新卡,内容 = 工具行(旁白缺省,卡里只有工具行)
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
-    expect(fx.sendLiveCard.mock.calls[0]![0]).toBe("!dm:server");
-    expect(fx.sendLiveCard.mock.calls[0]![1]).toBe("matrix");
-    expect(fx.sendLiveCard.mock.calls[0]![2]).toContain("第一步");
-    expect(fx.sendLiveCard.mock.calls[0]![2]).toContain("bash");
+    expect(fx.sendLiveCard.mock.calls[0]).toEqual(["!dm:server", "matrix", TOOL_LINE]);
     expect(fx.editReply).not.toHaveBeenCalled();
     expect(fx.replies).toEqual([]); // 中间回合不再产生新消息
 
     // 中间轮 2:对同一事件就地编辑追加,回合间空行连接
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第二步") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.editReply).toHaveBeenCalledTimes(1);
     expect(fx.editReply.mock.calls[0]).toEqual([
       "!dm:server",
       "matrix",
       "$card-1",
-      `${turnText("第一步")}\n\n${turnText("第二步")}`,
+      `${TOOL_LINE}\n\n${TOOL_LINE}`,
     ]);
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1); // 不开第二张卡
 
     // 中间轮 3:继续在同一张卡上累积
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第三步") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.editReply).toHaveBeenCalledTimes(2);
     expect(fx.editReply.mock.calls[1]).toEqual([
       "!dm:server",
       "matrix",
       "$card-1",
-      `${turnText("第一步")}\n\n${turnText("第二步")}\n\n${turnText("第三步")}`,
+      `${TOOL_LINE}\n\n${TOOL_LINE}\n\n${TOOL_LINE}`,
     ]);
     expect(fx.replies).toEqual([]);
 
@@ -120,17 +140,17 @@ describe("活卡聚合主路径(issue #235 票2)", () => {
     // (终答已释放默认进程的 unpinned 绑定 —— 现状语义;新一轮对话以用户
     // 新消息重建绑定,此处照实驱动。)
     await fx.router.handleIncoming(makeMsg({ text: "again" }));
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("新一轮") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
     expect(fx.editReply).toHaveBeenCalledTimes(2);
-    expect(fx.sendLiveCard.mock.calls[1]).toEqual(["!dm:server", "matrix", expect.stringContaining("新一轮")]);
+    expect(fx.sendLiveCard.mock.calls[1]).toEqual(["!dm:server", "matrix", TOOL_LINE]);
   });
 
   it("无内容回合(text=null)不动活卡:不刷新也不清卡", async () => {
     const fx = await makeLiveCardFixture();
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第一步") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
 
@@ -144,7 +164,7 @@ describe("活卡聚合主路径(issue #235 票2)", () => {
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
 
     // 活卡仍在:下一个有内容中间轮继续编辑原卡
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第二步") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.editReply).toHaveBeenCalledTimes(1);
     expect(fx.editReply.mock.calls[0]![2]).toBe("$card-1");
@@ -153,13 +173,13 @@ describe("活卡聚合主路径(issue #235 票2)", () => {
   it("agent_start 轮次边界清活卡:新一轮对话永远开新卡", async () => {
     const fx = await makeLiveCardFixture();
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("旧一轮") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
 
     fx.router.handleEvent({ type: "agent_start" }, fx.rpc);
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("新一轮") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     // 新对话开新卡:绝不把新回合追加进上一轮对话的旧卡
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
@@ -170,8 +190,8 @@ describe("活卡聚合主路径(issue #235 票2)", () => {
     const fx = await makeLiveCardFixture();
 
     // 工具循环跑两个中间轮(count 达 RECAP_MIN_TURNS),卡已活
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第一步") }, fx.rpc);
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第二步") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
     expect(fx.editReply).toHaveBeenCalledTimes(1);
@@ -183,7 +203,7 @@ describe("活卡聚合主路径(issue #235 票2)", () => {
     await vi.waitFor(() => expect(fx.rpc.prompt).toHaveBeenCalledWith(expect.stringContaining("5 个要点")));
 
     // 中间轮被捕获("wait"):不进活卡;房间只有 /recap 的「生成中」回执
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("被捕获的中间轮") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
     expect(fx.editReply).toHaveBeenCalledTimes(1);
@@ -200,7 +220,7 @@ describe("活卡聚合主路径(issue #235 票2)", () => {
     expect(fx.replies[1]).toContain("总结终答");
 
     // 清卡生效:下一工具循环的中间轮开新卡,而非编辑被捕获序列的旧卡
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("捕获后新一轮") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
     expect(fx.editReply).toHaveBeenCalledTimes(1);
@@ -212,86 +232,83 @@ describe("活卡聚合主路径(issue #235 票2)", () => {
     });
 
     // 轮 1:正常开卡
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("一") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
 
-    // 轮 2:编辑抛错(不分类不重试)→ 活卡清空 + 降级,本回合文本直发补上
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("二") }, fx.rpc);
+    // 轮 2:编辑抛错(不分类不重试)→ 活卡清空 + 降级,本回合工具行直发补上
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush(); // reject 被吞,无 unhandled rejection
     expect(fx.editReply).toHaveBeenCalledTimes(1);
-    expect(fx.replies).toEqual([turnText("二")]);
+    expect(fx.replies).toEqual([TOOL_LINE]);
 
     // 轮 3:同轮后续中间回合全部逐条直发(旧行为),不再碰编辑缝
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("三") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.editReply).toHaveBeenCalledTimes(1);
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
-    expect(fx.replies).toEqual([turnText("二"), turnText("三")]);
+    expect(fx.replies).toEqual([TOOL_LINE, TOOL_LINE]);
 
     // 下一轮对话开始:agent_start 重置降级,重新尝试聚合(开新卡)
     fx.router.handleEvent({ type: "agent_start" }, fx.rpc);
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("新一轮") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
-    expect(fx.sendLiveCard.mock.calls[1]![2]).toContain("新一轮");
+    expect(fx.sendLiveCard.mock.calls[1]).toEqual(["!dm:server", "matrix", TOOL_LINE]);
     expect(fx.editReply).toHaveBeenCalledTimes(1);
   });
 
   it("溢出滚动(新回合文本不超限):旧卡定稿、整体开新卡,旧卡不再被编辑", async () => {
     const fx = await makeLiveCardFixture({});
 
-    // 轮 1:开卡,累积较小
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("x".repeat(100)) }, fx.rpc);
+    // 轮 1:开卡,250 条工具行 ≈ 4.7k 字符(>4000,开卡直传不分片)
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn(undefined, 250) }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+    expect(fx.sendLiveCard.mock.calls[0]![2]).toBe(toolBlock(250));
 
-    // 轮 2:「累积 + 新回合文本」超 4000,新回合文本本身 ≤4000(单片)
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("A".repeat(3900)) }, fx.rpc);
+    // 轮 2:「累积 + 新回合工具行」超 4000,新回合文本本身 ≤4000(单片)
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     // 旧卡收到最后一次「定稿」编辑,内容 = 既有累积(不含新回合文本)
     expect(fx.editReply).toHaveBeenCalledTimes(1);
     expect(fx.editReply.mock.calls[0]![2]).toBe("$card-1");
-    expect(fx.editReply.mock.calls[0]![3]).toBe(turnText("x".repeat(100)));
+    expect(fx.editReply.mock.calls[0]![3]).toBe(toolBlock(250));
     expect(fx.replies).toEqual([]); // 无直发片
     // 唯一片开新卡作新活卡
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
-    expect(fx.sendLiveCard.mock.calls[1]![2]).toBe(turnText("A".repeat(3900)));
+    expect(fx.sendLiveCard.mock.calls[1]![2]).toBe(TOOL_LINE);
 
     // 只有最新一张卡可被编辑:后续中间回合编辑 $card-2,旧卡 event_id 不再出现
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("后续") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.editReply).toHaveBeenCalledTimes(2);
     expect(fx.editReply.mock.calls[1]![2]).toBe("$card-2");
-    expect(fx.editReply.mock.calls[1]![3]).toBe(`${turnText("A".repeat(3900))}\n\n${turnText("后续")}`);
+    expect(fx.editReply.mock.calls[1]![3]).toBe(`${TOOL_LINE}\n\n${TOOL_LINE}`);
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
   });
 
   it("溢出滚动(新回合文本超限):定稿后前 n-1 片普通直发、最后一片开新卡,内容不丢", async () => {
     const fx = await makeLiveCardFixture({});
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("短") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn(undefined, 250) }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
 
-    // 轮 2:新回合文本本身超 4000 → 按现行拆分口径切成 3 片(无分隔符硬切)
-    const long = "B".repeat(8500);
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn(long) }, fx.rpc);
+    // 轮 2:新回合文本本身超 4000 → 按现行拆分口径切成 3 片(按行切)
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn(undefined, 500) }, fx.rpc);
     await flush();
     // 旧卡定稿
     expect(fx.editReply).toHaveBeenCalledTimes(1);
     expect(fx.editReply.mock.calls[0]![2]).toBe("$card-1");
-    expect(fx.editReply.mock.calls[0]![3]).toBe(turnText("短"));
+    expect(fx.editReply.mock.calls[0]![3]).toBe(toolBlock(250));
     // 前 n-1 片普通新消息直发
-    expect(fx.replies).toEqual(["B".repeat(4000), "B".repeat(4000)]);
-    // 最后一片开新卡作新活卡(8500 = 4000 + 4000 + 500,工具行随最后一片)
+    expect(fx.replies).toHaveLength(2);
+    // 最后一片开新卡作新活卡
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
-    expect(fx.sendLiveCard.mock.calls[1]![2]).toBe(turnText("B".repeat(500)));
-    // 内容不丢:三段 B 合计 = 原文全文
-    const totalB =
-      (fx.replies[0] as string).length + (fx.replies[1] as string).length +
-      (fx.sendLiveCard.mock.calls[1]![2] as string).split("\n\n")[0]!.length;
-    expect(totalB).toBe(8500);
+    // 内容不丢:三片按序以换行重接 = 原文全文(切分吃掉的换行由重接补回)
+    const rejoined = [fx.replies[0], fx.replies[1], fx.sendLiveCard.mock.calls[1]![2]].join("\n");
+    expect(rejoined).toBe(toolBlock(500));
   });
 
   it("溢出时定稿编辑失败:全部切片逐条直发补上,不开新卡并转入降级", async () => {
@@ -299,21 +316,21 @@ describe("活卡聚合主路径(issue #235 票2)", () => {
       editReply: vi.fn().mockRejectedValueOnce(new Error("M_LIMIT_EXCEEDED")),
     });
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("短") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn(undefined, 250) }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
 
     // 轮 2 溢出,定稿编辑抛错 → 本回合全部切片直发(单片 = 1 条),不开新卡
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("A".repeat(3900)) }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.editReply).toHaveBeenCalledTimes(1); // 只有失败的那次定稿尝试
-    expect(fx.replies).toEqual([turnText("A".repeat(3900))]);
+    expect(fx.replies).toEqual([TOOL_LINE]);
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1); // 不开新卡
 
     // 已入降级:下一中间回合仍逐条直发
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("下一轮") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
-    expect(fx.replies).toEqual([turnText("A".repeat(3900)), turnText("下一轮")]);
+    expect(fx.replies).toEqual([TOOL_LINE, TOOL_LINE]);
     expect(fx.editReply).toHaveBeenCalledTimes(1);
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
   });
@@ -321,16 +338,123 @@ describe("活卡聚合主路径(issue #235 票2)", () => {
   it("发新卡拿不到 event_id:仅记日志不进活卡,下一中间回合重试开卡", async () => {
     const fx = await makeLiveCardFixture({}, { sendLiveCard: vi.fn().mockResolvedValue(undefined) });
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("一") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
     expect(fx.editReply).not.toHaveBeenCalled();
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("二") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     // 未进活卡状态:重试开卡而非编辑
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
     expect(fx.editReply).not.toHaveBeenCalled();
+  });
+});
+
+describe("旁白断链(spec #248)", () => {
+  it("带旁白的中间回合:旁白独立直发,卡片只装工具行;后续无旁白回合照常追加", async () => {
+    const fx = await makeLiveCardFixture();
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("我先看一下配置") }, fx.rpc);
+    await flush();
+    // 旁白走普通直发,工具行开卡,两者不混装
+    expect(fx.replies).toEqual(["我先看一下配置"]);
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+    expect(fx.sendLiveCard.mock.calls[0]).toEqual(["!dm:server", "matrix", TOOL_LINE]);
+    expect(fx.editReply).not.toHaveBeenCalled();
+
+    // 无旁白的下一回合:照常追加进同一张卡
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    expect(fx.editReply).toHaveBeenCalledTimes(1);
+    expect(fx.editReply.mock.calls[0]).toEqual([
+      "!dm:server",
+      "matrix",
+      "$card-1",
+      `${TOOL_LINE}\n\n${TOOL_LINE}`,
+    ]);
+  });
+
+  it("已有活卡时遇旁白断链:旧卡零新增编辑,旁白直发后工具行开新卡,后续追加进新卡", async () => {
+    const fx = await makeLiveCardFixture();
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+
+    // 带旁白回合:旧卡($card-1)不接追加,旁白独立直发,新卡开卡
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("旁白中断") }, fx.rpc);
+    await flush();
+    expect(fx.editReply).not.toHaveBeenCalled(); // 旧卡零编辑
+    expect(fx.replies).toEqual(["旁白中断"]);
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
+    expect(fx.sendLiveCard.mock.calls[1]).toEqual(["!dm:server", "matrix", TOOL_LINE]);
+
+    // 后续无旁白回合追加进新卡,旧卡 event_id 不再出现
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    expect(fx.editReply).toHaveBeenCalledTimes(1);
+    expect(fx.editReply.mock.calls[0]![2]).toBe("$card-2");
+  });
+
+  it("房间顺序由架构保证:旁白先落房间,新卡后开", async () => {
+    const fx = await makeLiveCardFixture();
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("先说一句") }, fx.rpc);
+    await flush();
+    expect(fx.order).toEqual(["reply:先说一句", "open:$card-1"]);
+  });
+
+  it("报错回合绕过聚合:失败行带全部内容直发,不进活卡", async () => {
+    const fx = await makeLiveCardFixture();
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+
+    const errTurn = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "坏了" },
+        { type: "toolCall", name: "bash", arguments: { cmd: "ls" } },
+      ],
+      stopReason: "error",
+      errorMessage: "rate limited",
+    } as unknown as AssistantMessage;
+    fx.router.handleEvent({ type: "turn_end", message: errTurn }, fx.rpc);
+    await flush();
+    expect(fx.replies).toHaveLength(1);
+    expect(fx.replies[0]).toContain("坏了");
+    expect(fx.replies[0]).toContain("❌ 本轮失败: rate limited");
+    expect(fx.replies[0]).toContain("bash");
+    expect(fx.editReply).not.toHaveBeenCalled();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+  });
+
+  it("降级序列遇旁白断链:降级标志随清卡解除,新卡恢复聚合", async () => {
+    const fx = await makeLiveCardFixture({}, {
+      editReply: vi.fn().mockRejectedValueOnce(new Error("M_LIMIT_EXCEEDED")),
+    });
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    // 轮 2 编辑失败 → 降级,本回合工具行逐条直发
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    expect(fx.replies).toEqual([TOOL_LINE]);
+
+    // 带旁白回合断链:降级随 clearLiveCard 一并解除,开新卡重试聚合
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn("换个姿势") }, fx.rpc);
+    await flush();
+    expect(fx.replies).toEqual([TOOL_LINE, "换个姿势"]);
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
+    expect(fx.sendLiveCard.mock.calls[1]).toEqual(["!dm:server", "matrix", TOOL_LINE]);
+
+    // 恢复聚合:下一回合编辑追加进新卡
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    expect(fx.editReply).toHaveBeenCalledTimes(2); // 1 次失败 + 1 次新卡成功
+    expect(fx.editReply.mock.calls[1]![2]).toBe("$card-2");
   });
 });
 
@@ -344,21 +468,21 @@ describe("边界加固(spec #242)", () => {
       }),
     });
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("x".repeat(100)) }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn(undefined, 250) }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("A".repeat(3900)) }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.editReply).toHaveBeenCalledTimes(1); // 只有那次定稿
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
     expect(fx.replies).toEqual([]); // 单片全留给开卡,无直发
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第三轮") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(3);
     expect(fx.editReply).toHaveBeenCalledTimes(1); // 旧卡零新增编辑
-    expect(fx.sendLiveCard.mock.calls[2]![2]).toContain("第三轮");
+    expect(fx.sendLiveCard.mock.calls[2]).toEqual(["!dm:server", "matrix", TOOL_LINE]);
   });
 
   it("开卡在途跨越 agent_start 清卡:迟到结果不写回,下一回合按新对话重开卡", async () => {
@@ -373,7 +497,7 @@ describe("边界加固(spec #242)", () => {
       }),
     });
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第一步") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1); // 在途挂起中
 
@@ -381,7 +505,7 @@ describe("边界加固(spec #242)", () => {
     release("$card-1");
     await flush();
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("新对话") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
     expect(fx.editReply).not.toHaveBeenCalled();
@@ -394,18 +518,18 @@ describe("边界加固(spec #242)", () => {
       editReply: vi.fn(() => pending),
     });
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第一步") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("第二步") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     fx.router.handleEvent({ type: "agent_start" }, fx.rpc);
     fail(new Error("network gone"));
     await flush();
-    expect(fx.replies).toEqual([turnText("第二步")]);
+    expect(fx.replies).toEqual([TOOL_LINE]);
 
-    fx.router.handleEvent({ type: "turn_end", message: toolTurn("新对话") }, fx.rpc);
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.sendLiveCard).toHaveBeenCalledTimes(2);
   });
@@ -431,7 +555,7 @@ describe("聚合旁路(缺省 = 现状逐字节一致)", () => {
     await flush();
     expect(fx.sendLiveCard).not.toHaveBeenCalled();
     expect(fx.editReply).not.toHaveBeenCalled();
-    expect(fx.replies).toHaveLength(1); // 逐条直发(含工具行的现行拼装)
+    expect(fx.replies).toHaveLength(1); // 逐条直发(含工具行的完整拼装)
     expect(fx.replies[0]).toContain("第一步");
     expect(fx.replies[0]).toContain("bash");
   });

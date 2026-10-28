@@ -47,6 +47,17 @@ export const AUDIT_EVENTS = {
   backlogExecute: "backlog.execute",
   guestDenied: "guest.denied",
   modelFallback: "model.fallback",
+  // /mcp 指令族(spec #246):MCP 服务器的配置突变面。事件由命令层经
+  // ctx.audit 缝按真实结果上报(服务器名入账;--env/--header 的值不落账)。
+  mcpAdd: "mcp.add",
+  mcpRemove: "mcp.remove",
+  mcpLogin: "mcp.login",
+  mcpLogout: "mcp.logout",
+  // /update 热更新命令族(桥自更新 spec §7):发起走 COMMAND_REGISTRY 的
+  // auditEvent 位;取消由命令层经 ctx.audit 缝上报;完成在启动消费时落账。
+  update: "update",
+  updateCancel: "update.cancel",
+  updateDone: "update.done",
 } as const;
 
 export interface AuditLogOptions {
@@ -56,6 +67,9 @@ export interface AuditLogOptions {
   /** Fired once per threshold window when writes keep failing — the
    *  composition root routes this to the management room. */
   onDegraded?: (message: string) => void;
+  /** 磁盘类写失败(ENOSPC/EDQUOT)的聚合可见性缝(spec #247 票04):
+   *  组合根注入 recorder 包装;缺省不接,阈值降级契约不变。 */
+  onDiskWriteFailure?: (err: unknown) => void;
 }
 
 export class AuditLog {
@@ -97,6 +111,12 @@ export class AuditLog {
       this.consecutiveFailures = 0;
     } catch (err) {
       this.consecutiveFailures += 1;
+      // 磁盘类写失败的聚合可见性(spec #247 票04):缝自身抛错不放大写路径
+      try {
+        this.options.onDiskWriteFailure?.(err);
+      } catch {
+        // 可见性通道失败不影响审计降级契约
+      }
       if (this.consecutiveFailures >= this.warnThreshold) {
         const message = `audit log unavailable (${this.consecutiveFailures} consecutive failures) — the service keeps running without evidence: ${errorMessage(err)}`;
         logger.warn(message);

@@ -61,12 +61,14 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 describe("buildTurnReply error turns (issue #52)", () => {
   it("an error turn without content produces the failure line (no longer silent)", () => {
     const msg = assistantMessage({ stopReason: "error", errorMessage: "usage limit reached" });
-    expect(buildTurnReply(msg)).toEqual({ text: "❌ 本轮失败: usage limit reached", pendingTools: false });
+    const line = "❌ 本轮失败: usage limit reached";
+    expect(buildTurnReply(msg)).toEqual({ text: line, toolsText: null, fullText: line, pendingTools: false });
   });
 
   it("an error turn without an upstream message reports 未知错误", () => {
     const msg = assistantMessage({ stopReason: "error" });
-    expect(buildTurnReply(msg)).toEqual({ text: "❌ 本轮失败: 未知错误", pendingTools: false });
+    const line = "❌ 本轮失败: 未知错误";
+    expect(buildTurnReply(msg)).toEqual({ text: line, toolsText: null, fullText: line, pendingTools: false });
   });
 
   it("an error turn keeps its partial text and appends the failure line", () => {
@@ -79,7 +81,7 @@ describe("buildTurnReply error turns (issue #52)", () => {
 
   it("an aborted turn (no content) still yields null text — never an error notice", () => {
     const msg = assistantMessage({ stopReason: "aborted", errorMessage: "user cancelled" });
-    expect(buildTurnReply(msg)).toEqual({ text: null, pendingTools: false });
+    expect(buildTurnReply(msg)).toEqual({ text: null, toolsText: null, fullText: null, pendingTools: false });
   });
 });
 

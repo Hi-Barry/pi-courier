@@ -18,6 +18,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
+import { AUDIT_EVENTS } from "../audit/audit-log.js";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
 import { BANG_COMMAND } from "../command-registry.js";
 import { BASH_OUTPUT_LIMIT_DEFAULT, CONFIG_DIR, parseModelRef } from "../config.js";
@@ -25,8 +26,23 @@ import { errorMessage } from "../errors.js";
 import { truncateLine } from "../formatting.js";
 import { type MessageKey, t } from "../i18n/index.js";
 import { logger } from "../logger.js";
+import {
+  addServer,
+  listServers,
+  logoutServer,
+  type McpCliDeps,
+  type McpOutcome,
+  removeServer,
+} from "../mcp/mcp-cli.js";
+import {
+  formatMcpStatusCard,
+  type McpListPayload,
+  tokenizeChatArgs,
+} from "../mcp/mcp-formatters.js";
+import { McpLoginFlow } from "../mcp/mcp-login-flow.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
 import { MAX_REMINDERS_PER_ROOM, type ReminderEntry } from "../reminders/reminder-store.js";
+import type { UpdateCommandIO } from "../update/updater.js";
 import { findModelMatch, sameModel } from "./model-switch.js";
 import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
 import { BashTimeoutError, upstreamClearQueueSend } from "./pi-rpc.js";
@@ -42,6 +58,44 @@ export interface QueueSnapshot {
   steering: string[];
   followUp: string[];
 }
+
+// ── /mcp 指令族(spec #246):MCP 服务器管理 ────────────────────────────
+//
+// 编排槽(照 ctx.reminders 的「router 按消息预绑定」口径):命令层不接触
+// pi CLI 的执行细节 —— 四条短命令与登录单飞编排器都在槽里,测试喂假件。
+// 槽未装配(deps.mcp 缺)→ 命令回复「未启用」,绝不落回 pi。
+export interface McpOrchestration {
+  /** `pi mcp list --json`:成败按 JSON 内容判定(退出码不可信,spec #246)。 */
+  list(): Promise<McpOutcome<McpListPayload>>;
+  /** `pi mcp add ...`:命令层分词后的 argv 原样透传,校验归 pi。 */
+  add(argv: readonly string[]): Promise<McpOutcome<string>>;
+  /** `pi mcp remove <名>`。 */
+  remove(name: string): Promise<McpOutcome<string>>;
+  /** `pi mcp logout <名>`。 */
+  logout(name: string): Promise<McpOutcome<string>>;
+  /** 登录单飞编排器(状态机与代次栅栏在 McpLoginFlow 内)。 */
+  login: McpLoginFlow;
+}
+
+/** 真实装配:pi CLI 执行缝(缺省 = node + 解析出的 cli.js)+ 登录编排器。
+ *  deps 原样透传给执行缝与编排器(测试可注入 spawn/runLogin 假件)。 */
+export function createMcpOrchestration(deps: McpCliDeps = {}): McpOrchestration {
+  return {
+    list: () => listServers(deps),
+    add: (argv) => addServer(argv, deps),
+    remove: (name) => removeServer(name, deps),
+    logout: (name) => logoutServer(name, deps),
+    login: new McpLoginFlow(deps),
+  };
+}
+
+/** 命令层看到的编排槽 = 编排能力 + router 按本消息预绑定的守卫判定。 */
+export interface McpCommandContext extends McpOrchestration {
+  /** adminRoom 守卫(router 按消息预绑定,命令层不接触 chatId/userId):
+   *  管理员 + (多工程:管理房间 | 单工程:私聊)—— /login 族同口径。 */
+  adminAllowed: boolean;
+}
+
 
 export interface SlashCommandContext {
   rpc: PiRpc;
@@ -69,6 +123,16 @@ export interface SlashCommandContext {
   /** Every rpc of this instance (default + started project rpcs) — enables
    *  `/reload all` (issue #55). Absent = /reload stays single-process. */
   allRpcs?: () => PiRpc[];
+  /** /update 热更新(桥自更新 spec §4):本消息是否管理房语境 —— router 按
+   *  login 先例计算(multiProject ? isManagementRoom : !isGroupChat;单工程
+   *  DM 即管理房)。Absence/false = 非管理房,编排器守卫拒绝。 */
+  adminRoom?: boolean;
+  /** /update 编排器插槽(发起/取消/查询的最小接口,同步段固定顺序在编排器
+   *  的 handleCommand 内,§5.3)。Absence = 未装配,回 cmd.update.unavailable
+   *  —— 不落回 pi(落回会把命令文本喂给模型)。 */
+  updater?: {
+    handle: (args: string, io: UpdateCommandIO) => Promise<boolean>;
+  };
   /** 在跑 bash 记账(/bashstop 的"列出"数据源)。Absence = /bashstop 只能
    *  盲停(仍然可用:上游 abortBash 无在跑命令时是无害空操作)。 */
   bashTracker?: BashTracker;
@@ -100,6 +164,10 @@ export interface SlashCommandContext {
     /** 取消本房间列表的第 index(1 基)条;序号不存在返回 undefined。 */
     removeByIndex(index: number): ReminderEntry | undefined;
   };
+  /** /mcp 指令族(spec #246):MCP 服务器管理的编排槽(含 router 按消息
+   *  预绑定的 adminRoom 守卫判定,见 McpCommandContext)。Absence = 未装配
+   *  (回复「未启用」文案,绝不落回 pi)。 */
+  mcp?: McpCommandContext;
   /** Router-owned per-rpc transient state (queue mirror, pending extension
    *  questions) must not survive a restart: the new subprocess knows nothing
    *  of old question ids, and a stale question would swallow the room's next
@@ -371,6 +439,86 @@ export async function waitForAgentIdle(
   throw new Error("agent did not become idle after abort");
 }
 
+// --- All-agents idle (update orchestrator, hot-update spec §5.3) -------------
+
+/** 全实例探测的一笔账:确认在跑的实例数 + 查不动的实例数。 */
+export interface AllAgentsProbe {
+  streaming: number;
+  unreachable: number;
+}
+
+/** 全实例空闲等待选项(超时/间隔默认与单实例版同源;测试注入短值)。 */
+export interface WaitForAllAgentsIdleOptions {
+  timeoutMs?: number;
+  intervalMs?: number;
+  /** 每轮探测后的回调(编排器的预告与进度回报数据源)。 */
+  onTick?: (probe: AllAgentsProbe) => void | Promise<void>;
+  /** 取消缝:返回 true 立即正常返回(是否真是 cancel 由编排器按代次仲裁)。 */
+  shouldAbort?: () => boolean;
+}
+
+/** 等待超时的类型化错误:detail 带最终计数 —— 便于区分「任务真没跑完」
+ *  与「实例挂了导致的假等待」。 */
+export class AllAgentsIdleTimeoutError extends Error {
+  constructor(public readonly probe: AllAgentsProbe) {
+    super(`agents did not all become idle (streaming=${probe.streaming}, unreachable=${probe.unreachable})`);
+    this.name = "AllAgentsIdleTimeoutError";
+  }
+}
+
+/**
+ * 对全部实例各做一次忙闲探测(编排器发起时判定三分支用)。
+ *
+ * 单实例查询抛错(requireClient 未连接时同步抛,pi-rpc.ts:666-674 ——
+ * 默认进程未连接 / 项目进程 restart 的 stop→start 窗口;lazy 未启动的项目
+ * 进程不在 allRpcs() 里、不在返回值里,不在此列)→ 该实例计入 unreachable,
+ * 不算空闲 —— 确认不了空闲就不重启,宁多等不误杀任务;「查不动的实例单独
+ * 记账、不混入判定」的口径先例见 restartIdleRpcs 的 catch→skipped。
+ */
+export async function probeAllAgents(rpcs: readonly PiRpc[]): Promise<AllAgentsProbe> {
+  const results = await Promise.all(
+    rpcs.map(async (rpc): Promise<boolean | null> => {
+      try {
+        return (await rpc.requireClient().getState()).isStreaming;
+      } catch {
+        return null; // unreachable:查不动 ≠ 空闲
+      }
+    })
+  );
+  let streaming = 0;
+  let unreachable = 0;
+  for (const result of results) {
+    if (result === null) unreachable += 1;
+    else if (result) streaming += 1;
+  }
+  return { streaming, unreachable };
+}
+
+/**
+ * 全实例忙闲等待:每 tick 对每个实例探测,全部实例【确认】空闲才返回 ——
+ * 单实例 waitForAgentIdle 的全实例变体(桥自更新 spec §5.3)。
+ *
+ * 与单实例版同一决策:保持轮询而非订阅事件 —— 上游 waitForIdle 只订阅
+ * 未来的 agent_settled、不查当前状态,abort 先于订阅 settle 时必假超时
+ * (waitForAgentIdle 注释,2026-10-11 真机复现)。单实例版保持不动
+ * (//interrupt 的语义与既有验收不破坏)。
+ */
+export async function waitForAllAgentsIdle(
+  rpcs: readonly PiRpc[],
+  options: WaitForAllAgentsIdleOptions = {}
+): Promise<void> {
+  const { timeoutMs = 30 * 60_000, intervalMs = 150, onTick, shouldAbort } = options;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (shouldAbort?.()) return;
+    const probe = await probeAllAgents(rpcs);
+    await onTick?.(probe);
+    if (probe.streaming === 0 && probe.unreachable === 0) return;
+    if (Date.now() >= deadline) throw new AllAgentsIdleTimeoutError(probe);
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 /** /stop 与 //interrupt 共用的清队机制(issue #112):快照 → 上游清队,
  *  旧上游拒清即 clearFailed。钉零(#115)刻意留给调用方在各自原时点做
  *  (/stop 在 abort 后,//interrupt 在 prompt 后):清队 RPC 应答与 clear
@@ -581,6 +729,301 @@ export function formatSkillsList(commands: readonly SkillCommandView[]): string 
   }
   return t("cmd.skills.header", { lines: blocks.join("\n\n") });
 }
+
+// ── /mcp 子命令分派(spec #246)─────────────────────────────────────────
+
+/** add 的带值 flag(值取下一 token)。清单对齐 pi 1.0.0
+ *  dist/extensions/mcp/cli.js:212-227 的 parseOptions known 表 —— 漏掉
+ *  任何一个都会把它的值当成服务器名(flag 出现在名字之前时回执/审计记错名)。 */
+const MCP_ADD_VALUED_FLAGS = new Set([
+  "--url",
+  "--env",
+  "--header",
+  "--cwd",
+  "--description",
+  "--exposure",
+  // pi 1.0 的 HTTP/OAuth 选项(与 --url 同族,带值):
+  "--bearer-token-env-var",
+  "--oauth-client-id",
+  "--oauth-client-secret",
+  "--oauth-callback-port",
+  "--oauth-client-name",
+]);
+
+/** scanMcpAddArgv 的产出:服务器名、脱敏名单(--env/--header 的值)、
+ *  v1 不支持的 --local 是否出现。 */
+interface McpAddScan {
+  name: string | undefined;
+  secrets: string[];
+  localFlag: boolean;
+}
+
+/**
+ * 扫描 add argv:第一个位置参数 = 服务器名;--env/--header 的值进脱敏名单
+ * (审计与回执都不落值,spec #246 回执安全纪律);遇 `--` 即停 —— 其后是
+ * 透传的本地命令,flag 语义(含 --local/--env)不再适用。未知 flag 不猜,
+ * 透传给 pi 裁决。
+ */
+function scanMcpAddArgv(argv: readonly string[]): McpAddScan {
+  let name: string | undefined;
+  const secrets: string[] = [];
+  let localFlag = false;
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i]!;
+    if (token === "--") break;
+    if (token === "--local") {
+      localFlag = true;
+      continue;
+    }
+    if (MCP_ADD_VALUED_FLAGS.has(token)) {
+      const value = argv[i + 1];
+      if (value !== undefined) {
+        if (token === "--env" || token === "--header") {
+          // K=V 形态:整串与「= 之后的值」都进脱敏名单 —— pi 的报错可能
+          // 只引用值部分,只遮整串会漏(spec #246 回执安全纪律)。
+          secrets.push(value);
+          const eq = value.indexOf("=");
+          if (eq >= 0 && eq + 1 < value.length) secrets.push(value.slice(eq + 1));
+        }
+        i += 1;
+      }
+      continue;
+    }
+    if (token.startsWith("--")) continue;
+    if (name === undefined) name = token;
+  }
+  return { name, secrets, localFlag };
+}
+
+/** 回执脱敏:--env/--header 的值绝不回显(整串精确替换,空值跳过)。 */
+function redactMcpSecrets(message: string, secrets: readonly string[]): string {
+  let out = message;
+  for (const secret of secrets) {
+    if (secret.length > 0) out = out.split(secret).join("***");
+  }
+  return out;
+}
+
+/**
+ * /mcp 子命令分派(spec #246)。调用前守卫已过(未装配/非管理员,见
+ * case "/mcp");这里只管分派、回执与审计 —— 审计按真实结果上报(服务器名
+ * 入账),--env/--header 的值不落账、任何回执不回显。
+ */
+async function handleMcpCommand(
+  args: string,
+  mcp: McpCommandContext,
+  reply: (text: string) => Promise<void>,
+  audit?: (event: string, detail?: string) => void,
+): Promise<void> {
+  const spaceIndex = args.indexOf(" ");
+  const sub = (spaceIndex === -1 ? args : args.slice(0, spaceIndex)).toLowerCase();
+  const rest = (spaceIndex === -1 ? "" : args.slice(spaceIndex + 1)).trim();
+
+  switch (sub) {
+    // 裸 /mcp 与 /mcp list 同义:先「检查中」再出状态卡(两段式,/recap 与
+    // /compact 先例)—— pi mcp list 逐服务器探测连接,有秒级延迟。
+    case "":
+    case "list": {
+      await reply(t("cmd.mcp.list.checking"));
+      const outcome = await mcp.list();
+      if (outcome.kind === "unavailable") {
+        await reply(t("cmd.mcp.unavailable", { detail: outcome.message }));
+        return;
+      }
+      if (outcome.kind === "failed") {
+        await reply(t("cmd.mcp.list.failed", { message: outcome.message }));
+        return;
+      }
+      await reply(formatMcpStatusCard(outcome.data));
+      return;
+    }
+
+    case "help":
+      await reply(t("cmd.mcp.help"));
+      return;
+
+    case "add": {
+      if (!rest) {
+        await reply(t("cmd.mcp.add.usage"));
+        return;
+      }
+      const tokenized = tokenizeChatArgs(rest);
+      if (!tokenized.ok) {
+        // 未闭合引号:用法 + 分词器的人话原因(已解析前缀不执行)。
+        await reply(`${t("cmd.mcp.add.usage")}\n❌ ${tokenized.error}`);
+        return;
+      }
+      const argv = tokenized.argv;
+      const scanned = scanMcpAddArgv(argv);
+      if (scanned.localFlag) {
+        await reply(t("cmd.mcp.add.localUnsupported"));
+        return;
+      }
+      if (scanned.name === undefined) {
+        await reply(t("cmd.mcp.add.usage"));
+        return;
+      }
+      const outcome = await mcp.add(argv);
+      if (outcome.kind === "unavailable") {
+        // pi 的报错可能引用 argv(--env/--header 的值),回执前脱敏(与
+        // failed 分支同纪律:版本门诊断串同样可能带上 pi 回显的输出尾部)。
+        await reply(t("cmd.mcp.unavailable", { detail: redactMcpSecrets(outcome.message, scanned.secrets) }));
+        return;
+      }
+      if (outcome.kind === "failed") {
+        // pi 的报错可能引用 argv(--env/--header 的值),回执前脱敏。
+        await reply(t("cmd.mcp.add.failed", { message: redactMcpSecrets(outcome.message, scanned.secrets) }));
+        return;
+      }
+      // 成功回执用本地文案,不透传 pi stdout —— 它可能回显配置内容(含值)。
+      // 旧版 pi(<1.0)会把命令当 prompt 喂模型:exit 0、无确认形状 →
+      // 回执与审计都带降级提示,不静默记成突变。
+      const unverified = outcome.confirmed === false;
+      audit?.(AUDIT_EVENTS.mcpAdd, `add ${scanned.name}${unverified ? " (unverified)" : ""}`);
+      await reply(
+        unverified
+          ? `${t("cmd.mcp.add.ok", { name: scanned.name })}\n${t("cmd.mcp.add.unverified")}`
+          : t("cmd.mcp.add.ok", { name: scanned.name }),
+      );
+      return;
+    }
+
+    case "remove":
+    case "logout": {
+      // 与 add/login 同一引号分词口径:带空格的引号名(`/mcp remove "my
+      // server"`)必须可达;未闭合引号给用法 + 人话原因,多余 token 一律用法。
+      const tokenized = tokenizeChatArgs(rest);
+      const usage = t(sub === "remove" ? "cmd.mcp.remove.usage" : "cmd.mcp.logout.usage");
+      if (!tokenized.ok) {
+        await reply(`${usage}\n❌ ${tokenized.error}`);
+        return;
+      }
+      if (tokenized.argv.length !== 1) {
+        await reply(usage);
+        return;
+      }
+      const name = tokenized.argv[0]!;
+      const outcome = sub === "remove" ? await mcp.remove(name) : await mcp.logout(name);
+      if (outcome.kind === "unavailable") {
+        await reply(t("cmd.mcp.unavailable", { detail: outcome.message }));
+        return;
+      }
+      if (outcome.kind === "failed") {
+        await reply(
+          t(sub === "remove" ? "cmd.mcp.remove.failed" : "cmd.mcp.logout.failed", { message: outcome.message })
+        );
+        return;
+      }
+      // 与 add 同款降级提示:exit 0 但无 pi ≥1.0 确认形状 → 回执与审计都带提示。
+      const unverified = outcome.confirmed === false;
+      const unverifiedSuffix = unverified ? " (unverified)" : "";
+      if (sub === "remove") {
+        audit?.(AUDIT_EVENTS.mcpRemove, `remove ${name}${unverifiedSuffix}`);
+        await reply(
+          unverified
+            ? `${t("cmd.mcp.remove.ok", { name })}\n${t("cmd.mcp.remove.unverified")}`
+            : t("cmd.mcp.remove.ok", { name }),
+        );
+      } else {
+        audit?.(AUDIT_EVENTS.mcpLogout, `logout ${name}${unverifiedSuffix}`);
+        await reply(
+          unverified
+            ? `${t("cmd.mcp.logout.ok", { server: name })}\n${t("cmd.mcp.logout.unverified", { server: name })}`
+            : t("cmd.mcp.logout.ok", { server: name }),
+        );
+      }
+      return;
+    }
+
+    case "login": {
+      const tokenized = tokenizeChatArgs(rest);
+      if (!tokenized.ok || tokenized.argv.length === 0) {
+        await reply(t("cmd.mcp.login.usage"));
+        return;
+      }
+      const argv = tokenized.argv;
+      const server = argv[0]!;
+      // --timeout <秒> 是唯一认的 flag;其余(含未知 flag / 游离参数)一律
+      // 用法回执 —— 不猜,错参数宁可不发起。
+      let timeoutSec: number | undefined;
+      let valid = true;
+      for (let i = 1; i < argv.length; i += 1) {
+        if (argv[i] === "--timeout") {
+          const raw = argv[i + 1];
+          if (raw === undefined || !/^\d+$/.test(raw)) {
+            valid = false;
+            break;
+          }
+          timeoutSec = Number.parseInt(raw, 10);
+          i += 1;
+          continue;
+        }
+        valid = false;
+        break;
+      }
+      if (!valid) {
+        await reply(t("cmd.mcp.login.usage"));
+        return;
+      }
+      const started = mcp.login.start(server, timeoutSec, {
+        // 授权 URL 即时转发本房间(附回跳限制与 SSH 隧道提示)。
+        onAuthUrl: (url, authServer) => reply(t("cmd.mcp.login.authUrl", { url, server: authServer })),
+        // 终局回执 + 审计(结果进账;invalidated 不经此回调,编排器保证)。
+        onFinished: async (outcome) => {
+          switch (outcome.kind) {
+            case "done": {
+              audit?.(
+                AUDIT_EVENTS.mcpLogin,
+                `login ${outcome.server}: ${outcome.already ? "already signed in" : "signed in"}`,
+              );
+              await reply(
+                outcome.already
+                  ? t("cmd.mcp.login.already", { server: outcome.server })
+                  : t("cmd.mcp.login.done", { server: outcome.server })
+              );
+              return;
+            }
+            case "failed": {
+              const codeSuffix = outcome.code !== undefined ? t("cmd.mcp.login.failedCode", { code: outcome.code }) : "";
+              audit?.(
+                AUDIT_EVENTS.mcpLogin,
+                `login ${outcome.server}: failed${outcome.code !== undefined ? ` (exit ${outcome.code})` : ""}`,
+              );
+              await reply(t("cmd.mcp.login.failed", { server: outcome.server, codeSuffix, message: outcome.message }));
+              return;
+            }
+            case "expired":
+              audit?.(AUDIT_EVENTS.mcpLogin, `login ${outcome.server}: expired after ${outcome.timeoutSec}s`);
+              await reply(t("cmd.mcp.login.expired", { server: outcome.server, timeoutSec: outcome.timeoutSec }));
+              return;
+            case "unavailable":
+              // 版本门(pi 缺失):与短命令同口径的 unavailable 回执,
+              // 不结成普通 failed。登录从未发起,审计如实记 unavailable。
+              audit?.(AUDIT_EVENTS.mcpLogin, `login ${outcome.server}: unavailable`);
+              await reply(t("cmd.mcp.unavailable", { detail: outcome.message }));
+              return;
+            case "invalidated":
+              return; // 作废流不发回执(防御性;编排器不会传进来)
+          }
+        },
+      });
+      if (started.kind === "busy") {
+        // 单飞拒绝:回报在途登录的服务器名(编排器 busy.server)。
+        await reply(t("cmd.mcp.login.busy", { server: started.server }));
+        return;
+      }
+      await reply(t("cmd.mcp.login.started", { server }));
+      // 编排挂后台:URL 与终局经 hooks 异步上抛,不阻塞命令管道。
+      void started.done;
+      return;
+    }
+
+    default:
+      await reply(t("cmd.mcp.usage"));
+      return;
+  }
+}
+
 
 /** Returns true if the command was handled (something was done / replied). */
 export async function handleSlashCommand(
@@ -934,6 +1377,26 @@ export async function handleSlashCommand(
         return true;
       }
 
+      // --- Hot update (/update family, 桥自更新 spec) -------------------------
+      case "/update": {
+        // 同步段固定顺序(§5.3 硬契约):①子命令分派(check/cancel)→ ②同步
+        // 守卫链(root/管理房/参数)→ ③编排分支 CAS 占位 —— 全部在编排器的
+        // handleCommand 内零 await 完成,首个 await 之前占位已落定(async 函数
+        // 首个 await 前同步执行)。预告回执完成后立即返回 true;等待/安装/
+        // 重启由编排器后台循环驱动,不 await 进命令调用栈。未装配不落回 pi
+        // (落回会把命令文本喂给模型),回 unavailable 文案(recap 先例的反例)。
+        if (!ctx.updater) {
+          await reply(t("cmd.update.unavailable"));
+          return true;
+        }
+        return await ctx.updater.handle(args, {
+          reply,
+          adminRoom: ctx.adminRoom === true,
+          allRpcs: ctx.allRpcs ?? (() => [rpc]),
+          audit: ctx.audit,
+        });
+      }
+
       // --- Model / thinking --------------------------------------------------
       case "/model": {
         if (!args) {
@@ -1079,6 +1542,24 @@ export async function handleSlashCommand(
         // 落既有 catch 管道的 cmd.generic.error 回执,不新增错误分支。
         const commands = await rpc.requireClient().getCommands();
         await reply(formatSkillsList(commands));
+        return true;
+      }
+
+      // --- MCP 服务器管理(spec #246)------------------------------------------
+      case "/mcp": {
+        // 未装配 → 「未启用」回执,绝不落回 pi:/mcp 不是 pi 的会话命令,
+        // 透传只会换来模型对不存在的命令一本正经的幻觉回复。
+        if (!ctx.mcp) {
+          await reply(t("cmd.mcp.unwired"));
+          return true;
+        }
+        // adminRoom 守卫(判定由 router 按本消息预绑定,含多工程管理房间
+        // 口径):非管理员礼貌拒绝,不给拓扑信息。
+        if (!ctx.mcp.adminAllowed) {
+          await reply(t("cmd.mcp.forbidden"));
+          return true;
+        }
+        await handleMcpCommand(args, ctx.mcp, reply, ctx.audit);
         return true;
       }
 

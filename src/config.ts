@@ -241,6 +241,70 @@ export function bashTimeoutMinutes(cfg: MsgBridgeConfig): number {
   return Math.floor(value);
 }
 
+// ── 进程韧性派生(spec #247)────────────────────────────────────────
+// 韧性配置段(cfg.resilience)的解释单点:每条默认值只有这里一处,后续票
+// (04 水位阈值、05 拉起上限)追加键时沿用同款手编白名单归一。
+
+/** 心跳间隔默认值(秒,spec #247 票02):看门狗过期秒的换算基线(默认
+ *  180 秒 = 6 × 30;换算关系单点归属看门狗脚本,文档与脚本注释互指)。 */
+export const HEARTBEAT_INTERVAL_SECONDS_DEFAULT = 30;
+
+/** 心跳写入间隔(秒):桥内周期自检 tick 的节拍。缺省/非法值(非正数、
+ *  非有限数)回落默认,floor 到整秒 —— 与 bashTimeoutMinutes 同款手编
+ *  白名单归一。 */
+export function heartbeatIntervalSeconds(cfg: MsgBridgeConfig): number {
+  const value = cfg.resilience?.heartbeatIntervalSeconds;
+  if (value === undefined || !Number.isFinite(value) || value < 1) {
+    return HEARTBEAT_INTERVAL_SECONDS_DEFAULT;
+  }
+  return Math.floor(value);
+}
+
+/** 磁盘软阈值默认(MB,spec #247 票04):跌破告警一次,回升发恢复。 */
+export const DISK_SOFT_MB_DEFAULT = 2048;
+/** 磁盘硬阈值默认(MB,spec #247 票04):低于即退(启动期只日志,运行期
+ *  留言 + 优雅退出)。 */
+export const DISK_HARD_MB_DEFAULT = 512;
+/** 堆告警默认百分比(spec #247 票04)。 */
+export const HEAP_ALERT_PERCENT_DEFAULT = 80;
+
+/** 白名单归一一条可选数值配置:非有限数/非正数回落默认(整型)。 */
+function positiveIntOrDefault(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value) || value < 1) {
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
+/** 磁盘硬阈值(MB):缺省/非法值回落默认。 */
+export function diskHardMb(cfg: MsgBridgeConfig): number {
+  return positiveIntOrDefault(cfg.resilience?.diskHardMb, DISK_HARD_MB_DEFAULT);
+}
+
+/** 磁盘软阈值(MB):缺省/非法值回落默认;恒钳在硬阈值之上(不变式
+ *  软 > 硬,手编倒挂时按硬阈值 +1 —— 否则软告警永远没机会先于硬退发出)。 */
+export function diskSoftMb(cfg: MsgBridgeConfig): number {
+  const raw = positiveIntOrDefault(cfg.resilience?.diskSoftMb, DISK_SOFT_MB_DEFAULT);
+  return Math.max(raw, diskHardMb(cfg) + 1);
+}
+
+/** 堆告警百分比:缺省/非法值回落默认,钳制到 [1, 100]。 */
+export function heapAlertPercent(cfg: MsgBridgeConfig): number {
+  const value = cfg.resilience?.heapAlertPercent;
+  if (value === undefined || !Number.isFinite(value) || value < 1) {
+    return HEAP_ALERT_PERCENT_DEFAULT;
+  }
+  return Math.min(Math.floor(value), 100);
+}
+
+/** pi RPC 自动拉起上限默认(次,spec #247 票05)。 */
+export const RPC_RESPAWN_LIMIT_DEFAULT = 5;
+
+/** pi RPC 自动拉起上限(连续意外崩溃次数):缺省/非法值回落默认。 */
+export function rpcRespawnLimit(cfg: MsgBridgeConfig): number {
+  return positiveIntOrDefault(cfg.resilience?.rpcRespawnLimit, RPC_RESPAWN_LIMIT_DEFAULT);
+}
+
 // ── 自定义头像路径派生(spec #84 v5 用户覆盖)────────────────────────
 // 空间/bot/项目三个消费位共用一条归一规则:~ 展开、相对 ~/.pi/ 解析、
 // 扩展名白名单定 mimetype。派生只有这一处解释,自愈与 /pmctl 同源。
