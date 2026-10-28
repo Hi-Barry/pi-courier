@@ -629,7 +629,7 @@ Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDA
       /sc minute /mo 1 /f
     ```
 
-    Parameters: `-TaskName` the bridge task name; `-HeartbeatPath` heartbeat file (default `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`); `-StaleSeconds` stale threshold (default 180 = 6 × 30, see the script header for the conversion); `-NoAlert` disables the Matrix alert. Ctrl+C / `pi-courier stop` writes the manual-stop marker so the watchdog will not bring the service back; `schtasks /end` is a hard kill and does not write it — stop the watchdog task before maintenance or uninstall. Uninstall:
+    Parameters: `-TaskName` the bridge task name; `-HeartbeatPath` heartbeat file (default `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`); `-StaleSeconds` stale threshold (default 180 = 6 × 30, see the script header for the conversion); `-NoAlert` disables the Matrix alert. Ctrl+C / Ctrl+Break writes the manual-stop marker so the watchdog will not bring the service back (`pi-courier stop` is Linux-only); `schtasks /end` is a hard kill and does not write it — stop the watchdog task before maintenance or uninstall. Uninstall:
 
     ```powershell
     schtasks /delete /tn "pi-courier-watchdog" /f
