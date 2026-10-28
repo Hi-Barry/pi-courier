@@ -457,7 +457,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // ---- disk write-failure aggregation (spec #247 票04) ------------------------
   // 桥内写路径(状态文件保存:附件台账/队列快照/提醒,审计日志,附件落盘,
   // 事件台账)的磁盘类写失败(ENOSPC/EDQUOT)统一聚合:首条立即告警,之后
-  // 5 分钟至多一条。各写路径既有降级契约不变,recorder 只是附加可见性。notify 走 sendReplyStrict(TDZ 闭包次序同上:构造期不
+  // 指数退避(5 分钟起步、每次翻倍、封顶 1 小时)。各写路径既有降级契约
+  // 不变,recorder 只是附加可见性。notify 走 sendReplyStrict(TDZ 闭包次序同上:构造期不
   // 调用,运行期时 sendReplyStrict 已声明)。
   const writeFailures = new WriteFailureRecorder({
     notify: (info) => {

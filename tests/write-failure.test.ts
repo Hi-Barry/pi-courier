@@ -9,9 +9,15 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuditLog } from "../src/audit/audit-log";
 import { JsonStateFile } from "../src/state/json-file";
-import { diskSpaceErrorCode, WriteFailureRecorder } from "../src/resilience/write-failure";
 import { AttachmentStore } from "../src/transports/attachments";
 import { FileEventLedger } from "../src/transports/event-ledger";
+import {
+  WRITE_FAILURE_BACKOFF_MAX_MS,
+  WRITE_FAILURE_BACKOFF_MS,
+  WriteFailureRecorder,
+  diskSpaceErrorCode,
+  writeFailureBackoffMs,
+} from "../src/resilience/write-failure";
 
 let dir: string;
 
@@ -80,25 +86,41 @@ describe("WriteFailureRecorder 退避(spec #247 票04)", () => {
     return { rec, notify, log, advance };
   }
 
-  it("首条立即告警,5 分钟窗口内至多一条,窗口过后恢复", () => {
+  it("首条立即,之后按指数退避(5 分钟起步、翻倍),窗口内至多一条(评审)", () => {
     const { rec, notify, advance } = recorder();
 
-    expect(rec.record("state-file", enospc())).toBe(true);
+    expect(rec.record("state-file", enospc())).toBe(true); // t=0,首条
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledWith({ code: "ENOSPC", count: 1, sources: ["state-file"] });
 
-    expect(rec.record("audit", enospc())).toBe(false); // 窗口内
+    expect(rec.record("audit", enospc())).toBe(false); // 5 分钟窗口内
     expect(rec.record("attachment", edquot())).toBe(false);
     expect(notify).toHaveBeenCalledTimes(1);
 
-    advance(5 * 60_000 + 1);
+    advance(5 * 60_000 + 1); // 第 1 个窗口到期:第二条
     expect(rec.record("event-ledger", enospc())).toBe(true);
-    expect(notify).toHaveBeenCalledTimes(2); // 首条 + 窗口后一条
+    expect(notify).toHaveBeenCalledTimes(2);
     expect(notify).toHaveBeenLastCalledWith({
       code: "ENOSPC",
       count: 4,
       sources: ["state-file", "audit", "attachment", "event-ledger"],
     });
+
+    advance(5 * 60_000); // 第二条之后窗口翻倍为 10 分钟:还不能发
+    expect(rec.record("state-file", enospc())).toBe(false);
+    expect(notify).toHaveBeenCalledTimes(2);
+
+    advance(5 * 60_000 + 1); // 距第二条已满 10 分钟:第三条
+    expect(rec.record("audit", enospc())).toBe(true);
+    expect(notify).toHaveBeenCalledTimes(3);
+  });
+
+  it("指数序列与封顶:5 → 10 → 20 → … → 1 小时", () => {
+    expect(writeFailureBackoffMs(0)).toBe(WRITE_FAILURE_BACKOFF_MS);
+    expect(writeFailureBackoffMs(1)).toBe(WRITE_FAILURE_BACKOFF_MS);
+    expect(writeFailureBackoffMs(2)).toBe(2 * WRITE_FAILURE_BACKOFF_MS);
+    expect(writeFailureBackoffMs(3)).toBe(4 * WRITE_FAILURE_BACKOFF_MS);
+    expect(writeFailureBackoffMs(20)).toBe(WRITE_FAILURE_BACKOFF_MAX_MS);
   });
 
   it("非磁盘类错误不计数不告警", () => {
