@@ -456,12 +456,14 @@ describe('config 派生函数族 — toolCallArgLimit(默认 100,硬顶 500 钳�
     expect(toolCallArgLimit({ toolCallArgLimit: 1_000_000 })).toBe(500);
   });
 
-  it('手编杂值白名单归一:非正数/非有限数按缺省处理,小数取整', async () => {
+  it('手编杂值白名单归一:小于 1/非有限数按缺省处理,不小于 1 的小数取整', async () => {
     const { toolCallArgLimit } = await import('../src/config');
     expect(toolCallArgLimit({ toolCallArgLimit: 0 })).toBe(100);
     expect(toolCallArgLimit({ toolCallArgLimit: -5 })).toBe(100);
+    expect(toolCallArgLimit({ toolCallArgLimit: 0.9 })).toBe(100);
     expect(toolCallArgLimit({ toolCallArgLimit: Number.NaN })).toBe(100);
     expect(toolCallArgLimit({ toolCallArgLimit: Number.POSITIVE_INFINITY })).toBe(100);
+    expect(toolCallArgLimit({ toolCallArgLimit: 1.9 })).toBe(1);
     expect(toolCallArgLimit({ toolCallArgLimit: 100.9 })).toBe(100);
   });
 });
