@@ -29,6 +29,7 @@ import {
   managementRoomId,
   presetProblems,
   resolveLanguage,
+  rpcRespawnLimit,
   THINKING_LEVELS,
 } from "./config.js";
 import { errorMessage } from "./errors.js";
@@ -265,6 +266,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   if (sessionDir) {
     rpcArgs.push("--session-dir", sessionDir);
   }
+  // ---- rpc respawn wiring (spec #247 票05) ------------------------------------
+  // pi 子进程意外崩溃的自动拉起配置:默认 rpc 与项目子进程共用同一包装类,
+  // 两个接线点同款注入 —— 项目进程自动获得同款自愈。达上限的告警经管理房
+  // 下发(文案双表,标签区分默认/项目进程)。
+  const rpcRespawn = {
+    limit: rpcRespawnLimit(config),
+    onGiveUp: (broken: PiRpc) => {
+      const mgmtRoom = managementRoomId(store.get());
+      if (!mgmtRoom || !matrix?.isConnected) return;
+      void sendReplyStrict(
+        mgmtRoom,
+        t("resilience.rpcRespawnGaveUp", {
+          label: broken.label ?? t("resilience.rpcLabelDefault"),
+          count: String(rpcRespawnLimit(config)),
+        })
+      ).catch(() => {});
+    },
+  };
   const rpc = new PiRpc({
     cliPath,
     cwd: workdir,
@@ -274,6 +293,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     proxyConfig: config,
     // bash 自管通道等待上限(票 #220):config bashTimeoutMinutes 派生注入。
     bashTimeoutMs: bashTimeoutMinutes(config) * 60_000,
+    respawn: rpcRespawn,
   });
 
   // ---- multi-project routing -------------------------------------------------
@@ -285,7 +305,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // does not rely on hoisting.
   const projectManager = new ProjectManager({
     defaultRpc: rpc,
-    baseOptions: { cliPath, args: ["--continue"], proxyConfig: config, bashTimeoutMs: bashTimeoutMinutes(config) * 60_000 },
+    baseOptions: {
+      cliPath,
+      args: ["--continue"],
+      proxyConfig: config,
+      bashTimeoutMs: bashTimeoutMinutes(config) * 60_000,
+      respawn: rpcRespawn,
+    },
     onRoomEvent: (_roomId, event, rpc) => {
       router.handleEvent(event, rpc);
     },

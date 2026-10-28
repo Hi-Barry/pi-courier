@@ -279,6 +279,14 @@ export function heapAlertPercent(cfg: MsgBridgeConfig): number {
   return Math.min(Math.floor(value), 100);
 }
 
+/** pi RPC 自动拉起上限默认(次,spec #247 票05)。 */
+export const RPC_RESPAWN_LIMIT_DEFAULT = 5;
+
+/** pi RPC 自动拉起上限(连续意外崩溃次数):缺省/非法值回落默认。 */
+export function rpcRespawnLimit(cfg: MsgBridgeConfig): number {
+  return positiveIntOrDefault(cfg.resilience?.rpcRespawnLimit, RPC_RESPAWN_LIMIT_DEFAULT);
+}
+
 // ── 自定义头像路径派生(spec #84 v5 用户覆盖)────────────────────────
 // 空间/bot/项目三个消费位共用一条归一规则:~ 展开、相对 ~/.pi/ 解析、
 // 扩展名白名单定 mimetype。派生只有这一处解释,自愈与 /pmctl 同源。

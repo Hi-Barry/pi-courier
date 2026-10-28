@@ -239,7 +239,9 @@ const en: Record<MessageKey, string> = {
   "resilience.diskRecovered": "✅ Disk space has recovered: {free}MB left (soft threshold {threshold}MB). Alert cleared.",
   "resilience.diskHardExit": "🚨 Disk space is below the hard threshold: {free}MB < {threshold}MB. The process will exit in order.",
   "resilience.heapAlert": "⚠️ Heap usage exceeded the limit: {percent}% (threshold {threshold}%). A memory leak is possible — please investigate.",
-  "resilience.writeFailure": "⚠️ Disk write failure ({code}); {count} failure(s) aggregated (sources: {sources}). No repeat alert within 5 minutes.",  "guest.denied": "🚫 This command requires trusted-user permission: {command}",
+  "resilience.writeFailure": "⚠️ Disk write failure ({code}); {count} failure(s) aggregated (sources: {sources}). No repeat alert within 5 minutes.",
+  "resilience.rpcRespawnGaveUp": "🚨 The pi process ({label}) crashed {count} times in a row — automatic respawn gave up. Investigate manually, then use /reload to recover.",
+  "resilience.rpcLabelDefault": "default process",  "guest.denied": "🚫 This command requires trusted-user permission: {command}",
   "router.attach.saved": "📎 Attachment saved: {path} ({bytes})\nIt will be attached automatically with your next message.",
   "router.payload.unsupported":
     "🤷 Unsupported message type ({msgtype}) — ignored. You can send text, images and files directly.",

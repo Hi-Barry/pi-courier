@@ -279,6 +279,12 @@ export interface MsgBridgeConfig {
      * (状态翻转去重)。钳制到 [1, 100]。
      */
     heapAlertPercent?: number;
+    /**
+     * pi RPC 子进程自动拉起上限(默认 5,spec #247 票05):连续意外崩溃
+     * 达上限后停止自动拉起并向管理房告警,人工 /reload 成功后清零重新
+     * 武装。非正数/非有限数视为缺省。
+     */
+    rpcRespawnLimit?: number;
   };
 }
 
