@@ -34,7 +34,7 @@ export interface ResourceGuardDeps {
    *  返回 false = 当前无法投递(未配管理房/transport 未连接),守卫不翻转
    *  告警状态、下一 tick 重试 —— 启动期 tick 早于 Matrix 连接,不能把
    *  「还没连上」误当成「已告警」而永久吞掉。undefined/true = 已受理。 */
-  notify?: (message: string) => boolean | void;
+  notify?: (message: string) => boolean | undefined;
   /** 运行期硬阈值退出缝(组合根接:管理房死因留言 + 共享退出链非零码)。 */
   onHardExit: (reason: string) => void;
   /** 死因/决策日志。 */
