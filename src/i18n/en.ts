@@ -264,6 +264,13 @@ const en: Record<MessageKey, string> = {
   "cmd.mcp.login.seamError": "The login execution seam threw: {message}",
   "cmd.mcp.login.noSuccessMark": "pi exited without printing a sign-in success marker",
   "cmd.mcp.login.exitCode": "pi mcp login exited with code {code}",
+  // Fallback diagnostics for short commands with no stderr tail: kept in the
+  // dual tables so an English deployment never mixes languages (review cleanup).
+  "cmd.mcp.detail.timeout": "{label} timed out after {seconds}s and was terminated",
+  "cmd.mcp.detail.listUnparsable": "pi mcp list returned no parsable JSON",
+  "cmd.mcp.detail.listUnparsableDetail": "pi mcp list returned no parsable JSON: {detail}",
+  "cmd.mcp.detail.exitCode": "pi mcp {sub} exited with code {code}",
+  "cmd.mcp.detail.exitCodeUnknown": "pi mcp {sub} exited with an unknown code",
   // Downgrade hint for a mutating command that exited 0 with no confirmation shape
   // (an older pi treated the command as a prompt).
   "cmd.mcp.add.unverified":

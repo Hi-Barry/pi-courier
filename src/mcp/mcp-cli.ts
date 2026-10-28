@@ -252,7 +252,14 @@ function resolveDeps(deps: McpCliDeps): {
 }
 
 function timeoutMessage(label: string, timeoutMs: number): string {
-  return `${label}超时(${Math.round(timeoutMs / 1000)}s)已终止`;
+  return t("cmd.mcp.detail.timeout", { label, seconds: Math.round(timeoutMs / 1000) });
+}
+
+/** 无 stderr 尾部时的退出码兜底(串进双表;code 为 null 走「未知」分支)。 */
+function exitCodeMessage(sub: "add" | "remove" | "logout", code: number | null): string {
+  return code === null
+    ? t("cmd.mcp.detail.exitCodeUnknown", { sub })
+    : t("cmd.mcp.detail.exitCode", { sub, code });
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +291,9 @@ export async function listServers(
   const detail = oneTail(run.stderr) || oneTail(run.stdout);
   return {
     kind: "failed",
-    message: `pi mcp list 未返回可解析的 JSON${detail ? `:${detail}` : ""}`,
+    message: detail
+      ? t("cmd.mcp.detail.listUnparsableDetail", { detail })
+      : t("cmd.mcp.detail.listUnparsable"),
   };
 }
 
@@ -314,7 +323,7 @@ export async function addServer(
     return { kind: "ok", data: stdout, confirmed: mutationConfirmed("add", stdout) };
   }
   const detail = oneTail(run.stderr) || oneTail(run.stdout);
-  return { kind: "failed", message: detail || `pi mcp add 退出码 ${run.code ?? "未知"}` };
+  return { kind: "failed", message: detail || exitCodeMessage("add", run.code) };
 }
 
 /** `pi mcp remove <名>`。 */
@@ -339,7 +348,7 @@ export async function removeServer(
     return { kind: "ok", data: stdout, confirmed: mutationConfirmed("remove", stdout) };
   }
   const detail = oneTail(run.stderr) || oneTail(run.stdout);
-  return { kind: "failed", message: detail || `pi mcp remove 退出码 ${run.code ?? "未知"}` };
+  return { kind: "failed", message: detail || exitCodeMessage("remove", run.code) };
 }
 
 /** `pi mcp logout <名>`。 */
@@ -364,7 +373,7 @@ export async function logoutServer(
     return { kind: "ok", data: stdout, confirmed: mutationConfirmed("logout", stdout) };
   }
   const detail = oneTail(run.stderr) || oneTail(run.stdout);
-  return { kind: "failed", message: detail || `pi mcp logout 退出码 ${run.code ?? "未知"}` };
+  return { kind: "failed", message: detail || exitCodeMessage("logout", run.code) };
 }
 
 /**

@@ -263,6 +263,13 @@ const zh = {
   "cmd.mcp.login.seamError": "登录执行缝抛错:{message}",
   "cmd.mcp.login.noSuccessMark": "pi 退出但未输出登录成功标记",
   "cmd.mcp.login.exitCode": "pi mcp login 退出码 {code}",
+  // 短命令无 stderr 尾部时的兜底诊断串:同样走双表,避免 en 部署下回执
+  // 中英混杂(评审收尾:原先散落在 mcp-cli 里的硬编码中文)。
+  "cmd.mcp.detail.timeout": "{label} 超时({seconds}s)已终止",
+  "cmd.mcp.detail.listUnparsable": "pi mcp list 未返回可解析的 JSON",
+  "cmd.mcp.detail.listUnparsableDetail": "pi mcp list 未返回可解析的 JSON:{detail}",
+  "cmd.mcp.detail.exitCode": "pi mcp {sub} 退出码 {code}",
+  "cmd.mcp.detail.exitCodeUnknown": "pi mcp {sub} 退出码未知",
   // 突变命令 exit 0 但输出无确认形状(旧版 pi 把命令当 prompt 喂模型)的降级提示。
   "cmd.mcp.add.unverified":
     "⚠️ pi 的输出未含预期的添加确认信息:旧版 pi(<1.0)可能把这条命令当成了普通提示词而没有执行。请发 /mcp list 核实;若 pi 过旧请先升级到 ≥ 1.0。",
