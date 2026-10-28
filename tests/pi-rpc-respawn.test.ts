@@ -195,6 +195,51 @@ describe("上限熔断与人工恢复(spec #247 票05)", () => {
     expect(onGiveUp).toHaveBeenCalledWith(rpc);
   });
 
+  it("自动拉起 start() 本身失败也计数,达上限告警恰好一次并停止尝试(评审)", async () => {
+    const onGiveUp = vi.fn();
+    const rpc = freshRpc(2, onGiveUp);
+    const first = makeFakeClient();
+    connect(rpc, first);
+    const startSpy = vi.spyOn(rpc, "start").mockRejectedValue(new Error("spawn failed"));
+
+    exitHandlerOf(first)(); // 第 1 次失败(意外死亡)→ 1s 后拉起
+    expect(internals(rpc).crashes).toBe(1);
+    await vi.advanceTimersByTimeAsync(1000); // 拉起失败 → 第 2 次 = limit → 熔断
+
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(internals(rpc).crashes).toBe(2);
+    expect(internals(rpc).gaveUp).toBe(true);
+    expect(onGiveUp).toHaveBeenCalledTimes(1);
+    expect(onGiveUp).toHaveBeenCalledWith(rpc);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(startSpy).toHaveBeenCalledTimes(1); // 不再尝试
+  });
+
+  it("拉起失败未达上限 → 继续指数退避重试,成功后恢复(评审)", async () => {
+    const current: { client?: FakeClient } = {};
+    const rpc = freshRpc(3);
+    const first = makeFakeClient();
+    connect(rpc, first);
+    const startSpy = vi
+      .spyOn(rpc, "start")
+      .mockRejectedValueOnce(new Error("spawn failed"))
+      .mockImplementation(async () => {
+        current.client = makeFakeClient();
+        connect(rpc, current.client);
+      });
+
+    exitHandlerOf(first)(); // 第 1 次失败(死亡)
+    await vi.advanceTimersByTimeAsync(1000); // 拉起失败 → 第 2 次,2s 后重试
+    expect(internals(rpc).crashes).toBe(2);
+    expect(internals(rpc).gaveUp).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2000); // 第二次拉起成功
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(current.client).toBeDefined();
+    expect(internals(rpc).expectedExit).toBe(false); // 新实例连上即复位
+  });
+
   it("人工 restart 成功 → 崩溃计数清零、熔断复位,自动拉起重新武装", async () => {
     const current: { client?: FakeClient } = {};
     const onGiveUp = vi.fn();

@@ -565,41 +565,67 @@ export class PiRpc {
    */
   private handleChildExit(): void {
     if (this.expectedExit) return;
-    const respawn = this.options.respawn;
-    if (!respawn || this.respawnGaveUp) return;
+    if (!this.respawnEnabled || this.respawnGaveUp) return;
     this.consecutiveCrashes += 1;
-    if (this.consecutiveCrashes >= respawn.limit) {
-      // 达上限:熔断 —— 清死连接,不再拉起,告警恰好一次(此后无进程,
-      // 不再收到 exit;标志是纵深防御)。人工 /reload 成功后重新武装。
-      this.respawnGaveUp = true;
-      this.client = undefined;
-      this.wrappedClient = undefined;
-      this.inFlight = 0;
-      logger.warn(
-        `[respawn] pi child crashed ${this.consecutiveCrashes} times in a row — giving up auto-respawn${this.label ? ` (${this.label})` : ""}`
-      );
-      try {
-        respawn.onGiveUp?.(this);
-      } catch {
-        // 告警通道失败不改变熔断决策
-      }
+    if (this.consecutiveCrashes >= this.options.respawn!.limit) {
+      this.giveUpRespawn();
       return;
     }
+    this.scheduleRespawn();
+  }
+
+  /** 排一次自动拉起:退避 delay 后走监听器保留路径 restartInternal。
+   *  拉起本身失败(pi 起不来/spawn 报错)同样计入连续失败 —— 此时已无
+   *  子进程、不会再有 exit 事件,不计数就会永久停摆且管理房收不到告警。 */
+  private scheduleRespawn(): void {
     const delay = respawnBackoffMs(this.consecutiveCrashes);
     logger.warn(
-      `[respawn] pi child exited unexpectedly (crash #${this.consecutiveCrashes}) — respawning in ${delay}ms`
+      `[respawn] pi child exited unexpectedly (failure #${this.consecutiveCrashes}) — respawning in ${delay}ms`
     );
     this.clearRespawnTimer();
     this.respawnTimer = setTimeout(() => {
       this.respawnTimer = undefined;
       void this.restartInternal({ clearCrashCount: false }).catch((err) => {
-        // 拉起失败:记日志等人工(/reload 照常可用)。不在此递增计数 ——
-        // 计数语义是「连续意外死亡」,拉起失败没有新的死亡事件。
         logger.error(`[respawn] auto-respawn failed: ${errorMessage(err)}`);
+        this.handleRespawnFailure();
       });
     }, delay);
     // unref:桥退出时排程中的拉起不拦路 —— 拉起是为活着的服务续命。
     this.respawnTimer.unref?.();
+  }
+
+  /** 自动拉起失败:计数 +1,未达上限继续按指数退避重试,达上限熔断并
+   *  告警恰好一次(错误里带不上新 exit,必须在这里收口)。 */
+  private handleRespawnFailure(): void {
+    if (this.respawnGaveUp) return;
+    const respawn = this.options.respawn;
+    if (!respawn) return;
+    this.consecutiveCrashes += 1;
+    if (this.consecutiveCrashes >= respawn.limit) {
+      this.giveUpRespawn();
+      return;
+    }
+    this.scheduleRespawn();
+  }
+
+  /** 熔断:清死连接、不再拉起、onGiveUp 恰好一次(人工 restart 成功后
+   *  由 restartInternal 复位计数与标志重新武装)。 */
+  private giveUpRespawn(): void {
+    const respawn = this.options.respawn;
+    if (!respawn || this.respawnGaveUp) return;
+    this.respawnGaveUp = true;
+    this.clearRespawnTimer();
+    this.client = undefined;
+    this.wrappedClient = undefined;
+    this.inFlight = 0;
+    logger.warn(
+      `[respawn] pi child crashed or failed to respawn ${this.consecutiveCrashes} times in a row — giving up auto-respawn${this.label ? ` (${this.label})` : ""}`
+    );
+    try {
+      respawn.onGiveUp?.(this);
+    } catch {
+      // 告警通道失败不改变熔断决策
+    }
   }
 
   private clearRespawnTimer(): void {
