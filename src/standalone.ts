@@ -23,8 +23,8 @@ import {
   ConfigStore,
   diskHardMb,
   diskSoftMb,
-  heartbeatIntervalSeconds,
   heapAlertPercent,
+  heartbeatIntervalSeconds,
   inboxMode,
   managementRoomId,
   presetProblems,
@@ -41,7 +41,7 @@ import { applyProxySettings } from "./proxy.js";
 import { ReminderClock } from "./reminders/reminder-clock.js";
 import type { ReminderEntry } from "./reminders/reminder-store.js";
 import { ReminderStore } from "./reminders/reminder-store.js";
-import { createCrashGuard, CRASH_EXIT_CODE } from "./resilience/crash-guard.js";
+import { CRASH_EXIT_CODE, createCrashGuard } from "./resilience/crash-guard.js";
 import { diskFreeBytes } from "./resilience/disk-free.js";
 import { Heartbeat } from "./resilience/heartbeat.js";
 import { ResourceGuard } from "./resilience/resource-guard.js";
