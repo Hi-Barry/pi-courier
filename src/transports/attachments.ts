@@ -122,7 +122,10 @@ export class AttachmentStore {
 
   constructor(
     private config: AttachmentStoreConfig,
-    private source: MediaSource
+    private source: MediaSource,
+    /** 磁盘类写失败(ENOSPC/EDQUOT)的聚合可见性缝(spec #247 票04):
+     *  组合根注入 recorder 包装;缺省不接,save 的错误类型契约不变。 */
+    private readonly onDiskWriteFailure?: (err: unknown) => void
   ) {}
 
   /** Download (or reuse) and persist one media payload. Throws
@@ -172,10 +175,22 @@ export class AttachmentStore {
     }
 
     const dir = path.join(this.config.rootDir, sanitizeRoomKey(roomId));
-    await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-
     const filename = sanitizeMediaFilename(media.body, mxcKey);
-    const target = await writeExclusive(dir, filename, data);
+    // 落盘段(建目录 + 独占写)整体过磁盘写失败缝(spec #247 票04):ENOSPC
+    // 可能打在 mkdir 也可能打在 writeFile。原错误照抛(类型契约不变,调用方
+    // 照常给房间回执);缝自身抛错不放大。
+    let target: string;
+    try {
+      await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+      target = await writeExclusive(dir, filename, data);
+    } catch (err) {
+      try {
+        this.onDiskWriteFailure?.(err);
+      } catch {
+        // 可见性通道失败不影响回执契约
+      }
+      throw err;
+    }
 
     this.dedup.set(mxcKey, target);
     return { path: target, filename: path.basename(target), bytes: data.length };

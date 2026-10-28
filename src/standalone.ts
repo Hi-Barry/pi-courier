@@ -21,10 +21,15 @@ import {
   bashTimeoutMinutes,
   CONFIG_DIR,
   ConfigStore,
+  diskHardMb,
+  diskSoftMb,
+  heapAlertPercent,
+  heartbeatIntervalSeconds,
   inboxMode,
   managementRoomId,
   presetProblems,
   resolveLanguage,
+  rpcRespawnLimit,
   THINKING_LEVELS,
 } from "./config.js";
 import { errorMessage } from "./errors.js";
@@ -36,6 +41,12 @@ import { applyProxySettings } from "./proxy.js";
 import { ReminderClock } from "./reminders/reminder-clock.js";
 import type { ReminderEntry } from "./reminders/reminder-store.js";
 import { ReminderStore } from "./reminders/reminder-store.js";
+import { CRASH_EXIT_CODE, CRASH_NOTIFY_TIMEOUT_MS, createCrashGuard } from "./resilience/crash-guard.js";
+import { diskFreeBytes } from "./resilience/disk-free.js";
+import { Heartbeat } from "./resilience/heartbeat.js";
+import { clearManualStop, manualStopMarkerPath, markManualStop } from "./resilience/manual-stop.js";
+import { ResourceGuard } from "./resilience/resource-guard.js";
+import { WriteFailureRecorder } from "./resilience/write-failure.js";
 import type { PersistedAttachmentEntry } from "./rpc/attachment-ledger.js";
 import { createMcpOrchestration } from "./rpc/command-map.js";
 import { createMessageRouter } from "./rpc/message-router.js";
@@ -43,6 +54,7 @@ import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
 import { ProjectManager } from "./rpc/project-manager.js";
 import { consumeQueueSnapshots, type QueueSnapshotEntry, QueueSnapshotStore } from "./rpc/queue-snapshots.js";
+import { createShutdownChain } from "./shutdown-chain.js";
 import { ensureSpaceAndManagementRoom } from "./space-topology.js";
 import { createStartupState, runStartupHeals } from "./startup-state.js";
 import { JsonStateFile } from "./state/json-file.js";
@@ -146,6 +158,72 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const configLevel = typeof config.logLevel === "string" ? parseLogLevel(config.logLevel) : undefined;
   setLogLevel(cliLevel ?? configLevel ?? "info");
 
+  // ---- durable state (issue #114) --------------------------------------------
+  // ~/.pi/pi-courier-state/(0700)收桥的派生状态文件:磁盘是备份,内存是热路径。
+  // 配置(pi-courier.json)、Matrix SDK 存储、PID 锁各归 ~/.pi 原位,不迁。
+  // 路径先于启动期硬阈值派生:人工停止标记必须在任何退出路径之前清除
+  // (否则上次 stop 留下的标记会让看门狗一直跳过,连硬退崩溃循环都不拉起)。
+  const stateDir = path.join(CONFIG_DIR, "pi-courier-state");
+  const manualStopMarker = manualStopMarkerPath(stateDir);
+  clearManualStop(manualStopMarker);
+
+  // ---- resource guard: startup disk hard threshold (spec #247 票04) -----------
+  // 资源守卫先于一切网络接线构造并做启动期硬阈值检查(proxy/Matrix 连接/pi
+  // 拉起都在其后):低于硬阈值只写死因日志即退、不发管理房留言 —— 「满盘 →
+  // systemd 拉起 → 启动检查又硬退」的循环每轮不重连网络、不刷管理房,循环
+  // 代价收敛为本地日志一行 + systemd StartLimitBurst 熔断(README 见)。
+  // 异常退出进行中(崩溃守卫/磁盘硬阈值):信号处理器不得写人工停止标记 ——
+  // 否则真崩溃会被看门狗当成「运维主动停止」而不再拉起。
+  let abnormalExit = false;
+  const resourceGuard = new ResourceGuard({
+    readDiskFreeBytes: () => diskFreeBytes(workdir),
+    notify: (message) => {
+      const mgmtRoom = managementRoomId(store.get());
+      // false = 当前投不出去(未配管理房/启动期 Matrix 尚未连接):资源守卫
+      // 会保留告警翻转状态,下一 tick 重试 —— 启动期软告警不会被永久吞掉。
+      if (!mgmtRoom || !matrix?.isConnected) return false;
+      // 必须接 catch:sendReplyStrict 在未连接/发送失败时 reject,而
+      // process 上的 unhandledRejection 崩溃守卫会把一条软告警发送失败
+      // 升级成非零退出(可能形成崩溃循环)。同文件其他同类调用一律静默。
+      void sendReplyStrict(mgmtRoom, message).catch(() => {});
+      return true;
+    },
+    onHardExit: (message) => {
+      abnormalExit = true;
+      // 与 L1 同一条「留言 + 退出」语义(spec #247 L3):先尽力把死因留言
+      // 发出去(整条限时,超时放弃),再断 transport 走退出链 —— 原来是
+      // fire-and-forget 紧接着断连,死因留言存在竞态,可能永远发不出去。
+      void (async () => {
+        const mgmtRoom = managementRoomId(store.get());
+        if (mgmtRoom && matrix?.isConnected) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, CRASH_NOTIFY_TIMEOUT_MS);
+            timer.unref?.();
+            sendReplyStrict(mgmtRoom, message)
+              .catch(() => {})
+              .finally(() => {
+                clearTimeout(timer);
+                resolve();
+              });
+          });
+        }
+        try {
+          await shutdownChain.shutdown("disk hard threshold", CRASH_EXIT_CODE);
+        } finally {
+          process.exit(CRASH_EXIT_CODE);
+        }
+      })();
+    },
+    log: (message) => logger.error(message),
+    softBytes: diskSoftMb(config) * 1024 * 1024,
+    hardBytes: diskHardMb(config) * 1024 * 1024,
+    heapAlertPercent: heapAlertPercent(config),
+  });
+  if (resourceGuard.startHardThresholdBreached()) {
+    releaseLock();
+    process.exit(CRASH_EXIT_CODE);
+  }
+
   // ---- outbound proxy (spec #201 票 #203) ------------------------------------
   // 出网代理接线必须先于任何出网:Matrix 客户端创建(底层 request 启动即读
   // 环境变量)、pi 拉起、向导进入都在其后。顺序:解析 → 校验 → 覆写进程
@@ -200,7 +278,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         rootDir: attachmentsDirectory(config),
         maxBytes: attachmentsMaxBytes(config),
       },
-      matrix.mediaSource
+      matrix.mediaSource,
+      // 磁盘类写失败聚合(spec #247 票04):TDZ 闭包次序,recordDiskWriteFailure
+      // 声明在 stateDir 区,运行期(首个附件落盘)才被调用。
+      (err) => recordDiskWriteFailure("attachment")(err)
     );
     matrix.setAttachmentStore(attachments);
     roomOps = matrix.roomOps;
@@ -228,6 +309,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   if (sessionDir) {
     rpcArgs.push("--session-dir", sessionDir);
   }
+  // ---- rpc respawn wiring (spec #247 票05) ------------------------------------
+  // pi 子进程意外崩溃的自动拉起配置:默认 rpc 与项目子进程共用同一包装类,
+  // 两个接线点同款注入 —— 项目进程自动获得同款自愈。达上限的告警经管理房
+  // 下发(文案双表,标签区分默认/项目进程)。
+  const rpcRespawn = {
+    limit: rpcRespawnLimit(config),
+    onGiveUp: (broken: PiRpc) => {
+      const mgmtRoom = managementRoomId(store.get());
+      if (!mgmtRoom || !matrix?.isConnected) return;
+      void sendReplyStrict(
+        mgmtRoom,
+        t("resilience.rpcRespawnGaveUp", {
+          label: broken.label ?? t("resilience.rpcLabelDefault"),
+          count: String(rpcRespawnLimit(config)),
+        })
+      ).catch(() => {});
+    },
+  };
   const rpc = new PiRpc({
     cliPath,
     cwd: workdir,
@@ -237,6 +336,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     proxyConfig: config,
     // bash 自管通道等待上限(票 #220):config bashTimeoutMinutes 派生注入。
     bashTimeoutMs: bashTimeoutMinutes(config) * 60_000,
+    respawn: rpcRespawn,
   });
 
   // ---- multi-project routing -------------------------------------------------
@@ -248,7 +348,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // does not rely on hoisting.
   const projectManager = new ProjectManager({
     defaultRpc: rpc,
-    baseOptions: { cliPath, args: ["--continue"], proxyConfig: config, bashTimeoutMs: bashTimeoutMinutes(config) * 60_000 },
+    baseOptions: {
+      cliPath,
+      args: ["--continue"],
+      proxyConfig: config,
+      bashTimeoutMs: bashTimeoutMinutes(config) * 60_000,
+      respawn: rpcRespawn,
+    },
     onRoomEvent: (_roomId, event, rpc) => {
       router.handleEvent(event, rpc);
     },
@@ -315,24 +421,99 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   });
 
   // ---- durable state (issue #114) --------------------------------------------
-  // ~/.pi/pi-courier-state/(0700)收桥的派生状态文件:磁盘是备份,内存是热路径。
-  // 配置(pi-courier.json)、Matrix SDK 存储、PID 锁各归 ~/.pi 原位,不迁。
-  const stateDir = path.join(CONFIG_DIR, "pi-courier-state");
+  // 目录在此创建(0700);路径本身已在上方派生,供人工停止标记使用。
   try {
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   } catch (err) {
     logger.warn(`state dir unavailable (state files degrade to in-memory): ${errorMessage(err)}`);
   }
+
+  // ---- shutdown ----------------------------------------------------------------
+  // 共享优雅退出链(spec #247 票01):停 pi RPC → 断 transport → 放单实例锁
+  // → 退出。信号路径缺省退出码 0,与历史逐字节一致;崩溃守卫(票03)与
+  // 磁盘硬阈值(票04)携带非零码走同一条链,重入标志归链持有。
+  // 必须在 heartbeat.start() 之前构造:资源守卫的 onHardExit 闭包引用
+  // shutdownChain,启动窗口内 tick 跌破硬阈值时不能撞上 TDZ(否则异常被
+  // heartbeat 吞成一行 warn,运行期硬退静默失效)。
+  const shutdownChain = createShutdownChain({
+    stopRpc: () => rpc.stop(),
+    disconnectAll,
+    releaseLock,
+    exit: (code) => process.exit(code),
+    log: (message) => logger.info(message),
+  });
+  // 正常信号退出(pi-courier stop / restart)先写人工停止标记:看门狗看到
+  // 标记就跳过本轮判定,不会把刚停掉的服务重新拉起。崩溃守卫与磁盘硬阈值
+  // 走的是异常路径,刻意不写标记 —— 它们需要被看门狗/ systemd 拉起。
+  const handleStopSignal = (signal: string): void => {
+    if (!abnormalExit && !shutdownChain.isShuttingDown() && !markManualStop(manualStopMarker)) {
+      logger.warn(
+        `manual stop marker write failed: ${manualStopMarker} (watchdog may restart the service)`
+      );
+    }
+    void shutdownChain.shutdown(signal);
+  };
+  process.on("SIGTERM", () => handleStopSignal("SIGTERM"));
+  process.on("SIGINT", () => handleStopSignal("SIGINT"));
+  // Windows delivers Ctrl+Break (and some service-stop handoffs) as SIGBREAK
+  // — SIGTERM never arrives there (evaluation 2026-10-13). POSIX defines the
+  // signal too, where it essentially never fires; same shutdown path, so
+  // registering it is harmless everywhere.
+  process.on("SIGBREAK", () => handleStopSignal("SIGBREAK"));
+
+  // ---- disk write-failure aggregation (spec #247 票04) ------------------------
+  // 桥内写路径(状态文件保存:附件台账/队列快照/提醒,审计日志,附件落盘,
+  // 事件台账)的磁盘类写失败(ENOSPC/EDQUOT)统一聚合:首条立即告警,之后
+  // 指数退避(5 分钟起步、每次翻倍、封顶 1 小时)。各写路径既有降级契约
+  // 不变,recorder 只是附加可见性。notify 走 sendReplyStrict(TDZ 闭包次序同上:构造期不
+  // 调用,运行期时 sendReplyStrict 已声明)。
+  const writeFailures = new WriteFailureRecorder({
+    notify: (info) => {
+      const mgmtRoom = managementRoomId(store.get());
+      if (!mgmtRoom || !matrix?.isConnected) return;
+      void sendReplyStrict(
+        mgmtRoom,
+        t("resilience.writeFailure", { code: info.code, count: String(info.count), sources: info.sources.join("、") })
+      ).catch(() => {});
+    },
+    log: (message) => logger.warn(message),
+  });
+  const recordDiskWriteFailure =
+    (source: string) =>
+    (err: unknown): void => {
+      try {
+        writeFailures.record(source, err);
+      } catch {
+        // 聚合通道自身失败不放大写路径
+      }
+    };
+
   const attachmentsLedger = new JsonStateFile<PersistedAttachmentEntry[]>(
     path.join(stateDir, "pending-attachments.json"),
-    []
+    [],
+    recordDiskWriteFailure("state-file")
   );
+
+  // ---- heartbeat + periodic self-check tick (spec #247 票02) ------------------
+  // 周期自检基座:每 tick(默认 30 秒,可配)原子写一个心跳 JSON 到派生
+  // 状态目录 —— 外部看门狗(票06/07)判死活与僵死的唯一依据。onTick 接
+  // 票04 资源水位守卫(一次 tick 干两件事,定时器不翻倍)。定时器 unref,
+  // 不阻碍优雅退出;写失败 fire-and-forget,永不抛。
+  const heartbeat = new Heartbeat({
+    filePath: path.join(stateDir, "heartbeat.json"),
+    intervalMs: heartbeatIntervalSeconds(config) * 1000,
+    readDiskFreeBytes: () => diskFreeBytes(workdir),
+    onTick: () => resourceGuard.runChecks(),
+  });
+  heartbeat.start();
 
   // ---- offline inbox (issue #113):已处理事件台账 -----------------------------
   // JSONL 追加 + 启动压实(7 天窗);首运会话(freshStart)里 stale 维持全丢,
   // 自第二个会话起「stale 且台账没见过」= 离线积压。模式来自 config 派生,
   // off = 与旧版逐字节一致。transport 在装配后回填(与附件仓库同一接缝)。
-  const eventLedger = new FileEventLedger(path.join(stateDir, "event-ledger.jsonl"));
+  const eventLedger = new FileEventLedger(path.join(stateDir, "event-ledger.jsonl"), {
+    onDiskWriteFailure: recordDiskWriteFailure("event-ledger"),
+  });
   matrix?.setEventLedger(eventLedger, inboxMode(config));
 
   // ---- queue snapshots (issue #115 阶段2):队列镜像的磁盘半边 ------------------
@@ -341,7 +522,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // 进程映射在 config 里跨重启稳定;单工程默认进程绑运行时 DM,还原会误发
   // 旧房间,按票面保守路线整段不做。
   const queueSnapshots = new QueueSnapshotStore(
-    new JsonStateFile<QueueSnapshotEntry[]>(path.join(stateDir, "queue-snapshots.json"), [])
+    new JsonStateFile<QueueSnapshotEntry[]>(
+      path.join(stateDir, "queue-snapshots.json"),
+      [],
+      // 状态文件保存挂点(spec #247 票04):队列镜像写满盘时同样进聚合,
+      // 不再只剩逐条 warn。
+      recordDiskWriteFailure("queue-snapshots")
+    )
   );
 
   // ---- /update 热更新(桥自更新 spec §5.5/§5.6):pending-update.json ------
@@ -366,6 +553,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         void sendReply(managementRoom, "matrix", t("audit.degraded", { message }));
       }
     },
+    onDiskWriteFailure: recordDiskWriteFailure("audit"),
   });
   auditLog.append(AUDIT_EVENTS.bridgeStart, "system", "", `pi-courier started (pid ${process.pid})`);
 
@@ -373,7 +561,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // 时钟句柄不跨进程:reminders.json 才是真相,start() 在 transports 连接后
   // 重装载并补起全部定时器,离线窗口过期的提醒立即补投(注明迟到)。
   const reminderStore = new ReminderStore(
-    new JsonStateFile<ReminderEntry[]>(path.join(stateDir, "reminders.json"), [])
+    new JsonStateFile<ReminderEntry[]>(
+      path.join(stateDir, "reminders.json"),
+      [],
+      // 状态文件保存挂点(spec #247 票04):提醒落盘失败同样进聚合。
+      recordDiskWriteFailure("reminders")
+    )
   );
   const reminderClock = new ReminderClock(reminderStore, (delivery) =>
     sendReply(delivery.chatId, delivery.transport, delivery.text)
@@ -552,24 +745,26 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     process.exit(1);
   }
 
-  // ---- shutdown ----------------------------------------------------------------
-  let shuttingDown = false;
-  const shutdown = async (signal: string): Promise<void> => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    logger.info(`🛑 ${signal} received — shutting down`);
-    await rpc.stop().catch(() => {});
-    await disconnectAll();
-    releaseLock();
-    process.exit(0);
-  };
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  process.on("SIGINT", () => void shutdown("SIGINT"));
-  // Windows delivers Ctrl+Break (and some service-stop handoffs) as SIGBREAK
-  // — SIGTERM never arrives there (evaluation 2026-10-13). POSIX defines the
-  // signal too, where it essentially never fires; same shutdown path, so
-  // registering it is harmless everywhere.
-  process.on("SIGBREAK", () => void shutdown("SIGBREAK"));
+  // ---- crash guard (spec #247 票03) ---------------------------------------------
+  // L1 全局兜底:未捕获异常/未处理 Promise 拒绝 → 记录死因 → 尽力向管理房
+  // 留言(限时 5 秒,失败不追;未配管理房/未连接静默)→ 沿共享退出链非零码
+  // 有序退出。notify 里未配管理房/transport 未连接时静默返回,守卫只记日志。
+  // 启动链仍由底部 main().catch 护(既有,保持不动);运行期逃逸由守卫接住。
+  const crashGuard = createCrashGuard({
+    log: (message) => logger.error(message),
+    notify: (reason) => {
+      const mgmtRoom = managementRoomId(store.get());
+      if (!mgmtRoom || !matrix?.isConnected) return Promise.resolve();
+      return sendReplyStrict(mgmtRoom, t("crash.notice", { reason }));
+    },
+    shutdown: (reason, exitCode) => {
+      abnormalExit = true;
+      return shutdownChain.shutdown(reason, exitCode);
+    },
+    hardExit: (code) => process.exit(code),
+  });
+  process.on("uncaughtException", (err) => void crashGuard.handleCrash("uncaughtException", err));
+  process.on("unhandledRejection", (reason) => void crashGuard.handleCrash("unhandledRejection", reason));
 
   logger.info("🚀 pi-courier ready. Waiting for messages...");
 }

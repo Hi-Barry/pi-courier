@@ -67,6 +67,9 @@ export interface AuditLogOptions {
   /** Fired once per threshold window when writes keep failing — the
    *  composition root routes this to the management room. */
   onDegraded?: (message: string) => void;
+  /** 磁盘类写失败(ENOSPC/EDQUOT)的聚合可见性缝(spec #247 票04):
+   *  组合根注入 recorder 包装;缺省不接,阈值降级契约不变。 */
+  onDiskWriteFailure?: (err: unknown) => void;
 }
 
 export class AuditLog {
@@ -108,6 +111,12 @@ export class AuditLog {
       this.consecutiveFailures = 0;
     } catch (err) {
       this.consecutiveFailures += 1;
+      // 磁盘类写失败的聚合可见性(spec #247 票04):缝自身抛错不放大写路径
+      try {
+        this.options.onDiskWriteFailure?.(err);
+      } catch {
+        // 可见性通道失败不影响审计降级契约
+      }
       if (this.consecutiveFailures >= this.warnThreshold) {
         const message = `audit log unavailable (${this.consecutiveFailures} consecutive failures) — the service keeps running without evidence: ${errorMessage(err)}`;
         logger.warn(message);

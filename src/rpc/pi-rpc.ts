@@ -19,6 +19,8 @@ import { fileURLToPath } from "node:url";
 // importing process itself on Node <22.19, before any gate could run).
 import type { CompactionResult, RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
 import { BASH_TIMEOUT_MINUTES_DEFAULT, loadConfig } from "../config.js";
+import { errorMessage } from "../errors.js";
+import { logger } from "../logger.js";
 import {
   joinNoProxyList,
   NO_PROXY_ENV_NAMES,
@@ -55,6 +57,17 @@ export interface PiRpcOptions {
    *  (10 分钟)。生产主路径由组合根从 config bashTimeoutMinutes 派生注入,
    *  与 proxyConfig 同一注入形态;测试经此注入免碰真实配置。 */
   bashTimeoutMs?: number;
+  /**
+   * 自动拉起配置(spec #247 票05):pi 子进程「意外退出」(非 /reload、
+   * 登录重启等主动路径)时自动重新拉起,指数退避(1 秒起步封顶 1 分钟),
+   * 连续意外崩溃达 limit 停止并回调 onGiveUp(组合根路由管理房告警);
+   * 人工 restart 成功后计数清零重新武装。undefined = 不启用自动拉起,
+   * 行为与旧版逐字节一致(未接线的入口零变化)。
+   */
+  respawn?: {
+    limit: number;
+    onGiveUp?: (rpc: PiRpc) => void;
+  };
 }
 
 /**
@@ -253,6 +266,18 @@ export class PiRpc {
   private inFlight = 0;
   private wrappedClient?: RpcClient;
 
+  // ── 自动拉起状态(spec #247 票05)──────────────────────────────────
+  /** 预期退出标志:主动 stop()/restart() 置位;新客户端实例连上(start
+   *  成功)即复位 —— 防一次正常 stop 后重新 start 的实例被残留标志永久
+   *  误判为预期而失去保护(生命周期回归断言钉住)。 */
+  private expectedExit = false;
+  /** 连续意外崩溃计数(达上限停止自动拉起;人工 restart 成功清零)。 */
+  private consecutiveCrashes = 0;
+  /** 已发「放弃拉起」告警(恰好一次的守卫;人工 restart 成功复位)。 */
+  private respawnGaveUp = false;
+  /** 排程中的自动拉起定时器(unref,不阻碍优雅退出;stop 清除)。 */
+  private respawnTimer: NodeJS.Timeout | undefined;
+
   /** Project label for tagged logging (undefined for the shared default rpc).
    *  Mutable: /pmctl rename & mv re-label a running project rpc. */
   label: string | undefined;
@@ -420,7 +445,7 @@ export class PiRpc {
     for (let attempt = 1; attempt <= 15; attempt++) {
       try {
         await client.getState();
-        this.client = client;
+        this.onClientConnected(client);
         return;
       } catch (err) {
         lastError = err;
@@ -429,6 +454,21 @@ export class PiRpc {
     }
     await client.stop().catch(() => {});
     throw new Error(`pi RPC did not become ready: ${(lastError as Error)?.message}`);
+  }
+
+  /**
+   * 新客户端实例连上的统一入口(spec #247 票05):doStart 握手成功即调。
+   * 复位预期退出标志(防残留标志让新实例失去保护)+ 挂子进程 exit 感知。
+   */
+  private onClientConnected(client: RpcClient): void {
+    this.expectedExit = false;
+    this.client = client;
+    this.attachExitWatch(client);
+  }
+
+  /** 自动拉起是否启用(未配置 = 与旧版一致,不挂感知不拉起)。 */
+  private get respawnEnabled(): boolean {
+    return this.options.respawn !== undefined;
   }
 
   /**
@@ -461,6 +501,10 @@ export class PiRpc {
   }
 
   async stop(): Promise<void> {
+    // 主动停止:预期退出(spec #247 票05),子进程 exit 不触发自动拉起;
+    // 同时撤销排程中的自动拉起 —— stop 之后不该有拉起动作。
+    this.expectedExit = true;
+    this.clearRespawnTimer();
     if (!this.client) return;
     await this.client.stop();
     this.client = undefined;
@@ -474,13 +518,28 @@ export class PiRpc {
    * new process. The session persists on disk, so the same session is resumed.
    * Useful after installing new extensions/skills or changing provider config.
    * Fires the restart lifecycle AFTER the new process is up.
+   *
+   * 人工重启(spec #247 票05):成功后清零连续崩溃计数并复位「放弃拉起」
+   * 状态 —— 人工介入(排查/修复后的 /reload)是重新武装自动拉起的唯一入口。
    */
   async restart(): Promise<void> {
+    await this.restartInternal({ clearCrashCount: true });
+  }
+
+  /** 重启的共同实现:主动 restart 与自动拉起同一条监听器保留路径 ——
+   *  先保存监听器、stop 后恢复再 start(裸 start 会让 respawn 后的 agent
+   *  事件路由全灭)。差别只在计数:人工成功清零,自动拉起不清零(否则
+   *  「连续崩溃达上限」永远到不了,拉起失去熔断)。 */
+  private async restartInternal(opts: { clearCrashCount: boolean }): Promise<void> {
     const keptListeners = this.listeners;
     await this.drainInFlight();
     await this.stop();
     this.listeners = keptListeners;
     await this.start();
+    if (opts.clearCrashCount) {
+      this.consecutiveCrashes = 0;
+      this.respawnGaveUp = false;
+    }
     for (const listener of this.restartListeners) {
       try {
         listener(this);
@@ -488,6 +547,96 @@ export class PiRpc {
         // 生命周期监听器的失败不影响重启本身
       }
     }
+  }
+
+  // ── 自动拉起(spec #247 票05)──────────────────────────────────────
+
+  /** 感知挂接:从客户端实例取子进程引用挂一次性 exit 监听(上游没有公开
+   *  的退出回调,兼容行为集中在上游兼容层 upstreamOnChildExit)。handler
+   *  绑定实例:exit 只在「它所属的客户端仍是当前连接」时生效 —— 主动
+   *  stop/重启后旧客户端的迟到 exit(理论上 once 已消费,纵深防御)不算
+   *  意外死亡。 */
+  private attachExitWatch(client: RpcClient): void {
+    if (!this.respawnEnabled) return;
+    upstreamOnChildExit(client, () => {
+      if (this.client !== client) return;
+      this.handleChildExit();
+    });
+  }
+
+  /**
+   * 子进程 exit 的统一入口(主动路径与意外路径分流):
+   *  - 预期退出(停机/主动重启置位):行为与现状逐字节一致,不计崩溃。
+   *  - 意外死亡:计数 → 指数退避排程自动拉起;达上限停止并告警一次。
+   */
+  private handleChildExit(): void {
+    if (this.expectedExit) return;
+    if (!this.respawnEnabled || this.respawnGaveUp) return;
+    this.consecutiveCrashes += 1;
+    if (this.consecutiveCrashes >= this.options.respawn!.limit) {
+      this.giveUpRespawn();
+      return;
+    }
+    this.scheduleRespawn();
+  }
+
+  /** 排一次自动拉起:退避 delay 后走监听器保留路径 restartInternal。
+   *  拉起本身失败(pi 起不来/spawn 报错)同样计入连续失败 —— 此时已无
+   *  子进程、不会再有 exit 事件,不计数就会永久停摆且管理房收不到告警。 */
+  private scheduleRespawn(): void {
+    const delay = respawnBackoffMs(this.consecutiveCrashes);
+    logger.warn(
+      `[respawn] pi child exited unexpectedly (failure #${this.consecutiveCrashes}) — respawning in ${delay}ms`
+    );
+    this.clearRespawnTimer();
+    this.respawnTimer = setTimeout(() => {
+      this.respawnTimer = undefined;
+      void this.restartInternal({ clearCrashCount: false }).catch((err) => {
+        logger.error(`[respawn] auto-respawn failed: ${errorMessage(err)}`);
+        this.handleRespawnFailure();
+      });
+    }, delay);
+    // unref:桥退出时排程中的拉起不拦路 —— 拉起是为活着的服务续命。
+    this.respawnTimer.unref?.();
+  }
+
+  /** 自动拉起失败:计数 +1,未达上限继续按指数退避重试,达上限熔断并
+   *  告警恰好一次(错误里带不上新 exit,必须在这里收口)。 */
+  private handleRespawnFailure(): void {
+    if (this.respawnGaveUp) return;
+    const respawn = this.options.respawn;
+    if (!respawn) return;
+    this.consecutiveCrashes += 1;
+    if (this.consecutiveCrashes >= respawn.limit) {
+      this.giveUpRespawn();
+      return;
+    }
+    this.scheduleRespawn();
+  }
+
+  /** 熔断:清死连接、不再拉起、onGiveUp 恰好一次(人工 restart 成功后
+   *  由 restartInternal 复位计数与标志重新武装)。 */
+  private giveUpRespawn(): void {
+    const respawn = this.options.respawn;
+    if (!respawn || this.respawnGaveUp) return;
+    this.respawnGaveUp = true;
+    this.clearRespawnTimer();
+    this.client = undefined;
+    this.wrappedClient = undefined;
+    this.inFlight = 0;
+    logger.warn(
+      `[respawn] pi child crashed or failed to respawn ${this.consecutiveCrashes} times in a row — giving up auto-respawn${this.label ? ` (${this.label})` : ""}`
+    );
+    try {
+      respawn.onGiveUp?.(this);
+    } catch {
+      // 告警通道失败不改变熔断决策
+    }
+  }
+
+  private clearRespawnTimer(): void {
+    if (this.respawnTimer) clearTimeout(this.respawnTimer);
+    this.respawnTimer = undefined;
   }
 
   /**
@@ -784,6 +933,29 @@ function upstreamClientStdin(client: RpcClient): { write: (chunk: string) => unk
     throw new Error("pi RPC stdin is not writable");
   }
   return stdin;
+}
+
+/**
+ * COMPAT(上游子进程退出通道,spec #247 票05):上游没有公开的子进程退出
+ * 回调 —— 其内部对子进程挂一次性 exit 监听,只做退出错误记录与在途请求
+ * 拒收。自动拉起需要自己的感知口:从客户端实例的公开字段 process 上取
+ * 子进程引用另挂 exit 监听。上游改动时只查兼容层这一处(与
+ * upstreamClientStdin 同界;评审以 npm pack 源码复核 1.0.0:process 为其
+ * 公开字段)。子进程引用不可得时静默跳过(无法感知 = 无法自愈,与旧版一致)。
+ */
+function upstreamOnChildExit(client: RpcClient, handler: () => void): void {
+  const proc = (client as unknown as {
+    process?: { once?: (event: string, listener: () => void) => unknown } | null;
+  }).process;
+  proc?.once?.("exit", handler);
+}
+
+/**
+ * 自动拉起的指数退避(spec #247 票05):1 秒起步,逐次翻倍,封顶 1 分钟。
+ * 入参是本次崩溃的序号(第 1 次崩溃 → 1s,第 2 次 → 2s,第 3 次 → 4s …)。
+ */
+export function respawnBackoffMs(consecutiveCrashes: number): number {
+  return Math.min(1000 * 2 ** Math.max(0, consecutiveCrashes - 1), 60_000);
 }
 
 /**
