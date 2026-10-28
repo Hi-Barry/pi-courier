@@ -44,6 +44,7 @@ import { ReminderStore } from "./reminders/reminder-store.js";
 import { CRASH_EXIT_CODE, CRASH_NOTIFY_TIMEOUT_MS, createCrashGuard } from "./resilience/crash-guard.js";
 import { diskFreeBytes } from "./resilience/disk-free.js";
 import { Heartbeat } from "./resilience/heartbeat.js";
+import { clearManualStop, manualStopMarkerPath, markManualStop } from "./resilience/manual-stop.js";
 import { ResourceGuard } from "./resilience/resource-guard.js";
 import { WriteFailureRecorder } from "./resilience/write-failure.js";
 import type { PersistedAttachmentEntry } from "./rpc/attachment-ledger.js";
@@ -153,6 +154,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const cliLevel = args.logLevel ? parseLogLevel(args.logLevel) : undefined;
   const configLevel = typeof config.logLevel === "string" ? parseLogLevel(config.logLevel) : undefined;
   setLogLevel(cliLevel ?? configLevel ?? "info");
+
+  // ---- durable state (issue #114) --------------------------------------------
+  // ~/.pi/pi-courier-state/(0700)收桥的派生状态文件:磁盘是备份,内存是热路径。
+  // 配置(pi-courier.json)、Matrix SDK 存储、PID 锁各归 ~/.pi 原位,不迁。
+  // 路径先于启动期硬阈值派生:人工停止标记必须在任何退出路径之前清除
+  // (否则上次 stop 留下的标记会让看门狗一直跳过,连硬退崩溃循环都不拉起)。
+  const stateDir = path.join(CONFIG_DIR, "pi-courier-state");
+  const manualStopMarker = manualStopMarkerPath(stateDir);
+  clearManualStop(manualStopMarker);
 
   // ---- resource guard: startup disk hard threshold (spec #247 票04) -----------
   // 资源守卫先于一切网络接线构造并做启动期硬阈值检查(proxy/Matrix 连接/pi
@@ -404,9 +414,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   });
 
   // ---- durable state (issue #114) --------------------------------------------
-  // ~/.pi/pi-courier-state/(0700)收桥的派生状态文件:磁盘是备份,内存是热路径。
-  // 配置(pi-courier.json)、Matrix SDK 存储、PID 锁各归 ~/.pi 原位,不迁。
-  const stateDir = path.join(CONFIG_DIR, "pi-courier-state");
+  // 目录在此创建(0700);路径本身已在上方派生,供人工停止标记使用。
   try {
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   } catch (err) {
@@ -427,13 +435,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     exit: (code) => process.exit(code),
     log: (message) => logger.info(message),
   });
-  process.on("SIGTERM", () => void shutdownChain.shutdown("SIGTERM"));
-  process.on("SIGINT", () => void shutdownChain.shutdown("SIGINT"));
+  // 正常信号退出(pi-courier stop / restart)先写人工停止标记:看门狗看到
+  // 标记就跳过本轮判定,不会把刚停掉的服务重新拉起。崩溃守卫与磁盘硬阈值
+  // 走的是异常路径,刻意不写标记 —— 它们需要被看门狗/ systemd 拉起。
+  const handleStopSignal = (signal: string): void => {
+    if (!markManualStop(manualStopMarker)) {
+      logger.warn(
+        `manual stop marker write failed: ${manualStopMarker} (watchdog may restart the service)`
+      );
+    }
+    void shutdownChain.shutdown(signal);
+  };
+  process.on("SIGTERM", () => handleStopSignal("SIGTERM"));
+  process.on("SIGINT", () => handleStopSignal("SIGINT"));
   // Windows delivers Ctrl+Break (and some service-stop handoffs) as SIGBREAK
   // — SIGTERM never arrives there (evaluation 2026-10-13). POSIX defines the
   // signal too, where it essentially never fires; same shutdown path, so
   // registering it is harmless everywhere.
-  process.on("SIGBREAK", () => void shutdownChain.shutdown("SIGBREAK"));
+  process.on("SIGBREAK", () => handleStopSignal("SIGBREAK"));
 
   // ---- disk write-failure aggregation (spec #247 票04) ------------------------
   // 桥内写路径(状态文件保存:附件台账/队列快照/提醒,审计日志,附件落盘,

@@ -551,7 +551,8 @@ systemd cannot see a **hang**: the process and its PID are still there, but the 
 - runs every minute from cron / a systemd timer; reads `~/.pi/pi-courier-state/heartbeat.json` (written atomically every 30 seconds, along with disk and heap levels);
 - heartbeat older than **180 seconds** (= 6 × 30; the stale threshold lives as a script constant and can be overridden with `--stale-seconds`) or the PID in it no longer exists → `systemctl --user restart`;
 - after the restart, the sibling `matrix-alert.mjs` reads the Matrix credentials and management room from `~/.pi/pi-courier.json` (`managementRooms[0]`, falling back to `space.roomId`) and calls the homeserver room-send API directly. The cooldown is 30 minutes by default (stamp file `~/.pi/pi-courier-state/watchdog-alert-stamp`); a failed send does not write the stamp, so the next minute retries. Alerts do not depend on the bridge — when the bot is dead, they still get out;
-- a missing heartbeat file (the bridge has never had its first run) is treated as an installation error: no alert, no action.
+- a missing heartbeat file (the bridge has never had its first run) is treated as an installation error: no alert, no action;
+- **a deliberate stop is never undone**: `pi-courier stop` / `pi-courier restart` writes `~/.pi/pi-courier-state/watchdog-paused` before the clean exit, and the watchdog skips its check while that marker exists; the next bridge start removes it. Hard kills (`kill -9`, `schtasks /end`) do not write the marker and will still be treated as a failure — use the normal stop command for maintenance, or stop the watchdog first.
 
 Install (either one; full comments in the script header):
 
@@ -560,7 +561,7 @@ Install (either one; full comments in the script header):
 * * * * * /opt/pi-courier/deploy/watchdog/watchdog-posix.sh >> ~/.pi/pi-courier-state/watchdog.log 2>&1
 ```
 
-Option 2: a systemd timer (two unit files, `systemctl --user enable --now pi-courier-watchdog.timer`). The service name defaults to `pi-pi-courier` (the name `deploy/pi-courier.user.service` installs as); override it with `PI_COURIER_SERVICE`; `PI_COURIER_ALERT=off` disables alerts and `PI_COURIER_HEARTBEAT` overrides the heartbeat path. The script hard-codes `systemctl --user` for **user units**; for a system-level unit remove `--user` and set `PI_COURIER_SERVICE`. Uninstall: delete the crontab line, or `systemctl --user disable --now pi-courier-watchdog.timer` and remove the two unit files.
+Option 2: a systemd timer (two unit files, `systemctl --user enable --now pi-courier-watchdog.timer`). The service name defaults to `pi-pi-courier` (the name `deploy/pi-courier.user.service` installs as); override it with `PI_COURIER_SERVICE`; `PI_COURIER_ALERT=off` disables alerts and `PI_COURIER_HEARTBEAT` overrides the heartbeat path. The script hard-codes `systemctl --user` for **user units**; for a system-level unit remove `--user` and set `PI_COURIER_SERVICE`. Uninstall: stop the watchdog first (`systemctl --user disable --now pi-courier-watchdog.timer` and remove the two unit files, or delete the crontab line), then `pi-courier disable`; otherwise the watchdog will bring the service back once the stop window passes.
 
 **Circuit breaker for a persistently full disk**: at startup, before any network wiring, the bridge checks the disk hard threshold (512MB by default) and exits with a single cause line in the local log (no management-room message). If the disk never gets cleaned, systemd keeps restarting it, one local log line per round. Add the following to the unit's `[Unit]` section to stop the loop:
 
@@ -627,11 +628,13 @@ Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDA
       /sc minute /mo 1 /f
     ```
 
-    Parameters: `-TaskName` the bridge task name; `-HeartbeatPath` heartbeat file (default `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`); `-StaleSeconds` stale threshold (default 180 = 6 × 30, see the script header for the conversion); `-NoAlert` disables the Matrix alert. Uninstall:
+    Parameters: `-TaskName` the bridge task name; `-HeartbeatPath` heartbeat file (default `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`); `-StaleSeconds` stale threshold (default 180 = 6 × 30, see the script header for the conversion); `-NoAlert` disables the Matrix alert. Ctrl+C / `pi-courier stop` writes the manual-stop marker so the watchdog will not bring the service back; `schtasks /end` is a hard kill and does not write it — stop the watchdog task before maintenance or uninstall. Uninstall:
 
     ```powershell
     schtasks /delete /tn "pi-courier-watchdog" /f
     ```
+
+    Delete the watchdog task before stopping the bridge / deleting the bridge task — otherwise the watchdog will bring the bridge back once the stop window passes.
 
   A Windows service wrapper such as [NSSM](https://nssm.cc/) removes the logon dependency, but turns Node into a system service — heavier to install, upgrade and inspect; this version does not implement it and only keeps it as a trade-off option. Or simply keep a foreground session.
 - **Ctrl+C / Ctrl+Break (SIGBREAK) shut the bridge down cleanly** — pi RPC stopped, Matrix disconnected, the single-instance lock released.

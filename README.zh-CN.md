@@ -544,6 +544,7 @@ systemd 管不了**僵死**:进程还在、PID 还在,但事件循环卡住不�
 - 心跳超过 **180 秒**(= 6 × 30 秒;过期秒单点归属脚本常量,`--stale-seconds` 可覆盖)或心跳里的 PID 不存在 → `systemctl --user restart` 重启服务;
 - 重启后用同目录的 `matrix-alert.mjs` 直读 `~/.pi/pi-courier.json` 的 Matrix 凭据与管理房 ID(`managementRooms[0]`,缺省回落 `space.roomId`),直接调 homeserver 的房间发送 API 发一条告警;冷却窗口默认 30 分钟(时间戳落在 `~/.pi/pi-courier-state/watchdog-alert-stamp`),发送失败不落戳、下一分钟重试。告警不依赖桥进程 —— bot 死了告警照样出得去;
 - 心跳文件不存在(桥还没跑过 first run)按安装错误处理:不告警、不动作。
+- **人工停止不会被拉回**:`pi-courier stop` / `pi-courier restart` 在正常退出前写 `~/.pi/pi-courier-state/watchdog-paused` 标记,看门狗看到标记就跳过本轮判定;下次桥启动自动清除。`kill -9`、`schtasks /end` 这类强杀不写标记,看门狗仍按失能拉起 —— 维护时请用正常停止命令,或先停看门狗。
 
 安装(二选一,完整注释见脚本头):
 
@@ -552,7 +553,7 @@ systemd 管不了**僵死**:进程还在、PID 还在,但事件循环卡住不�
 * * * * * /opt/pi-courier/deploy/watchdog/watchdog-posix.sh >> ~/.pi/pi-courier-state/watchdog.log 2>&1
 ```
 
-方式二:systemd timer(两个 unit 文件,`systemctl --user enable --now pi-courier-watchdog.timer`)。服务名默认 `pi-pi-courier`(与 `deploy/pi-courier.user.service` 安装后的名字一致),用 `PI_COURIER_SERVICE` 覆盖;`PI_COURIER_ALERT=off` 关闭告警,`PI_COURIER_HEARTBEAT` 覆盖心跳路径。脚本按 **user unit** 写死 `systemctl --user`;若你用的是系统级 unit,请把脚本里的 `--user` 去掉并用 `PI_COURIER_SERVICE` 指定服务名。卸载:删掉 crontab 行,或 `systemctl --user disable --now pi-courier-watchdog.timer` 后删除两个 unit 文件。
+方式二:systemd timer(两个 unit 文件,`systemctl --user enable --now pi-courier-watchdog.timer`)。服务名默认 `pi-pi-courier`(与 `deploy/pi-courier.user.service` 安装后的名字一致),用 `PI_COURIER_SERVICE` 覆盖;`PI_COURIER_ALERT=off` 关闭告警,`PI_COURIER_HEARTBEAT` 覆盖心跳路径。脚本按 **user unit** 写死 `systemctl --user`;若你用的是系统级 unit,请把脚本里的 `--user` 去掉并用 `PI_COURIER_SERVICE` 指定服务名。卸载:先停看门狗(`systemctl --user disable --now pi-courier-watchdog.timer` 并删除两个 unit 文件,或删掉 crontab 行),再 `pi-courier disable`;否则看门狗会在停止窗口过后把服务重新拉起。
 
 **磁盘持续满盘的熔断**:桥在启动期、连接任何网络之前检查磁盘硬阈值(默认 512MB),低于即写一行死因日志退出、不发管理房留言。磁盘一直不清理时 systemd 会反复拉起,每轮只多一行本地日志。在 unit 的 `[Unit]` 段加熔断参数让它停手:
 
@@ -619,11 +620,13 @@ npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs p
       /sc minute /mo 1 /f
     ```
 
-    参数:`-TaskName` 桥的计划任务名;`-HeartbeatPath` 心跳文件(默认 `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`);`-StaleSeconds` 过期秒(默认 180 = 6 × 30,换算关系见脚本头注释);`-NoAlert` 关闭 Matrix 告警。卸载:
+    参数:`-TaskName` 桥的计划任务名;`-HeartbeatPath` 心跳文件(默认 `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`);`-StaleSeconds` 过期秒(默认 180 = 6 × 30,换算关系见脚本头注释);`-NoAlert` 关闭 Matrix 告警。用 Ctrl+C / `pi-courier stop` 正常退出会写人工停止标记,看门狗不会把服务拉回;`schtasks /end` 属强杀、不写标记,维护或卸载前请先停看门狗任务。卸载:
 
     ```powershell
     schtasks /delete /tn "pi-courier-watchdog" /f
     ```
+
+    先删看门狗任务,再停桥/删桥任务 —— 否则看门狗会在停止窗口过后把桥重新拉起。
 
   [NSSM](https://nssm.cc/) 之类的 Windows 服务包装器能省掉登录依赖,但要把 Node 变成系统服务,安装、升级、日志都更重;本版本不提供实现,只作为权衡选项保留。或者干脆保持前台会话。
 - **Ctrl+C / Ctrl+Break(SIGBREAK)干净退出** —— pi RPC 停止、Matrix 断开、单实例锁释放。

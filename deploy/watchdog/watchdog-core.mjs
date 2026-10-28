@@ -8,6 +8,8 @@
  * 本核心 —— 判定逻辑只有这一份,两个平台共用。
  *
  * 判定规则:
+ *   - 人工停止标记存在(paused):桥在 `pi-courier stop`/`restart` 的正常
+ *     信号退出前写、下次启动清除 —— 运维主动停掉的服务不拉起、不告警。
  *   - 心跳文件读不到(首次运行前):安装错误,不是进程死亡 —— 不告警、
  *     不动作,stderr 记一行即可。
  *   - 心跳时间戳未过期:进程活着且在干活,零动作。
@@ -43,6 +45,13 @@ export const DEFAULT_STALE_SECONDS = 180;
 /** 默认心跳文件路径(桥的派生状态目录,票02 的写侧契约)。 */
 export function defaultHeartbeatPath() {
   return path.join(os.homedir(), ".pi", "pi-courier-state", "heartbeat.json");
+}
+
+/** 人工停止标记的默认路径:与心跳同目录(桥在正常信号退出前写、启动时清)。
+ *  看门狗看到标记就跳过本轮判定,避免把运维刚 `pi-courier stop` 掉的服务
+ *  当崩溃重新拉起并告警。 */
+export function defaultPauseMarkerPath(heartbeatPath) {
+  return path.join(path.dirname(heartbeatPath), "watchdog-paused");
 }
 
 /** 判活(POSIX/Windows 通用):kill(pid, 0) 只探测不杀。ESRCH=不存在;
@@ -98,6 +107,7 @@ export function fillCommand(template, vars, opts = {}) {
  * 判定 + 动作执行(壳的薄壳化使然:全部决策在这里,壳只传参)。
  * opts 字段:
  *   heartbeatPath    心跳文件路径
+ *   pauseMarkerPath  人工停止标记路径(默认:心跳同目录/watchdog-paused)
  *   staleSeconds     过期秒(默认 DEFAULT_STALE_SECONDS;壳从命令行透传)
  *   nowMs            时间源(测试注入 fake 时钟)
  *   readHeartbeatFn  读心跳缝(测试注入;默认 readHeartbeat)
@@ -110,11 +120,28 @@ export function fillCommand(template, vars, opts = {}) {
  *   alertMessage     告警文本(核心按判定结果拼默认值,英文 —— 公开仓库
  *                    口径,独立部署产物不进桥的 i18n 双表)
  * 返回 { verdict, actions, pid?, pidAlive? }:
- *   verdict: missing=心跳读不到(安装错误);ok=未过期零动作;
- *            stale=僵死(PID 活);dead=已死。
+ *   verdict: missing=心跳读不到(安装错误);paused=人工停止标记存在(跳过);
+ *            ok=未过期零动作;stale=僵死(PID 活);dead=已死。
  */
 export function runWatchdogCore(opts) {
   const staleSeconds = opts.staleSeconds ?? DEFAULT_STALE_SECONDS;
+
+  // 人工停止标记优先于一切判定:运维刚 `pi-courier stop` 掉的服务不该被
+  // 看门狗拉回来。标记由桥在正常信号退出前写、下次启动时清除。
+  const pauseMarkerPath = opts.pauseMarkerPath ?? defaultPauseMarkerPath(opts.heartbeatPath);
+  let paused = false;
+  try {
+    paused = fs.existsSync(pauseMarkerPath);
+  } catch {
+    paused = false;
+  }
+  if (paused) {
+    process.stderr.write(
+      `[watchdog] manual stop marker present (${pauseMarkerPath}) — service was stopped on purpose; nothing to do.\n`
+    );
+    return { verdict: "paused", actions: [] };
+  }
+
   const beat = (opts.readHeartbeatFn ?? readHeartbeat)(opts.heartbeatPath);
   if (!beat) {
     process.stderr.write(
@@ -170,6 +197,7 @@ export function runWatchdogCore(opts) {
 /**
  * CLI 参数解析(壳透传;导出以便测试直测)。
  *   --heartbeat <path>       心跳文件(默认 ~/.pi/pi-courier-state/heartbeat.json)
+ *   --pause-marker <path>    人工停止标记(默认与心跳同目录/watchdog-paused)
  *   --stale-seconds <n>      过期秒(默认 180 = 6 × 30s 心跳间隔)
  *   --restart-command <cmd>  重启命令(必填)
  *   --kill-command <cmd>     杀旧命令(可选,Windows 壳专用;{pid} 占位)
@@ -182,6 +210,9 @@ export function parseCoreArgs(argv) {
     switch (argv[i]) {
       case "--heartbeat":
         result.heartbeatPath = argv[++i];
+        break;
+      case "--pause-marker":
+        result.pauseMarkerPath = argv[++i];
         break;
       case "--stale-seconds":
         result.staleSeconds = Number.parseInt(argv[++i] ?? "", 10);
@@ -209,6 +240,7 @@ export function parseCoreArgs(argv) {
   }
   return {
     heartbeatPath: result.heartbeatPath ?? defaultHeartbeatPath(),
+    ...(result.pauseMarkerPath ? { pauseMarkerPath: result.pauseMarkerPath } : {}),
     ...(result.staleSeconds !== undefined && Number.isFinite(result.staleSeconds)
       ? { staleSeconds: result.staleSeconds }
       : {}),

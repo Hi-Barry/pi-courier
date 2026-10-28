@@ -103,6 +103,27 @@ describe("看门狗判定核心三分支(spec #247 票06)", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("人工停止标记存在 → paused:不拉起重启、不告警(评审)", () => {
+    const marker = path.join(dir, "watchdog-paused");
+    fs.writeFileSync(marker, new Date().toISOString());
+    const { run, opts } = core({
+      heartbeatPath: writeHeartbeat({ ts: NOW - 200_000, pid: 4242 }),
+      pidAliveFn: () => true,
+      pauseMarkerPath: marker,
+      killCommand: "taskkill /F /PID {pid}",
+      alertCommand: "node matrix-alert.mjs --message {message}",
+    });
+
+    const result = runWatchdogCore(opts);
+    expect(result.verdict).toBe("paused");
+    expect(result.actions).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+
+    // 标记清除后恢复判定(下次桥启动会清)
+    fs.rmSync(marker);
+    expect(runWatchdogCore(opts).verdict).toBe("stale");
+  });
+
   it("POSIX 形态(不给 kill-command):僵死也直接 restart(systemctl 天然先 stop 后 start)", () => {
     const { run, opts } = core({
       pidAliveFn: () => true,
