@@ -163,11 +163,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     readDiskFreeBytes: () => diskFreeBytes(workdir),
     notify: (message) => {
       const mgmtRoom = managementRoomId(store.get());
-      if (!mgmtRoom || !matrix?.isConnected) return;
+      // false = 当前投不出去(未配管理房/启动期 Matrix 尚未连接):资源守卫
+      // 会保留告警翻转状态,下一 tick 重试 —— 启动期软告警不会被永久吞掉。
+      if (!mgmtRoom || !matrix?.isConnected) return false;
       // 必须接 catch:sendReplyStrict 在未连接/发送失败时 reject,而
       // process 上的 unhandledRejection 崩溃守卫会把一条软告警发送失败
       // 升级成非零退出(可能形成崩溃循环)。同文件其他同类调用一律静默。
       void sendReplyStrict(mgmtRoom, message).catch(() => {});
+      return true;
     },
     onHardExit: (message) => {
       const mgmtRoom = managementRoomId(store.get());

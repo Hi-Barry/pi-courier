@@ -77,6 +77,51 @@ describe("磁盘软阈值翻转去重(spec #247 票04)", () => {
     expect(notify).not.toHaveBeenCalled();
     expect(onHardExit).not.toHaveBeenCalled();
   });
+
+  it("启动期未连接(notify 返回 false)→ 不翻转,连接后补发恰好一条(评审)", () => {
+    let free = 1 * 1024 * MB; // 已在软阈值下
+    let connected = false;
+    const notify = vi.fn(() => connected);
+    const { deps } = makeDeps({ readDiskFreeBytes: () => free, notify });
+    const guard = new ResourceGuard(deps);
+
+    guard.runChecks(); // 启动期 tick:Matrix 尚未连接
+    expect(notify).toHaveBeenCalledTimes(1);
+    guard.runChecks(); // 仍未连接:继续尝试,但不允许「已告警」状态提前置位
+    expect(notify).toHaveBeenCalledTimes(2);
+
+    connected = true;
+    guard.runChecks(); // 连上后补发
+    expect(notify).toHaveBeenCalledTimes(3);
+    guard.runChecks(); // 已告警态:不再重复
+    expect(notify).toHaveBeenCalledTimes(3);
+
+    free = 3 * 1024 * MB; // 回升:恰好一条恢复
+    guard.runChecks();
+    expect(notify).toHaveBeenCalledTimes(4);
+  });
+
+  it("恢复投递失败保留告警态,投递恢复后补发恢复(评审)", () => {
+    let free = 1 * 1024 * MB;
+    let connected = true;
+    const notify = vi.fn(() => connected);
+    const { deps } = makeDeps({ readDiskFreeBytes: () => free, notify });
+    const guard = new ResourceGuard(deps);
+
+    guard.runChecks(); // 软告警一条
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    free = 3 * 1024 * MB;
+    connected = false;
+    guard.runChecks(); // 恢复投不出去:状态保持「已告警」
+    expect(notify).toHaveBeenCalledTimes(2);
+
+    connected = true;
+    guard.runChecks(); // 补发恢复
+    expect(notify).toHaveBeenCalledTimes(3);
+    guard.runChecks(); // 已恢复态:不再重复
+    expect(notify).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("启动期硬阈值(spec #247 票04)", () => {

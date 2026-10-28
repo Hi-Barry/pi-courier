@@ -30,8 +30,11 @@ export interface ResourceGuardDeps {
   readDiskFreeBytes: () => number | undefined;
   /** 堆用量读数缝(默认 process.memoryUsage + v8.getHeapStatistics;测试注入)。 */
   readHeap?: () => HeapUsage;
-  /** 管理房告警回调(软告警/恢复/堆告警文案已由本模块 i18n 拼好)。 */
-  notify?: (message: string) => void;
+  /** 管理房告警回调(软告警/恢复/堆告警文案已由本模块 i18n 拼好)。
+   *  返回 false = 当前无法投递(未配管理房/transport 未连接),守卫不翻转
+   *  告警状态、下一 tick 重试 —— 启动期 tick 早于 Matrix 连接,不能把
+   *  「还没连上」误当成「已告警」而永久吞掉。undefined/true = 已受理。 */
+  notify?: (message: string) => boolean | void;
   /** 运行期硬阈值退出缝(组合根接:管理房死因留言 + 共享退出链非零码)。 */
   onHardExit: (reason: string) => void;
   /** 死因/决策日志。 */
@@ -101,22 +104,27 @@ export class ResourceGuard {
         return;
       }
       if (free < this.deps.softBytes && !this.diskAlerted) {
-        this.diskAlerted = true;
-        this.deps.notify?.(
+        // 投递成功才翻转:启动期 Matrix 未连接时 notify 返回 false,下一
+        // tick(连接完成后)补发,而不是被吞掉后只剩一条无对应告警的恢复。
+        if (this.notifyMessage(
           t("resilience.diskSoft", {
             free: String(toMb(free)),
             threshold: String(toMb(this.deps.softBytes)),
             hard: String(toMb(this.deps.hardBytes)),
           })
-        );
+        )) {
+          this.diskAlerted = true;
+        }
       } else if (free >= this.deps.softBytes && this.diskAlerted) {
-        this.diskAlerted = false;
-        this.deps.notify?.(
+        // 恢复同样要投递成功才清告警态;投不出去下一 tick 再试。
+        if (this.notifyMessage(
           t("resilience.diskRecovered", {
             free: String(toMb(free)),
             threshold: String(toMb(this.deps.softBytes)),
           })
-        );
+        )) {
+          this.diskAlerted = false;
+        }
       }
     }
 
@@ -124,17 +132,29 @@ export class ResourceGuard {
     if (heap.limit > 0) {
       const percent = (heap.used / heap.limit) * 100;
       if (percent >= this.deps.heapAlertPercent && !this.heapAlerted) {
-        this.heapAlerted = true;
-        this.deps.notify?.(
+        if (this.notifyMessage(
           t("resilience.heapAlert", {
             percent: String(Math.round(percent)),
             threshold: String(this.deps.heapAlertPercent),
           })
-        );
+        )) {
+          this.heapAlerted = true;
+        }
       } else if (percent < this.deps.heapAlertPercent && this.heapAlerted) {
         // 恢复静默翻转(票面文案清单无堆恢复通知):再超限可再告警。
         this.heapAlerted = false;
       }
+    }
+  }
+
+  /** 投递一条管理房告警:返回 true=已受理(或未接告警通道),false=当前
+   *  投不出去、调用方保留翻转状态等下一 tick。notify 同步抛错按投递失败
+   *  处理 —— runChecks 的不抛契约不能因告警通道破功。 */
+  private notifyMessage(message: string): boolean {
+    try {
+      return this.deps.notify?.(message) !== false;
+    } catch {
+      return false;
     }
   }
 }
