@@ -233,7 +233,12 @@ const zh = {
   "audit.degraded": "⚠️ 审计日志不可用,服务继续运行但敏感动作暂无记录:{message}",
 
   // ── resilience(进程韧性,spec #247)────────────────────────────────
-  "crash.notice": "💥 桥进程遇到未捕获异常,即将有序退出:{reason}",  "guest.denied": "🚫 此命令需要信任用户权限:{command}",
+  "crash.notice": "💥 桥进程遇到未捕获异常,即将有序退出:{reason}",
+  "resilience.diskSoft": "⚠️ 磁盘剩余空间偏低:{free}MB(软阈值 {threshold}MB)。请尽快清理;低于硬阈值 {hard}MB 时进程会自动退出。",
+  "resilience.diskRecovered": "✅ 磁盘剩余空间已恢复:{free}MB(软阈值 {threshold}MB),告警解除。",
+  "resilience.diskHardExit": "🚨 磁盘剩余空间低于硬阈值:{free}MB < {threshold}MB,进程即将有序退出。",
+  "resilience.heapAlert": "⚠️ 堆内存用量超限:{percent}%(阈值 {threshold}%),可能存在内存泄漏,请关注。",
+  "resilience.writeFailure": "⚠️ 磁盘写入失败({code}),已聚合 {count} 条(挂点:{sources});5 分钟内不重复告警。",  "guest.denied": "🚫 此命令需要信任用户权限:{command}",
   "router.attach.saved": "📎 附件已保存: {path}({bytes})\n下一条消息发送时会自动附上它。",
   "router.payload.unsupported": "🤷 暂不支持的消息类型({msgtype}),已忽略。文字、图片和文件都可以直接发给我。",
   "router.enable.usage": "用法: /enable <all|mentions|trusted-only>(本房间)",

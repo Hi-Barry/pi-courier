@@ -46,9 +46,12 @@ export class FileEventLedger implements EventLedger {
 
   constructor(
     private readonly filePath: string,
-    opts: { retentionMs?: number } = {}
+    opts: { retentionMs?: number; onDiskWriteFailure?: (err: unknown) => void } = {}
   ) {
     this.retentionMs = opts.retentionMs ?? EVENT_LEDGER_RETENTION_MS;
+    // 磁盘类写失败(ENOSPC/EDQUOT)的聚合可见性缝(spec #247 票04):
+    // 组合根注入 recorder 包装;缺省不接,「追加失败仅 warn」契约不变。
+    this.onDiskWriteFailure = opts.onDiskWriteFailure;
     const loaded = this.load();
     this.freshStart = loaded === null;
     if (loaded === null) {
@@ -57,6 +60,8 @@ export class FileEventLedger implements EventLedger {
       this.compact(loaded.entries, loaded.keepInit);
     }
   }
+
+  private readonly onDiskWriteFailure: ((err: unknown) => void) | undefined;
 
   seen(eventId: string): boolean {
     return this.seenIds.has(eventId);
@@ -67,6 +72,12 @@ export class FileEventLedger implements EventLedger {
     const line = JSON.stringify({ id: eventId, ts: Date.now() }) + "\n";
     appendFile(this.filePath, line).catch((err: unknown) => {
       logger.warn(`event ledger append failed (memory stays authoritative): ${errorMessage(err)}`);
+      // 磁盘类写失败的聚合可见性(spec #247 票04);缝自身抛错不放大
+      try {
+        this.onDiskWriteFailure?.(err);
+      } catch {
+        // 可见性通道失败不影响「内存为权威」契约
+      }
     });
   }
 

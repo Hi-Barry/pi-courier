@@ -234,7 +234,12 @@ const en: Record<MessageKey, string> = {
   "audit.degraded": "⚠️ Audit log unavailable — the service keeps running but sensitive actions leave no trace: {message}",
 
   // ── resilience (process resilience, spec #247) ────────────────────────
-  "crash.notice": "💥 The bridge hit an uncaught error and will exit in order: {reason}",  "guest.denied": "🚫 This command requires trusted-user permission: {command}",
+  "crash.notice": "💥 The bridge hit an uncaught error and will exit in order: {reason}",
+  "resilience.diskSoft": "⚠️ Disk space is running low: {free}MB left (soft threshold {threshold}MB). Please clean up soon; the process exits automatically below the hard threshold of {hard}MB.",
+  "resilience.diskRecovered": "✅ Disk space has recovered: {free}MB left (soft threshold {threshold}MB). Alert cleared.",
+  "resilience.diskHardExit": "🚨 Disk space is below the hard threshold: {free}MB < {threshold}MB. The process will exit in order.",
+  "resilience.heapAlert": "⚠️ Heap usage exceeded the limit: {percent}% (threshold {threshold}%). A memory leak is possible — please investigate.",
+  "resilience.writeFailure": "⚠️ Disk write failure ({code}); {count} failure(s) aggregated (sources: {sources}). No repeat alert within 5 minutes.",  "guest.denied": "🚫 This command requires trusted-user permission: {command}",
   "router.attach.saved": "📎 Attachment saved: {path} ({bytes})\nIt will be attached automatically with your next message.",
   "router.payload.unsupported":
     "🤷 Unsupported message type ({msgtype}) — ignored. You can send text, images and files directly.",

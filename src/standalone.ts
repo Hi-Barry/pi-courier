@@ -21,7 +21,10 @@ import {
   bashTimeoutMinutes,
   CONFIG_DIR,
   ConfigStore,
+  diskHardMb,
+  diskSoftMb,
   heartbeatIntervalSeconds,
+  heapAlertPercent,
   inboxMode,
   managementRoomId,
   presetProblems,
@@ -37,9 +40,11 @@ import { applyProxySettings } from "./proxy.js";
 import { ReminderClock } from "./reminders/reminder-clock.js";
 import type { ReminderEntry } from "./reminders/reminder-store.js";
 import { ReminderStore } from "./reminders/reminder-store.js";
-import { createCrashGuard } from "./resilience/crash-guard.js";
+import { createCrashGuard, CRASH_EXIT_CODE } from "./resilience/crash-guard.js";
 import { diskFreeBytes } from "./resilience/disk-free.js";
 import { Heartbeat } from "./resilience/heartbeat.js";
+import { ResourceGuard } from "./resilience/resource-guard.js";
+import { WriteFailureRecorder } from "./resilience/write-failure.js";
 import type { PersistedAttachmentEntry } from "./rpc/attachment-ledger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
@@ -148,6 +153,33 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const configLevel = typeof config.logLevel === "string" ? parseLogLevel(config.logLevel) : undefined;
   setLogLevel(cliLevel ?? configLevel ?? "info");
 
+  // ---- resource guard: startup disk hard threshold (spec #247 票04) -----------
+  // 资源守卫先于一切网络接线构造并做启动期硬阈值检查(proxy/Matrix 连接/pi
+  // 拉起都在其后):低于硬阈值只写死因日志即退、不发管理房留言 —— 「满盘 →
+  // systemd 拉起 → 启动检查又硬退」的循环每轮不重连网络、不刷管理房,循环
+  // 代价收敛为本地日志一行 + systemd StartLimitBurst 熔断(README 见)。
+  const resourceGuard = new ResourceGuard({
+    readDiskFreeBytes: () => diskFreeBytes(workdir),
+    notify: (message) => {
+      const mgmtRoom = managementRoomId(store.get());
+      if (!mgmtRoom || !matrix?.isConnected) return;
+      void sendReplyStrict(mgmtRoom, message);
+    },
+    onHardExit: (message) => {
+      const mgmtRoom = managementRoomId(store.get());
+      if (mgmtRoom && matrix?.isConnected) void sendReplyStrict(mgmtRoom, message).catch(() => {});
+      void shutdownChain.shutdown("disk hard threshold", CRASH_EXIT_CODE).finally(() => process.exit(CRASH_EXIT_CODE));
+    },
+    log: (message) => logger.error(message),
+    softBytes: diskSoftMb(config) * 1024 * 1024,
+    hardBytes: diskHardMb(config) * 1024 * 1024,
+    heapAlertPercent: heapAlertPercent(config),
+  });
+  if (resourceGuard.startHardThresholdBreached()) {
+    releaseLock();
+    process.exit(CRASH_EXIT_CODE);
+  }
+
   // ---- outbound proxy (spec #201 票 #203) ------------------------------------
   // 出网代理接线必须先于任何出网:Matrix 客户端创建(底层 request 启动即读
   // 环境变量)、pi 拉起、向导进入都在其后。顺序:解析 → 校验 → 覆写进程
@@ -202,7 +234,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         rootDir: attachmentsDirectory(config),
         maxBytes: attachmentsMaxBytes(config),
       },
-      matrix.mediaSource
+      matrix.mediaSource,
+      // 磁盘类写失败聚合(spec #247 票04):TDZ 闭包次序,recordDiskWriteFailure
+      // 声明在 stateDir 区,运行期(首个附件落盘)才被调用。
+      (err) => recordDiskWriteFailure("attachment")(err)
     );
     matrix.setAttachmentStore(attachments);
     roomOps = matrix.roomOps;
@@ -325,20 +360,48 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   } catch (err) {
     logger.warn(`state dir unavailable (state files degrade to in-memory): ${errorMessage(err)}`);
   }
+  // ---- disk write-failure aggregation (spec #247 票04) ------------------------
+  // 桥内四条写路径(状态文件/审计/附件/台账)的磁盘类写失败(ENOSPC/EDQUOT)
+  // 统一聚合:首条立即告警,之后 5 分钟至多一条。各写路径既有降级契约不变,
+  // recorder 只是附加可见性。notify 走 sendReplyStrict(TDZ 闭包次序同上:
+  // 构造期不调用,运行期时 sendReplyStrict 已声明)。
+  const writeFailures = new WriteFailureRecorder({
+    notify: (info) => {
+      const mgmtRoom = managementRoomId(store.get());
+      if (!mgmtRoom || !matrix?.isConnected) return;
+      void sendReplyStrict(
+        mgmtRoom,
+        t("resilience.writeFailure", { code: info.code, count: String(info.count), sources: info.sources.join("、") })
+      ).catch(() => {});
+    },
+    log: (message) => logger.warn(message),
+  });
+  const recordDiskWriteFailure =
+    (source: string) =>
+    (err: unknown): void => {
+      try {
+        writeFailures.record(source, err);
+      } catch {
+        // 聚合通道自身失败不放大写路径
+      }
+    };
+
   const attachmentsLedger = new JsonStateFile<PersistedAttachmentEntry[]>(
     path.join(stateDir, "pending-attachments.json"),
-    []
+    [],
+    recordDiskWriteFailure("state-file")
   );
 
   // ---- heartbeat + periodic self-check tick (spec #247 票02) ------------------
   // 周期自检基座:每 tick(默认 30 秒,可配)原子写一个心跳 JSON 到派生
-  // 状态目录 —— 外部看门狗(票06/07)判死活与僵死的唯一依据。onTick 注入
-  // 缝留给票04 的资源水位守卫(一次 tick 干两件事,定时器不翻倍)。定时器
-  // unref,不阻碍优雅退出;写失败 fire-and-forget,永不抛。
+  // 状态目录 —— 外部看门狗(票06/07)判死活与僵死的唯一依据。onTick 接
+  // 票04 资源水位守卫(一次 tick 干两件事,定时器不翻倍)。定时器 unref,
+  // 不阻碍优雅退出;写失败 fire-and-forget,永不抛。
   const heartbeat = new Heartbeat({
     filePath: path.join(stateDir, "heartbeat.json"),
     intervalMs: heartbeatIntervalSeconds(config) * 1000,
     readDiskFreeBytes: () => diskFreeBytes(workdir),
+    onTick: () => resourceGuard.runChecks(),
   });
   heartbeat.start();
 
@@ -346,7 +409,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // JSONL 追加 + 启动压实(7 天窗);首运会话(freshStart)里 stale 维持全丢,
   // 自第二个会话起「stale 且台账没见过」= 离线积压。模式来自 config 派生,
   // off = 与旧版逐字节一致。transport 在装配后回填(与附件仓库同一接缝)。
-  const eventLedger = new FileEventLedger(path.join(stateDir, "event-ledger.jsonl"));
+  const eventLedger = new FileEventLedger(path.join(stateDir, "event-ledger.jsonl"), {
+    onDiskWriteFailure: recordDiskWriteFailure("event-ledger"),
+  });
   matrix?.setEventLedger(eventLedger, inboxMode(config));
 
   // ---- queue snapshots (issue #115 阶段2):队列镜像的磁盘半边 ------------------
@@ -369,6 +434,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         void sendReply(managementRoom, "matrix", t("audit.degraded", { message }));
       }
     },
+    onDiskWriteFailure: recordDiskWriteFailure("audit"),
   });
   auditLog.append(AUDIT_EVENTS.bridgeStart, "system", "", `pi-courier started (pid ${process.pid})`);
 
