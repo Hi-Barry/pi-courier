@@ -436,10 +436,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   process.on("SIGBREAK", () => void shutdownChain.shutdown("SIGBREAK"));
 
   // ---- disk write-failure aggregation (spec #247 票04) ------------------------
-  // 桥内四条写路径(状态文件/审计/附件/台账)的磁盘类写失败(ENOSPC/EDQUOT)
-  // 统一聚合:首条立即告警,之后 5 分钟至多一条。各写路径既有降级契约不变,
-  // recorder 只是附加可见性。notify 走 sendReplyStrict(TDZ 闭包次序同上:
-  // 构造期不调用,运行期时 sendReplyStrict 已声明)。
+  // 桥内写路径(状态文件保存:附件台账/队列快照/提醒,审计日志,附件落盘,
+  // 事件台账)的磁盘类写失败(ENOSPC/EDQUOT)统一聚合:首条立即告警,之后
+  // 5 分钟至多一条。各写路径既有降级契约不变,recorder 只是附加可见性。notify 走 sendReplyStrict(TDZ 闭包次序同上:构造期不
+  // 调用,运行期时 sendReplyStrict 已声明)。
   const writeFailures = new WriteFailureRecorder({
     notify: (info) => {
       const mgmtRoom = managementRoomId(store.get());
@@ -495,7 +495,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // 进程映射在 config 里跨重启稳定;单工程默认进程绑运行时 DM,还原会误发
   // 旧房间,按票面保守路线整段不做。
   const queueSnapshots = new QueueSnapshotStore(
-    new JsonStateFile<QueueSnapshotEntry[]>(path.join(stateDir, "queue-snapshots.json"), [])
+    new JsonStateFile<QueueSnapshotEntry[]>(
+      path.join(stateDir, "queue-snapshots.json"),
+      [],
+      // 状态文件保存挂点(spec #247 票04):队列镜像写满盘时同样进聚合,
+      // 不再只剩逐条 warn。
+      recordDiskWriteFailure("queue-snapshots")
+    )
   );
 
   // ---- audit log (issue #124):敏感动作的追加式证据 ----------------------------
@@ -517,7 +523,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // 时钟句柄不跨进程:reminders.json 才是真相,start() 在 transports 连接后
   // 重装载并补起全部定时器,离线窗口过期的提醒立即补投(注明迟到)。
   const reminderStore = new ReminderStore(
-    new JsonStateFile<ReminderEntry[]>(path.join(stateDir, "reminders.json"), [])
+    new JsonStateFile<ReminderEntry[]>(
+      path.join(stateDir, "reminders.json"),
+      [],
+      // 状态文件保存挂点(spec #247 票04):提醒落盘失败同样进聚合。
+      recordDiskWriteFailure("reminders")
+    )
   );
   const reminderClock = new ReminderClock(reminderStore, (delivery) =>
     sendReply(delivery.chatId, delivery.transport, delivery.text)
