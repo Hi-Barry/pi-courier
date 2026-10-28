@@ -544,7 +544,7 @@ systemd 管不了**僵死**:进程还在、PID 还在,但事件循环卡住不�
 - 心跳超过 **180 秒**(= 6 × 30 秒;过期秒单点归属脚本常量,`--stale-seconds` 可覆盖)或心跳里的 PID 不存在 → `systemctl --user restart` 重启服务。PID 不存在时会先等 **2 × 心跳间隔**(默认 60 秒,`--heartbeat-interval-seconds` 可覆盖)再判死,覆盖 RestartSec 与首拍延迟,避免重启窗口里上一实例的旧心跳把正在启动的新实例再踢一次;
 - 重启后用同目录的 `matrix-alert.mjs` 直读 `~/.pi/pi-courier.json` 的 Matrix 凭据与管理房 ID(`managementRooms[0]`,缺省回落 `space.roomId`),直接调 homeserver 的房间发送 API 发一条告警;冷却窗口默认 30 分钟(时间戳落在 `~/.pi/pi-courier-state/watchdog-alert-stamp`),发送失败不落戳、下一分钟重试。告警不依赖桥进程 —— bot 死了告警照样出得去;
 - 心跳文件不存在(桥还没跑过 first run)按安装错误处理:不告警、不动作。
-- **人工停止不会被拉回**:`pi-courier stop` 会先写 `~/.pi/pi-courier-state/watchdog-paused` 再调 systemctl(即使进程已经僵死、信号处理器跑不到,标记也能落盘),看门狗看到标记就跳过本轮判定;下次桥启动自动清除。`pi-courier restart` 由进程收到 SIGTERM 时写标记,随后新实例启动即清。直接 `systemctl stop`、`kill -9` 这类强杀不写标记,看门狗仍按失能拉起 —— 维护时请用 `pi-courier stop`,或先停看门狗。
+- **人工停止不会被拉回**:`pi-courier stop` 会先写 `~/.pi/pi-courier-state/watchdog-paused` 再调 systemctl(即使进程已经僵死、信号处理器跑不到,标记也能落盘),看门狗看到标记就跳过本轮判定;下次桥启动自动清除。`pi-courier restart` 由进程收到 SIGTERM 时写标记,随后新实例启动即清。直接 `systemctl stop`、`kill -9` 这类强杀不写标记,看门狗仍按失能拉起 —— 维护时请用 `pi-courier stop`,或先停看门狗。`pi-courier update` 在停服务前同样先写标记;升级中途失败时服务保持停止,修好后 `pi-courier start` 会清除标记并恢复。
 
 安装(二选一,完整注释见脚本头):
 
