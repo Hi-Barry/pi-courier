@@ -392,6 +392,29 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   } catch (err) {
     logger.warn(`state dir unavailable (state files degrade to in-memory): ${errorMessage(err)}`);
   }
+
+  // ---- shutdown ----------------------------------------------------------------
+  // 共享优雅退出链(spec #247 票01):停 pi RPC → 断 transport → 放单实例锁
+  // → 退出。信号路径缺省退出码 0,与历史逐字节一致;崩溃守卫(票03)与
+  // 磁盘硬阈值(票04)携带非零码走同一条链,重入标志归链持有。
+  // 必须在 heartbeat.start() 之前构造:资源守卫的 onHardExit 闭包引用
+  // shutdownChain,启动窗口内 tick 跌破硬阈值时不能撞上 TDZ(否则异常被
+  // heartbeat 吞成一行 warn,运行期硬退静默失效)。
+  const shutdownChain = createShutdownChain({
+    stopRpc: () => rpc.stop(),
+    disconnectAll,
+    releaseLock,
+    exit: (code) => process.exit(code),
+    log: (message) => logger.info(message),
+  });
+  process.on("SIGTERM", () => void shutdownChain.shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdownChain.shutdown("SIGINT"));
+  // Windows delivers Ctrl+Break (and some service-stop handoffs) as SIGBREAK
+  // — SIGTERM never arrives there (evaluation 2026-10-13). POSIX defines the
+  // signal too, where it essentially never fires; same shutdown path, so
+  // registering it is harmless everywhere.
+  process.on("SIGBREAK", () => void shutdownChain.shutdown("SIGBREAK"));
+
   // ---- disk write-failure aggregation (spec #247 票04) ------------------------
   // 桥内四条写路径(状态文件/审计/附件/台账)的磁盘类写失败(ENOSPC/EDQUOT)
   // 统一聚合:首条立即告警,之后 5 分钟至多一条。各写路径既有降级契约不变,
@@ -630,25 +653,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     releaseLock();
     process.exit(1);
   }
-
-  // ---- shutdown ----------------------------------------------------------------
-  // 共享优雅退出链(spec #247 票01):停 pi RPC → 断 transport → 放单实例锁
-  // → 退出。信号路径缺省退出码 0,与历史逐字节一致;崩溃守卫(票03)与
-  // 磁盘硬阈值(票04)携带非零码走同一条链,重入标志归链持有。
-  const shutdownChain = createShutdownChain({
-    stopRpc: () => rpc.stop(),
-    disconnectAll,
-    releaseLock,
-    exit: (code) => process.exit(code),
-    log: (message) => logger.info(message),
-  });
-  process.on("SIGTERM", () => void shutdownChain.shutdown("SIGTERM"));
-  process.on("SIGINT", () => void shutdownChain.shutdown("SIGINT"));
-  // Windows delivers Ctrl+Break (and some service-stop handoffs) as SIGBREAK
-  // — SIGTERM never arrives there (evaluation 2026-10-13). POSIX defines the
-  // signal too, where it essentially never fires; same shutdown path, so
-  // registering it is harmless everywhere.
-  process.on("SIGBREAK", () => void shutdownChain.shutdown("SIGBREAK"));
 
   // ---- crash guard (spec #247 票03) ---------------------------------------------
   // L1 全局兜底:未捕获异常/未处理 Promise 拒绝 → 记录死因 → 尽力向管理房
