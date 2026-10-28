@@ -534,6 +534,38 @@ pi-courier restart
 
 pi.dev 托管安装(`~/.pi/agent`)同样支持:pi-courier 会把 `bin/pi` 包装脚本自动解析到当前版本的真实 JS 入口,pi 升级后无需改配置(0.3.1 起)。
 
+### 进程挂了怎么办:systemd 与看门狗
+
+systemd unit 自带 `Restart=on-failure` + `RestartSec=5`:进程**崩溃**(非零退出码或被信号杀死)后 5 秒自动拉起。崩溃守卫会把未捕获异常转成「留言 + 非零码优雅退出」,所以 JS 异常这类死亡也由 systemd 接住;`pi-courier stop` 是正常退出(退出码 0),不会被拉起。
+
+systemd 管不了**僵死**:进程还在、PID 还在,但事件循环卡住不干活。unit 仍显示 active,journal 没有新日志,桥也不再回消息。补这个缺口的是独立看门狗 `deploy/watchdog/watchdog-posix.sh`:
+
+- 每分钟由 cron / systemd timer 触发,读 `~/.pi/pi-courier-state/heartbeat.json`(桥每 30 秒原子写一次,同时记录磁盘与堆水位);
+- 心跳超过 **180 秒**(= 6 × 30 秒;过期秒单点归属脚本常量,`--stale-seconds` 可覆盖)或心跳里的 PID 不存在 → `systemctl --user restart` 重启服务;
+- 重启后用同目录的 `matrix-alert.mjs` 直读 `~/.pi/pi-courier.json` 的 Matrix 凭据与管理房 ID(`managementRooms[0]`,缺省回落 `space.roomId`),直接调 homeserver 的房间发送 API 发一条告警;冷却窗口默认 30 分钟(时间戳落在 `~/.pi/pi-courier-state/watchdog-alert-stamp`),发送失败不落戳、下一分钟重试。告警不依赖桥进程 —— bot 死了告警照样出得去;
+- 心跳文件不存在(桥还没跑过 first run)按安装错误处理:不告警、不动作。
+
+安装(二选一,完整注释见脚本头):
+
+```bash
+# 方式一:cron
+* * * * * /opt/pi-courier/deploy/watchdog/watchdog-posix.sh >> ~/.pi/pi-courier-state/watchdog.log 2>&1
+```
+
+方式二:systemd timer(两个 unit 文件,`systemctl --user enable --now pi-courier-watchdog.timer`)。服务名默认 `pi-pi-courier`(与 `deploy/pi-courier.user.service` 安装后的名字一致),用 `PI_COURIER_SERVICE` 覆盖;`PI_COURIER_ALERT=off` 关闭告警,`PI_COURIER_HEARTBEAT` 覆盖心跳路径。脚本按 **user unit** 写死 `systemctl --user`;若你用的是系统级 unit,请把脚本里的 `--user` 去掉并用 `PI_COURIER_SERVICE` 指定服务名。卸载:删掉 crontab 行,或 `systemctl --user disable --now pi-courier-watchdog.timer` 后删除两个 unit 文件。
+
+**磁盘持续满盘的熔断**:桥在启动期、连接任何网络之前检查磁盘硬阈值(默认 512MB),低于即写一行死因日志退出、不发管理房留言。磁盘一直不清理时 systemd 会反复拉起,每轮只多一行本地日志。在 unit 的 `[Unit]` 段加熔断参数让它停手:
+
+```ini
+[Unit]
+StartLimitIntervalSec=300
+StartLimitBurst=5
+```
+
+(300 秒内启动 5 次即停止自动重启;清理磁盘后 `systemctl --user reset-failed pi-pi-courier` 再 `start`。)韧性参数都在配置文件的 `resilience` 段:心跳间隔默认 30 秒、磁盘软阈值 2048MB、硬阈值 512MB、堆告警 80%、pi RPC 连续拉起上限 5 次,改完重启生效。
+
+**什么时候还需要看门狗**:要「僵死也能被拉起」「服务死了能收到 Matrix 告警」就装;只靠 systemd 的崩溃拉起、接受「僵死要人工发现」可以不装。看门狗的过期秒刻意不进桥的 `resilience` 配置 —— 它零桥代码依赖,只读心跳与 Matrix 凭据;桥改 `resilience.heartbeatIntervalSeconds` 时,同步调整脚本默认值(或安装参数),保持 6 倍关系。
+
 ## Windows
 
 自 1.0.0 起正式支持,并已于 2026-10-14 在真实 Windows Server 2025 机器上端到端验收:安装(原生库下载 + sha256 校验 + 加载)、配置向导、Matrix 连接、`!`/`!!` bash、单实例锁、多工程房间与空间组织、任务计划程序自启、Ctrl+C 干净退出。除下文明确列出的限制外,行为与 Linux 一致。
@@ -574,7 +606,26 @@ npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs p
   Start-ScheduledTask -TaskName 'pi-courier'   # 立即启动;此后每次登录自动拉起
   ```
 
-  想要真正无控制台窗口的后台服务,可用 [NSSM](https://nssm.cc/) 包一层;或者干脆保持前台会话。
+  这是**登录触发型**任务:只在每次登录时拉起。进程中途崩溃、被杀死或僵死,任务都不会重新拉起;进程死掉后任务状态还可能停留在 Running。补自愈有两条路线:
+
+  - **auto-logon(自动登录桌面)**:让机器重启后自动登录,计划任务随之触发。代价是凭据与桌面会话留在无人值守的机器上(安全风险);而且它只解决「重启后没人登录」,仍然发现不了进程僵死。
+  - **看门狗(推荐)**:独立计划任务每分钟运行 `deploy/watchdog/watchdog-windows.ps1`,读 `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`。心跳超过 **180 秒**(= 6 × 30 秒,`-StaleSeconds` 可覆盖)或心跳里的 PID 不存在 → ① PID 仍存活(僵死)时先 `taskkill /F /PID` 杀旧实例(单实例锁不抢占活进程,不先杀新实例会秒退);② `schtasks /end` 终止卡住的任务实例(end 失败不阻断下一步);③ `schtasks /run` 拉起。随后用同目录的 `matrix-alert.mjs` 直读 `%USERPROFILE%\.pi\pi-courier.json` 的凭据与管理房,发一条 Matrix 告警(默认 30 分钟冷却)。心跳文件不存在按安装错误处理:不告警、不动作。看门狗自身需要 `node` 在 PATH 上。
+
+    安装(桥的任务名默认 `pi-courier`,与上面的配方一致;把脚本路径换成你的实际安装目录,npm 全局安装通常在 `%APPDATA%\npm\node_modules\pi-courier\deploy\watchdog\`):
+
+    ```powershell
+    schtasks /create /tn "pi-courier-watchdog" `
+      /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\pi-courier\deploy\watchdog\watchdog-windows.ps1 -TaskName pi-courier" `
+      /sc minute /mo 1 /f
+    ```
+
+    参数:`-TaskName` 桥的计划任务名;`-HeartbeatPath` 心跳文件(默认 `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`);`-StaleSeconds` 过期秒(默认 180 = 6 × 30,换算关系见脚本头注释);`-NoAlert` 关闭 Matrix 告警。卸载:
+
+    ```powershell
+    schtasks /delete /tn "pi-courier-watchdog" /f
+    ```
+
+  [NSSM](https://nssm.cc/) 之类的 Windows 服务包装器能省掉登录依赖,但要把 Node 变成系统服务,安装、升级、日志都更重;本版本不提供实现,只作为权衡选项保留。或者干脆保持前台会话。
 - **Ctrl+C / Ctrl+Break(SIGBREAK)干净退出** —— pi RPC 停止、Matrix 断开、单实例锁释放。
 - **单实例锁**行为一致:崩溃残留的锁会被下次启动自动接管,无论从控制台还是任务计划程序启动。
 - 配置文件权限检查(0600)在 Windows 上跳过:系统无法表达 POSIX 权限位,继续检查只会每次启动误报。
