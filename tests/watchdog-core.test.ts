@@ -162,6 +162,26 @@ describe("看门狗判定核心三分支(spec #247 票06)", () => {
 
     expect(result.actions).toEqual(["restart"]); // alert 失败不入列,重启已完成
   });
+
+  it("重启命令失败 → 仍然发告警并标 restartFailed(评审)", () => {
+    const calls: string[] = [];
+    const run = vi.fn((command: string) => {
+      calls.push(String(command));
+      if (String(command).includes("restart-service")) throw new Error("systemctl failed");
+    });
+    const { opts } = core({
+      pidAliveFn: () => false,
+      restartCommand: "restart-service",
+      alertCommand: "node matrix-alert.mjs --message {message}",
+      runFn: run,
+    });
+    const result = runWatchdogCore(opts);
+
+    expect(result.restartFailed).toBe(true);
+    expect(result.actions).toEqual(["restart-failed", "alert"]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain("RESTART FAILED");
+  });
 });
 
 describe("过期秒(spec #247 票06:默认 180 = 6 × 30s 心跳间隔,可覆盖)", () => {

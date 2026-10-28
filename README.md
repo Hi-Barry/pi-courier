@@ -557,8 +557,9 @@ systemd cannot see a **hang**: the process and its PID are still there, but the 
 Install (either one; full comments in the script header):
 
 ```bash
-# Option 1: cron
-* * * * * /opt/pi-courier/deploy/watchdog/watchdog-posix.sh >> ~/.pi/pi-courier-state/watchdog.log 2>&1
+# Option 1: cron (cron usually has no XDG_RUNTIME_DIR, which makes systemctl --user fail;
+# replace 1000 with your uid, or use option 2, which is recommended)
+* * * * * XDG_RUNTIME_DIR=/run/user/1000 /opt/pi-courier/deploy/watchdog/watchdog-posix.sh >> ~/.pi/pi-courier-state/watchdog.log 2>&1
 ```
 
 Option 2: a systemd timer (two unit files, `systemctl --user enable --now pi-courier-watchdog.timer`). The service name defaults to `pi-pi-courier` (the name `deploy/pi-courier.user.service` installs as); override it with `PI_COURIER_SERVICE`; `PI_COURIER_ALERT=off` disables alerts and `PI_COURIER_HEARTBEAT` overrides the heartbeat path. The script hard-codes `systemctl --user` for **user units**; for a system-level unit remove `--user` and set `PI_COURIER_SERVICE`. Uninstall: stop the watchdog first (`systemctl --user disable --now pi-courier-watchdog.timer` and remove the two unit files, or delete the crontab line), then `pi-courier disable`; otherwise the watchdog will bring the service back once the stop window passes.

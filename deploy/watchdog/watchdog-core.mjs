@@ -121,9 +121,11 @@ export function fillCommand(template, vars, opts = {}) {
  *   alertCommand     告警命令(可选;{message}/{pid} 占位;失败只记 stderr)
  *   alertMessage     告警文本(核心按判定结果拼默认值,英文 —— 公开仓库
  *                    口径,独立部署产物不进桥的 i18n 双表)
- * 返回 { verdict, actions, pid?, pidAlive? }:
+ * 返回 { verdict, actions, pid?, pidAlive?, restartFailed? }:
  *   verdict: missing=心跳读不到(安装错误);paused=人工停止标记存在(跳过);
  *            ok=未过期零动作;stale=僵死(PID 活);dead=已死。
+ *   restartFailed: true = 重启命令本身失败(此时仍尽力发告警,CLI 以非零码
+ *   退出,便于计划任务历史里看到失败)。
  */
 export function runWatchdogCore(opts) {
   const staleSeconds = opts.staleSeconds ?? DEFAULT_STALE_SECONDS;
@@ -181,23 +183,36 @@ export function runWatchdogCore(opts) {
       process.stderr.write(`[watchdog] end command failed (continuing to restart): ${String(err)}\n`);
     }
   }
-  run(fillCommand(opts.restartCommand, { pid: beat.pid }));
-  actions.push("restart");
+  let restartFailed = false;
+  let restartError;
+  try {
+    run(fillCommand(opts.restartCommand, { pid: beat.pid }));
+    actions.push("restart");
+  } catch (err) {
+    // 重启失败恰恰最需要告警:不能在这里直接抛出把后面的 alert 跳过。
+    restartFailed = true;
+    restartError = err;
+    actions.push("restart-failed");
+    process.stderr.write(`[watchdog] restart command failed: ${String(err)}\n`);
+  }
 
   if (opts.alertCommand) {
+    const state = verdict === "stale" ? "STALE (heartbeat frozen, pid alive)" : "DEAD (pid gone)";
     const message =
       opts.alertMessage ??
-      `pi-courier watchdog: service was ${verdict === "stale" ? "STALE (heartbeat frozen, pid alive)" : "DEAD (pid gone)"} and has been restarted.`;
+      (restartFailed
+        ? `pi-courier watchdog: service was ${state}; RESTART FAILED — manual intervention required (${String(restartError)}).`
+        : `pi-courier watchdog: service was ${state} and has been restarted.`);
     try {
       // {message} 必须按宿主 shell 加引号:默认消息含括号/空格,裸替换会
       // 让 /bin/sh -c 语法错,告警在「最需要通知」时静默丢失。
       run(fillCommand(opts.alertCommand, { pid: beat.pid, message }, { quoteMessage: true }));
       actions.push("alert");
     } catch (err) {
-      process.stderr.write(`[watchdog] alert command failed (restart already done): ${String(err)}\n`);
+      process.stderr.write(`[watchdog] alert command failed (restart already attempted): ${String(err)}\n`);
     }
   }
-  return { verdict, actions, pid: beat.pid, pidAlive: alive };
+  return { verdict, actions, pid: beat.pid, pidAlive: alive, restartFailed };
 }
 
 /**
@@ -263,4 +278,5 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   if (!opts) process.exit(2);
   const result = runWatchdogCore(opts);
   process.stdout.write(`${JSON.stringify(result)}\n`);
+  if (result.restartFailed) process.exitCode = 1;
 }
