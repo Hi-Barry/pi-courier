@@ -187,21 +187,24 @@ interface RoomBinding {
   replyTarget: ReplyTarget;
 }
 
-/** Format a completed turn into reply text. Returns text = null when the turn
- *  has no replyable content (the binding is kept for the follow-up turn).
+/** Format a completed turn into reply parts. Returns text = null when the
+ *  turn has no narration/error content (the binding is kept for the
+ *  follow-up turn); toolsText = null when tool lines are absent or hidden.
  *  Error turns (stopReason "error") always yield replyable text — the failure
- *  line rides along even when the model produced no content (issue #52). */
+ *  line rides along even when the model produced no content (issue #52).
+ *  旁白/工具拆分(spec #248):text 只装旁白与错误行,工具行独立出口 ——
+ *  聚合路径工具卡只装工具行,旁白独立成卡并断开聚合链;非聚合路径以
+ *  fullText 派发,可达路径上与旧整段输出逐字节一致。 */
 export function buildTurnReply(
   message: AssistantMessage,
   hideToolCalls?: boolean
-): { text: string | null; pendingTools: boolean } {
+): { text: string | null; toolsText: string | null; fullText: string | null; pendingTools: boolean } {
   const responseText = extractTextFromMessage(message);
   const toolCallsText = formatToolCalls(message);
   const pendingTools = hasToolCalls(message);
   const parts: string[] = [];
   const trimmed = responseText.trim();
   if (trimmed) parts.push(trimmed);
-  if (toolCallsText && !hideToolCalls) parts.push(toolCallsText);
   // Error visibility (issue #52): a turn ending with stopReason "error" must
   // reach the room even when the model produced no text — the text=null path
   // used to swallow failed turns silently (holding an unpinned binding
@@ -209,8 +212,16 @@ export function buildTurnReply(
   if (message.stopReason === "error") {
     parts.push(t("router.turn.failed", { message: message.errorMessage ?? t("common.unknownError") }));
   }
-  if (parts.length === 0) return { text: null, pendingTools };
-  return { text: parts.join("\n\n"), pendingTools };
+  const text = parts.length === 0 ? null : parts.join("\n\n");
+  const toolsText = toolCallsText && !hideToolCalls ? toolCallsText : null;
+  return {
+    text,
+    toolsText,
+    // 拼装契约的唯一住处(spec #248 评审整改):非聚合派发与 log 预览都吃
+    // 这个字段,「空行连接」的口径不再在调用方复写。
+    fullText: text === null && toolsText === null ? null : [text, toolsText].filter(Boolean).join("\n\n"),
+    pendingTools,
+  };
 }
 
 /**
@@ -1404,12 +1415,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 连败计数(issue #121):彻底失败的轮喂计数,其余轮次清零(工具
         // 循环的中间轮也算成功 —— 模型还在干活,故障 streak 不该跨过它)。
         // 自动切换的回执与失败回复同房间送达;交接卡捕获轮同样计数。
-        if ((event.message as AssistantMessage | undefined)?.stopReason === "error") {
+        const turnMessage = event.message as AssistantMessage | undefined;
+        const isErrorTurn = turnMessage?.stopReason === "error";
+        if (isErrorTurn) {
           void runFallback(rpc, target);
         } else {
           fallbackStreak.clear(rpc);
         }
-        const turn = buildTurnReply(event.message as AssistantMessage, store.get().hideToolCalls);
+        const turn = buildTurnReply(turnMessage as AssistantMessage, store.get().hideToolCalls);
 
         // 交接卡捕获(issue #122):在途捕获命中本进程时,终答落卡 —— 工具
         // 循环的中间轮继续等;卡片投递替代原生回复,总结文本不重复发房间。
@@ -1422,28 +1435,43 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           return;
         }
 
-        // Reply summary at INFO level — the full conversation is also in pi's
-        // session file.
-        const replyPreview = turn.text ?? "";
+        // 完整口径(旁白+空行+工具行)由 buildTurnReply.fullText 单一供给
+        // (spec #248 评审整改):log 预览与非聚合派发共用,不再复写拼装。
+        const replyPreview = turn.fullText ?? "";
         log.info(`[agent] reply to @${target.username}: ${replyPreview.slice(0, 500)}${replyPreview.length > 500 ? "…" : ""}`);
 
-        if (turn.text === null) {
+        if (turn.fullText === null) {
           // No content this turn — keep the binding for a follow-up turn
           return;
         }
-        // 局部提取(turn.text 的 null 收窄不跨闭包边界,下方出站链回调要用)。
-        const replyText: string = turn.text;
 
-        // 活卡聚合(issue #235 票2):聚合启用的中间回合交给出站链决策
-        // (无卡开卡 / 有卡编辑追加 / 降级逐条直发),出站顺序 = 事件到达
-        // 顺序。hideToolCalls、配置关、编辑缝未注入都落到下方现行派发路径
-        // —— 与现状逐字节一致。
-        if (turn.pendingTools && liveCardAggregation()) {
-          enqueueLiveCardTurn(rpc, () => liveCardTurn(rpc, target, replyText));
+        // 活卡聚合(issue #235 票2;内容契约修订 spec #248):聚合启用的
+        // 中间回合交给出站链决策。旁白断链(spec #248):回合带旁白文本时,
+        // 在出站链的单一步骤内 —— 先清活卡(旧卡定稿于既有累积,不再被
+        // 编辑)→ 旁白独立直发(普通消息卡,可分片)→ 工具行交活卡决策
+        // (此时必无卡 → 开新卡)。时间线必为「旧卡 → 旁白 → 新卡」:
+        // 普通回复/开卡/编辑在 Matrix transport 走同一条 per-room FIFO,
+        // 且本步骤与前序步骤经出站链串行,顺序由架构保证而非时序运气。
+        // 报错回合绕过聚合:失败行醒目直达,不埋进持续刷新的卡。
+        // hideToolCalls、配置关、编辑缝未注入都落到下方现行派发路径。
+        if (turn.pendingTools && liveCardAggregation() && !isErrorTurn) {
+          const narration: string | null = turn.text;
+          const toolLines: string = turn.toolsText!; // pendingTools+未隐藏 ⇒ 非空
+          enqueueLiveCardTurn(rpc, async () => {
+            if (narration) {
+              // 清卡单一入口含代次递增(spec #242):降级标志随状态一并清除
+              // —— 降级绑定旧卡 event_id 上的编辑失败,断链后的新卡自然重试。
+              clearLiveCard(rpc);
+              for (const chunk of splitMessage(narration, 4000)) {
+                await sendReply(target.chatId, target.transport, chunk).catch(() => {});
+              }
+            }
+            await liveCardTurn(rpc, target, toolLines);
+          });
           return;
         }
 
-        const chunks = splitMessage(replyText, 4000);
+        const chunks = splitMessage(turn.fullText, 4000);
         // 回复末尾状态脚注:仅收敛终答(pendingTools=false)挂 —— 工具循环
         // 中间消息不挂(否则 N 步任务挂 N 条);失败回复(stopReason=error)
         // 与正文同路,一并携带。数据现拉现用(collectStatusFooter 永不抛,
