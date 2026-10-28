@@ -32,8 +32,12 @@ describe("PendingUpdateStore(读侧经 JsonStateFile 吞错,写侧可感知上�
     try {
       store.write(VALID);
       expect(store.read()).toEqual(VALID);
-      const mode = fs.statSync(file).mode & 0o777;
-      expect(mode).toBe(0o600);
+      // 0600 是 POSIX 语义(spec §5.5);Windows 不维护 POSIX 权限位
+      // (stat 恒报 0666),只在 POSIX 上断言。
+      if (process.platform !== "win32") {
+        const mode = fs.statSync(file).mode & 0o777;
+        expect(mode).toBe(0o600);
+      }
     } finally {
       cleanup();
     }

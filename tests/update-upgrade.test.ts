@@ -202,7 +202,11 @@ describe("defaultProjectDir · 默认项目根推导(两层,E2E 回归钉)", () 
   it("dist 布局:dist/update/upgrade.js 上溯两层到项目根", () => {
     // 回归背景(2026-10-28 真机):一层解析把 projDir 落到 dist/,dist/.git
     // 恒不存在 → git 部署被误判成 npm 安装,换血装进 npm 全局。
-    expect(defaultProjectDir("file:///home/u/proj/dist/update/upgrade.js")).toBe("/home/u/proj");
+    // URL 从真实 import.meta.url 派生(带平台盘符)——硬编码 POSIX 路径在
+    // Windows 上 fileURLToPath 会抛 ERR_INVALID_FILE_URL_PATH。
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const distModuleUrl = new URL("../dist/update/upgrade.js", import.meta.url).href;
+    expect(defaultProjectDir(distModuleUrl)).toBe(repoRoot);
   });
 
   it("源码布局:src/update/*.ts 上溯两层同为项目根(两种布局同一推导)", () => {
