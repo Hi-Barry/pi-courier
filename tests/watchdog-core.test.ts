@@ -202,6 +202,29 @@ describe("看门狗判定核心三分支(spec #247 票06)", () => {
     expect(calls).toHaveLength(2);
     expect(calls[1]).toContain("RESTART FAILED");
   });
+
+  it("杀旧命令失败 → 不裸抛,继续 end/run 并告警 KILL FAILED(第2轮评审)", () => {
+    const calls: string[] = [];
+    const run = vi.fn((command: string) => {
+      calls.push(String(command));
+      if (String(command).includes("taskkill")) throw new Error("access denied");
+    });
+    const { opts } = core({
+      pidAliveFn: () => true,
+      killCommand: "taskkill /F /PID {pid}",
+      endCommand: "schtasks /end /tn pi-courier",
+      restartCommand: "schtasks /run /tn pi-courier",
+      alertCommand: "node matrix-alert.mjs --message {message}",
+      runFn: run,
+    });
+    const result = runWatchdogCore(opts);
+
+    expect(result.killFailed).toBe(true);
+    expect(result.actions).toEqual(["kill-failed", "end", "restart", "alert"]);
+    expect(calls[1]).toBe("schtasks /end /tn pi-courier");
+    expect(calls[2]).toBe("schtasks /run /tn pi-courier");
+    expect(calls[3]).toContain("KILL FAILED");
+  });
 });
 
 describe("过期秒(spec #247 票06:默认 180 = 6 × 30s 心跳间隔,可覆盖)", () => {

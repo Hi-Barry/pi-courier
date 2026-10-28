@@ -133,6 +133,8 @@ export function fillCommand(template, vars, opts = {}) {
  *            ok=未过期零动作;stale=僵死(PID 活);dead=已死。
  *   restartFailed: true = 重启命令本身失败(此时仍尽力发告警,CLI 以非零码
  *   退出,便于计划任务历史里看到失败)。
+ *   killFailed: true = 僵死分支的杀旧命令失败(继续 end/run 并告警,提示
+ *   人工确认旧实例是否仍在)。
  */
 export function runWatchdogCore(opts) {
   const staleSeconds = opts.staleSeconds ?? DEFAULT_STALE_SECONDS;
@@ -186,9 +188,20 @@ export function runWatchdogCore(opts) {
   const run = opts.runFn ?? ((command) => execSync(command, { stdio: "pipe" }));
 
   // 僵死且壳给了杀旧命令(Windows):先杀后起 —— 单实例锁对活进程不抢占。
+  // kill 失败(权限不足 / PID 在判活与 taskkill 之间消失)不能裸抛把
+  // end/run/告警全部跳过;继续走后续步骤,并在告警里标 KILL FAILED。
+  let killFailed = false;
+  let killError;
   if (verdict === "stale" && opts.killCommand) {
-    run(fillCommand(opts.killCommand, { pid: beat.pid }));
-    actions.push("kill");
+    try {
+      run(fillCommand(opts.killCommand, { pid: beat.pid }));
+      actions.push("kill");
+    } catch (err) {
+      killFailed = true;
+      killError = err;
+      actions.push("kill-failed");
+      process.stderr.write(`[watchdog] kill command failed: ${String(err)}\n`);
+    }
   }
   // 结束任务实例(Windows):任务可能在进程死后仍卡 Running,不先 end,
   // 随后的 run 会被「禁止同任务并行实例」拒绝。end 对未运行任务返回非零
@@ -216,10 +229,13 @@ export function runWatchdogCore(opts) {
 
   if (opts.alertCommand) {
     const state = verdict === "stale" ? "STALE (heartbeat frozen, pid alive)" : "DEAD (pid gone)";
+    const problems = [];
+    if (killFailed) problems.push(`KILL FAILED (${String(killError)})`);
+    if (restartFailed) problems.push(`RESTART FAILED (${String(restartError)})`);
     const message =
       opts.alertMessage ??
-      (restartFailed
-        ? `pi-courier watchdog: service was ${state}; RESTART FAILED — manual intervention required (${String(restartError)}).`
+      (problems.length > 0
+        ? `pi-courier watchdog: service was ${state}; ${problems.join("; ")} — manual intervention may be required.`
         : `pi-courier watchdog: service was ${state} and has been restarted.`);
     try {
       // {message} 必须按宿主 shell 加引号:默认消息含括号/空格,裸替换会
@@ -230,7 +246,7 @@ export function runWatchdogCore(opts) {
       process.stderr.write(`[watchdog] alert command failed (restart already attempted): ${String(err)}\n`);
     }
   }
-  return { verdict, actions, pid: beat.pid, pidAlive: alive, restartFailed };
+  return { verdict, actions, pid: beat.pid, pidAlive: alive, restartFailed, killFailed };
 }
 
 /**
