@@ -234,6 +234,30 @@ function beginServiceStop(): ManualStopIntent {
   return intent;
 }
 
+/**
+ * 停服务并处理人工停止标记(第3轮评审):
+ *  - systemctl 之前先写标记(进程僵死也能落盘);
+ *  - CLI 在等待期间被 Ctrl+C/SIGTERM 中断时无法确认服务已停,回滚标记,
+ *    避免看门狗对一个仍在跑的服务失明;
+ *  - 正常返回后按退出码 settle(0=确认停止、保留标记;非0=回滚)。
+ * spawnSync 阻塞事件循环,信号会排队到返回之后:先执行 confirmed/settle,
+ * 再派发 handler,所以 handler 用 confirmed 判断不会误回滚已确认的停止。
+ */
+function runServiceStop(args: string[]): number {
+  const intent = beginServiceStop();
+  let confirmed = false;
+  const onSignal = (code: number): void => {
+    intent.settle(confirmed);
+    process.exit(code);
+  };
+  process.once("SIGINT", () => onSignal(130));
+  process.once("SIGTERM", () => onSignal(143));
+  const status = systemctlUser(args);
+  confirmed = true;
+  intent.settle(status === 0);
+  return status;
+}
+
 /** Project labels from the config (the single source `log-filter` matches against). */
 function projectLabels(): { labels: string[]; multiProject: boolean } {
   const config = loadConfig();
@@ -297,11 +321,13 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
   // spawnSystemctlUser 自带 systemctl --user 前缀,这里只传其余参数
   // stop 先写人工停止标记:进程僵死时信号处理器跑不到,只能由 CLI 落盘。
   // restart 不写:它紧接着会启动新实例,新实例启动即清标记。
-  const stopIntent = action === "stop" ? beginServiceStop() : undefined;
+  if (action === "stop") {
+    const status = runServiceStop(["stop", SERVICE_NAME]);
+    if (status !== 0) process.exit(status);
+    return;
+  }
   const { status, stderr } = spawnSystemctlUser([action, SERVICE_NAME]);
   if (status !== 0) {
-    // 停止没成功:撤掉标记,否则看门狗会对一个仍在运行的服务失明。
-    stopIntent?.settle(false);
     printBusHint(stderr);
     process.exit(status);
   }
@@ -315,11 +341,8 @@ function cmdDisable(): void {
     process.exit(1);
   }
   // Stop + remove from autostart, then delete the unit file (full uninstall).
-  // 与 stop 同款:先由 CLI 写人工停止标记,进程僵死也能落盘。
-  const stopIntent = beginServiceStop();
-  const stopStatus = systemctlUser(["disable", "--now", SERVICE_NAME]);
-  stopIntent.settle(stopStatus === 0);
-  if (stopStatus !== 0) {
+  // 与 stop 同款:先由 CLI 写人工停止标记,进程僵死也能落盘;中断回滚同源。
+  if (runServiceStop(["disable", "--now", SERVICE_NAME]) !== 0) {
     // Issue #60: the failure path must not delete the unit — say so explicitly.
     console.error(t("cli.disable.keptUnit"));
     process.exit(1);
@@ -363,9 +386,7 @@ function cmdUpdate(): void {
       console.log(t("cli.update.stopping"));
       // 升级的 stop 同样先由 CLI 写人工停止标记:进程僵死时 handler 跑不到,
       // 否则升级的 npm/git 替换文件期间看门狗可能把旧版本拉起来。
-      const stopIntent = beginServiceStop();
-      const stopStatus = systemctlUser(["stop", SERVICE_NAME]);
-      stopIntent.settle(stopStatus === 0);
+      const stopStatus = runServiceStop(["stop", SERVICE_NAME]);
       if (stopStatus !== 0) process.exit(stopStatus);
     }
   } else {
