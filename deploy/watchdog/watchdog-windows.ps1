@@ -43,6 +43,8 @@ param(
   [string]$HeartbeatPath = "$env:USERPROFILE\.pi\pi-courier-state\heartbeat.json",
   # 过期秒(默认 180 = 6 × 30s 心跳间隔,换算关系见文件头)
   [int]$StaleSeconds = 180,
+  # 心跳间隔秒(默认 30;PID 消失后的宽限期 = 2 × 该值)
+  [int]$HeartbeatIntervalSeconds = 30,
   # 桥自身的计划任务名(schtasks /end、/run 的目标)
   [string]$TaskName = "pi-courier",
   # 关闭告警(默认经 matrix-alert.mjs 发管理房)
@@ -69,6 +71,7 @@ $restartCommand = "schtasks /run /tn $TaskName"
 $coreArgs = @(
   "--heartbeat", $HeartbeatPath,
   "--stale-seconds", "$StaleSeconds",
+  "--heartbeat-interval-seconds", "$HeartbeatIntervalSeconds",
   "--kill-command", $killCommand,
   "--end-command", $endCommand,
   "--restart-command", $restartCommand

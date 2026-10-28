@@ -149,13 +149,15 @@ describe("Windows 重启序列注入测试(票07:僵死必测)", () => {
 });
 
 describe("Windows 壳脚本契约(票07:部署产物与安装注释)", () => {
-  it("参数默认值与票02/06契约一致:心跳路径、180 秒过期、任务名", () => {
+  it("参数默认值与票02/06契约一致:心跳路径、180 秒过期、任务名、30 秒心跳间隔", () => {
     expect(SHELL).toContain('$HeartbeatPath = "$env:USERPROFILE\\.pi\\pi-courier-state\\heartbeat.json"');
     expect(SHELL).toContain("[int]$StaleSeconds = 180");
+    expect(SHELL).toContain("[int]$HeartbeatIntervalSeconds = 30");
     expect(SHELL).toContain('[string]$TaskName = "pi-courier"');
   });
 
-  it("核心参数接线:kill/end/restart 模板透传,告警可关闭且带 {message} 占位", () => {
+  it("核心参数接线:kill/end/restart/heartbeat-interval 模板透传,告警可关闭且带 {message} 占位", () => {
+    expect(SHELL).toContain('"--heartbeat-interval-seconds", "$HeartbeatIntervalSeconds"');
     expect(SHELL).toContain('"--kill-command", $killCommand');
     expect(SHELL).toContain('"--end-command", $endCommand');
     expect(SHELL).toContain('"--restart-command", $restartCommand');
@@ -173,7 +175,10 @@ describe("Windows 壳脚本契约(票07:部署产物与安装注释)", () => {
 });
 
 describe.skipIf(!POWERSHELL)("Windows 壳端到端(pwsh + 假 taskkill/schtasks)", () => {
-  function runShell(heartbeatPath: string): {
+  function runShell(
+    heartbeatPath: string,
+    extraArgs: string[] = [],
+  ): {
     result: { verdict: string; actions: string[] };
     commands: string[];
   } {
@@ -203,6 +208,7 @@ describe.skipIf(!POWERSHELL)("Windows 壳端到端(pwsh + 假 taskkill/schtasks)
         "-TaskName",
         "pi-courier",
         "-NoAlert",
+        ...extraArgs,
       ],
       {
         encoding: "utf-8",
@@ -239,6 +245,15 @@ describe.skipIf(!POWERSHELL)("Windows 壳端到端(pwsh + 假 taskkill/schtasks)
 
   it("心跳未过期:零动作", () => {
     const { result, commands } = runShell(writeHeartbeat({ ts: Date.now(), pid: process.pid }));
+    expect(result.verdict).toBe("ok");
+    expect(commands).toEqual([]);
+  });
+
+  it("透传 -HeartbeatIntervalSeconds(不再被参数绑定拒绝,第3轮评审)", () => {
+    const { result, commands } = runShell(writeHeartbeat({ ts: Date.now(), pid: process.pid }), [
+      "-HeartbeatIntervalSeconds",
+      "60",
+    ]);
     expect(result.verdict).toBe("ok");
     expect(commands).toEqual([]);
   });

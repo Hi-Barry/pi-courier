@@ -44,6 +44,9 @@
 #                        判定核心按宿主 shell 安全引用)。默认调同目录
 #                        matrix-alert.mjs;置 off / 空串关闭告警
 #   --stale-seconds <n>  过期秒覆盖(命令行参数优先于默认 180)
+#   --heartbeat-interval-seconds <n>
+#                        心跳间隔秒覆盖(默认 30;PID 消失后的宽限期 = 2 × 该值。
+#                        桥改 resilience.heartbeatIntervalSeconds 时同步传入)
 
 set -u
 
@@ -51,11 +54,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE="${PI_COURIER_SERVICE:-pi-pi-courier}"
 HEARTBEAT="${PI_COURIER_HEARTBEAT:-$HOME/.pi/pi-courier-state/heartbeat.json}"
 STALE_SECONDS="180"
+HEARTBEAT_INTERVAL_SECONDS="30"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --stale-seconds)
       STALE_SECONDS="$2"
+      shift 2
+      ;;
+    --heartbeat-interval-seconds)
+      HEARTBEAT_INTERVAL_SECONDS="$2"
       shift 2
       ;;
     --heartbeat)
@@ -91,5 +99,6 @@ fi
 exec node "$SCRIPT_DIR/watchdog-core.mjs" \
   --heartbeat "$HEARTBEAT" \
   --stale-seconds "$STALE_SECONDS" \
+  --heartbeat-interval-seconds "$HEARTBEAT_INTERVAL_SECONDS" \
   --restart-command "systemctl --user restart $SERVICE" \
   "${ALERT_ARGS[@]}"

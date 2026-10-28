@@ -336,4 +336,22 @@ describe("POSIX 壳语法门禁(bash -n,spec #247 票06)", () => {
     // 自定义模板收到的是核心安全引用后的消息(含括号)
     expect(fs.readFileSync(out, "utf-8")).toContain("DEAD (pid gone)");
   });
+
+  it("POSIX 壳透传 --heartbeat-interval-seconds(不再 unknown argument,第3轮评审)", () => {
+    if (process.platform === "win32") return;
+    const heartbeat = writeHeartbeat({ ts: Date.now(), pid: process.pid }); // 新鲜且活
+    const out = execFileSync(
+      "bash",
+      [path.resolve(__dirname, "../deploy/watchdog/watchdog-posix.sh"), "--heartbeat-interval-seconds", "60"],
+      {
+        env: {
+          ...process.env,
+          PI_COURIER_HEARTBEAT: heartbeat,
+          PI_COURIER_ALERT: "off",
+        },
+        encoding: "utf-8",
+      }
+    );
+    expect(out).toContain('"verdict":"ok"');
+  });
 });

@@ -621,7 +621,7 @@ npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs p
       /sc minute /mo 1 /f
     ```
 
-    参数:`-TaskName` 桥的计划任务名;`-HeartbeatPath` 心跳文件(默认 `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`);`-StaleSeconds` 过期秒(默认 180 = 6 × 30,换算关系见脚本头注释);`-NoAlert` 关闭 Matrix 告警。用 Ctrl+C / Ctrl+Break 正常退出会写人工停止标记,看门狗不会把服务拉回(`pi-courier stop` 仅 Linux 可用);`schtasks /end` 属强杀、不写标记,维护或卸载前请先停看门狗任务。卸载:
+    参数:`-TaskName` 桥的计划任务名;`-HeartbeatPath` 心跳文件(默认 `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`);`-StaleSeconds` 过期秒(默认 180 = 6 × 30,换算关系见脚本头注释);`-HeartbeatIntervalSeconds` 心跳间隔秒(默认 30,PID 消失后的宽限期 = 2 × 该值);`-NoAlert` 关闭 Matrix 告警。用 Ctrl+C / Ctrl+Break 正常退出会写人工停止标记,看门狗不会把服务拉回(`pi-courier stop` 仅 Linux 可用);`schtasks /end` 属强杀、不写标记,维护或卸载前请先停看门狗任务。卸载:
 
     ```powershell
     schtasks /delete /tn "pi-courier-watchdog" /f
