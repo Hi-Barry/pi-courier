@@ -794,6 +794,27 @@ Note: pi itself is installed and upgraded independently on the system
     "🌐 outbound proxy: {proxy} (source: {source}; edit ~/.pi/pi-courier.json and restart to change)",
   "proxy.unsupportedScheme":
     "❌ Proxy \"{value}\" (from {origin}) is not supported in this version — only http/https proxies are supported; use an address starting with http:// or https://",
+
+  // ── workflow (workflow progress live card) ─────────────────────────────
+  "workflow.icon.running": "▶️",
+  "workflow.icon.paused": "⏸",
+  "workflow.icon.stopped": "🛑",
+  "workflow.icon.finished": "✅",
+  "workflow.icon.error": "❌",
+  "workflow.agentStatus.running": "running",
+  "workflow.agentStatus.done": "done",
+  "workflow.agentStatus.skipped": "skipped",
+  "workflow.agentStatus.error": "error",
+  "workflow.card.title": "{icon} Workflow {name} · phase {done}/{total} · {tokens}{cost}",
+  "workflow.phase.done": "✅ {phase}",
+  "workflow.phase.current": "⏳ {phase}",
+  "workflow.phase.pending": "○ {phase}",
+  "workflow.agent.header": "| Subtask | Phase | Status | Tokens |\n|---|---|---|---|",
+  "workflow.agent.row": "| {label} | {phase} | {status} | {tokens} |",
+  "workflow.agent.collapsed": "…({count} more finished subtask(s) collapsed)",
+  "workflow.result": "**Result:** {result}",
+  "workflow.control.hint": "💡 You can control the workflow in plain language (e.g. \"pause\", \"resume\", \"stop\").",
+  "workflow.card.superseded": "⚠️ The previous workflow was interrupted before its final state; the new workflow run continues on a new card.",
 };
 
 export default en;

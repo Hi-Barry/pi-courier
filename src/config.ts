@@ -421,6 +421,22 @@ export function aggregateToolTurns(cfg: MsgBridgeConfig): boolean {
   return cfg.aggregateToolTurns !== false;
 }
 
+/** 工作流进度活卡:默认开;false = 完全旁路,不消费 dwf 进度事件。 */
+export function workflowProgressCard(cfg: MsgBridgeConfig): boolean {
+  return cfg.workflowProgressCard !== false;
+}
+
+/** 活卡就地编辑节流(默认 3 秒);可经配置覆盖。 */
+export const WORKFLOW_CARD_THROTTLE_MS_DEFAULT = 3000;
+
+export function workflowCardThrottleMs(cfg: MsgBridgeConfig): number {
+  const v = cfg.workflowProgressCardThrottleMs;
+  return typeof v === "number" && v > 0 ? v : WORKFLOW_CARD_THROTTLE_MS_DEFAULT;
+}
+
+/** 终态活卡降级(编辑失败)后的重试间隔(默认 30 秒)。 */
+export const WORKFLOW_CARD_DEGRADED_RETRY_MS_DEFAULT = 30000;
+
 // ── 模型预设与降级链(issues #119 / #121)────────────────────────────
 // 语法单一解释:provider/id 引用、思考级别取值、链条目归一,配置校验、
 // 预设应用、降级切换三方共用,永不各写一份。

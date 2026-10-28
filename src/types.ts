@@ -95,6 +95,13 @@ export interface MsgBridgeConfig {
    * 终答回合仍是独立新消息。false = 完全旁路,与旧版逐条发送逐字节一致。
    */
   aggregateToolTurns?: boolean;
+  /**
+   * 工作流进度活卡:默认开启 —— dwf 进度快照聚合进一张活卡就地刷新;
+   * false = 完全旁路,不消费 dwf 进度事件。
+   */
+  workflowProgressCard?: boolean;
+  /** 活卡就地编辑节流间隔(毫秒,默认 3000)。 */
+  workflowProgressCardThrottleMs?: number;
   autoConnect?: boolean;
   showWidget?: boolean;
   debug?: boolean;

@@ -747,6 +747,27 @@ const zh = {
     "🌐 出网代理: {proxy}(来源: {source};修改 ~/.pi/pi-courier.json 后重启生效)",
   "proxy.unsupportedScheme":
     "❌ 代理 \"{value}\"(来源: {origin})当前版本不支持 —— 仅支持 http/https 代理,请改用 http:// 或 https:// 开头的地址",
+
+  // ── workflow(工作流进度活卡)────────────────────────────────────────
+  "workflow.icon.running": "▶️",
+  "workflow.icon.paused": "⏸",
+  "workflow.icon.stopped": "🛑",
+  "workflow.icon.finished": "✅",
+  "workflow.icon.error": "❌",
+  "workflow.agentStatus.running": "运行中",
+  "workflow.agentStatus.done": "完成",
+  "workflow.agentStatus.skipped": "跳过",
+  "workflow.agentStatus.error": "出错",
+  "workflow.card.title": "{icon} 工作流 {name} · 阶段 {done}/{total} · {tokens}{cost}",
+  "workflow.phase.done": "✅ {phase}",
+  "workflow.phase.current": "⏳ {phase}",
+  "workflow.phase.pending": "○ {phase}",
+  "workflow.agent.header": "| 子任务 | 阶段 | 状态 | Tokens |\n|---|---|---|---|",
+  "workflow.agent.row": "| {label} | {phase} | {status} | {tokens} |",
+  "workflow.agent.collapsed": "…(另有 {count} 个子任务已完成)",
+  "workflow.result": "**结果:** {result}",
+  "workflow.control.hint": "💡 可直接用自然语言操控工作流(如「暂停」「继续」「停止」)。",
+  "workflow.card.superseded": "⚠️ 上一个工作流已中断(未到终态);继续运行的工作流将另起新卡。",
 } as const;
 
 export type MessageKey = keyof typeof zh;

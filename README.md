@@ -305,6 +305,24 @@ Authorization: Bearer <admin access token>
 { "aggregateToolTurns": false }
 ```
 
+### Workflow progress live card
+
+When pi runs a dynamic workflow (multi-phase runs with subagents), the bot posts a **single live card** and refreshes it in place as the run progresses — the title line shows the status icon, workflow name, phase progress (`x/y`), and running token/cost totals; a phase chain (`✅ Alpha  ⏳ Beta  ○ Gamma`) tracks first-seen phases; a Markdown table lists subagents with their phase, status, and token counts. Finished/skipped subagents never disappear from the card: running ones always stay visible, plus the 4 most recently finished — anything older collapses into a single count line, so the card never scrolls into a new message. On the final state the card shows the run's result preview and stays in the room as the record.
+
+You control the workflow in **plain language** — reply "pause", "resume", "stop" (or their natural-language equivalents) and the message is routed to the running workflow.
+
+**Turn it off?** Add `workflowProgressCard: false` by hand (not in the setup wizard), then `pi-courier restart` — workflow progress events are then ignored entirely:
+
+```json
+{ "workflowProgressCard": false }
+```
+
+The in-place refresh is throttled (default every 3 seconds; state flips and final states edit immediately). Tune it with `workflowProgressCardThrottleMs`:
+
+```json
+{ "workflowProgressCardThrottleMs": 5000 }
+```
+
 ### Session handoff cards: /recap
 
 `/recap` asks the current session to summarize itself — goal, what got done, what's left, in ≤5 bullets — and posts a `📋 Handoff card` right in the room, so `/new` stops being an act of amnesia. `/recap` refuses honestly when there's nothing to summarize (fewer than two completed turns) or when a task is still running (it never races a live task with steering semantics). In multi-project mode the card is also copied to the management room as `📋 <project> handoff card (project log)` — a running "what has this project been doing" timeline.
