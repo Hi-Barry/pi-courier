@@ -6,8 +6,11 @@
  * 1. 命令模板注入测试:从 watchdog-windows.ps1 里取出 $killCommand /
  *    $restartCommand,喂给判定核心,断言「僵死(PID 存活)→ taskkill 先行,
  *    再 end → run」「已死 → 跳过 taskkill,直接 end → run」。
- * 2. 壳端到端(pwsh 可用时):用假 taskkill / schtasks 记录真实调用次序,
- *    验证 PowerShell 参数传递与核心 CLI 拼接没走样。
+ * 2. 壳端到端(pwsh 可用且非 Windows 时):用假 taskkill / schtasks 记录真实
+ *    调用次序,验证 PowerShell 参数传递与核心 CLI 拼接没走样。Windows 上不跑:
+ *    假命令是无扩展名的 sh 脚本,Windows 的 cmd 解析不会执行它,落到真实
+ *    taskkill 会把测试 worker 自己杀掉(PR #252 Windows CI 失败根因);Windows
+ *    的真实调用次序属真机验收。
  * 3. 语法门禁:有 pwsh 时走 PowerShell 自己的 Parser.ParseFile(真解析);
  *    没有时对脚本所用子集做结构校验(字符串/注释/括号配对),Windows 上
  *    必须有真实解析器。
@@ -174,7 +177,9 @@ describe("Windows 壳脚本契约(票07:部署产物与安装注释)", () => {
   });
 });
 
-describe.skipIf(!POWERSHELL)("Windows 壳端到端(pwsh + 假 taskkill/schtasks)", () => {
+describe.skipIf(!POWERSHELL || process.platform === "win32")(
+  "Windows 壳端到端(pwsh + 假 taskkill/schtasks;Windows 宿主不跑,见文件头)",
+  () => {
   function runShell(
     heartbeatPath: string,
     extraArgs: string[] = [],
