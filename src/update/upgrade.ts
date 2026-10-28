@@ -149,12 +149,22 @@ function npmStep(npmCli: string | undefined, nodeExecPath: string, args: readonl
 }
 
 /**
+ * 默认项目根推导:本模块编译产物在 <root>/dist/update/upgrade.js(源码在
+ * <root>/src/update/),距项目根恒为两层。E2E 真机(2026-10-28)曾因只解析
+ * 一层把 projDir 落到 dist/,dist/.git 恒不存在 → git 部署被误判成 npm
+ * 安装、换血装进 npm 全局而运行中的部署原地不动;两层解析对源码与 dist
+ * 两种布局同样成立。
+ */
+export function defaultProjectDir(moduleUrl: string): string {
+  return path.resolve(path.dirname(fileURLToPath(moduleUrl)), "..", "..");
+}
+
+/**
  * 执行升级。任一步失败/超时即整体失败(返回 ok:false,不抛),调用方据此
  * 回执 npmFailed 并把状态机放回 idle —— 旧版继续运行,桥绝不自杀。
  */
 export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome> {
-  const projDir =
-    deps.projectDir ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const projDir = deps.projectDir ?? defaultProjectDir(import.meta.url);
   const exists = deps.existsSync ?? ((p: fs.PathLike) => fs.existsSync(p));
   const readDir = deps.readdirSync ?? ((p: fs.PathLike) => fs.readdirSync(p));
   const nodeExecPath = deps.nodeExecPath ?? process.execPath;

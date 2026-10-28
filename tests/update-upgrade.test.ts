@@ -1,5 +1,12 @@
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runUpgrade, UPGRADE_TIMEOUT_MS, type UpgradeDeps } from "../src/update/upgrade.js";
+import {
+  defaultProjectDir,
+  runUpgrade,
+  UPGRADE_TIMEOUT_MS,
+  type UpgradeDeps,
+} from "../src/update/upgrade.js";
 
 interface FakeChild {
   stdout: { on(event: string, cb: (chunk: Buffer) => void): void };
@@ -188,5 +195,19 @@ describe("runUpgrade · 失败分支(旧版继续,桥不自杀)", () => {
 
   it("默认超时上限 30 分钟(与忙闲等待同量级)", () => {
     expect(UPGRADE_TIMEOUT_MS).toBe(30 * 60_000);
+  });
+});
+
+describe("defaultProjectDir · 默认项目根推导(两层,E2E 回归钉)", () => {
+  it("dist 布局:dist/update/upgrade.js 上溯两层到项目根", () => {
+    // 回归背景(2026-10-28 真机):一层解析把 projDir 落到 dist/,dist/.git
+    // 恒不存在 → git 部署被误判成 npm 安装,换血装进 npm 全局。
+    expect(defaultProjectDir("file:///home/u/proj/dist/update/upgrade.js")).toBe("/home/u/proj");
+  });
+
+  it("源码布局:src/update/*.ts 上溯两层同为项目根(两种布局同一推导)", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const srcModuleUrl = new URL("../src/update/upgrade.ts", import.meta.url).href;
+    expect(defaultProjectDir(srcModuleUrl)).toBe(repoRoot);
   });
 });
