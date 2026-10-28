@@ -169,6 +169,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // 拉起都在其后):低于硬阈值只写死因日志即退、不发管理房留言 —— 「满盘 →
   // systemd 拉起 → 启动检查又硬退」的循环每轮不重连网络、不刷管理房,循环
   // 代价收敛为本地日志一行 + systemd StartLimitBurst 熔断(README 见)。
+  // 异常退出进行中(崩溃守卫/磁盘硬阈值):信号处理器不得写人工停止标记 ——
+  // 否则真崩溃会被看门狗当成「运维主动停止」而不再拉起。
+  let abnormalExit = false;
   const resourceGuard = new ResourceGuard({
     readDiskFreeBytes: () => diskFreeBytes(workdir),
     notify: (message) => {
@@ -183,6 +186,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       return true;
     },
     onHardExit: (message) => {
+      abnormalExit = true;
       // 与 L1 同一条「留言 + 退出」语义(spec #247 L3):先尽力把死因留言
       // 发出去(整条限时,超时放弃),再断 transport 走退出链 —— 原来是
       // fire-and-forget 紧接着断连,死因留言存在竞态,可能永远发不出去。
@@ -439,7 +443,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // 标记就跳过本轮判定,不会把刚停掉的服务重新拉起。崩溃守卫与磁盘硬阈值
   // 走的是异常路径,刻意不写标记 —— 它们需要被看门狗/ systemd 拉起。
   const handleStopSignal = (signal: string): void => {
-    if (!markManualStop(manualStopMarker)) {
+    if (!abnormalExit && !shutdownChain.isShuttingDown() && !markManualStop(manualStopMarker)) {
       logger.warn(
         `manual stop marker write failed: ${manualStopMarker} (watchdog may restart the service)`
       );
@@ -717,7 +721,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       if (!mgmtRoom || !matrix?.isConnected) return Promise.resolve();
       return sendReplyStrict(mgmtRoom, t("crash.notice", { reason }));
     },
-    shutdown: shutdownChain.shutdown,
+    shutdown: (reason, exitCode) => {
+      abnormalExit = true;
+      return shutdownChain.shutdown(reason, exitCode);
+    },
     hardExit: (code) => process.exit(code),
   });
   process.on("uncaughtException", (err) => void crashGuard.handleCrash("uncaughtException", err));
