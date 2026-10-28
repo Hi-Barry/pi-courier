@@ -188,11 +188,11 @@ interface RoomBinding {
  *  line rides along even when the model produced no content (issue #52).
  *  旁白/工具拆分(spec #248):text 只装旁白与错误行,工具行独立出口 ——
  *  聚合路径工具卡只装工具行,旁白独立成卡并断开聚合链;非聚合路径以
- *  [text, toolsText] 重拼装派发,可达路径上与旧整段输出逐字节一致。 */
+ *  fullText 派发,可达路径上与旧整段输出逐字节一致。 */
 export function buildTurnReply(
   message: AssistantMessage,
   hideToolCalls?: boolean
-): { text: string | null; toolsText: string | null; pendingTools: boolean } {
+): { text: string | null; toolsText: string | null; fullText: string | null; pendingTools: boolean } {
   const responseText = extractTextFromMessage(message);
   const toolCallsText = formatToolCalls(message);
   const pendingTools = hasToolCalls(message);
@@ -206,9 +206,14 @@ export function buildTurnReply(
   if (message.stopReason === "error") {
     parts.push(t("router.turn.failed", { message: message.errorMessage ?? t("common.unknownError") }));
   }
+  const text = parts.length === 0 ? null : parts.join("\n\n");
+  const toolsText = toolCallsText && !hideToolCalls ? toolCallsText : null;
   return {
-    text: parts.length === 0 ? null : parts.join("\n\n"),
-    toolsText: toolCallsText && !hideToolCalls ? toolCallsText : null,
+    text,
+    toolsText,
+    // 拼装契约的唯一住处(spec #248 评审整改):非聚合派发与 log 预览都吃
+    // 这个字段,「空行连接」的口径不再在调用方复写。
+    fullText: text === null && toolsText === null ? null : [text, toolsText].filter(Boolean).join("\n\n"),
     pendingTools,
   };
 }
@@ -1396,12 +1401,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 连败计数(issue #121):彻底失败的轮喂计数,其余轮次清零(工具
         // 循环的中间轮也算成功 —— 模型还在干活,故障 streak 不该跨过它)。
         // 自动切换的回执与失败回复同房间送达;交接卡捕获轮同样计数。
-        if ((event.message as AssistantMessage | undefined)?.stopReason === "error") {
+        const turnMessage = event.message as AssistantMessage | undefined;
+        const isErrorTurn = turnMessage?.stopReason === "error";
+        if (isErrorTurn) {
           void runFallback(rpc, target);
         } else {
           fallbackStreak.clear(rpc);
         }
-        const turn = buildTurnReply(event.message as AssistantMessage, store.get().hideToolCalls);
+        const turn = buildTurnReply(turnMessage as AssistantMessage, store.get().hideToolCalls);
 
         // 交接卡捕获(issue #122):在途捕获命中本进程时,终答落卡 —— 工具
         // 循环的中间轮继续等;卡片投递替代原生回复,总结文本不重复发房间。
@@ -1414,16 +1421,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           return;
         }
 
-        // 旁白/工具重拼装(spec #248):log 预览与非聚合派发共用完整口径,
-        // 与旧整段拼装(文本+空行+工具行)逐字节一致。
-        const fullText: string | null =
-          turn.text === null && turn.toolsText === null
-            ? null
-            : [turn.text, turn.toolsText].filter(Boolean).join("\n\n");
-        const replyPreview = fullText ?? "";
+        // 完整口径(旁白+空行+工具行)由 buildTurnReply.fullText 单一供给
+        // (spec #248 评审整改):log 预览与非聚合派发共用,不再复写拼装。
+        const replyPreview = turn.fullText ?? "";
         log.info(`[agent] reply to @${target.username}: ${replyPreview.slice(0, 500)}${replyPreview.length > 500 ? "…" : ""}`);
 
-        if (fullText === null) {
+        if (turn.fullText === null) {
           // No content this turn — keep the binding for a follow-up turn
           return;
         }
@@ -1437,7 +1440,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 且本步骤与前序步骤经出站链串行,顺序由架构保证而非时序运气。
         // 报错回合绕过聚合:失败行醒目直达,不埋进持续刷新的卡。
         // hideToolCalls、配置关、编辑缝未注入都落到下方现行派发路径。
-        if (turn.pendingTools && liveCardAggregation() && (event.message as AssistantMessage).stopReason !== "error") {
+        if (turn.pendingTools && liveCardAggregation() && !isErrorTurn) {
           const narration: string | null = turn.text;
           const toolLines: string = turn.toolsText!; // pendingTools+未隐藏 ⇒ 非空
           enqueueLiveCardTurn(rpc, async () => {
@@ -1454,7 +1457,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           return;
         }
 
-        const chunks = splitMessage(fullText, 4000);
+        const chunks = splitMessage(turn.fullText, 4000);
         // 回复末尾状态脚注:仅收敛终答(pendingTools=false)挂 —— 工具循环
         // 中间消息不挂(否则 N 步任务挂 N 条);失败回复(stopReason=error)
         // 与正文同路,一并携带。数据现拉现用(collectStatusFooter 永不抛,

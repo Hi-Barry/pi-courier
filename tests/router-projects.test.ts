@@ -142,28 +142,30 @@ describe("buildTurnReply", () => {
 
   it("joins text parts into replyable text", () => {
     const msg = { content: [textPart("hello"), textPart("world")] } as unknown as AssistantMessage;
-    expect(buildTurnReply(msg)).toEqual({ text: "hello\nworld", toolsText: null, pendingTools: false });
+    expect(buildTurnReply(msg)).toEqual({ text: "hello\nworld", toolsText: null, fullText: "hello\nworld", pendingTools: false });
   });
 
   it("reports pendingTools for tool-call turns", () => {
     const msg = { content: [toolPart] } as unknown as AssistantMessage;
-    expect(buildTurnReply(msg, true)).toEqual({ text: null, toolsText: null, pendingTools: true });
+    expect(buildTurnReply(msg, true)).toEqual({ text: null, toolsText: null, fullText: null, pendingTools: true });
   });
 
   it("splits narration and tool-call summaries into separate outlets (spec #248)", () => {
     const msg = { content: [textPart("ran it"), toolPart] } as unknown as AssistantMessage;
     // 隐藏工具行:toolsText 随之消失,旁白不受影响
-    expect(buildTurnReply(msg, true)).toEqual({ text: "ran it", toolsText: null, pendingTools: true });
-    // 显示工具行:text 只装旁白,工具行独立出口、互不混装
+    expect(buildTurnReply(msg, true)).toEqual({ text: "ran it", toolsText: null, fullText: "ran it", pendingTools: true });
+    // 显示工具行:text 只装旁白,工具行独立出口、互不混装;fullText 供
+    // 非聚合派发与 log 预览(拼装契约单一住处)
     const shown = buildTurnReply(msg, false);
     expect(shown.text).toBe("ran it");
     expect(shown.toolsText).toContain("`bash`");
     expect(shown.toolsText).not.toContain("ran it");
+    expect(shown.fullText).toBe(`${shown.text}\n\n${shown.toolsText}`);
   });
 
   it("returns null text for a content-free turn (binding must be kept)", () => {
     const msg = { content: [] } as unknown as AssistantMessage;
-    expect(buildTurnReply(msg)).toEqual({ text: null, toolsText: null, pendingTools: false });
+    expect(buildTurnReply(msg)).toEqual({ text: null, toolsText: null, fullText: null, pendingTools: false });
   });
 });
 
