@@ -250,6 +250,20 @@ export interface MsgBridgeConfig {
    * (以配置为准,不回落环境变量 NO_PROXY)。
    */
   noProxy?: string[];
+  /**
+   * 进程韧性配置段(spec #247 票02):心跳、水位、拉起等自愈参数。每条
+   * 默认值单点解释在 config.ts 派生函数族,缺省/非法值回落默认,手编配置
+   * + 重启生效(与 bashTimeoutMinutes 同策略)。看门狗侧的「多久算死」
+   * 过期秒刻意不在本段 —— 单点归属看门狗脚本常量(spec #247 L2 决策,
+   * 文档与脚本注释互指换算关系)。
+   */
+  resilience?: {
+    /**
+     * 心跳写入间隔(秒,默认 30):桥内周期自检 tick 的节拍,也是看门狗
+     * 过期秒的换算基线(默认 180 秒 = 6 × 30)。非正数/非有限数视为缺省。
+     */
+    heartbeatIntervalSeconds?: number;
+  };
 }
 
 /**

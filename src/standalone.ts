@@ -21,6 +21,7 @@ import {
   bashTimeoutMinutes,
   CONFIG_DIR,
   ConfigStore,
+  heartbeatIntervalSeconds,
   inboxMode,
   managementRoomId,
   presetProblems,
@@ -36,6 +37,8 @@ import { applyProxySettings } from "./proxy.js";
 import { ReminderClock } from "./reminders/reminder-clock.js";
 import type { ReminderEntry } from "./reminders/reminder-store.js";
 import { ReminderStore } from "./reminders/reminder-store.js";
+import { diskFreeBytes } from "./resilience/disk-free.js";
+import { Heartbeat } from "./resilience/heartbeat.js";
 import type { PersistedAttachmentEntry } from "./rpc/attachment-ledger.js";
 import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
@@ -325,6 +328,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     path.join(stateDir, "pending-attachments.json"),
     []
   );
+
+  // ---- heartbeat + periodic self-check tick (spec #247 票02) ------------------
+  // 周期自检基座:每 tick(默认 30 秒,可配)原子写一个心跳 JSON 到派生
+  // 状态目录 —— 外部看门狗(票06/07)判死活与僵死的唯一依据。onTick 注入
+  // 缝留给票04 的资源水位守卫(一次 tick 干两件事,定时器不翻倍)。定时器
+  // unref,不阻碍优雅退出;写失败 fire-and-forget,永不抛。
+  const heartbeat = new Heartbeat({
+    filePath: path.join(stateDir, "heartbeat.json"),
+    intervalMs: heartbeatIntervalSeconds(config) * 1000,
+    readDiskFreeBytes: () => diskFreeBytes(workdir),
+  });
+  heartbeat.start();
 
   // ---- offline inbox (issue #113):已处理事件台账 -----------------------------
   // JSONL 追加 + 启动压实(7 天窗);首运会话(freshStart)里 stale 维持全丢,

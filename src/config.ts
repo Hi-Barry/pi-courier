@@ -223,6 +223,25 @@ export function bashTimeoutMinutes(cfg: MsgBridgeConfig): number {
   return Math.floor(value);
 }
 
+// ── 进程韧性派生(spec #247)────────────────────────────────────────
+// 韧性配置段(cfg.resilience)的解释单点:每条默认值只有这里一处,后续票
+// (04 水位阈值、05 拉起上限)追加键时沿用同款手编白名单归一。
+
+/** 心跳间隔默认值(秒,spec #247 票02):看门狗过期秒的换算基线(默认
+ *  180 秒 = 6 × 30;换算关系单点归属看门狗脚本,文档与脚本注释互指)。 */
+export const HEARTBEAT_INTERVAL_SECONDS_DEFAULT = 30;
+
+/** 心跳写入间隔(秒):桥内周期自检 tick 的节拍。缺省/非法值(非正数、
+ *  非有限数)回落默认,floor 到整秒 —— 与 bashTimeoutMinutes 同款手编
+ *  白名单归一。 */
+export function heartbeatIntervalSeconds(cfg: MsgBridgeConfig): number {
+  const value = cfg.resilience?.heartbeatIntervalSeconds;
+  if (value === undefined || !Number.isFinite(value) || value < 1) {
+    return HEARTBEAT_INTERVAL_SECONDS_DEFAULT;
+  }
+  return Math.floor(value);
+}
+
 // ── 自定义头像路径派生(spec #84 v5 用户覆盖)────────────────────────
 // 空间/bot/项目三个消费位共用一条归一规则:~ 展开、相对 ~/.pi/ 解析、
 // 扩展名白名单定 mimetype。派生只有这一处解释,自愈与 /pmctl 同源。
