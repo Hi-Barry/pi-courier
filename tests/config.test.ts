@@ -434,6 +434,38 @@ describe('config 派生函数族 — bashOutputLimit(默认 30000,64KB 钳制)',
   });
 });
 
+describe('config 派生函数族 — toolCallArgLimit(默认 100,硬顶 500 钳制)', () => {
+  it('缺省回落默认值 100', async () => {
+    const { toolCallArgLimit, TOOL_CALL_ARG_LIMIT_DEFAULT, TOOL_CALL_ARG_LIMIT_MAX } = await import('../src/config');
+    expect(TOOL_CALL_ARG_LIMIT_DEFAULT).toBe(100);
+    expect(TOOL_CALL_ARG_LIMIT_MAX).toBe(500);
+    expect(toolCallArgLimit({})).toBe(100);
+    expect(toolCallArgLimit({ toolCallArgLimit: undefined })).toBe(100);
+  });
+
+  it('合法值原样通过', async () => {
+    const { toolCallArgLimit } = await import('../src/config');
+    expect(toolCallArgLimit({ toolCallArgLimit: 1 })).toBe(1);
+    expect(toolCallArgLimit({ toolCallArgLimit: 300 })).toBe(300);
+    expect(toolCallArgLimit({ toolCallArgLimit: 500 })).toBe(500);
+  });
+
+  it('超过硬顶按 500 使用(超限配置直接忽略)', async () => {
+    const { toolCallArgLimit } = await import('../src/config');
+    expect(toolCallArgLimit({ toolCallArgLimit: 501 })).toBe(500);
+    expect(toolCallArgLimit({ toolCallArgLimit: 1_000_000 })).toBe(500);
+  });
+
+  it('手编杂值白名单归一:非正数/非有限数按缺省处理,小数取整', async () => {
+    const { toolCallArgLimit } = await import('../src/config');
+    expect(toolCallArgLimit({ toolCallArgLimit: 0 })).toBe(100);
+    expect(toolCallArgLimit({ toolCallArgLimit: -5 })).toBe(100);
+    expect(toolCallArgLimit({ toolCallArgLimit: Number.NaN })).toBe(100);
+    expect(toolCallArgLimit({ toolCallArgLimit: Number.POSITIVE_INFINITY })).toBe(100);
+    expect(toolCallArgLimit({ toolCallArgLimit: 100.9 })).toBe(100);
+  });
+});
+
 describe('config 派生函数族 — bashTimeoutMinutes(默认 10,分钟,spec #218 票 #220)', () => {
   it('缺省回落默认值 10 分钟', async () => {
     const { bashTimeoutMinutes, BASH_TIMEOUT_MINUTES_DEFAULT } = await import('../src/config');

@@ -157,6 +157,15 @@ describe("buildTurnReply", () => {
     expect(shown.text).toContain("`bash`");
   });
 
+  it("passes a custom tool-argument limit through to the tool line", () => {
+    const msg = {
+      content: [{ type: "toolCall", name: "bash", arguments: { command: "z".repeat(80) } }],
+    } as unknown as AssistantMessage;
+    const shown = buildTurnReply(msg, false, 20);
+    expect(shown.text).toContain("command=" + "z".repeat(17) + "...");
+    expect(shown.text).not.toContain("z".repeat(18));
+  });
+
   it("returns null text for a content-free turn (binding must be kept)", () => {
     const msg = { content: [] } as unknown as AssistantMessage;
     expect(buildTurnReply(msg)).toEqual({ text: null, pendingTools: false });

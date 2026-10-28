@@ -331,6 +331,12 @@ Bash replies (`!` / `!!` / `/bash`) truncate their output before posting: the ca
 { "bashOutputLimit": 50000 }
 ```
 
+Each argument value in a tool-call line (`🔧 bash (command=...)`) is capped at `toolCallArgLimit` characters (default 100). Values above 500 are used as 500 (the excess setting is ignored); zero, negative numbers, NaN and other invalid values fall back to the default, and fractions round down. Direct replies and the aggregated live card share this cap. This field is also **not** part of the setup wizard — edit the config by hand and restart:
+
+```json
+{ "toolCallArgLimit": 200 }
+```
+
 ### Custom avatars (space / bot / project rooms)
 
 Not happy with the bundled pick? Point any target at your own image and restart (these fields are **not** part of the setup wizard):

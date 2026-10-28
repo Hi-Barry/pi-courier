@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { TOOL_CALL_ARG_LIMIT_DEFAULT } from "./config.js";
 
 /**
  * Extract text from assistant message.
@@ -16,9 +17,14 @@ export function hasToolCalls(message: AssistantMessage): boolean {
 }
 
 /**
- * Format tool call summaries for the remote user.
+ * Format tool call summaries for the remote user. `argLimit` bounds each
+ * argument value independently (not the whole line); the production caller
+ * passes the normalized config value, see toolCallArgLimit.
  */
-export function formatToolCalls(message: AssistantMessage): string {
+export function formatToolCalls(
+  message: AssistantMessage,
+  argLimit = TOOL_CALL_ARG_LIMIT_DEFAULT
+): string {
   const toolCalls = message.content.filter((part) => part.type === "toolCall");
   if (toolCalls.length === 0) return "";
   return toolCalls
@@ -29,7 +35,7 @@ export function formatToolCalls(message: AssistantMessage): string {
       const argPairs = Object.entries(args)
         .map(([k, v]) => {
           const valStr = typeof v === 'string' ? v : JSON.stringify(v);
-          return `${k}=${truncate(valStr, 50)}`;
+          return `${k}=${truncate(valStr, argLimit)}`;
         })
         .join(", ");
 
