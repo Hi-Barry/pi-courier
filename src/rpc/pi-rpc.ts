@@ -281,9 +281,15 @@ export class PiRpc {
   }
 
   /** Locate the pi CLI entry point. Env override (PI_CLI_PATH) is folded
-   *  into config.cliPath by loadConfig (spec #72 票4/C4) — this chain only
-   *  resolves between the configured path and the two install locations. */
-  static async resolveCliPath(): Promise<string> {
+   *  into config.cliPath by loadConfig (spec #72 票4/C4); when a configured
+   *  path is handed in it IS the answer — the caller (PiRpc.doStart, the /mcp
+   *  orchestration) spawns exactly what the bridge subprocess would, so the
+   *  static discovery below is only the fallback for unconfigured deploys:
+   *  which pi → node_modules (POSIX) / managed install → node_modules (win32). */
+  static async resolveCliPath(configuredPath?: string): Promise<string> {
+    // 配置段(config.cliPath ← PI_CLI_PATH)是权威头段:有配置直接采用,
+    // 与 PiRpcOptions.cliPath 的用法一致(doStart 同样盲用配置路径)。
+    if (configuredPath) return configuredPath;
     // Windows: there is no `which` (spawning it fails with ENOENT every
     // time — libuv's PATH search only tries .com/.exe), so skip the PATH
     // lookup entirely. pi.dev's install.ps1 produces the same releases-v1

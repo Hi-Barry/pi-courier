@@ -21,6 +21,7 @@ const zh = {
   "common.truncated": "…(已截断)",
   "common.noOutput": "(无输出)",
   "common.exitCode": "退出码: {code}",
+  "common.unknown": "未知",
   "common.listSep": "、",
 
   // ── cmd(/命令回复,command-map.ts)───────────────────────────────────
@@ -169,6 +170,113 @@ const zh = {
     "💤 还没有已安装的技能。把技能放进这些目录即可:\n" +
     "• 用户级:~/.agents/skills/ 或 ~/.pi/agent/skills/\n" +
     "• 项目级:<工作目录>/.agents/skills/ 或 <工作目录>/.pi/skills/",
+  // ── /mcp 指令族(spec #246:MCP 服务器管理,command-map.ts)──────────
+  // 回执安全纪律:--env/--header 的值不进任何回执(命令层脱敏),这里的
+  // 文案只收服务器名与预格式化的诊断串。
+  "cmd.mcp.unavailable":
+    "❌ MCP 管理不可用({detail})。\n本机的 pi 可能未安装或版本过旧:mcp 子命令需 pi ≥ 1.0。",
+  "cmd.mcp.unwired": "❌ MCP 管理在当前部署未启用。",
+  "cmd.mcp.forbidden": "❌ /mcp 仅管理员可用(多工程模式下仅管理房间可用)。",
+  "cmd.mcp.usage":
+    "用法:\n" +
+    "• /mcp — 查看 MCP 服务器状态\n" +
+    "• /mcp add <名> (--url <地址> | -- <命令> [参数...])\n" +
+    "• /mcp remove <名>\n" +
+    "• /mcp login <名> [--timeout 秒]\n" +
+    "• /mcp logout <名>\n" +
+    "• /mcp help — 详解",
+  "cmd.mcp.help":
+    "**MCP 服务器管理**(经 pi mcp 子命令执行):\n" +
+    "\n" +
+    "• `/mcp` 或 `/mcp list` — 服务器状态卡(连接/工具/作用域;待登录的会附登录指引)\n" +
+    "• `/mcp add <名> --url <地址>` — 添加远程服务器\n" +
+    "• `/mcp add <名> -- <命令> [参数...]` — 添加本地服务器(`--` 之后原样透传)\n" +
+    "  可选:`--env K=V`、`--header K=V`(可多次)、`--cwd <目录>`、`--description <说明>`、`--exposure <模式>`\n" +
+    "  ⚠️ `--env`/`--header` 的值不会回显到聊天,也不会进审计日志\n" +
+    "• `/mcp remove <名>` — 移除服务器\n" +
+    "• `/mcp login <名> [--timeout 秒]` — 授权登录(默认 300s,上限 600s;授权链接发到本房间)\n" +
+    "• `/mcp logout <名>` — 登出服务器\n" +
+    "\n" +
+    "生效语义:**登录即刻生效**(运行中的会话下一回合自动用上,无需 /reload);\n" +
+    "**增删需 /reload 生效**(多项目用 /reload all)。",
+  "cmd.mcp.list.checking": "⏳ 正在检查 MCP 服务器状态…",
+  "cmd.mcp.list.failed": "❌ 获取 MCP 服务器状态失败: {message}",
+  "cmd.mcp.add.usage":
+    "用法: /mcp add <名> (--url <地址> | -- <命令> [参数...])\n" +
+    "例:/mcp add docs --url https://mcp.example.com/mcp\n" +
+    "    /mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp\n" +
+    "可选: --env K=V、--header K=V(均可多次)、--cwd <目录>、--description <说明>、--exposure <模式>",
+  "cmd.mcp.add.localUnsupported": "❌ 暂不支持 --local 作用域限定:请去掉该选项后重试。",
+  "cmd.mcp.add.ok":
+    "✅ 已添加 MCP 服务器「{name}」。\n发 /reload 生效(多项目用 /reload all);状态可用 /mcp list 查看。",
+  "cmd.mcp.add.failed": "❌ 添加 MCP 服务器失败: {message}",
+  "cmd.mcp.remove.usage": "用法: /mcp remove <名>(用 /mcp list 查看名字)",
+  "cmd.mcp.remove.ok": "✅ 已移除 MCP 服务器「{name}」。\n发 /reload 生效(多项目用 /reload all)。",
+  "cmd.mcp.remove.failed": "❌ 移除 MCP 服务器失败: {message}",
+  "cmd.mcp.login.usage": "用法: /mcp login <名> [--timeout 秒](缺省 300s,上限 600s)",
+  "cmd.mcp.login.started": "🔑 正在为 MCP 服务器「{server}」发起登录…授权链接随后发到本房间。",
+  "cmd.mcp.login.busy": "⚠️ 已有登录进行中:「{server}」。等它完成或超时后再发起下一次。",
+  "cmd.mcp.login.authUrl":
+    "🌐 请在浏览器打开以下链接,完成 MCP 服务器「{server}」的授权:\n" +
+    "{url}\n\n" +
+    "⚠️ 回跳地址可能指向 127.0.0.1:若 pi 跑在远程机器(SSH 场景),请先做端口转发(如 `ssh -L <端口>:127.0.0.1:<端口> <主机>`)再打开链接。\n" +
+    "授权完成后自动收到回执;登录即刻生效,无需 /reload。",
+  "cmd.mcp.login.done": "✅ MCP 服务器「{server}」登录成功。即刻生效:运行中的会话下一回合自动用上,无需 /reload。",
+  "cmd.mcp.login.already": "ℹ️ MCP 服务器「{server}」本已登录,无需重复操作。",
+  "cmd.mcp.login.failed": "❌ MCP 服务器「{server}」登录失败{codeSuffix}: {message}",
+  "cmd.mcp.login.failedCode": "(退出码 {code})",
+  "cmd.mcp.login.expired": "⌛ MCP 服务器「{server}」登录超时({timeoutSec}s)。网络可达后重发 /mcp login {server} 重试。",
+  "cmd.mcp.logout.usage": "用法: /mcp logout <名>(用 /mcp list 查看名字)",
+  "cmd.mcp.logout.ok": "✅ 已登出 MCP 服务器「{server}」。需重新授权时再发 /mcp login {server}。",
+  "cmd.mcp.logout.failed": "❌ 登出 MCP 服务器失败: {message}",
+  // 分词器错误(经 add/remove/logout 的用法回执进聊天)。
+  "cmd.mcp.tokenize.unclosedSingle": "有 单引号没有闭合",
+  "cmd.mcp.tokenize.unclosedDouble": "有 双引号没有闭合",
+  "cmd.mcp.tokenize.danglingBackslash": "反斜杠后面没有字符",
+  // 状态卡(/mcp list → formatMcpStatusCard):全部经 t() 双表,zh 为键集基准。
+  "cmd.mcp.card.empty":
+    "尚未配置任何 MCP 服务器。\n" +
+    "添加远程服务器:/mcp add <名> --url <地址>\n" +
+    "添加本地服务器:/mcp add <名> -- <命令> [参数...]\n" +
+    "添加后发 /reload 生效(多项目 /reload all)。",
+  "cmd.mcp.card.header": "MCP 服务器({count}):",
+  "cmd.mcp.card.server": "• {name} — {state} | {exposure} | {scope}",
+  "cmd.mcp.card.transport": "  传输:{transport}",
+  "cmd.mcp.card.needsAuth": "  需要登录:发 /mcp login {server} 获取授权链接",
+  "cmd.mcp.card.tools": "  工具({count}):{tools}{more}",
+  "cmd.mcp.card.toolsMore": " …等 {count} 个",
+  "cmd.mcp.card.resources": "  资源:{count} 个,URI 模板:{templates} 个",
+  "cmd.mcp.card.serverError": "  ⚠ {error}",
+  "cmd.mcp.card.errorsHeader": "配置错误:",
+  "cmd.mcp.card.errorLine": "• {message}",
+  "cmd.mcp.card.note": "注:{note}",
+  // pi list --json 状态词的本地化;未知 state 由代码原样透传,不进表。
+  "cmd.mcp.state.connected": "已连接",
+  "cmd.mcp.state.needsAuth": "待登录",
+  "cmd.mcp.state.disabled": "已禁用",
+  "cmd.mcp.state.connecting": "连接中",
+  "cmd.mcp.state.unknown": "未知",
+  // 执行缝诊断前缀(mcp-cli / mcp-login-flow 拼进回执 {message}/{detail})。
+  "cmd.mcp.detail.spawnFailed": "无法启动 pi CLI:{message}",
+  "cmd.mcp.detail.unknownSubcommand": "pi 不认识这条 mcp 子命令:{detail}",
+  "cmd.mcp.detail.cliLocate": "无法定位 pi CLI:{message}",
+  "cmd.mcp.login.seamError": "登录执行缝抛错:{message}",
+  "cmd.mcp.login.noSuccessMark": "pi 退出但未输出登录成功标记",
+  "cmd.mcp.login.exitCode": "pi mcp login 退出码 {code}",
+  // 短命令无 stderr 尾部时的兜底诊断串:同样走双表,避免 en 部署下回执
+  // 中英混杂(评审收尾:原先散落在 mcp-cli 里的硬编码中文)。
+  "cmd.mcp.detail.timeout": "{label} 超时({seconds}s)已终止",
+  "cmd.mcp.detail.listUnparsable": "pi mcp list 未返回可解析的 JSON",
+  "cmd.mcp.detail.listUnparsableDetail": "pi mcp list 未返回可解析的 JSON:{detail}",
+  "cmd.mcp.detail.exitCode": "pi mcp {sub} 退出码 {code}",
+  "cmd.mcp.detail.exitCodeUnknown": "pi mcp {sub} 退出码未知",
+  // 突变命令 exit 0 但输出无确认形状(旧版 pi 把命令当 prompt 喂模型)的降级提示。
+  "cmd.mcp.add.unverified":
+    "⚠️ pi 的输出未含预期的添加确认信息:旧版 pi(<1.0)可能把这条命令当成了普通提示词而没有执行。请发 /mcp list 核实;若 pi 过旧请先升级到 ≥ 1.0。",
+  "cmd.mcp.remove.unverified":
+    "⚠️ pi 的输出未含预期的移除确认信息:旧版 pi(<1.0)可能把这条命令当成了普通提示词而没有执行。请发 /mcp list 核实;若 pi 过旧请先升级到 ≥ 1.0。",
+  "cmd.mcp.logout.unverified":
+    "⚠️ pi 的输出未含预期的登出确认信息:旧版 pi(<1.0)可能把这条命令当成了普通提示词而没有执行。可重发 /mcp login {server}:提示「本已登录」即凭证仍在;若 pi 过旧请先升级到 ≥ 1.0。",
   "cmd.help.group.pi":
     "**Pi 原生命令**(pi TUI 同款,经 RPC 执行):\n" +
     "\n" +
@@ -219,6 +327,14 @@ const zh = {
     "【定时提醒】\n" +
     "• `/remind <时间> <内容>` — 定时提醒(先落盘再跑,重启不丢;例:/remind 30m 泡茶)\n" +
     "• `/remind list` / `/remind rm <序号>` — 查看 / 取消本房间的提醒\n" +
+    "\n" +
+    "【MCP 服务器】\n" +
+    "• `/mcp` — 查看 MCP 服务器状态(连接/工具/作用域)\n" +
+    "• `/mcp add <名> (--url <地址> | -- <命令> [参数...])` — 添加服务器(--env/--header 的值不回显)\n" +
+    "• `/mcp remove <名>` — 移除服务器(增删后发 /reload 生效,多项目 /reload all)\n" +
+    "• `/mcp login <名> [--timeout 秒]` — 授权登录(链接发到本房间;登录即刻生效,无需 /reload)\n" +
+    "• `/mcp logout <名>` — 登出服务器\n" +
+    "• `/mcp help` — MCP 命令详解\n" +
     "\n" +
     "【会话镜像】\n" +
     "• `/attach` — 开启 TUI ↔ Matrix 会话镜像(回复附加命令,终端跑它即可双端同步)\n" +

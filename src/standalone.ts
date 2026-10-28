@@ -37,6 +37,7 @@ import { ReminderClock } from "./reminders/reminder-clock.js";
 import type { ReminderEntry } from "./reminders/reminder-store.js";
 import { ReminderStore } from "./reminders/reminder-store.js";
 import type { PersistedAttachmentEntry } from "./rpc/attachment-ledger.js";
+import { createMcpOrchestration } from "./rpc/command-map.js";
 import { createMessageRouter } from "./rpc/message-router.js";
 import { PiRpc } from "./rpc/pi-rpc.js";
 import { PmctlController } from "./rpc/pmctl-controller.js";
@@ -424,6 +425,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // 阶段按消息预绑定 IO 接入;adminRoom 映射在 router 侧(login 先例)。
     updater: updateOrchestrator,
     backlogTransportsReady,
+    // /mcp 指令族(spec #246):pi CLI 执行缝 + 登录单飞编排器。pi 定位把
+    // config.cliPath(PI_CLI_PATH 折入)作解析头段传入 —— 与桥子进程
+    // (PiRpcOptions.cliPath,本文件上方)同一来源,PI_CLI_PATH/自定义
+    // cliPath 部署下 /mcp 不会操作到另一个 pi;未配置时走解析链回退段。
+    // 未注入整个编排槽 = /mcp 回「未启用」。
+    mcp: createMcpOrchestration({ resolveCliPath: () => PiRpc.resolveCliPath(cliPath) }),
   });
 
   // 房间消亡销账(issue #114/#117 后续):/pmctl rm 确认后清掉该房间的附件
