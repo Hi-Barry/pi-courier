@@ -37,6 +37,7 @@ import { applyProxySettings } from "./proxy.js";
 import { ReminderClock } from "./reminders/reminder-clock.js";
 import type { ReminderEntry } from "./reminders/reminder-store.js";
 import { ReminderStore } from "./reminders/reminder-store.js";
+import { createCrashGuard } from "./resilience/crash-guard.js";
 import { diskFreeBytes } from "./resilience/disk-free.js";
 import { Heartbeat } from "./resilience/heartbeat.js";
 import type { PersistedAttachmentEntry } from "./rpc/attachment-ledger.js";
@@ -550,6 +551,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // signal too, where it essentially never fires; same shutdown path, so
   // registering it is harmless everywhere.
   process.on("SIGBREAK", () => void shutdownChain.shutdown("SIGBREAK"));
+
+  // ---- crash guard (spec #247 票03) ---------------------------------------------
+  // L1 全局兜底:未捕获异常/未处理 Promise 拒绝 → 记录死因 → 尽力向管理房
+  // 留言(限时 5 秒,失败不追;未配管理房/未连接静默)→ 沿共享退出链非零码
+  // 有序退出。notify 里未配管理房/transport 未连接时静默返回,守卫只记日志。
+  // 启动链仍由底部 main().catch 护(既有,保持不动);运行期逃逸由守卫接住。
+  const crashGuard = createCrashGuard({
+    log: (message) => logger.error(message),
+    notify: (reason) => {
+      const mgmtRoom = managementRoomId(store.get());
+      if (!mgmtRoom || !matrix?.isConnected) return Promise.resolve();
+      return sendReplyStrict(mgmtRoom, t("crash.notice", { reason }));
+    },
+    shutdown: shutdownChain.shutdown,
+    hardExit: (code) => process.exit(code),
+  });
+  process.on("uncaughtException", (err) => void crashGuard.handleCrash("uncaughtException", err));
+  process.on("unhandledRejection", (reason) => void crashGuard.handleCrash("unhandledRejection", reason));
 
   logger.info("🚀 pi-courier ready. Waiting for messages...");
 }

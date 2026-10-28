@@ -232,7 +232,9 @@ const en: Record<MessageKey, string> = {
   "router.attach.inject.sourced": "Attachment(s) from {user} in room {room} (view them with the read tool):",
   "router.quote.prefix": "\"Quoted from @{user}'s earlier message: {excerpt}\"",
   "audit.degraded": "⚠️ Audit log unavailable — the service keeps running but sensitive actions leave no trace: {message}",
-  "guest.denied": "🚫 This command requires trusted-user permission: {command}",
+
+  // ── resilience (process resilience, spec #247) ────────────────────────
+  "crash.notice": "💥 The bridge hit an uncaught error and will exit in order: {reason}",  "guest.denied": "🚫 This command requires trusted-user permission: {command}",
   "router.attach.saved": "📎 Attachment saved: {path} ({bytes})\nIt will be attached automatically with your next message.",
   "router.payload.unsupported":
     "🤷 Unsupported message type ({msgtype}) — ignored. You can send text, images and files directly.",
