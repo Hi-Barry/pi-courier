@@ -41,7 +41,7 @@ import { applyProxySettings } from "./proxy.js";
 import { ReminderClock } from "./reminders/reminder-clock.js";
 import type { ReminderEntry } from "./reminders/reminder-store.js";
 import { ReminderStore } from "./reminders/reminder-store.js";
-import { CRASH_EXIT_CODE, createCrashGuard } from "./resilience/crash-guard.js";
+import { CRASH_EXIT_CODE, CRASH_NOTIFY_TIMEOUT_MS, createCrashGuard } from "./resilience/crash-guard.js";
 import { diskFreeBytes } from "./resilience/disk-free.js";
 import { Heartbeat } from "./resilience/heartbeat.js";
 import { ResourceGuard } from "./resilience/resource-guard.js";
@@ -173,9 +173,29 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       return true;
     },
     onHardExit: (message) => {
-      const mgmtRoom = managementRoomId(store.get());
-      if (mgmtRoom && matrix?.isConnected) void sendReplyStrict(mgmtRoom, message).catch(() => {});
-      void shutdownChain.shutdown("disk hard threshold", CRASH_EXIT_CODE).finally(() => process.exit(CRASH_EXIT_CODE));
+      // 与 L1 同一条「留言 + 退出」语义(spec #247 L3):先尽力把死因留言
+      // 发出去(整条限时,超时放弃),再断 transport 走退出链 —— 原来是
+      // fire-and-forget 紧接着断连,死因留言存在竞态,可能永远发不出去。
+      void (async () => {
+        const mgmtRoom = managementRoomId(store.get());
+        if (mgmtRoom && matrix?.isConnected) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, CRASH_NOTIFY_TIMEOUT_MS);
+            timer.unref?.();
+            sendReplyStrict(mgmtRoom, message)
+              .catch(() => {})
+              .finally(() => {
+                clearTimeout(timer);
+                resolve();
+              });
+          });
+        }
+        try {
+          await shutdownChain.shutdown("disk hard threshold", CRASH_EXIT_CODE);
+        } finally {
+          process.exit(CRASH_EXIT_CODE);
+        }
+      })();
     },
     log: (message) => logger.error(message),
     softBytes: diskSoftMb(config) * 1024 * 1024,
