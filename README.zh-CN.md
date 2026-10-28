@@ -259,6 +259,7 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动(Linux;
 | `/sessions` / `/switch <序号>` | 列出最近会话 / 切换(流式中拒绝) |
 | `/autocompact on\|off` / `/autoretry on\|off` | 自动压缩 / 自动重试开关(写入 pi 全局设置 —— 本机全部 pi 进程生效,重启后仍有效) |
 | `/login` / `/logout <provider>` / `/auth` | provider 登录管理(仅管理员 + 管理房间) |
+| `/mcp <子命令>` | MCP 服务器管理:list / add / remove / login / logout(仅管理员 + 管理房间) |
 | `/reload` | 重启 pi(装完扩展/配置后);`/reload all` 重启本实例全部空闲 pi 进程 |
 | `/help` | 完整帮助 |
 
@@ -279,7 +280,7 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动(Linux;
 
 ### 工具循环聚合:一张「工作中」的卡片持续刷新
 
-agent 跑长任务时,工具循环的**中间回合不再逐条刷屏**:首回合发一张「工作中」卡片,之后的每个中间回合对**同一张卡就地编辑刷新**(Matrix 消息编辑,MSC2676;Element X / Element Web / FluffyChat 均就地渲染)—— 房间里始终只有一张卡在更新,进度一眼可见,手机通知不再被中间轮轰炸。**终答回合**照旧是独立新消息(挂状态脚注),重要结论的通知不会被编辑吞掉。用不支持编辑的旧客户端?你看到的是带 `* ` 前缀的全文 fallback,内容一点不少。内容逼近单条消息上限(4000 字符)时自动**定稿旧卡、开新卡继续**(任意时刻只有最新一张卡会被刷新);编辑失败自动**退回逐条发消息**的旧行为,内容绝不丢。`/toggletools` 隐藏工具行(hideToolCalls)时聚合整体旁路,与旧版逐字节一致。
+agent 跑长任务时,工具循环的**中间回合不再逐条刷屏**:首回合发一张「工作中」卡片,**卡里只有工具调用行**,之后的每个中间回合对**同一张卡就地编辑刷新**(Matrix 消息编辑,MSC2676;Element X / Element Web / FluffyChat 均就地渲染)—— 进度一眼可见,手机通知不再被中间轮轰炸。模型夹在工具调用之间的**旁白文本不进卡**:它独立成一条普通消息,当前工具卡就此定稿,后续工具调用开新卡继续刷新。**终答回合**照旧是独立新消息(挂状态脚注),重要结论的通知不会被编辑吞掉。用不支持编辑的旧客户端?你看到的是带 `* ` 前缀的全文 fallback,内容一点不少。卡片内容逼近单条消息上限(4000 字符)时自动**定稿旧卡、开新卡继续**(任意时刻只有最新一张卡会被刷新);编辑失败自动**退回逐条发消息**的旧行为,内容绝不丢。`/toggletools` 隐藏工具行(hideToolCalls)时聚合整体旁路,与旧版逐字节一致。
 
 **部署提示(Synapse 限速)**:聚合会让 bot 的发帖频率显著升高(一次 N 轮工具循环 ≈ N 次编辑)。Synapse 默认按账号限速 `rc_message`(0.2 条/秒,突发 10)—— 被限速的最坏表现是**编辑延迟到达**:卡片刷新变慢,但编辑总会收敛到最终态,内容不丢(真不支持编辑时还有自动降级兜底)。自建 homeserver 可二选一豁免 —— 全局调高 `homeserver.yaml`:
 
@@ -347,6 +348,12 @@ bash 回帖(`!` / `!!` / `/bash`)发帖前会截断输出:上限 `bashOutputLimi
 
 ```json
 { "bashOutputLimit": 50000 }
+```
+
+工具调用行(`🔧 bash (command=...)`)里每个参数值的展示上限是 `toolCallArgLimit` 字符(默认 100)。配置值超过 500 按 500 使用(超限部分直接忽略);小于 1 的数值、NaN 等非法值回落默认,大于等于 1 的小数向下取整。逐条回复与聚合活卡共用这一上限;该字段同样**不进** setup 向导,手编后重启生效:
+
+```json
+{ "toolCallArgLimit": 200 }
 ```
 
 ### 自定义头像(空间 / bot / 项目房间)
@@ -421,6 +428,42 @@ bash 回帖(`!` / `!!` / `/bash`)发帖前会截断输出:上限 `bashOutputLimi
 - `/auth` — 查看已认证的 provider
 
 权限:仅管理员 + 仅管理房间(单工程模式 = 与 bot 的私聊)。登录成功后**空闲的** pi 进程自动重启以加载新凭据;忙碌的会提示稍后 `/reload`。凭据直写 pi 的标准凭据文件(`~/.pi/agent/auth.json`),与本机全部 pi 进程共享 —— pi-courier 自身既不保存也不显示密钥。
+
+### 聊天里管理 MCP 服务器:`/mcp`
+
+MCP(Model Context Protocol)服务器是给 AI 外接工具的插线板。pi 1.0 起 MCP 配置完全归 pi 管,`/mcp` 把 `pi mcp` 命令族原样搬进聊天 —— 不用 SSH 到桥主机,就能查看状态、增删服务器、完成 OAuth 登录:
+
+| 命令 | 作用 |
+|---|---|
+| `/mcp`(即 `/mcp list`) | 一张状态卡列出全部服务器:连接状态 / 传输方式 / 工具数 / 作用域;需要登录的附 `/mcp login` 提示,空列表附添加指引。探测较慢时先回一条「检查中」 |
+| `/mcp add <名字> --url <地址>` | 添加远程 HTTP 服务器(可重复传 `--header`) |
+| `/mcp add <名字> <命令> [参数…]` | 添加本地 stdio 服务器;`--env` / `--header` / `--cwd` / `--description` / `--exposure` 按 pi CLI 语义透传 |
+| `/mcp remove <名字>` | 删除服务器;对同名 `/mcp add` 即替换,不用先删后加 |
+| `/mcp login <名字> [--timeout 秒]` | OAuth 登录:bot 把授权链接发进房间,浏览器点开授权即可(默认 300 秒,桥侧硬上限 600 秒) |
+| `/mcp logout <名字>` | 清除该服务器的 OAuth 凭证(换账号 / 撤销授权) |
+| `/mcp help` | 子命令用法 |
+
+命令按 shell 风格引号分词,`--` 之后的参数原样透传;参数缺失或选项打错收到的是用法回执,不会被当成对话喂给模型。
+
+**权限与安全**:仅管理员 + 管理房间可用(单工程模式 = 与 bot 的私聊),访客一律硬拦;添加 / 删除 / 登录 / 登出四种动作进审计日志(`list` 只读不记)。`--env` / `--header` 的**值**在任何回执里都不回显(只回显键名)—— 密钥不会留在聊天记录里。
+
+**改动何时生效**(回执里都会写明):
+
+- **登录 / 登出:即刻生效** —— 运行中的 pi 会话下一回合自动用上,无需 `/reload`;
+- **添加 / 删除:需 `/reload` 生效**;多工程部署发 `/reload all` 重启全部空闲 pi 进程。
+
+**OAuth 回跳限制(远程部署必读)**:pi 的 OAuth 回跳绑定**桥主机**本机(`127.0.0.1`)。`/mcp login` 会把授权链接发进房间,但**打开链接的浏览器必须能访问到桥主机上的回跳地址** —— 桥部署在服务器、你用手机点链接时,手机浏览器到不了服务器的 `127.0.0.1`,授权页会一直转圈直到超时。两条解法任选其一:
+
+```bash
+# 在你本地电脑开一条 SSH 隧道,把桥主机上的回跳端口转到本地同名端口
+ssh -L <端口>:127.0.0.1:<端口> <用户>@<桥主机>
+```
+
+或按你的网络方案让桥主机的该端口对你的浏览器可达(防火墙放行等)。登录回执里也会带上这条提示。
+
+**v1 只管全局配置**:`/mcp` 的所有改动都落在全局 `~/.pi/agent/mcp.json`,对本机全部 pi 进程(所有项目)生效。项目级 `.pi/mcp.json` 暂不支持:项目级配置受 pi 的项目信任门约束,无界面的 RPC 模式下未信任项目会被**静默拒绝**,聊天侧无法完成信任确认;全局配置天然覆盖所有项目,项目级支持留作后续扩展。
+
+**版本要求**:pi ≥ 1.0(旧版 pi 没有 `pi mcp` 子命令,`/mcp` 会回执提示升级,不会神秘报错)。
 
 ### 引用更早的消息
 
@@ -552,6 +595,40 @@ pi-courier restart
 
 pi.dev 托管安装(`~/.pi/agent`)同样支持:pi-courier 会把 `bin/pi` 包装脚本自动解析到当前版本的真实 JS 入口,pi 升级后无需改配置(0.3.1 起)。
 
+### 进程挂了怎么办:systemd 与看门狗
+
+systemd unit 自带 `Restart=on-failure` + `RestartSec=5`:进程**崩溃**(非零退出码或被信号杀死)后 5 秒自动拉起。崩溃守卫会把未捕获异常转成「留言 + 非零码优雅退出」,所以 JS 异常这类死亡也由 systemd 接住;`pi-courier stop` 是正常退出(退出码 0),不会被拉起。
+
+systemd 管不了**僵死**:进程还在、PID 还在,但事件循环卡住不干活。unit 仍显示 active,journal 没有新日志,桥也不再回消息。补这个缺口的是独立看门狗 `deploy/watchdog/watchdog-posix.sh`:
+
+- 每分钟由 cron / systemd timer 触发,读 `~/.pi/pi-courier-state/heartbeat.json`(桥每 30 秒原子写一次,同时记录磁盘与堆水位);
+- 心跳超过 **180 秒**(= 6 × 30 秒;过期秒单点归属脚本常量,`--stale-seconds` 可覆盖)或心跳里的 PID 不存在 → `systemctl --user restart` 重启服务。PID 不存在时会先等 **2 × 心跳间隔**(默认 60 秒,`--heartbeat-interval-seconds` 可覆盖)再判死,覆盖 RestartSec 与首拍延迟,避免重启窗口里上一实例的旧心跳把正在启动的新实例再踢一次;
+- 重启后用同目录的 `matrix-alert.mjs` 直读 `~/.pi/pi-courier.json` 的 Matrix 凭据与管理房 ID(`managementRooms[0]`,缺省回落 `space.roomId`),直接调 homeserver 的房间发送 API 发一条告警;冷却窗口默认 30 分钟(时间戳落在 `~/.pi/pi-courier-state/watchdog-alert-stamp`),发送失败不落戳、下一分钟重试。告警不依赖桥进程 —— bot 死了告警照样出得去;
+- 心跳文件不存在(桥还没跑过 first run)按安装错误处理:不告警、不动作。
+- **人工停止不会被拉回**:`pi-courier stop` 会先写 `~/.pi/pi-courier-state/watchdog-paused` 再调 systemctl(即使进程已经僵死、信号处理器跑不到,标记也能落盘),看门狗看到标记就跳过本轮判定;下次桥启动自动清除。`pi-courier restart` 由进程收到 SIGTERM 时写标记,随后新实例启动即清。直接 `systemctl stop`、`kill -9` 这类强杀不写标记,看门狗仍按失能拉起 —— 维护时请用 `pi-courier stop`,或先停看门狗。`pi-courier update` 在停服务前同样先写标记;升级中途失败时服务保持停止,修好后 `pi-courier start` 会清除标记并恢复。
+
+安装(二选一,完整注释见脚本头):
+
+```bash
+# 方式一:cron(cron 环境通常没有 XDG_RUNTIME_DIR,不设会让 systemctl --user 报错;
+# 把 1000 换成你的 uid,或直接用推荐的方式二)
+* * * * * XDG_RUNTIME_DIR=/run/user/1000 /opt/pi-courier/deploy/watchdog/watchdog-posix.sh >> ~/.pi/pi-courier-state/watchdog.log 2>&1
+```
+
+方式二:systemd timer(两个 unit 文件,`systemctl --user enable --now pi-courier-watchdog.timer`)。服务名默认 `pi-pi-courier`(与 `deploy/pi-courier.user.service` 安装后的名字一致),用 `PI_COURIER_SERVICE` 覆盖;`PI_COURIER_ALERT=off` 关闭告警,也可以设成自定义命令模板(含 `{message}` 占位,由看门狗做 shell 安全引用);`PI_COURIER_HEARTBEAT` 覆盖心跳路径。脚本按 **user unit** 写死 `systemctl --user`;若你用的是系统级 unit,请把脚本里的 `--user` 去掉并用 `PI_COURIER_SERVICE` 指定服务名。卸载:先停看门狗(`systemctl --user disable --now pi-courier-watchdog.timer` 并删除两个 unit 文件,或删掉 crontab 行),再 `pi-courier disable`;否则看门狗会在停止窗口过后把服务重新拉起。
+
+**磁盘持续满盘的熔断**:桥在启动期、连接任何网络之前检查磁盘硬阈值(默认 512MB),低于即写一行死因日志退出、不发管理房留言。磁盘一直不清理时 systemd 会反复拉起,每轮只多一行本地日志。在 unit 的 `[Unit]` 段加熔断参数让它停手:
+
+```ini
+[Unit]
+StartLimitIntervalSec=300
+StartLimitBurst=5
+```
+
+(300 秒内启动 5 次即停止自动重启;清理磁盘后 `systemctl --user reset-failed pi-pi-courier` 再 `start`。)韧性参数都在配置文件的 `resilience` 段:心跳间隔默认 30 秒、磁盘软阈值 2048MB、硬阈值 512MB、堆告警 80%、pi RPC 连续拉起上限 5 次,改完重启生效。
+
+**什么时候还需要看门狗**:要「僵死也能被拉起」「服务死了能收到 Matrix 告警」就装;只靠 systemd 的崩溃拉起、接受「僵死要人工发现」可以不装。看门狗的过期秒刻意不进桥的 `resilience` 配置 —— 它零桥代码依赖,只读心跳与 Matrix 凭据;桥改 `resilience.heartbeatIntervalSeconds` 时,同步调整脚本默认值(或安装参数),保持 6 倍关系。
+
 ## Windows
 
 自 1.0.0 起正式支持,并已于 2026-10-14 在真实 Windows Server 2025 机器上端到端验收:安装(原生库下载 + sha256 校验 + 加载)、配置向导、Matrix 连接、`!`/`!!` bash、单实例锁、多工程房间与空间组织、任务计划程序自启、Ctrl+C 干净退出。除下文明确列出的限制外,行为与 Linux 一致。
@@ -592,7 +669,28 @@ npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs p
   Start-ScheduledTask -TaskName 'pi-courier'   # 立即启动;此后每次登录自动拉起
   ```
 
-  想要真正无控制台窗口的后台服务,可用 [NSSM](https://nssm.cc/) 包一层;或者干脆保持前台会话。
+  这是**登录触发型**任务:只在每次登录时拉起。进程中途崩溃、被杀死或僵死,任务都不会重新拉起;进程死掉后任务状态还可能停留在 Running。补自愈有两条路线:
+
+  - **auto-logon(自动登录桌面)**:让机器重启后自动登录,计划任务随之触发。代价是凭据与桌面会话留在无人值守的机器上(安全风险);而且它只解决「重启后没人登录」,仍然发现不了进程僵死。
+  - **看门狗(推荐)**:独立计划任务每分钟运行 `deploy/watchdog/watchdog-windows.ps1`,读 `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`。心跳超过 **180 秒**(= 6 × 30 秒,`-StaleSeconds` 可覆盖)或心跳里的 PID 不存在(PID 消失同样等 2 × 心跳间隔,默认 60 秒)→ ① PID 仍存活(僵死)时先 `taskkill /F /PID` 杀旧实例(单实例锁不抢占活进程,不先杀新实例会秒退);② `schtasks /end` 终止卡住的任务实例(end 失败不阻断下一步);③ `schtasks /run` 拉起。随后用同目录的 `matrix-alert.mjs` 直读 `%USERPROFILE%\.pi\pi-courier.json` 的凭据与管理房,发一条 Matrix 告警(默认 30 分钟冷却)。心跳文件不存在按安装错误处理:不告警、不动作。看门狗自身需要 `node` 在 PATH 上。
+
+    安装(桥的任务名默认 `pi-courier`,与上面的配方一致;把脚本路径换成你的实际安装目录,npm 全局安装通常在 `%APPDATA%\npm\node_modules\pi-courier\deploy\watchdog\`):
+
+    ```powershell
+    schtasks /create /tn "pi-courier-watchdog" `
+      /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\pi-courier\deploy\watchdog\watchdog-windows.ps1 -TaskName pi-courier" `
+      /sc minute /mo 1 /f
+    ```
+
+    参数:`-TaskName` 桥的计划任务名;`-HeartbeatPath` 心跳文件(默认 `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`);`-StaleSeconds` 过期秒(默认 180 = 6 × 30,换算关系见脚本头注释);`-HeartbeatIntervalSeconds` 心跳间隔秒(默认 30,PID 消失后的宽限期 = 2 × 该值);`-NoAlert` 关闭 Matrix 告警。用 Ctrl+C / Ctrl+Break 正常退出会写人工停止标记,看门狗不会把服务拉回(`pi-courier stop` 仅 Linux 可用);`schtasks /end` 属强杀、不写标记,维护或卸载前请先停看门狗任务。卸载:
+
+    ```powershell
+    schtasks /delete /tn "pi-courier-watchdog" /f
+    ```
+
+    先删看门狗任务,再停桥/删桥任务 —— 否则看门狗会在停止窗口过后把桥重新拉起。
+
+  [NSSM](https://nssm.cc/) 之类的 Windows 服务包装器能省掉登录依赖,但要把 Node 变成系统服务,安装、升级、日志都更重;本版本不提供实现,只作为权衡选项保留。或者干脆保持前台会话。
 - **Ctrl+C / Ctrl+Break(SIGBREAK)干净退出** —— pi RPC 停止、Matrix 断开、单实例锁释放。
 - **单实例锁**行为一致:崩溃残留的锁会被下次启动自动接管,无论从控制台还是任务计划程序启动。
 - 配置文件权限检查(0600)在 Windows 上跳过:系统无法表达 POSIX 权限位,继续检查只会每次启动误报。

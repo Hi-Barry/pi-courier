@@ -259,6 +259,7 @@ You are now a trusted user (the first trusted user also becomes admin). In multi
 | `/sessions` / `/switch <n>` | List recent sessions / switch to one (rejected while streaming) |
 | `/autocompact on\|off` / `/autoretry on\|off` | Toggle pi's auto-compaction / auto-retry (writes pi's global settings — affects every pi process on this machine, survives restarts) |
 | `/login` / `/logout <provider>` / `/auth` | Provider login management (admin + management room only) |
+| `/mcp <subcommand>` | MCP server management: list / add / remove / login / logout (admin + management room only) |
 | `/reload` | Restart pi (after installing extensions/config); `/reload all` restarts every idle pi process of the instance |
 | `/help` | Full help |
 
@@ -279,7 +280,7 @@ Since 0.1.39 sending mirrors pi's TUI. A plain text message is always sent with 
 
 ### Tool-loop aggregation: one "working" card, continuously refreshed
 
-While the agent works through long tasks, the **intermediate tool-loop turns no longer flood the room**: the first turn posts a single "working" card, and every following turn edits **that same card in place** (Matrix message edits, MSC2676; Element X / Element Web / FluffyChat all render edits in place) — one card keeps updating, progress is visible at a glance, and phones stop getting pinged by every intermediate turn. The **final answer** is still its own standalone message (with the status footer), so the notification that matters is never swallowed by an edit. On a client without edit support you'll see the full text with a `* ` prefix (the classic fallback — nothing is lost). When content approaches the single-message ceiling (4000 characters) the old card is finalized and a new one continues (only the newest card is ever edited); if an edit fails, the bridge automatically **falls back to the old one-message-per-turn behaviour**, so nothing is ever lost. With `/toggletools` (hideToolCalls) hiding tool lines, aggregation is bypassed entirely — byte-for-byte the old behaviour.
+While the agent works through long tasks, the **intermediate tool-loop turns no longer flood the room**: the first turn posts a single "working" card **containing only the tool-call lines**, and every following turn edits **that same card in place** (Matrix message edits, MSC2676; Element X / Element Web / FluffyChat all render edits in place) — progress is visible at a glance, and phones stop getting pinged by every intermediate turn. Narration text the model emits between tool calls **never enters the card**: it goes out as its own regular message, the current tool card is finalized there, and the next tool calls open a fresh card that keeps updating. The **final answer** is still its own standalone message (with the status footer), so the notification that matters is never swallowed by an edit. On a client without edit support you'll see the full text with a `* ` prefix (the classic fallback — nothing is lost). When the card approaches the single-message ceiling (4000 characters) the old card is finalized and a new one continues (only the newest card is ever edited); if an edit fails, the bridge automatically **falls back to the old one-message-per-turn behaviour**, so nothing is ever lost. With `/toggletools` (hideToolCalls) hiding tool lines, aggregation is bypassed entirely — byte-for-byte the old behaviour.
 
 **Deployment note (Synapse rate limiting)**: aggregation raises the bot's posting rate considerably (one N-turn tool loop ≈ N edits). Synapse rate-limits accounts by default via `rc_message` (0.2 messages/second, burst 10) — when throttled, the worst case is **edits arriving late**: the card refreshes slower but still converges to the final state, losing nothing (and the automatic fallback covers outright failures). Self-hosting? Either raise the global limit in `homeserver.yaml`:
 
@@ -347,6 +348,12 @@ Bash replies (`!` / `!!` / `/bash`) truncate their output before posting: the ca
 
 ```json
 { "bashOutputLimit": 50000 }
+```
+
+Each argument value in a tool-call line (`🔧 bash (command=...)`) is capped at `toolCallArgLimit` characters (default 100). Values above 500 are used as 500 (the excess setting is ignored); values below 1, NaN and other invalid values fall back to the default, and fractions of 1 or more round down. Direct replies and the aggregated live card share this cap. This field is also **not** part of the setup wizard — edit the config by hand and restart:
+
+```json
+{ "toolCallArgLimit": 200 }
 ```
 
 ### Custom avatars (space / bot / project rooms)
@@ -421,6 +428,43 @@ No shell needed to (re-)login a provider:
 - `/auth` — the authenticated providers
 
 Gate: admin + management room only (single-project mode: your DM with the bot). On success the **idle** pi processes restart automatically so the new credential loads; busy ones are told to `/reload` later. Credentials go straight into pi's standard credential file (`~/.pi/agent/auth.json`), shared with every pi process on the machine — pi-courier itself neither stores nor displays them.
+
+### Manage MCP servers from chat: `/mcp`
+
+MCP (Model Context Protocol) servers are the plugboard that gives the AI extra tools. Since pi 1.0, MCP configuration belongs to pi, and `/mcp` brings the `pi mcp` command family into chat — no SSH into the bridge host needed to check status, add/remove servers, or complete an OAuth login:
+
+| Command | Action |
+|---|---|
+| `/mcp` (same as `/mcp list`) | One status card listing every server: connection state / transport / tool count / scope; servers needing login get a `/mcp login` hint, an empty list gets add guidance. A "checking…" notice arrives first when probing is slow |
+| `/mcp add <name> --url <url>` | Add a remote HTTP server (`--header` may repeat) |
+| `/mcp add <name> <command> [args…]` | Add a local stdio server; `--env` / `--header` / `--cwd` / `--description` / `--exposure` pass through with pi CLI semantics |
+| `/mcp remove <name>` | Remove a server; `/mcp add` with the same name replaces it — no remove-first dance |
+| `/mcp login <name> [--timeout sec]` | OAuth login: the bot posts the authorization link into the room; open it in a browser and approve (default 300 s, bridge-side hard cap 600 s) |
+| `/mcp logout <name>` | Clear that server's OAuth credential (account switch / revocation) |
+| `/mcp help` | Subcommand usage |
+
+Commands are tokenized shell-style (quotes respected); everything after `--` passes through verbatim. Missing arguments or unknown options get a usage reply — never fed to the model as a chat turn.
+
+**Permissions & safety**: admin + management room only (single-project mode: your DM with the bot); guests are hard-blocked. The four sensitive actions — add / remove / login / logout — land in the audit log (`list` is read-only and not logged). The **values** of `--env` / `--header` are never echoed in any reply (keys only) — secrets stay out of the chat history.
+
+**When changes take effect** (every reply says which):
+
+- **Login / logout: effective immediately** — running pi sessions pick up the credential on their next turn, no `/reload` needed;
+- **Add / remove: needs `/reload`**; multi-project deployments send `/reload all` to restart every idle pi process.
+
+**OAuth redirect limitation (read this for remote deployments)**: pi's OAuth callback is bound to the **bridge host's** loopback (`127.0.0.1`). `/mcp login` posts the authorization link into the room, but **the browser that opens the link must be able to reach the redirect address on the bridge host** — if the bridge runs on a server and you tap the link on your phone, the phone's browser cannot reach the server's `127.0.0.1`, and the authorization page spins until timeout. Either fix works:
+
+```bash
+# From your local machine, open an SSH tunnel that forwards the redirect
+# port on the bridge host to the same local port
+ssh -L <port>:127.0.0.1:<port> <user>@<bridge-host>
+```
+
+or make that port on the bridge host reachable from your browser (firewall rules etc. — your network call). The login reply includes this reminder too.
+
+**v1 manages the global config only**: every `/mcp` change lands in the global `~/.pi/agent/mcp.json`, shared by every pi process on the machine (all projects). Project-level `.pi/mcp.json` is not supported yet: it sits behind pi's project trust gate, which silently rejects untrusted projects in the UI-less RPC mode — trust cannot be confirmed from chat. The global config already covers every project; project-level support stays as a future extension.
+
+**Version requirement**: pi ≥ 1.0 (older pi builds have no `pi mcp` subcommand; `/mcp` replies with an upgrade hint instead of a mysterious error).
 
 ### Replying to an earlier message
 
@@ -560,6 +604,40 @@ pi-courier restart
 
 A pi.dev managed install (`~/.pi/agent`) is supported too: pi-courier resolves the `bin/pi` wrapper script to the current version's real JS entry automatically, so pi upgrades need no config changes (0.3.1+).
 
+### What happens when the bridge dies: systemd vs. watchdog
+
+The systemd unit ships with `Restart=on-failure` + `RestartSec=5`: a **crash** (non-zero exit code or killed by a signal) is restarted after 5 seconds. The crash guard turns uncaught exceptions into a "message + non-zero graceful exit", so JS-level deaths are covered by systemd too; `pi-courier stop` is a clean exit (code 0) and is not restarted.
+
+systemd cannot see a **hang**: the process and its PID are still there, but the event loop is stuck. The unit still shows active, journal gets no new lines, and the bridge stops answering. The independent watchdog `deploy/watchdog/watchdog-posix.sh` fills that gap:
+
+- runs every minute from cron / a systemd timer; reads `~/.pi/pi-courier-state/heartbeat.json` (written atomically every 30 seconds, along with disk and heap levels);
+- heartbeat older than **180 seconds** (= 6 × 30; the stale threshold lives as a script constant and can be overridden with `--stale-seconds`) or the PID in it no longer exists → `systemctl --user restart`. A missing PID waits **2 × the heartbeat interval** (60 seconds by default, overridable with `--heartbeat-interval-seconds`) before declaring death, covering RestartSec and the first-beat delay so a stale beat from the previous instance cannot kick a starting instance again;
+- after the restart, the sibling `matrix-alert.mjs` reads the Matrix credentials and management room from `~/.pi/pi-courier.json` (`managementRooms[0]`, falling back to `space.roomId`) and calls the homeserver room-send API directly. The cooldown is 30 minutes by default (stamp file `~/.pi/pi-courier-state/watchdog-alert-stamp`); a failed send does not write the stamp, so the next minute retries. Alerts do not depend on the bridge — when the bot is dead, they still get out;
+- a missing heartbeat file (the bridge has never had its first run) is treated as an installation error: no alert, no action;
+- **a deliberate stop is never undone**: `pi-courier stop` writes `~/.pi/pi-courier-state/watchdog-paused` *before* calling systemctl (so the marker lands even when the process is hung and its signal handlers never run); the watchdog skips its check while the marker exists, and the next bridge start removes it. `pi-courier restart` has the process write the marker on SIGTERM, and the new instance clears it on startup. A raw `systemctl stop` or `kill -9` does not write the marker and will still be treated as a failure — use `pi-courier stop` for maintenance, or stop the watchdog first. `pi-courier update` also writes the marker before stopping; if the upgrade fails midway the service stays stopped, and `pi-courier start` clears the marker once it is fixed.
+
+Install (either one; full comments in the script header):
+
+```bash
+# Option 1: cron (cron usually has no XDG_RUNTIME_DIR, which makes systemctl --user fail;
+# replace 1000 with your uid, or use option 2, which is recommended)
+* * * * * XDG_RUNTIME_DIR=/run/user/1000 /opt/pi-courier/deploy/watchdog/watchdog-posix.sh >> ~/.pi/pi-courier-state/watchdog.log 2>&1
+```
+
+Option 2: a systemd timer (two unit files, `systemctl --user enable --now pi-courier-watchdog.timer`). The service name defaults to `pi-pi-courier` (the name `deploy/pi-courier.user.service` installs as); override it with `PI_COURIER_SERVICE`; `PI_COURIER_ALERT=off` disables alerts (it can also hold a custom command template with a `{message}` placeholder, which the watchdog shell-quotes), and `PI_COURIER_HEARTBEAT` overrides the heartbeat path. The script hard-codes `systemctl --user` for **user units**; for a system-level unit remove `--user` and set `PI_COURIER_SERVICE`. Uninstall: stop the watchdog first (`systemctl --user disable --now pi-courier-watchdog.timer` and remove the two unit files, or delete the crontab line), then `pi-courier disable`; otherwise the watchdog will bring the service back once the stop window passes.
+
+**Circuit breaker for a persistently full disk**: at startup, before any network wiring, the bridge checks the disk hard threshold (512MB by default) and exits with a single cause line in the local log (no management-room message). If the disk never gets cleaned, systemd keeps restarting it, one local log line per round. Add the following to the unit's `[Unit]` section to stop the loop:
+
+```ini
+[Unit]
+StartLimitIntervalSec=300
+StartLimitBurst=5
+```
+
+(5 starts within 300 seconds stop automatic restarts; after cleaning the disk run `systemctl --user reset-failed pi-pi-courier` and start again.) Resilience knobs live in the `resilience` section of the config file: heartbeat interval 30s, disk soft threshold 2048MB, hard threshold 512MB, heap alert 80%, pi RPC consecutive respawn limit 5; changes take effect on restart.
+
+**When do you still need the watchdog?** Install it if you want hangs restarted and a Matrix alert when the service dies; if systemd's crash restart is enough and you accept discovering hangs manually, you can skip it. The watchdog's stale threshold deliberately does not live in the bridge's `resilience` config — the watchdog depends on zero bridge code and only reads the heartbeat and Matrix credentials. If you change `resilience.heartbeatIntervalSeconds`, adjust the script default (or install argument) to keep the 6× relationship.
+
 ## Windows
 
 Supported since 1.0.0 and verified end-to-end on a real Windows Server 2025 machine (2026-10-14): install with native-library download + sha256 + load, setup wizard, Matrix connectivity, `!`/`!!` bash, single-instance lock, multi-project rooms with spaces, Task Scheduler autostart and a clean Ctrl+C shutdown. Everything not mentioned as a limitation below behaves as on Linux.
@@ -600,7 +678,28 @@ Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDA
   Start-ScheduledTask -TaskName 'pi-courier'   # start right now; it refires on every logon
   ```
 
-  [NSSM](https://nssm.cc/) remains the option if you want a true background service without a console window; or just keep a foreground session.
+  This is a **logon-triggered** task: it starts at every logon only. It does not restart a process that crashes, is killed or hangs mid-session; after the process dies the task may still show Running. There are two ways to add self-healing:
+
+  - **Auto-logon (automatic desktop login)**: lets the machine log in after a reboot so the logon task fires. The cost is credentials and a desktop session left on an unattended machine (a security risk), and it only covers "nobody logged in after a reboot" — it still cannot detect a hang.
+  - **Watchdog (recommended)**: an independent scheduled task runs `deploy/watchdog/watchdog-windows.ps1` every minute and reads `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`. If the heartbeat is older than **180 seconds** (= 6 × 30, overridable with `-StaleSeconds`) or its PID no longer exists (a missing PID also waits 2 × the heartbeat interval, 60s by default) → ① if the PID is still alive (hang), `taskkill /F /PID` kills the old instance first (the single-instance lock is not preempted from a live process; without the kill the new instance exits immediately); ② `schtasks /end` terminates the stuck task instance (an end failure does not block the next step); ③ `schtasks /run` starts it. The sibling `matrix-alert.mjs` then reads the credentials and management room from `%USERPROFILE%\.pi\pi-courier.json` and posts a Matrix alert (30-minute cooldown by default). A missing heartbeat file is treated as an installation error: no alert, no action. The watchdog itself needs `node` on PATH.
+
+    Install (the bridge task name defaults to `pi-courier`, matching the recipe above; replace the script path with your install directory — for an npm global install it is usually under `%APPDATA%\npm\node_modules\pi-courier\deploy\watchdog\`):
+
+    ```powershell
+    schtasks /create /tn "pi-courier-watchdog" `
+      /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\pi-courier\deploy\watchdog\watchdog-windows.ps1 -TaskName pi-courier" `
+      /sc minute /mo 1 /f
+    ```
+
+    Parameters: `-TaskName` the bridge task name; `-HeartbeatPath` heartbeat file (default `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`); `-StaleSeconds` stale threshold (default 180 = 6 × 30, see the script header for the conversion); `-HeartbeatIntervalSeconds` heartbeat interval (default 30; the missing-PID grace is 2 × this value); `-NoAlert` disables the Matrix alert. Ctrl+C / Ctrl+Break writes the manual-stop marker so the watchdog will not bring the service back (`pi-courier stop` is Linux-only); `schtasks /end` is a hard kill and does not write it — stop the watchdog task before maintenance or uninstall. Uninstall:
+
+    ```powershell
+    schtasks /delete /tn "pi-courier-watchdog" /f
+    ```
+
+    Delete the watchdog task before stopping the bridge / deleting the bridge task — otherwise the watchdog will bring the bridge back once the stop window passes.
+
+  A Windows service wrapper such as [NSSM](https://nssm.cc/) removes the logon dependency, but turns Node into a system service — heavier to install, upgrade and inspect; this version does not implement it and only keeps it as a trade-off option. Or simply keep a foreground session.
 - **Ctrl+C / Ctrl+Break (SIGBREAK) shut the bridge down cleanly** — pi RPC stopped, Matrix disconnected, the single-instance lock released.
 - **Single-instance lock** works the same: a stale lock left by a crashed process is taken over by the next start, whether launched from a console or the Task Scheduler.
 - The config-file permission check (0600) is skipped on Windows: the OS cannot express POSIX modes there, so checking would warn on every start.

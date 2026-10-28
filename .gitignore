@@ -39,6 +39,8 @@ docs/DEVLOG.md
 # Local-only maintainer files (never published; kept on disk only)
 AGENTS.md
 .zcodeignore
+# Internal spec/ticket drafts (to-tickets output) — never published
+.scratch/
 
 # Local working reports (audit / verification deliverables, kept local)
 ocr-audit-report.md

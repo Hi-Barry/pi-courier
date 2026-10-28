@@ -47,8 +47,9 @@ export const COMMAND_REGISTRY: readonly CommandPolicy[] = [
   { name: "/login", guest: "blocked" },
   { name: "/logout", guest: "blocked" },
   { name: "/auth", guest: "blocked" },
-  // 生命周期(访客禁;reload 另是敏感审计面)
+  // 生命周期(访客禁;reload 另是敏感审计面;/update 是桥自更新的敏感审计面)
   { name: "/reload", guest: "blocked", auditEvent: "reload" },
+  { name: "/update", guest: "blocked", auditEvent: "update" },
   { name: "/stop", guest: "blocked" },
   { name: "/abort", guest: "blocked" },
   { name: "/interrupt", guest: "blocked" },
@@ -62,6 +63,10 @@ export const COMMAND_REGISTRY: readonly CommandPolicy[] = [
   { name: "/toggletools", guest: "blocked" },
   // 主动外发(访客禁)
   { name: "/remind", guest: "blocked" },
+  // MCP 服务器管理(spec #246,访客禁:配 MCP = 给 agent 加工具/外发通道,
+  // add 还能带 --env 密钥)。审计不经本表 —— 事件按真实结果由命令层经
+  // ctx.audit 缝上报(mcp.add/remove/login/logout),这里只拦访客。
+  { name: "/mcp", guest: "blocked" },
   // 会话镜像(访客禁:动共享会话)
   { name: "/attach", guest: "blocked" },
   { name: "/detach", guest: "blocked" },

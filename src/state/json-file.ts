@@ -13,7 +13,10 @@ import { logger } from "../logger.js";
 export class JsonStateFile<T> {
   constructor(
     private readonly filePath: string,
-    private readonly fallback: T
+    private readonly fallback: T,
+    /** 磁盘类写失败(ENOSPC/EDQUOT)的可见性缝(spec #247 票04):组合根
+     *  注入聚合 recorder;缺省不接,行为与旧版逐字节一致。 */
+    private readonly onDiskWriteFailure?: (err: unknown) => void
   ) {}
 
   /** Missing file (first run) stays quiet; corrupt/unreadable warns. Never throws. */
@@ -88,6 +91,12 @@ export class JsonStateFile<T> {
       }
     } catch (err) {
       logger.warn(`state file write failed (memory copy stays authoritative): ${this.filePath} (${errorMessage(err)})`);
+      // 磁盘类写失败的聚合可见性(spec #247 票04):缝自身抛错不放大写路径
+      try {
+        this.onDiskWriteFailure?.(err);
+      } catch {
+        // 可见性通道失败不影响降级契约
+      }
     }
   }
 }

@@ -21,6 +21,7 @@ const zh = {
   "common.truncated": "…(已截断)",
   "common.noOutput": "(无输出)",
   "common.exitCode": "退出码: {code}",
+  "common.unknown": "未知",
   "common.listSep": "、",
 
   // ── cmd(/命令回复,command-map.ts)───────────────────────────────────
@@ -169,6 +170,113 @@ const zh = {
     "💤 还没有已安装的技能。把技能放进这些目录即可:\n" +
     "• 用户级:~/.agents/skills/ 或 ~/.pi/agent/skills/\n" +
     "• 项目级:<工作目录>/.agents/skills/ 或 <工作目录>/.pi/skills/",
+  // ── /mcp 指令族(spec #246:MCP 服务器管理,command-map.ts)──────────
+  // 回执安全纪律:--env/--header 的值不进任何回执(命令层脱敏),这里的
+  // 文案只收服务器名与预格式化的诊断串。
+  "cmd.mcp.unavailable":
+    "❌ MCP 管理不可用({detail})。\n本机的 pi 可能未安装或版本过旧:mcp 子命令需 pi ≥ 1.0。",
+  "cmd.mcp.unwired": "❌ MCP 管理在当前部署未启用。",
+  "cmd.mcp.forbidden": "❌ /mcp 仅管理员可用(多工程模式下仅管理房间可用)。",
+  "cmd.mcp.usage":
+    "用法:\n" +
+    "• /mcp — 查看 MCP 服务器状态\n" +
+    "• /mcp add <名> (--url <地址> | -- <命令> [参数...])\n" +
+    "• /mcp remove <名>\n" +
+    "• /mcp login <名> [--timeout 秒]\n" +
+    "• /mcp logout <名>\n" +
+    "• /mcp help — 详解",
+  "cmd.mcp.help":
+    "**MCP 服务器管理**(经 pi mcp 子命令执行):\n" +
+    "\n" +
+    "• `/mcp` 或 `/mcp list` — 服务器状态卡(连接/工具/作用域;待登录的会附登录指引)\n" +
+    "• `/mcp add <名> --url <地址>` — 添加远程服务器\n" +
+    "• `/mcp add <名> -- <命令> [参数...]` — 添加本地服务器(`--` 之后原样透传)\n" +
+    "  可选:`--env K=V`、`--header K=V`(可多次)、`--cwd <目录>`、`--description <说明>`、`--exposure <模式>`\n" +
+    "  ⚠️ `--env`/`--header` 的值不会回显到聊天,也不会进审计日志\n" +
+    "• `/mcp remove <名>` — 移除服务器\n" +
+    "• `/mcp login <名> [--timeout 秒]` — 授权登录(默认 300s,上限 600s;授权链接发到本房间)\n" +
+    "• `/mcp logout <名>` — 登出服务器\n" +
+    "\n" +
+    "生效语义:**登录即刻生效**(运行中的会话下一回合自动用上,无需 /reload);\n" +
+    "**增删需 /reload 生效**(多项目用 /reload all)。",
+  "cmd.mcp.list.checking": "⏳ 正在检查 MCP 服务器状态…",
+  "cmd.mcp.list.failed": "❌ 获取 MCP 服务器状态失败: {message}",
+  "cmd.mcp.add.usage":
+    "用法: /mcp add <名> (--url <地址> | -- <命令> [参数...])\n" +
+    "例:/mcp add docs --url https://mcp.example.com/mcp\n" +
+    "    /mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp\n" +
+    "可选: --env K=V、--header K=V(均可多次)、--cwd <目录>、--description <说明>、--exposure <模式>",
+  "cmd.mcp.add.localUnsupported": "❌ 暂不支持 --local 作用域限定:请去掉该选项后重试。",
+  "cmd.mcp.add.ok":
+    "✅ 已添加 MCP 服务器「{name}」。\n发 /reload 生效(多项目用 /reload all);状态可用 /mcp list 查看。",
+  "cmd.mcp.add.failed": "❌ 添加 MCP 服务器失败: {message}",
+  "cmd.mcp.remove.usage": "用法: /mcp remove <名>(用 /mcp list 查看名字)",
+  "cmd.mcp.remove.ok": "✅ 已移除 MCP 服务器「{name}」。\n发 /reload 生效(多项目用 /reload all)。",
+  "cmd.mcp.remove.failed": "❌ 移除 MCP 服务器失败: {message}",
+  "cmd.mcp.login.usage": "用法: /mcp login <名> [--timeout 秒](缺省 300s,上限 600s)",
+  "cmd.mcp.login.started": "🔑 正在为 MCP 服务器「{server}」发起登录…授权链接随后发到本房间。",
+  "cmd.mcp.login.busy": "⚠️ 已有登录进行中:「{server}」。等它完成或超时后再发起下一次。",
+  "cmd.mcp.login.authUrl":
+    "🌐 请在浏览器打开以下链接,完成 MCP 服务器「{server}」的授权:\n" +
+    "{url}\n\n" +
+    "⚠️ 回跳地址可能指向 127.0.0.1:若 pi 跑在远程机器(SSH 场景),请先做端口转发(如 `ssh -L <端口>:127.0.0.1:<端口> <主机>`)再打开链接。\n" +
+    "授权完成后自动收到回执;登录即刻生效,无需 /reload。",
+  "cmd.mcp.login.done": "✅ MCP 服务器「{server}」登录成功。即刻生效:运行中的会话下一回合自动用上,无需 /reload。",
+  "cmd.mcp.login.already": "ℹ️ MCP 服务器「{server}」本已登录,无需重复操作。",
+  "cmd.mcp.login.failed": "❌ MCP 服务器「{server}」登录失败{codeSuffix}: {message}",
+  "cmd.mcp.login.failedCode": "(退出码 {code})",
+  "cmd.mcp.login.expired": "⌛ MCP 服务器「{server}」登录超时({timeoutSec}s)。网络可达后重发 /mcp login {server} 重试。",
+  "cmd.mcp.logout.usage": "用法: /mcp logout <名>(用 /mcp list 查看名字)",
+  "cmd.mcp.logout.ok": "✅ 已登出 MCP 服务器「{server}」。需重新授权时再发 /mcp login {server}。",
+  "cmd.mcp.logout.failed": "❌ 登出 MCP 服务器失败: {message}",
+  // 分词器错误(经 add/remove/logout 的用法回执进聊天)。
+  "cmd.mcp.tokenize.unclosedSingle": "有 单引号没有闭合",
+  "cmd.mcp.tokenize.unclosedDouble": "有 双引号没有闭合",
+  "cmd.mcp.tokenize.danglingBackslash": "反斜杠后面没有字符",
+  // 状态卡(/mcp list → formatMcpStatusCard):全部经 t() 双表,zh 为键集基准。
+  "cmd.mcp.card.empty":
+    "尚未配置任何 MCP 服务器。\n" +
+    "添加远程服务器:/mcp add <名> --url <地址>\n" +
+    "添加本地服务器:/mcp add <名> -- <命令> [参数...]\n" +
+    "添加后发 /reload 生效(多项目 /reload all)。",
+  "cmd.mcp.card.header": "MCP 服务器({count}):",
+  "cmd.mcp.card.server": "• {name} — {state} | {exposure} | {scope}",
+  "cmd.mcp.card.transport": "  传输:{transport}",
+  "cmd.mcp.card.needsAuth": "  需要登录:发 /mcp login {server} 获取授权链接",
+  "cmd.mcp.card.tools": "  工具({count}):{tools}{more}",
+  "cmd.mcp.card.toolsMore": " …等 {count} 个",
+  "cmd.mcp.card.resources": "  资源:{count} 个,URI 模板:{templates} 个",
+  "cmd.mcp.card.serverError": "  ⚠ {error}",
+  "cmd.mcp.card.errorsHeader": "配置错误:",
+  "cmd.mcp.card.errorLine": "• {message}",
+  "cmd.mcp.card.note": "注:{note}",
+  // pi list --json 状态词的本地化;未知 state 由代码原样透传,不进表。
+  "cmd.mcp.state.connected": "已连接",
+  "cmd.mcp.state.needsAuth": "待登录",
+  "cmd.mcp.state.disabled": "已禁用",
+  "cmd.mcp.state.connecting": "连接中",
+  "cmd.mcp.state.unknown": "未知",
+  // 执行缝诊断前缀(mcp-cli / mcp-login-flow 拼进回执 {message}/{detail})。
+  "cmd.mcp.detail.spawnFailed": "无法启动 pi CLI:{message}",
+  "cmd.mcp.detail.unknownSubcommand": "pi 不认识这条 mcp 子命令:{detail}",
+  "cmd.mcp.detail.cliLocate": "无法定位 pi CLI:{message}",
+  "cmd.mcp.login.seamError": "登录执行缝抛错:{message}",
+  "cmd.mcp.login.noSuccessMark": "pi 退出但未输出登录成功标记",
+  "cmd.mcp.login.exitCode": "pi mcp login 退出码 {code}",
+  // 短命令无 stderr 尾部时的兜底诊断串:同样走双表,避免 en 部署下回执
+  // 中英混杂(评审收尾:原先散落在 mcp-cli 里的硬编码中文)。
+  "cmd.mcp.detail.timeout": "{label} 超时({seconds}s)已终止",
+  "cmd.mcp.detail.listUnparsable": "pi mcp list 未返回可解析的 JSON",
+  "cmd.mcp.detail.listUnparsableDetail": "pi mcp list 未返回可解析的 JSON:{detail}",
+  "cmd.mcp.detail.exitCode": "pi mcp {sub} 退出码 {code}",
+  "cmd.mcp.detail.exitCodeUnknown": "pi mcp {sub} 退出码未知",
+  // 突变命令 exit 0 但输出无确认形状(旧版 pi 把命令当 prompt 喂模型)的降级提示。
+  "cmd.mcp.add.unverified":
+    "⚠️ pi 的输出未含预期的添加确认信息:旧版 pi(<1.0)可能把这条命令当成了普通提示词而没有执行。请发 /mcp list 核实;若 pi 过旧请先升级到 ≥ 1.0。",
+  "cmd.mcp.remove.unverified":
+    "⚠️ pi 的输出未含预期的移除确认信息:旧版 pi(<1.0)可能把这条命令当成了普通提示词而没有执行。请发 /mcp list 核实;若 pi 过旧请先升级到 ≥ 1.0。",
+  "cmd.mcp.logout.unverified":
+    "⚠️ pi 的输出未含预期的登出确认信息:旧版 pi(<1.0)可能把这条命令当成了普通提示词而没有执行。可重发 /mcp login {server}:提示「本已登录」即凭证仍在;若 pi 过旧请先升级到 ≥ 1.0。",
   "cmd.help.group.pi":
     "**Pi 原生命令**(pi TUI 同款,经 RPC 执行):\n" +
     "\n" +
@@ -208,6 +316,7 @@ const zh = {
     "• `/stop` — 立即停止所有任务(≈ TUI 的 Esc;别名 `/abort`)\n" +
     "• `/interrupt <新指令>` — 打断当前任务并立即下发新指令(一条消息完成)\n" +
     "• `/queue [文本]` — 无参:查看队列;带文本:排队不打断当前任务(≈ Alt+Enter)\n" +
+    "• `/update [check|force|cancel]` — 任务不中断的桥自更新(check 查新版 / force 跳过忙等 / cancel 取消等待;仅管理房)\n" +
     "\n" +
     "【Shell 执行】\n" +
     "• `/bash <命令>` — 执行 shell 命令(写入上下文)\n" +
@@ -219,10 +328,46 @@ const zh = {
     "• `/remind <时间> <内容>` — 定时提醒(先落盘再跑,重启不丢;例:/remind 30m 泡茶)\n" +
     "• `/remind list` / `/remind rm <序号>` — 查看 / 取消本房间的提醒\n" +
     "\n" +
+    "【MCP 服务器】\n" +
+    "• `/mcp` — 查看 MCP 服务器状态(连接/工具/作用域)\n" +
+    "• `/mcp add <名> (--url <地址> | -- <命令> [参数...])` — 添加服务器(--env/--header 的值不回显)\n" +
+    "• `/mcp remove <名>` — 移除服务器(增删后发 /reload 生效,多项目 /reload all)\n" +
+    "• `/mcp login <名> [--timeout 秒]` — 授权登录(链接发到本房间;登录即刻生效,无需 /reload)\n" +
+    "• `/mcp logout <名>` — 登出服务器\n" +
+    "• `/mcp help` — MCP 命令详解\n" +
+    "\n" +
     "【会话镜像】\n" +
     "• `/attach` — 开启 TUI ↔ Matrix 会话镜像(回复附加命令,终端跑它即可双端同步)\n" +
     "• `/detach` — 关闭会话镜像",
   "cmd.help.passthrough": "**透传**: `/skill:名称`、提示词模板、扩展命令会直接执行;普通文本发给模型。可用 /skills 查看技能列表。",
+
+  // ── cmd.update(/update 热更新命令族,spec:hot-update-command)─────────
+  "cmd.update.unavailable": "ℹ️ /update 未装配(当前部署不支持)。",
+  "cmd.update.notManagementRoom": "❌ /update 仅可在管理房使用。",
+  "cmd.update.rootDenied": "❌ 桥正以 root 运行,/update 拒绝执行(npm 脚本提权风险)。请改用停机更新:pi-courier update。",
+  "cmd.update.rejectedArgs": "❌ /update 不接受版本号、URL 或路径等参数(唯一来源:npm 的 latest 标签)。可用:/update、/update check、/update force、/update cancel。",
+  "cmd.update.check.upToDate": "✅ 已是最新版本(v{version})。",
+  "cmd.update.check.hasNew": "🆕 发现新版本:v{from} → v{to}。发送 /update 开始更新(任务不中断)。",
+  "cmd.update.check.failed": "❌ 版本检查失败:{message}",
+  "cmd.update.started": "🚀 开始更新:v{from} → v{to}(升级期间任务照常服务,完成后自动重启)。",
+  "cmd.update.busyWaiting": "⏳ {count} 个任务在跑,全部完成后自动开始更新(超 {minutes} 分钟未空闲则取消;期间新消息照常排队)。",
+  "cmd.update.unreachableNote": "(另有 {count} 个实例暂不可查询——pi 重启窗口,同样等待其就绪。)",
+  "cmd.update.waitProgress": "⏳ 更新等待中:{count} 个任务仍在跑(已等 {minutes} 分钟)。",
+  "cmd.update.waitingUnreachableOnly": "⏳ 暂无法确认全部实例空闲({count} 个实例查询失败或正处重启窗口),就绪后自动开始更新(超 {minutes} 分钟未确认则取消;期间新消息照常排队)。",
+  "cmd.update.restartWait": "🔄 新代码已上磁盘,等待全部任务空闲后自动重启(超 {minutes} 分钟未空闲则取消,可随时手动 pi-courier restart)。",
+  "cmd.update.restartProgress": "🔄 重启等待中:{count} 个任务仍在跑(已等 {minutes} 分钟)。",
+  "cmd.update.waitTimeout": "⏰ 等待空闲超时({minutes} 分钟),本次更新已取消。任务结束后可用 /update force 重试。",
+  "cmd.update.cancelled": "🛑 已取消更新等待。",
+  "cmd.update.noPending": "ℹ️ 当前没有进行中的更新。",
+  "cmd.update.inProgress": "⏳ 更新已在进行中,请等待完成(等待期可 /update cancel)。",
+  "cmd.update.npmFailed": "❌ 升级失败:{message}\n旧版继续运行,桥未受影响。",
+  "cmd.update.installed": "📦 新代码已写入磁盘:v{from} → v{to}(当前进程仍跑旧版)。",
+  "cmd.update.restarting": "🔄 全部任务已空闲,正在重启服务以加载新版本…",
+  "cmd.update.restartFailed": "⚠️ 自动重启失败({message}):新代码已在磁盘,请手动执行 pi-courier restart。",
+  "cmd.update.manualRestart": "ℹ️ 新代码已写入磁盘(v{from} → v{to})。本桥未由活动的 systemd 单元管理(或平台无 systemd),请手动执行 pi-courier restart 生效。",
+  "cmd.update.manualRestartHint": "⚠️ 新代码已写入磁盘(v{from} → v{to}),但任务未空闲/等待已取消。空闲后请手动执行 pi-courier restart(重启后仍会收到完成回执)。",
+  "cmd.update.done": "✅ 更新完成:v{from} → v{to}。",
+  "cmd.update.doneVersionMismatch": "⚠️ 磁盘实际版本(v{actual})与预期(v{to})不一致,更新可能未生效,请检查。",
 
   // ── router(管道回执,message-router.ts)──────────────────────────────
   "common.unknownError": "未知错误",
@@ -231,7 +376,16 @@ const zh = {
   "router.attach.inject.sourced": "用户 {user} 在房间 {room} 发来附件(请用 read 工具查看):",
   "router.quote.prefix": "「引用自 @{user} 的历史消息:{excerpt}」",
   "audit.degraded": "⚠️ 审计日志不可用,服务继续运行但敏感动作暂无记录:{message}",
-  "guest.denied": "🚫 此命令需要信任用户权限:{command}",
+
+  // ── resilience(进程韧性,spec #247)────────────────────────────────
+  "crash.notice": "💥 桥进程遇到未捕获异常,即将有序退出:{reason}",
+  "resilience.diskSoft": "⚠️ 磁盘剩余空间偏低:{free}MB(软阈值 {threshold}MB)。请尽快清理;低于硬阈值 {hard}MB 时进程会自动退出。",
+  "resilience.diskRecovered": "✅ 磁盘剩余空间已恢复:{free}MB(软阈值 {threshold}MB),告警解除。",
+  "resilience.diskHardExit": "🚨 磁盘剩余空间低于硬阈值:{free}MB < {threshold}MB,进程即将有序退出。",
+  "resilience.heapAlert": "⚠️ 堆内存用量超限:{percent}%(阈值 {threshold}%),可能存在内存泄漏,请关注。",
+  "resilience.writeFailure": "⚠️ 磁盘写入失败({code}),已聚合 {count} 条(挂点:{sources});5 分钟内不重复告警。",
+  "resilience.rpcRespawnGaveUp": "🚨 pi 进程({label})反复崩溃 {count} 次,已停止自动拉起。请人工排查后用 /reload 恢复。",
+  "resilience.rpcLabelDefault": "默认进程",  "guest.denied": "🚫 此命令需要信任用户权限:{command}",
   "router.attach.saved": "📎 附件已保存: {path}({bytes})\n下一条消息发送时会自动附上它。",
   "router.payload.unsupported": "🤷 暂不支持的消息类型({msgtype}),已忽略。文字、图片和文件都可以直接发给我。",
   "router.enable.usage": "用法: /enable <all|mentions|trusted-only>(本房间)",
@@ -557,6 +711,7 @@ const zh = {
     "❌ 服务管理子命令({cmd})目前仅支持 Linux(systemd)。Windows 上请前台运行 `pi-courier run`;开机自启用任务计划程序或 NSSM 包一层,详见 README 的 Windows 章节。",
   "cli.service.statusFailed": "⚠️ 服务状态查询失败(退出码 {status})——以下为 journald 历史日志,不代表服务当前在运行。",
   "cli.service.singleProjectNoFilter": "❌ 当前为单工程模式,日志不区分项目(多工程模式才打项目标签)。",
+  "cli.service.stopMarkerFailed": "⚠️ 无法写人工停止标记({path});若看门狗在运行,服务停止后可能被重新拉起。",
   "cli.disable.notInstalled": "❌ 服务未安装(unit 文件不存在)。",
   "cli.disable.keptUnit": "ℹ️ unit 文件已保留,修复环境后可再次 `pi-courier disable` 或直接 `pi-courier enable`。",
   "cli.disable.ok": "✅ 服务已停止并卸载。以后要恢复:`pi-courier enable`(配置不受影响)。",

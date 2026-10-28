@@ -1,0 +1,332 @@
+#!/usr/bin/env node
+/**
+ * pi-courier 看门狗 —— 判定核心(spec #247 票06)。
+ *
+ * 零桥代码依赖:只读桥的心跳文件(~/.pi/pi-courier-state/heartbeat.json,
+ * 由桥内周期自检 tick 每 30 秒原子写),按需执行注入的「判活 / 任务控制 /
+ * 告警」命令。平台壳(POSIX bash / Windows PowerShell)只做参数解析与调用
+ * 本核心 —— 判定逻辑只有这一份,两个平台共用。
+ *
+ * 判定规则:
+ *   - 人工停止标记存在(paused):桥在 `pi-courier stop`/`restart` 的正常
+ *     信号退出前写、下次启动清除 —— 运维主动停掉的服务不拉起、不告警。
+ *   - 心跳文件读不到(首次运行前):安装错误,不是进程死亡 —— 不告警、
+ *     不动作,stderr 记一行即可。
+ *   - 心跳时间戳未过期且 PID 仍存活:进程活着且在干活,零动作。
+ *   - PID 已不存在(无论心跳是否过期):进程死亡,直接重启 —— 「进程刚死、
+ *     心跳还新鲜」也要立刻拉起,不必等满过期窗口;但心跳年龄不足 2 × 心跳
+ *     间隔时先给重启中的新实例一个宽限期(旧心跳 + 已死 PID 正是
+ *     systemd RestartSec 窗口的形态,立即重启会把正在启动的实例再踢一次)。
+ *     心跳时间戳落在未来(系统时钟回拨)无法衡量宽限期,只记 stderr;此时
+ *     PID 已死立即判死,避免「永远等不到过期」。
+ *   - 心跳过期但 PID 仍存活:僵死(活着不干活)。Windows 序列必须先杀
+ *     (单实例锁不抢占,不杀则新实例秒退,看门狗陷入「每分钟拉起→秒退」
+ *     死循环);POSIX 的 `systemctl --user restart` 天然先 stop 后 start,
+ *     两形态都成立,不需要额外步骤 —— 壳是否传 --kill-command 决定差异。
+ *   - 心跳过期且 PID 已不存在:进程死亡,直接重启。
+ *
+ * 结束任务命令(end-command,可选,Windows 壳专用):在杀旧之后、重启之前
+ * 无条件执行一次;失败只记 stderr 不阻断 —— `schtasks /end` 对未运行的
+ * 任务会返回非零,而「已死」分支恰恰常见,若把它和 `/run` 串成 `&&`,
+ * 重启会被永远跳过。POSIX 壳不传此参数(`systemctl restart` 自己完成 stop)。
+ *
+ * 「多久算死」的过期秒数单点归属本脚本(桥的韧性配置段刻意不含此键):
+ *   默认 180 秒 = 6 × 30 秒心跳间隔。桥侧改 config
+ *   resilience.heartbeatIntervalSeconds 时,此处(--stale-seconds 或安装
+ *   命令里的参数)同步调整;README 安装步骤与本注释互指。
+ *
+ * 安装(spec #247,详见 README「看门狗」章节):cron / systemd timer 每分钟
+ * 触发本脚本的平台壳;命令与参数见壳文件头注释(与 deploy/pi-courier.user.service
+ * 同风格)。
+ */
+
+import { execSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+/** 心跳过期默认秒数:180 = 6 × 30 秒心跳间隔(换算关系见文件头)。 */
+export const DEFAULT_STALE_SECONDS = 180;
+
+/** 心跳间隔默认秒数(与桥 config resilience.heartbeatIntervalSeconds 一致):
+ *  「心跳仍新鲜但 PID 消失」的宽限期 = 2 × 该值(覆盖 RestartSec + 首拍延迟)。 */
+export const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30;
+
+/** 默认心跳文件路径(桥的派生状态目录,票02 的写侧契约)。 */
+export function defaultHeartbeatPath() {
+  return path.join(os.homedir(), ".pi", "pi-courier-state", "heartbeat.json");
+}
+
+/** 人工停止标记的默认路径:与心跳同目录(桥在正常信号退出前写、启动时清)。
+ *  看门狗看到标记就跳过本轮判定,避免把运维刚 `pi-courier stop` 掉的服务
+ *  当崩溃重新拉起并告警。 */
+export function defaultPauseMarkerPath(heartbeatPath) {
+  return path.join(path.dirname(heartbeatPath), "watchdog-paused");
+}
+
+/** 判活(POSIX/Windows 通用):kill(pid, 0) 只探测不杀。ESRCH=不存在;
+ *  EPERM=存在但无权发信号(他人进程)= 活。 */
+export function defaultPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+
+/** 读心跳(票02 写侧契约:{ ts, pid, ... });缺失/坏 JSON/缺关键字段一律
+ *  按「读不到」处理(missing —— 安装错误,不告警不动作)。返回 null 或
+ *  { ts, pid }。 */
+export function readHeartbeat(filePath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+  try {
+    const beat = JSON.parse(raw);
+    if (typeof beat.ts !== "number" || typeof beat.pid !== "number") return null;
+    return { ts: beat.ts, pid: beat.pid };
+  } catch {
+    return null;
+  }
+}
+
+/** 按宿主 shell 给单个值加引号(告警消息可能含空格/括号)。
+ *  POSIX:单引号包裹,内部 ' 转义为 '\'';Windows(cmd.exe):双引号包裹,
+ *  内部 " 转义为 \"。平台壳的模板不含引号,由这里统一负责。 */
+export function shellQuote(value) {
+  const text = String(value);
+  if (process.platform === "win32") return `"${text.replaceAll('"', '\\"')}"`;
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+/** 命令模板占位符替换:{pid}=心跳 PID,{message}=告警文本(壳传入)。
+ *  quoteMessage=true 时 {message} 按宿主 shell 加引号(告警命令专用;
+ *  默认英文消息含 `STALE (heartbeat frozen, pid alive)` 这类括号,裸替换
+ *  会让 /bin/sh -c 报语法错,告警直接丢失)。 */
+export function fillCommand(template, vars, opts = {}) {
+  const rawMessage = vars.message ?? "";
+  const message = opts.quoteMessage ? shellQuote(rawMessage) : rawMessage;
+  return template.replaceAll("{pid}", String(vars.pid)).replaceAll("{message}", message);
+}
+
+/**
+ * 判定 + 动作执行(壳的薄壳化使然:全部决策在这里,壳只传参)。
+ * opts 字段:
+ *   heartbeatPath    心跳文件路径
+ *   pauseMarkerPath  人工停止标记路径(默认:心跳同目录/watchdog-paused)
+ *   heartbeatIntervalSeconds 心跳间隔秒(默认 30;新鲜心跳+PID 死的宽限期 = 2×)
+ *   staleSeconds     过期秒(默认 DEFAULT_STALE_SECONDS;壳从命令行透传)
+ *   nowMs            时间源(测试注入 fake 时钟)
+ *   readHeartbeatFn  读心跳缝(测试注入;默认 readHeartbeat)
+ *   pidAliveFn       判活缝(测试注入;默认 defaultPidAlive)
+ *   runFn            任务控制命令缝(测试注入 fake;默认 execSync)
+ *   killCommand      僵死分支杀旧命令(POSIX 留空;Windows 传 taskkill,票07)
+ *   endCommand       结束任务命令(可选;Windows 传 schtasks /end,失败不阻断)
+ *   restartCommand   重启命令(必填;{pid} 占位)
+ *   alertCommand     告警命令(可选;{message}/{pid} 占位;失败只记 stderr)
+ *   alertMessage     告警文本(核心按判定结果拼默认值,英文 —— 公开仓库
+ *                    口径,独立部署产物不进桥的 i18n 双表)
+ * 返回 { verdict, actions, pid?, pidAlive?, restartFailed? }:
+ *   verdict: missing=心跳读不到(安装错误);paused=人工停止标记存在(跳过);
+ *            ok=未过期零动作;stale=僵死(PID 活);dead=已死。
+ *   restartFailed: true = 重启命令本身失败(此时仍尽力发告警,CLI 以非零码
+ *   退出,便于计划任务历史里看到失败)。
+ *   killFailed: true = 僵死分支的杀旧命令失败(继续 end/run 并告警,提示
+ *   人工确认旧实例是否仍在)。
+ */
+export function runWatchdogCore(opts) {
+  const staleSeconds = opts.staleSeconds ?? DEFAULT_STALE_SECONDS;
+
+  // 人工停止标记优先于一切判定:运维刚 `pi-courier stop` 掉的服务不该被
+  // 看门狗拉回来。标记由桥在正常信号退出前写、下次启动时清除。
+  const pauseMarkerPath = opts.pauseMarkerPath ?? defaultPauseMarkerPath(opts.heartbeatPath);
+  let paused = false;
+  try {
+    paused = fs.existsSync(pauseMarkerPath);
+  } catch {
+    paused = false;
+  }
+  if (paused) {
+    process.stderr.write(
+      `[watchdog] manual stop marker present (${pauseMarkerPath}) — service was stopped on purpose; nothing to do.\n`
+    );
+    return { verdict: "paused", actions: [] };
+  }
+
+  const beat = (opts.readHeartbeatFn ?? readHeartbeat)(opts.heartbeatPath);
+  if (!beat) {
+    process.stderr.write(
+      `[watchdog] heartbeat not found at ${opts.heartbeatPath} — first run yet? Nothing to do (installation issue, not a crash).\n`
+    );
+    return { verdict: "missing", actions: [] };
+  }
+  const ageMs = (opts.nowMs ?? Date.now()) - beat.ts;
+  const alive = (opts.pidAliveFn ?? defaultPidAlive)(beat.pid);
+  const expired = ageMs >= staleSeconds * 1000;
+  // 心跳新鲜 + PID 活 = 健康。其余两种失能形态都继续:
+  //   expired + alive  → stale(僵死,需要先杀)
+  //   !expired + !alive → dead(进程刚死,立刻拉起,不等过期)
+  if (!expired && alive) {
+    return { verdict: "ok", actions: [] };
+  }
+
+  // 重启宽限:旧实例已死但心跳还不满 2 × 心跳间隔 —— 很可能是 systemd
+  // RestartSec / stop→start 窗口里的上一份心跳,新实例尚未来得及写。
+  // 取 2× 而非 1×,覆盖 RestartSec(5s)+ 新实例首拍延迟的余量。
+  // 心跳时间戳在未来(负 age)无法测量宽限,不做宽限判断(futureTimestamp),
+  // 死 PID 直接判死,避免宽限条件恒真、永远等不到过期。
+  const futureTimestamp = ageMs < 0;
+  const graceMs = (opts.heartbeatIntervalSeconds ?? DEFAULT_HEARTBEAT_INTERVAL_SECONDS) * 2000;
+  if (futureTimestamp) {
+    process.stderr.write(
+      `[watchdog] heartbeat timestamp is in the future (${beat.ts} > now) — clock skew; staleness is unreliable, dead PIDs are judged immediately.\n`
+    );
+  } else if (!expired && !alive && ageMs < graceMs) {
+    process.stderr.write(
+      `[watchdog] heartbeat is fresh (${ageMs}ms) but pid ${beat.pid} is gone — within the restart grace (${graceMs}ms = 2 × heartbeat interval); waiting for the next round.\n`
+    );
+    return { verdict: "ok", actions: [] };
+  }
+
+  const verdict = alive ? "stale" : "dead";
+  const actions = [];
+  const run = opts.runFn ?? ((command) => execSync(command, { stdio: "pipe" }));
+
+  // 僵死且壳给了杀旧命令(Windows):先杀后起 —— 单实例锁对活进程不抢占。
+  // kill 失败(权限不足 / PID 在判活与 taskkill 之间消失)不能裸抛把
+  // end/run/告警全部跳过;继续走后续步骤,并在告警里标 KILL FAILED。
+  let killFailed = false;
+  let killError;
+  if (verdict === "stale" && opts.killCommand) {
+    try {
+      run(fillCommand(opts.killCommand, { pid: beat.pid }));
+      actions.push("kill");
+    } catch (err) {
+      killFailed = true;
+      killError = err;
+      actions.push("kill-failed");
+      process.stderr.write(`[watchdog] kill command failed: ${String(err)}\n`);
+    }
+  }
+  // 结束任务实例(Windows):任务可能在进程死后仍卡 Running,不先 end,
+  // 随后的 run 会被「禁止同任务并行实例」拒绝。end 对未运行任务返回非零
+  // 属预期(已死分支),失败只记 stderr,绝不阻断 run。
+  if (opts.endCommand) {
+    try {
+      run(fillCommand(opts.endCommand, { pid: beat.pid }));
+      actions.push("end");
+    } catch (err) {
+      process.stderr.write(`[watchdog] end command failed (continuing to restart): ${String(err)}\n`);
+    }
+  }
+  let restartFailed = false;
+  let restartError;
+  try {
+    run(fillCommand(opts.restartCommand, { pid: beat.pid }));
+    actions.push("restart");
+  } catch (err) {
+    // 重启失败恰恰最需要告警:不能在这里直接抛出把后面的 alert 跳过。
+    restartFailed = true;
+    restartError = err;
+    actions.push("restart-failed");
+    process.stderr.write(`[watchdog] restart command failed: ${String(err)}\n`);
+  }
+
+  if (opts.alertCommand) {
+    const state = verdict === "stale" ? "STALE (heartbeat frozen, pid alive)" : "DEAD (pid gone)";
+    const problems = [];
+    if (killFailed) problems.push(`KILL FAILED (${String(killError)})`);
+    if (restartFailed) problems.push(`RESTART FAILED (${String(restartError)})`);
+    const message =
+      opts.alertMessage ??
+      (problems.length > 0
+        ? `pi-courier watchdog: service was ${state}; ${problems.join("; ")} — manual intervention may be required.`
+        : `pi-courier watchdog: service was ${state} and has been restarted.`);
+    try {
+      // {message} 必须按宿主 shell 加引号:默认消息含括号/空格,裸替换会
+      // 让 /bin/sh -c 语法错,告警在「最需要通知」时静默丢失。
+      run(fillCommand(opts.alertCommand, { pid: beat.pid, message }, { quoteMessage: true }));
+      actions.push("alert");
+    } catch (err) {
+      process.stderr.write(`[watchdog] alert command failed (restart already attempted): ${String(err)}\n`);
+    }
+  }
+  return { verdict, actions, pid: beat.pid, pidAlive: alive, restartFailed, killFailed };
+}
+
+/**
+ * CLI 参数解析(壳透传;导出以便测试直测)。
+ *   --heartbeat <path>       心跳文件(默认 ~/.pi/pi-courier-state/heartbeat.json)
+ *   --pause-marker <path>    人工停止标记(默认与心跳同目录/watchdog-paused)
+ *   --heartbeat-interval-seconds <n>  心跳间隔秒(默认 30;PID 消失后的宽限)
+ *   --stale-seconds <n>      过期秒(默认 180 = 6 × 30s 心跳间隔)
+ *   --restart-command <cmd>  重启命令(必填)
+ *   --kill-command <cmd>     杀旧命令(可选,Windows 壳专用;{pid} 占位)
+ *   --end-command <cmd>      结束任务命令(可选,Windows 壳专用;失败不阻断)
+ *   --alert-command <cmd>    告警命令(可选;{message}/{pid} 占位)
+ */
+export function parseCoreArgs(argv) {
+  const result = {};
+  for (let i = 0; i < argv.length; i++) {
+    switch (argv[i]) {
+      case "--heartbeat":
+        result.heartbeatPath = argv[++i];
+        break;
+      case "--pause-marker":
+        result.pauseMarkerPath = argv[++i];
+        break;
+      case "--stale-seconds":
+        result.staleSeconds = Number.parseInt(argv[++i] ?? "", 10);
+        break;
+      case "--heartbeat-interval-seconds":
+        result.heartbeatIntervalSeconds = Number.parseInt(argv[++i] ?? "", 10);
+        break;
+      case "--restart-command":
+        result.restartCommand = argv[++i];
+        break;
+      case "--kill-command":
+        result.killCommand = argv[++i];
+        break;
+      case "--end-command":
+        result.endCommand = argv[++i];
+        break;
+      case "--alert-command":
+        result.alertCommand = argv[++i];
+        break;
+      default:
+        process.stderr.write(`[watchdog] unknown argument: ${argv[i]}\n`);
+        return null;
+    }
+  }
+  if (!result.restartCommand) {
+    process.stderr.write("[watchdog] --restart-command is required\n");
+    return null;
+  }
+  return {
+    heartbeatPath: result.heartbeatPath ?? defaultHeartbeatPath(),
+    ...(result.pauseMarkerPath ? { pauseMarkerPath: result.pauseMarkerPath } : {}),
+    ...(result.staleSeconds !== undefined && Number.isFinite(result.staleSeconds)
+      ? { staleSeconds: result.staleSeconds }
+      : {}),
+    ...(result.heartbeatIntervalSeconds !== undefined && Number.isFinite(result.heartbeatIntervalSeconds)
+      ? { heartbeatIntervalSeconds: result.heartbeatIntervalSeconds }
+      : {}),
+    restartCommand: result.restartCommand,
+    ...(result.killCommand ? { killCommand: result.killCommand } : {}),
+    ...(result.endCommand ? { endCommand: result.endCommand } : {}),
+    ...(result.alertCommand ? { alertCommand: result.alertCommand } : {}),
+  };
+}
+
+// 直接执行:node watchdog-core.mjs --restart-command "..."
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+  const opts = parseCoreArgs(process.argv.slice(2));
+  if (!opts) process.exit(2);
+  const result = runWatchdogCore(opts);
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+  if (result.restartFailed) process.exitCode = 1;
+}

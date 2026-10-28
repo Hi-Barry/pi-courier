@@ -131,4 +131,16 @@ describe("resolveCliPath — pi.dev managed install (issue #111)", () => {
     expect(resolved).toMatch(/cli\.js$/);
     expect(resolved).toContain(path.join("dist"));
   });
+
+  it("配置段(config.cliPath ← PI_CLI_PATH)是权威头段:有配置直接采用,不走发现链", async () => {
+    // PATH 置空 + 不造任何安装:发现链必然落到 node_modules 或抛错;
+    // 配置段必须抢先返回,证明头段在发现链之前(与桥子进程同源)。
+    process.env.PATH = "";
+
+    await expect(PiRpc.resolveCliPath("/configured/pi/dist/cli.js")).resolves.toBe(
+      "/configured/pi/dist/cli.js",
+    );
+    // 空串/undefined 视同未配置,照常走发现链。
+    await expect(PiRpc.resolveCliPath("")).resolves.toMatch(/cli\.js$/);
+  });
 });

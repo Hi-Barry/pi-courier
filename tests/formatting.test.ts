@@ -217,8 +217,8 @@ describe('formatToolCalls', () => {
     expect(formatToolCalls(msg)).toBe('');
   });
 
-  it('truncates long argument values at 50 chars', () => {
-    const longVal = 'x'.repeat(100);
+  it('truncates long argument values at the default 100 chars', () => {
+    const longVal = 'x'.repeat(200);
     const msg = {
       content: [
         {
@@ -229,8 +229,45 @@ describe('formatToolCalls', () => {
       ],
     } as any;
     const result = formatToolCalls(msg);
-    // 50 chars: 47 x's + "..."
-    expect(result).toContain('content=' + 'x'.repeat(47) + '...');
+    // 100 chars: 97 x's + "..."
+    expect(result).toContain('content=' + 'x'.repeat(97) + '...');
+    expect(result).not.toContain('x'.repeat(98));
+  });
+
+  it('honors a custom per-argument limit', () => {
+    const longVal = 'x'.repeat(100);
+    const msg = {
+      content: [{ type: 'toolCall', name: 'bash', arguments: { command: longVal } }],
+    } as any;
+    const result = formatToolCalls(msg, 20);
+    // 20 chars: 17 x's + "..."
+    expect(result).toContain('command=' + 'x'.repeat(17) + '...');
+    expect(result).not.toContain('x'.repeat(18));
+  });
+
+  it('leaves a value exactly at the limit untouched', () => {
+    const exact = 'y'.repeat(100);
+    const msg = {
+      content: [{ type: 'toolCall', name: 'read', arguments: { path: exact } }],
+    } as any;
+    const result = formatToolCalls(msg);
+    expect(result).toContain('path=' + exact + ')');
+    expect(result).not.toContain('...');
+  });
+
+  it('applies the limit to each argument independently, not to the whole line', () => {
+    const msg = {
+      content: [
+        {
+          type: 'toolCall',
+          name: 'bash',
+          arguments: { command: 'a'.repeat(150), timeout: 'b'.repeat(150) },
+        },
+      ],
+    } as any;
+    const result = formatToolCalls(msg);
+    expect(result).toContain('command=' + 'a'.repeat(97) + '...');
+    expect(result).toContain('timeout=' + 'b'.repeat(97) + '...');
   });
 
   it('joins multiple tool calls with newlines', () => {
