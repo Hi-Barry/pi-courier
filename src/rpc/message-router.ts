@@ -33,6 +33,7 @@ import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
+import type { UpdateOrchestrator } from "../update/updater.js";
 import type { PersistedAttachmentEntry } from "./attachment-ledger.js";
 import { AttachmentLedger } from "./attachment-ledger.js";
 import { BacklogInbox } from "./backlog-inbox.js";
@@ -122,6 +123,11 @@ export interface MessageRouterDeps {
    * 开卡。缺省未注入 = 聚合整体禁用(与 editReply 同门)。
    */
   sendLiveCard?: (chatId: string, transport: string, text: string) => Promise<string | undefined>;
+  /** /update 热更新编排器(桥自更新 spec §8):组合根构造注入 —— slashCommands
+   *  阶段按本消息预绑定 IO(reply 缝、adminRoom、allRpcs、audit)交给它。
+   *  依赖面取最小结构(路由侧只调 handleCommand);Absent = /update 回
+   *  unavailable 文案(命令层已处理),行为与未接线一致。 */
+  updater?: Pick<UpdateOrchestrator, "handleCommand">;
 }
 
 /**
@@ -1095,6 +1101,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             bashTracker,
             // bash 回帖截断上限(config bashOutputLimit;`!`/`!!` 与 /bash 共用一份派生值)
             bashOutputLimit: bashOutputLimit(store.get()),
+            // /update 热更新(桥自更新 spec §4):adminRoom 按 login 的既定口径
+            // 计算 —— 多工程看管理房收养结果;单工程没有管理房,DM 即管理房。
+            // 不传 ctx.isManagementRoom:单工程下它恒 false(multiProject 可选
+            // 默认 false),照传会让 /update 成为死路。
+            adminRoom: ctx.multiProject ? ctx.isManagementRoom : !ctx.msg.isGroupChat,
+            // 编排器插槽:组合根注入的 UpdateOrchestrator,状态机的同步段固定
+            // 顺序(§5.3)在其 handleCommand 内。Absent = /update 回 unavailable。
+            updater: deps.updater ? { handle: (args, io) => deps.updater!.handleCommand(args, io) } : undefined,
             // 审计缝(issue #124):命令层只报「发生了什么」,落账仍在 router
             //(/stop //interrupt 的真实清队、/bash 的 shell 执行由此上报)。
             audit: (event, detail) => auditTrail(event, ctx.msg, detail),

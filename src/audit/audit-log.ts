@@ -47,6 +47,11 @@ export const AUDIT_EVENTS = {
   backlogExecute: "backlog.execute",
   guestDenied: "guest.denied",
   modelFallback: "model.fallback",
+  // /update 热更新命令族(桥自更新 spec §7):发起走 COMMAND_REGISTRY 的
+  // auditEvent 位;取消由命令层经 ctx.audit 缝上报;完成在启动消费时落账。
+  update: "update",
+  updateCancel: "update.cancel",
+  updateDone: "update.done",
 } as const;
 
 export interface AuditLogOptions {

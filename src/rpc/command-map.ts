@@ -27,6 +27,7 @@ import { type MessageKey, t } from "../i18n/index.js";
 import { logger } from "../logger.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
 import { MAX_REMINDERS_PER_ROOM, type ReminderEntry } from "../reminders/reminder-store.js";
+import type { UpdateCommandIO } from "../update/updater.js";
 import { findModelMatch, sameModel } from "./model-switch.js";
 import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
 import { BashTimeoutError, upstreamClearQueueSend } from "./pi-rpc.js";
@@ -69,6 +70,16 @@ export interface SlashCommandContext {
   /** Every rpc of this instance (default + started project rpcs) — enables
    *  `/reload all` (issue #55). Absent = /reload stays single-process. */
   allRpcs?: () => PiRpc[];
+  /** /update 热更新(桥自更新 spec §4):本消息是否管理房语境 —— router 按
+   *  login 先例计算(multiProject ? isManagementRoom : !isGroupChat;单工程
+   *  DM 即管理房)。Absence/false = 非管理房,编排器守卫拒绝。 */
+  adminRoom?: boolean;
+  /** /update 编排器插槽(发起/取消/查询的最小接口,同步段固定顺序在编排器
+   *  的 handleCommand 内,§5.3)。Absence = 未装配,回 cmd.update.unavailable
+   *  —— 不落回 pi(落回会把命令文本喂给模型)。 */
+  updater?: {
+    handle: (args: string, io: UpdateCommandIO) => Promise<boolean>;
+  };
   /** 在跑 bash 记账(/bashstop 的"列出"数据源)。Absence = /bashstop 只能
    *  盲停(仍然可用:上游 abortBash 无在跑命令时是无害空操作)。 */
   bashTracker?: BashTracker;
@@ -369,6 +380,86 @@ export async function waitForAgentIdle(
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   throw new Error("agent did not become idle after abort");
+}
+
+// --- All-agents idle (update orchestrator, hot-update spec §5.3) -------------
+
+/** 全实例探测的一笔账:确认在跑的实例数 + 查不动的实例数。 */
+export interface AllAgentsProbe {
+  streaming: number;
+  unreachable: number;
+}
+
+/** 全实例空闲等待选项(超时/间隔默认与单实例版同源;测试注入短值)。 */
+export interface WaitForAllAgentsIdleOptions {
+  timeoutMs?: number;
+  intervalMs?: number;
+  /** 每轮探测后的回调(编排器的预告与进度回报数据源)。 */
+  onTick?: (probe: AllAgentsProbe) => void | Promise<void>;
+  /** 取消缝:返回 true 立即正常返回(是否真是 cancel 由编排器按代次仲裁)。 */
+  shouldAbort?: () => boolean;
+}
+
+/** 等待超时的类型化错误:detail 带最终计数 —— 便于区分「任务真没跑完」
+ *  与「实例挂了导致的假等待」。 */
+export class AllAgentsIdleTimeoutError extends Error {
+  constructor(public readonly probe: AllAgentsProbe) {
+    super(`agents did not all become idle (streaming=${probe.streaming}, unreachable=${probe.unreachable})`);
+    this.name = "AllAgentsIdleTimeoutError";
+  }
+}
+
+/**
+ * 对全部实例各做一次忙闲探测(编排器发起时判定三分支用)。
+ *
+ * 单实例查询抛错(requireClient 未连接时同步抛,pi-rpc.ts:666-674 ——
+ * 默认进程未连接 / 项目进程 restart 的 stop→start 窗口;lazy 未启动的项目
+ * 进程不在 allRpcs() 里、不在返回值里,不在此列)→ 该实例计入 unreachable,
+ * 不算空闲 —— 确认不了空闲就不重启,宁多等不误杀任务;「查不动的实例单独
+ * 记账、不混入判定」的口径先例见 restartIdleRpcs 的 catch→skipped。
+ */
+export async function probeAllAgents(rpcs: readonly PiRpc[]): Promise<AllAgentsProbe> {
+  const results = await Promise.all(
+    rpcs.map(async (rpc): Promise<boolean | null> => {
+      try {
+        return (await rpc.requireClient().getState()).isStreaming;
+      } catch {
+        return null; // unreachable:查不动 ≠ 空闲
+      }
+    })
+  );
+  let streaming = 0;
+  let unreachable = 0;
+  for (const result of results) {
+    if (result === null) unreachable += 1;
+    else if (result) streaming += 1;
+  }
+  return { streaming, unreachable };
+}
+
+/**
+ * 全实例忙闲等待:每 tick 对每个实例探测,全部实例【确认】空闲才返回 ——
+ * 单实例 waitForAgentIdle 的全实例变体(桥自更新 spec §5.3)。
+ *
+ * 与单实例版同一决策:保持轮询而非订阅事件 —— 上游 waitForIdle 只订阅
+ * 未来的 agent_settled、不查当前状态,abort 先于订阅 settle 时必假超时
+ * (waitForAgentIdle 注释,2026-10-11 真机复现)。单实例版保持不动
+ * (//interrupt 的语义与既有验收不破坏)。
+ */
+export async function waitForAllAgentsIdle(
+  rpcs: readonly PiRpc[],
+  options: WaitForAllAgentsIdleOptions = {}
+): Promise<void> {
+  const { timeoutMs = 30 * 60_000, intervalMs = 150, onTick, shouldAbort } = options;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (shouldAbort?.()) return;
+    const probe = await probeAllAgents(rpcs);
+    await onTick?.(probe);
+    if (probe.streaming === 0 && probe.unreachable === 0) return;
+    if (Date.now() >= deadline) throw new AllAgentsIdleTimeoutError(probe);
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
 }
 
 /** /stop 与 //interrupt 共用的清队机制(issue #112):快照 → 上游清队,
@@ -932,6 +1023,26 @@ export async function handleSlashCommand(
           await reply(t("cmd.reload.failed", { message: errorMessage(err) }));
         }
         return true;
+      }
+
+      // --- Hot update (/update family, 桥自更新 spec) -------------------------
+      case "/update": {
+        // 同步段固定顺序(§5.3 硬契约):①子命令分派(check/cancel)→ ②同步
+        // 守卫链(root/管理房/参数)→ ③编排分支 CAS 占位 —— 全部在编排器的
+        // handleCommand 内零 await 完成,首个 await 之前占位已落定(async 函数
+        // 首个 await 前同步执行)。预告回执完成后立即返回 true;等待/安装/
+        // 重启由编排器后台循环驱动,不 await 进命令调用栈。未装配不落回 pi
+        // (落回会把命令文本喂给模型),回 unavailable 文案(recap 先例的反例)。
+        if (!ctx.updater) {
+          await reply(t("cmd.update.unavailable"));
+          return true;
+        }
+        return await ctx.updater.handle(args, {
+          reply,
+          adminRoom: ctx.adminRoom === true,
+          allRpcs: ctx.allRpcs ?? (() => [rpc]),
+          audit: ctx.audit,
+        });
       }
 
       // --- Model / thinking --------------------------------------------------
