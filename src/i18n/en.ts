@@ -601,6 +601,8 @@ Note: pi itself is installed and upgraded independently on the system
     "⚠️ The status query failed (exit code {status}) — the journald output below is HISTORY and does not mean the service is running.",
   "cli.service.singleProjectNoFilter":
     "❌ Single-project mode: logs are not tagged per project (project tags exist only in multi-project mode).",
+  "cli.service.stopMarkerFailed":
+    "⚠️ Could not write the manual-stop marker ({path}); if the watchdog is running, it may restart the service after it stops.",
   "cli.disable.notInstalled": "❌ Service not installed (the unit file does not exist).",
   "cli.disable.keptUnit":
     "ℹ️ The unit file was kept; after fixing the environment, re-run `pi-courier disable` or just `pi-courier enable`.",

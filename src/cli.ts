@@ -21,12 +21,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { effectiveLanguage, loadConfig } from "./config.js";
+import { CONFIG_DIR, effectiveLanguage, loadConfig } from "./config.js";
 import { errorMessage } from "./errors.js";
 import { setLocale, t } from "./i18n/index.js";
 import { buildLogFilterArgs } from "./log-filter.js";
 import { globalNodeModulesDir, resolveNpmCli } from "./npm-runtime.js";
 import { projectLabelOf } from "./project-labels.js";
+import { clearManualStop, manualStopMarkerPath, markManualStop } from "./resilience/manual-stop.js";
 import { busFailureHint, dirOwnerUid, serviceManagementSupported } from "./systemd-hint.js";
 import { readBridgeVersion } from "./version.js";
 import { suppressKnownWarnings } from "./warnings.js";
@@ -219,6 +220,20 @@ function runSystemctl(args: string[]): void {
   if (code !== 0) process.exit(code);
 }
 
+/**
+ * 人工停止标记(spec #247 评审):stop/disable 必须在调 systemctl 之前由
+ * CLI 自己落盘 —— 被停进程僵死时 Node 信号处理器根本跑不到,标记永远写不
+ * 出来,看门狗下一轮会把服务重新拉起。CLI 与被停进程同用户、同 stateDir。
+ * 写失败只告警不阻断停止。返回标记路径供失败回滚。
+ */
+function markManualStopIntent(): string {
+  const marker = manualStopMarkerPath(path.join(CONFIG_DIR, "pi-courier-state"));
+  if (!markManualStop(marker)) {
+    console.error(t("cli.service.stopMarkerFailed", { path: marker }));
+  }
+  return marker;
+}
+
 /** Project labels from the config (the single source `log-filter` matches against). */
 function projectLabels(): { labels: string[]; multiProject: boolean } {
   const config = loadConfig();
@@ -280,8 +295,13 @@ function cmdService(action: "start" | "stop" | "restart" | "status" | "logs", ar
     return;
   }
   // spawnSystemctlUser 自带 systemctl --user 前缀,这里只传其余参数
+  // stop 先写人工停止标记:进程僵死时信号处理器跑不到,只能由 CLI 落盘。
+  // restart 不写:它紧接着会启动新实例,新实例启动即清标记。
+  const stopMarker = action === "stop" ? markManualStopIntent() : undefined;
   const { status, stderr } = spawnSystemctlUser([action, SERVICE_NAME]);
   if (status !== 0) {
+    // 停止没成功:撤掉标记,否则看门狗会对一个仍在运行的服务失明。
+    if (stopMarker) clearManualStop(stopMarker);
     printBusHint(stderr);
     process.exit(status);
   }
@@ -295,7 +315,10 @@ function cmdDisable(): void {
     process.exit(1);
   }
   // Stop + remove from autostart, then delete the unit file (full uninstall).
+  // 与 stop 同款:先由 CLI 写人工停止标记,进程僵死也能落盘。
+  const stopMarker = markManualStopIntent();
   if (systemctlUser(["disable", "--now", SERVICE_NAME]) !== 0) {
+    clearManualStop(stopMarker); // 没停成:恢复看门狗判定
     // Issue #60: the failure path must not delete the unit — say so explicitly.
     console.error(t("cli.disable.keptUnit"));
     process.exit(1);

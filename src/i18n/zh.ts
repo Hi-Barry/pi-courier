@@ -566,6 +566,7 @@ const zh = {
     "❌ 服务管理子命令({cmd})目前仅支持 Linux(systemd)。Windows 上请前台运行 `pi-courier run`;开机自启用任务计划程序或 NSSM 包一层,详见 README 的 Windows 章节。",
   "cli.service.statusFailed": "⚠️ 服务状态查询失败(退出码 {status})——以下为 journald 历史日志,不代表服务当前在运行。",
   "cli.service.singleProjectNoFilter": "❌ 当前为单工程模式,日志不区分项目(多工程模式才打项目标签)。",
+  "cli.service.stopMarkerFailed": "⚠️ 无法写人工停止标记({path});若看门狗在运行,服务停止后可能被重新拉起。",
   "cli.disable.notInstalled": "❌ 服务未安装(unit 文件不存在)。",
   "cli.disable.keptUnit": "ℹ️ unit 文件已保留,修复环境后可再次 `pi-courier disable` 或直接 `pi-courier enable`。",
   "cli.disable.ok": "✅ 服务已停止并卸载。以后要恢复:`pi-courier enable`(配置不受影响)。",
