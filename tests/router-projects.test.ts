@@ -138,28 +138,32 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
 
 describe("buildTurnReply", () => {
   const textPart = (text: string) => ({ type: "text", text });
+  const toolPart = { type: "toolCall", name: "bash", arguments: {} };
 
   it("joins text parts into replyable text", () => {
     const msg = { content: [textPart("hello"), textPart("world")] } as unknown as AssistantMessage;
-    expect(buildTurnReply(msg)).toEqual({ text: "hello\nworld", pendingTools: false });
+    expect(buildTurnReply(msg)).toEqual({ text: "hello\nworld", toolsText: null, pendingTools: false });
   });
 
   it("reports pendingTools for tool-call turns", () => {
-    const msg = { content: [{ type: "toolCall", name: "bash", arguments: {} }] } as unknown as AssistantMessage;
-    expect(buildTurnReply(msg, true)).toEqual({ text: null, pendingTools: true });
+    const msg = { content: [toolPart] } as unknown as AssistantMessage;
+    expect(buildTurnReply(msg, true)).toEqual({ text: null, toolsText: null, pendingTools: true });
   });
 
-  it("appends tool-call summaries unless hidden", () => {
-    const msg = { content: [textPart("ran it"), { type: "toolCall", name: "bash", arguments: {} }] } as unknown as AssistantMessage;
-    expect(buildTurnReply(msg, true)).toEqual({ text: "ran it", pendingTools: true });
+  it("splits narration and tool-call summaries into separate outlets (spec #248)", () => {
+    const msg = { content: [textPart("ran it"), toolPart] } as unknown as AssistantMessage;
+    // 隐藏工具行:toolsText 随之消失,旁白不受影响
+    expect(buildTurnReply(msg, true)).toEqual({ text: "ran it", toolsText: null, pendingTools: true });
+    // 显示工具行:text 只装旁白,工具行独立出口、互不混装
     const shown = buildTurnReply(msg, false);
-    expect(shown.text).toContain("ran it");
-    expect(shown.text).toContain("`bash`");
+    expect(shown.text).toBe("ran it");
+    expect(shown.toolsText).toContain("`bash`");
+    expect(shown.toolsText).not.toContain("ran it");
   });
 
   it("returns null text for a content-free turn (binding must be kept)", () => {
     const msg = { content: [] } as unknown as AssistantMessage;
-    expect(buildTurnReply(msg)).toEqual({ text: null, pendingTools: false });
+    expect(buildTurnReply(msg)).toEqual({ text: null, toolsText: null, pendingTools: false });
   });
 });
 
