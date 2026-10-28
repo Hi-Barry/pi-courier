@@ -163,6 +163,16 @@ describe("buildTurnReply", () => {
     expect(shown.fullText).toBe(`${shown.text}\n\n${shown.toolsText}`);
   });
 
+  it("passes a custom tool-argument limit through to the tool line", () => {
+    const msg = {
+      content: [{ type: "toolCall", name: "bash", arguments: { command: "z".repeat(80) } }],
+    } as unknown as AssistantMessage;
+    const shown = buildTurnReply(msg, false, 20);
+    // spec #248 新契约:工具行住 toolsText 独立出口,限长在出口内生效
+    expect(shown.toolsText).toContain("command=" + "z".repeat(17) + "...");
+    expect(shown.toolsText).not.toContain("z".repeat(18));
+  });
+
   it("returns null text for a content-free turn (binding must be kept)", () => {
     const msg = { content: [] } as unknown as AssistantMessage;
     expect(buildTurnReply(msg)).toEqual({ text: null, toolsText: null, fullText: null, pendingTools: false });

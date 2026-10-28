@@ -209,6 +209,24 @@ export function bashOutputLimit(cfg: MsgBridgeConfig): number {
   return Math.min(Math.floor(value), BASH_OUTPUT_LIMIT_MAX);
 }
 
+/** 工具调用参数展示上限默认值(字符,每个参数值独立计算)。 */
+export const TOOL_CALL_ARG_LIMIT_DEFAULT = 100;
+/** 工具调用参数展示上限硬顶(字符):活卡按 4000 字符滚动分片,500 约占
+ *  一张卡的八分之一 —— 再长单个参数会淹没整张卡的工具时间线。 */
+export const TOOL_CALL_ARG_LIMIT_MAX = 500;
+
+/** 工具调用参数展示上限(字符;逐条回复与聚合活卡共用):缺省/非法值回落
+ *  默认,超过硬顶按硬顶使用(超限配置直接忽略)。不足 1 的小数经 floor 会
+ *  成 0(truncate 只剩省略号),按非法值回落默认 —— 与 bashTimeoutMinutes
+ *  的亚分钟守卫同口径。 */
+export function toolCallArgLimit(cfg: MsgBridgeConfig): number {
+  const value = cfg.toolCallArgLimit;
+  if (value === undefined || !Number.isFinite(value) || value < 1) {
+    return TOOL_CALL_ARG_LIMIT_DEFAULT;
+  }
+  return Math.min(Math.floor(value), TOOL_CALL_ARG_LIMIT_MAX);
+}
+
 /** bash 执行等待上限默认值(分钟,spec #218 票 #220)。 */
 export const BASH_TIMEOUT_MINUTES_DEFAULT = 10;
 

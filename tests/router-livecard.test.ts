@@ -577,4 +577,21 @@ describe("聚合旁路(缺省 = 现状逐字节一致)", () => {
     expect(replies[0]).toContain("第一步");
     expect(replies[1]).toContain("第二步");
   });
+
+  it("工具调用参数上限走配置:toolCallArgLimit 归一后进入卡片文本", async () => {
+    const fx = await makeLiveCardFixture({ toolCallArgLimit: 30 });
+    const longTurn = {
+      role: "assistant",
+      content: [{ type: "toolCall", name: "bash", arguments: { command: "q".repeat(200) } }],
+      stopReason: "stop",
+    } as unknown as AssistantMessage;
+
+    fx.router.handleEvent({ type: "turn_end", message: longTurn }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+    const cardText = fx.sendLiveCard.mock.calls[0]![2] as string;
+    // 30 chars: 27 q's + "..."
+    expect(cardText).toContain("command=" + "q".repeat(27) + "...");
+    expect(cardText).not.toContain("q".repeat(28));
+  });
 });

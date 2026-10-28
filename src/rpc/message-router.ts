@@ -13,7 +13,7 @@ import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
 import { commandPolicy } from "../command-registry.js";
-import { aggregateToolTurns, bashOutputLimit, type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew } from "../config.js";
+import { aggregateToolTurns, bashOutputLimit, type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew, toolCallArgLimit } from "../config.js";
 import { errorMessage } from "../errors.js";
 import {
   extractTextFromMessage,
@@ -202,10 +202,11 @@ interface RoomBinding {
  *  fullText 派发,可达路径上与旧整段输出逐字节一致。 */
 export function buildTurnReply(
   message: AssistantMessage,
-  hideToolCalls?: boolean
+  hideToolCalls?: boolean,
+  toolArgLimit?: number
 ): { text: string | null; toolsText: string | null; fullText: string | null; pendingTools: boolean } {
   const responseText = extractTextFromMessage(message);
-  const toolCallsText = formatToolCalls(message);
+  const toolCallsText = formatToolCalls(message, toolArgLimit);
   const pendingTools = hasToolCalls(message);
   const parts: string[] = [];
   const trimmed = responseText.trim();
@@ -1439,7 +1440,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         } else {
           fallbackStreak.clear(rpc);
         }
-        const turn = buildTurnReply(turnMessage as AssistantMessage, store.get().hideToolCalls);
+        const turn = buildTurnReply(
+          turnMessage as AssistantMessage,
+          store.get().hideToolCalls,
+          toolCallArgLimit(store.get())
+        );
 
         // 交接卡捕获(issue #122):在途捕获命中本进程时,终答落卡 —— 工具
         // 循环的中间轮继续等;卡片投递替代原生回复,总结文本不重复发房间。
