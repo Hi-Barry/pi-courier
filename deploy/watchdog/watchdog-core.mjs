@@ -14,9 +14,11 @@
  *     不动作,stderr 记一行即可。
  *   - 心跳时间戳未过期且 PID 仍存活:进程活着且在干活,零动作。
  *   - PID 已不存在(无论心跳是否过期):进程死亡,直接重启 —— 「进程刚死、
- *     心跳还新鲜」也要立刻拉起,不必等满过期窗口;但心跳年龄不足一个心跳
+ *     心跳还新鲜」也要立刻拉起,不必等满过期窗口;但心跳年龄不足 2 × 心跳
  *     间隔时先给重启中的新实例一个宽限期(旧心跳 + 已死 PID 正是
  *     systemd RestartSec 窗口的形态,立即重启会把正在启动的实例再踢一次)。
+ *     心跳时间戳落在未来(系统时钟回拨)无法衡量宽限期,只记 stderr;此时
+ *     PID 已死立即判死,避免「永远等不到过期」。
  *   - 心跳过期但 PID 仍存活:僵死(活着不干活)。Windows 序列必须先杀
  *     (单实例锁不抢占,不杀则新实例秒退,看门狗陷入「每分钟拉起→秒退」
  *     死循环);POSIX 的 `systemctl --user restart` 天然先 stop 后 start,
@@ -47,7 +49,7 @@ import * as path from "node:path";
 export const DEFAULT_STALE_SECONDS = 180;
 
 /** 心跳间隔默认秒数(与桥 config resilience.heartbeatIntervalSeconds 一致):
- *  「心跳仍新鲜但 PID 消失」的宽限期,避免重启窗口拿上一实例的旧心跳误判。 */
+ *  「心跳仍新鲜但 PID 消失」的宽限期 = 2 × 该值(覆盖 RestartSec + 首拍延迟)。 */
 export const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30;
 
 /** 默认心跳文件路径(桥的派生状态目录,票02 的写侧契约)。 */
@@ -116,7 +118,7 @@ export function fillCommand(template, vars, opts = {}) {
  * opts 字段:
  *   heartbeatPath    心跳文件路径
  *   pauseMarkerPath  人工停止标记路径(默认:心跳同目录/watchdog-paused)
- *   heartbeatIntervalSeconds 心跳间隔秒(默认 30;新鲜心跳+PID 死的宽限期)
+ *   heartbeatIntervalSeconds 心跳间隔秒(默认 30;新鲜心跳+PID 死的宽限期 = 2×)
  *   staleSeconds     过期秒(默认 DEFAULT_STALE_SECONDS;壳从命令行透传)
  *   nowMs            时间源(测试注入 fake 时钟)
  *   readHeartbeatFn  读心跳缝(测试注入;默认 readHeartbeat)
@@ -172,13 +174,20 @@ export function runWatchdogCore(opts) {
     return { verdict: "ok", actions: [] };
   }
 
-  // 重启宽限:旧实例已死但心跳还不足一个心跳间隔 —— 很可能是 systemd
+  // 重启宽限:旧实例已死但心跳还不满 2 × 心跳间隔 —— 很可能是 systemd
   // RestartSec / stop→start 窗口里的上一份心跳,新实例尚未来得及写。
-  // 此时重启会把正在启动的实例再踢一次,并误发一条 DEAD 告警;等下一轮。
-  const graceMs = (opts.heartbeatIntervalSeconds ?? DEFAULT_HEARTBEAT_INTERVAL_SECONDS) * 1000;
-  if (!expired && !alive && ageMs < graceMs) {
+  // 取 2× 而非 1×,覆盖 RestartSec(5s)+ 新实例首拍延迟的余量。
+  // 心跳时间戳在未来(负 age)无法测量宽限,不做宽限判断(futureTimestamp),
+  // 死 PID 直接判死,避免宽限条件恒真、永远等不到过期。
+  const futureTimestamp = ageMs < 0;
+  const graceMs = (opts.heartbeatIntervalSeconds ?? DEFAULT_HEARTBEAT_INTERVAL_SECONDS) * 2000;
+  if (futureTimestamp) {
     process.stderr.write(
-      `[watchdog] heartbeat is fresh (${ageMs}ms) but pid ${beat.pid} is gone — within the one-heartbeat restart grace (${graceMs}ms); waiting for the next round.\n`
+      `[watchdog] heartbeat timestamp is in the future (${beat.ts} > now) — clock skew; staleness is unreliable, dead PIDs are judged immediately.\n`
+    );
+  } else if (!expired && !alive && ageMs < graceMs) {
+    process.stderr.write(
+      `[watchdog] heartbeat is fresh (${ageMs}ms) but pid ${beat.pid} is gone — within the restart grace (${graceMs}ms = 2 × heartbeat interval); waiting for the next round.\n`
     );
     return { verdict: "ok", actions: [] };
   }

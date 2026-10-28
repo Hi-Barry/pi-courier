@@ -95,9 +95,9 @@ describe("看门狗判定核心三分支(spec #247 票06)", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("心跳未过期但 PID 已死超过一个心跳间隔 → dead 重启(评审)", () => {
+  it("心跳未过期但 PID 已死超过宽限期(2×心跳间隔)→ dead 重启(评审)", () => {
     const { run, opts } = core({
-      heartbeatPath: writeHeartbeat({ ts: NOW - 60_000, pid: 4242 }),
+      heartbeatPath: writeHeartbeat({ ts: NOW - 65_000, pid: 4242 }),
       pidAliveFn: () => false,
     });
     const result = runWatchdogCore(opts);
@@ -107,9 +107,9 @@ describe("看门狗判定核心三分支(spec #247 票06)", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("心跳新鲜 + PID 消失:宽限期内不动作,避免重启窗口二次重启(评审)", () => {
+  it("心跳新鲜 + PID 消失:2×心跳间隔宽限内不动作,避免重启窗口二次重启(第3轮评审)", () => {
     const { run, opts } = core({
-      heartbeatPath: writeHeartbeat({ ts: NOW - 10_000, pid: 4242 }),
+      heartbeatPath: writeHeartbeat({ ts: NOW - 50_000, pid: 4242 }),
       pidAliveFn: () => false,
     });
     const result = runWatchdogCore(opts);
@@ -118,13 +118,23 @@ describe("看门狗判定核心三分支(spec #247 票06)", () => {
     expect(result.actions).toEqual([]);
     expect(run).not.toHaveBeenCalled();
 
-    // 宽限期可用 --heartbeat-interval-seconds 覆盖(桥改心跳间隔时同步)
+    // 宽限期 = 2 × 心跳间隔,可用 --heartbeat-interval-seconds 覆盖
     const { opts: shorter } = core({
-      heartbeatPath: writeHeartbeat({ ts: NOW - 10_000, pid: 4242 }),
+      heartbeatPath: writeHeartbeat({ ts: NOW - 11_000, pid: 4242 }),
       pidAliveFn: () => false,
       heartbeatIntervalSeconds: 5,
     });
     expect(runWatchdogCore(shorter).verdict).toBe("dead");
+  });
+
+  it("心跳时间戳在未来(时钟回拨)时:PID 活仍健康,死 PID 立即判死(第3轮评审)", () => {
+    const future = writeHeartbeat({ ts: NOW + 60_000, pid: 4242 });
+
+    const { opts: dead } = core({ heartbeatPath: future, pidAliveFn: () => false });
+    expect(runWatchdogCore(dead).verdict).toBe("dead");
+
+    const { opts: alive } = core({ heartbeatPath: future, pidAliveFn: () => true });
+    expect(runWatchdogCore(alive).verdict).toBe("ok");
   });
 
   it("心跳文件缺失 → missing:不告警、不动作(安装错误,不是进程死亡)", () => {
