@@ -59,3 +59,48 @@ export function win32PathProblem(workdir: string): Win32PathProblem | null {
 export function win32SamePath(a: string, b: string): boolean {
   return a.normalize("NFKC").toLowerCase() === b.normalize("NFKC").toLowerCase();
 }
+
+/**
+ * Whether a shell command contains an UNQUOTED drive-letter backslash path
+ * (`X:\...`, spec #256). Outside quotes bash strips those backslashes as
+ * escapes (`d:\share\Projects` → `d:shareProjects`), so such a command fails
+ * with a cryptic error on the Git Bash that backs `!`/`!!`//bash on Windows.
+ * Callers use the signal to append a syntax hint to the failure reply — the
+ * command itself is never rewritten.
+ *
+ * Quote-aware scanner, mirroring the shell semantics that actually matter
+ * here: outside quotes `\` escapes the next character; inside single quotes
+ * everything is literal; inside double quotes `\` escapes the next character
+ * (a quoted path therefore reaches Git Bash intact and works — no signal).
+ * A doubled backslash (`d:\\share`) also arrives intact, so only the
+ * single-backslash form signals; `X:/...` works unquoted either way.
+ */
+export function unquotedWin32DrivePath(command: string): boolean {
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i]!;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      else if (ch === "\\") i += 1; // escaped char inside double quotes
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    // Drive form at an unescaped `X:`: the separator backslash is only
+    // path-mangling when it escapes something OTHER than a backslash.
+    if (ch === ":" && i > 0 && /[A-Za-z]/.test(command[i - 1]!)) {
+      const next = command[i + 1];
+      if (next === "\\" && command[i + 2] !== "\\") return true;
+    }
+    if (ch === "\\") {
+      i += 1; // escaped char outside quotes (`d:\\share` arrives intact)
+    }
+  }
+  return false;
+}

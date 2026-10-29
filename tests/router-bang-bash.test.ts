@@ -337,3 +337,52 @@ describe("createBashTracker — 记账语义", () => {
     expect(tracker.list(rpcA)).toHaveLength(1);
   });
 });
+
+describe("formatBashReply — win32 未加引号路径提示(spec #256)", () => {
+  const winFail: BashResultView = {
+    output: "dir: cannot access 'd:shareProjects': No such file or directory",
+    exitCode: 2,
+    cancelled: false,
+    truncated: false,
+  };
+  const winOk: BashResultView = { output: "项目A\n项目B", exitCode: 0, cancelled: false, truncated: false };
+
+  it("win32 + 非零退出码 + 未加引号 X:\\ 路径 → 附提示", () => {
+    const text = formatBashReply("dir d:\\share\\Projects", winFail, false, 30000, "win32");
+    expect(text).toContain("退出码: 2");
+    expect(text).toContain("/d/share/Projects");
+    expect(text).toContain("'d:\\share\\Projects'");
+  });
+
+  it("win32 但退出码 0 → 不提示", () => {
+    expect(formatBashReply("dir d:\\share\\Projects", winOk, false, 30000, "win32")).not.toContain("/d/share/Projects");
+  });
+
+  it("非 win32 平台 → 恒不提示", () => {
+    expect(formatBashReply("dir d:\\share\\Projects", winFail, false, 30000, "linux")).not.toContain("/d/share/Projects");
+    expect(formatBashReply("dir d:\\share\\Projects", winFail, false, 30000, "darwin")).not.toContain("/d/share/Projects");
+  });
+
+  it("缺省 platform 参数即当前进程(CI 上非 win32)→ 不提示", () => {
+    expect(formatBashReply("dir d:\\share\\Projects", winFail)).not.toContain("/d/share/Projects");
+  });
+
+  it("win32 失败但路径已写对(引号/正斜杠/双反斜杠)→ 不提示", () => {
+    expect(formatBashReply("dir 'd:\\share\\Projects'", winFail, false, 30000, "win32")).not.toContain("cmd.bash.winPathHint");
+    expect(formatBashReply("dir d:/share/Projects", winFail, false, 30000, "win32")).not.toContain("cmd.bash.winPathHint");
+    expect(formatBashReply("dir d:\\\\share", winFail, false, 30000, "win32")).not.toContain("cmd.bash.winPathHint");
+  });
+
+  it("cancelled 回帖形态不变(本就不打退出码)", () => {
+    const cancelled: BashResultView = { output: "partial", exitCode: undefined, cancelled: true, truncated: false };
+    const text = formatBashReply("dir d:\\share", cancelled, false, 30000, "win32");
+    expect(text).toContain("已中止");
+    expect(text).not.toContain("/d/share/Projects");
+  });
+
+  it("提示不影响 excluded/截断等既有形态", () => {
+    const text = formatBashReply("dir d:\\share", winFail, true, 30000, "win32");
+    expect(text).toContain("(结果未写入上下文)");
+    expect(text).toContain("/d/share/Projects");
+  });
+});
