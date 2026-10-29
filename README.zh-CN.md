@@ -658,7 +658,7 @@ npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs p
 验证:`pi-courier -v`。npm 装到 `%APPDATA%\npm` 的 `.cmd` / `.ps1` 垫片照常可用。
 
 - **pi 自动发现**:npm 全局安装的 `@earendil-works/pi-coding-agent` 会从 pi-courier 自身的安装树自动解析命中;pi.dev `install.ps1` 装在 `~/.pi/agent` 的同样自动识别。只有特殊布局才需要把 `PI_CLI_PATH` 指到 pi 包目录里的 `dist/cli.js`——**不要**指 `pi.cmd` / `pi.ps1` 垫片。
-- **`!` / `!!` bash 命令走 Git for Windows 的 bash** —— POSIX 路径(`/c/Users/...`)、退出码、报错信息都与 Linux 一致地透传。
+- **`!` / `!!` bash 命令走 Git for Windows 的 bash** —— POSIX 路径(`/c/Users/...`)、退出码、报错信息都与 Linux 一致地透传。Windows 风格路径要按 bash 规则写:未加引号的 `d:\share\Projects` 里的反斜杠会被当转义符吃掉,请写 `/d/share/Projects` 或加引号 `'d:\share\Projects'`;踩了这个坑(命令失败且含未加引号的 `X:\` 路径)时,回帖末尾会自动附一行写法提示。
 - **`pi-courier update` 在 Windows 上可用**:它通过 npm 的 `npm-cli.js` 入口启动 npm,并跳过 systemd 的停启编排。
 - **任务计划程序自启**(无需管理员,每次登录触发)——真机验证过的配方:
 

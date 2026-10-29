@@ -667,7 +667,7 @@ npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs p
 Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDATA%\npm` work normally.
 
 - **pi discovery is automatic**: an npm-global `@earendil-works/pi-coding-agent` is resolved from pi-courier's own install tree, and a pi.dev `install.ps1` install under `~/.pi/agent` is detected as well. Only exotic layouts need `PI_CLI_PATH` pointing at the `dist/cli.js` inside your pi package directory — **not** the `pi.cmd` / `pi.ps1` shim.
-- **`!` / `!!` bash commands run through the Git for Windows bash** — POSIX paths (`/c/Users/...`), exit codes and error messages pass through exactly as on Linux.
+- **`!` / `!!` bash commands run through the Git for Windows bash** — POSIX paths (`/c/Users/...`), exit codes and error messages pass through exactly as on Linux. Write Windows-style paths the bash way: unquoted `d:\share\Projects` loses its backslashes to escape processing — use `/d/share/Projects` or quote it as `'d:\share\Projects'`; when you hit that (a failed command containing an unquoted `X:\` path), the reply automatically appends a one-line syntax hint.
 - **`pi-courier update` works on Windows**: it launches npm through its `npm-cli.js` entry and skips the systemd stop/start choreography.
 - **Autostart via Task Scheduler** (no admin needed, fires at every logon) — verified recipe:
 

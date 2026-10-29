@@ -3,7 +3,12 @@
  * 大小写折叠比较。纯函数,全平台可跑。
  */
 import { describe, expect, it } from "vitest";
-import { MAX_PATH_LENGTH, win32PathProblem, win32SamePath } from "../src/win32-path.js";
+import {
+  MAX_PATH_LENGTH,
+  unquotedWin32DrivePath,
+  win32PathProblem,
+  win32SamePath,
+} from "../src/win32-path.js";
 
 describe("win32PathProblem", () => {
   it("accepts ordinary paths (drive, UNC, trailing separators)", () => {
@@ -52,5 +57,52 @@ describe("win32SamePath", () => {
   it("folds case and NFKC like the label/room-name comparisons", () => {
     expect(win32SamePath("C:\\Projects\\Foo", "c:\\projects\\foo")).toBe(true);
     expect(win32SamePath("C:\\Projects\\Foo", "C:\\Projects\\bar")).toBe(false);
+  });
+});
+
+describe("unquotedWin32DrivePath — 未加引号盘符反斜杠路径信号(spec #256)", () => {
+  it("命中:引号外的 X:\\ 形式", () => {
+    expect(unquotedWin32DrivePath("dir d:\\share\\Projects")).toBe(true);
+    expect(unquotedWin32DrivePath("type C:\\Windows\\win.ini")).toBe(true);
+    expect(unquotedWin32DrivePath("ls D:/share && dir e:\\tmp")).toBe(true);
+  });
+
+  it("不命中:正斜杠形式本就能正常工作", () => {
+    expect(unquotedWin32DrivePath("dir d:/share/Projects")).toBe(false);
+  });
+
+  it("不命中:单引号内是字面量,路径原样到达", () => {
+    expect(unquotedWin32DrivePath("dir 'd:\\share\\Projects'")).toBe(false);
+  });
+
+  it("不命中:双引号内反斜杠保留,路径能正常工作", () => {
+    expect(unquotedWin32DrivePath('dir "d:\\share\\Projects"')).toBe(false);
+  });
+
+  it("不命中:引号外的转义反斜杠(d:\\\\share 到达时完好)", () => {
+    expect(unquotedWin32DrivePath("dir d:\\\\share\\\\Projects")).toBe(false);
+  });
+
+  it("不命中:双引号内的转义序列(\"...\\\" 之后回到引号外才算)", () => {
+    expect(unquotedWin32DrivePath('echo "d:\\x" && dir e:\\y')).toBe(true);
+    expect(unquotedWin32DrivePath('echo "a\\"b" dir e:\\y')).toBe(true);
+  });
+
+  it("命中:引号后无空格紧跟盘符路径", () => {
+    expect(unquotedWin32DrivePath('echo "x"d:\\share')).toBe(true);
+  });
+
+  it("不命中:串尾孤立反斜杠(bash 保留字面量,路径未被吞)", () => {
+    expect(unquotedWin32DrivePath("cd d:\\")).toBe(false);
+  });
+
+  it("命中:盘符反斜杠后还有真实字符(转义的是别的字符)", () => {
+    expect(unquotedWin32DrivePath("dir d:\\ ")).toBe(true);
+  });
+
+  it("不命中:无盘符反斜杠的普通命令", () => {
+    expect(unquotedWin32DrivePath("git status")).toBe(false);
+    expect(unquotedWin32DrivePath("ls -la /d/share")).toBe(false);
+    expect(unquotedWin32DrivePath("echo a:b")).toBe(false);
   });
 });
