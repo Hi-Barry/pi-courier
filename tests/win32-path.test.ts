@@ -88,6 +88,18 @@ describe("unquotedWin32DrivePath — 未加引号盘符反斜杠路径信号(spe
     expect(unquotedWin32DrivePath('echo "a\\"b" dir e:\\y')).toBe(true);
   });
 
+  it("命中:引号后无空格紧跟盘符路径", () => {
+    expect(unquotedWin32DrivePath('echo "x"d:\\share')).toBe(true);
+  });
+
+  it("不命中:串尾孤立反斜杠(bash 保留字面量,路径未被吞)", () => {
+    expect(unquotedWin32DrivePath("cd d:\\")).toBe(false);
+  });
+
+  it("命中:盘符反斜杠后还有真实字符(转义的是别的字符)", () => {
+    expect(unquotedWin32DrivePath("dir d:\\ ")).toBe(true);
+  });
+
   it("不命中:无盘符反斜杠的普通命令", () => {
     expect(unquotedWin32DrivePath("git status")).toBe(false);
     expect(unquotedWin32DrivePath("ls -la /d/share")).toBe(false);

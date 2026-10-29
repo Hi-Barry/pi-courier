@@ -267,7 +267,7 @@ export function formatBashReply(
   result: BashResultView,
   excluded = false,
   limit: number = BASH_OUTPUT_LIMIT_DEFAULT,
-  platform: string = process.platform,
+  platform: NodeJS.Platform = process.platform,
 ): string {
   const suffix = excluded ? t("cmd.bash.notWritten") : "";
   const output = result.output.length > limit

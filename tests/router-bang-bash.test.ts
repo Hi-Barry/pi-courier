@@ -368,9 +368,9 @@ describe("formatBashReply — win32 未加引号路径提示(spec #256)", () => 
   });
 
   it("win32 失败但路径已写对(引号/正斜杠/双反斜杠)→ 不提示", () => {
-    expect(formatBashReply("dir 'd:\\share\\Projects'", winFail, false, 30000, "win32")).not.toContain("cmd.bash.winPathHint");
-    expect(formatBashReply("dir d:/share/Projects", winFail, false, 30000, "win32")).not.toContain("cmd.bash.winPathHint");
-    expect(formatBashReply("dir d:\\\\share", winFail, false, 30000, "win32")).not.toContain("cmd.bash.winPathHint");
+    expect(formatBashReply("dir 'd:\\share\\Projects'", winFail, false, 30000, "win32")).not.toContain("💡");
+    expect(formatBashReply("dir d:/share/Projects", winFail, false, 30000, "win32")).not.toContain("💡");
+    expect(formatBashReply("dir d:\\\\share", winFail, false, 30000, "win32")).not.toContain("💡");
   });
 
   it("cancelled 回帖形态不变(本就不打退出码)", () => {

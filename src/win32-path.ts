@@ -64,16 +64,19 @@ export function win32SamePath(a: string, b: string): boolean {
  * Whether a shell command contains an UNQUOTED drive-letter backslash path
  * (`X:\...`, spec #256). Outside quotes bash strips those backslashes as
  * escapes (`d:\share\Projects` → `d:shareProjects`), so such a command fails
- * with a cryptic error on the Git Bash that backs `!`/`!!`//bash on Windows.
+ * with a cryptic error on the Git Bash that backs `!`/`!!`/`/bash` on Windows.
  * Callers use the signal to append a syntax hint to the failure reply — the
  * command itself is never rewritten.
  *
  * Quote-aware scanner, mirroring the shell semantics that actually matter
  * here: outside quotes `\` escapes the next character; inside single quotes
- * everything is literal; inside double quotes `\` escapes the next character
- * (a quoted path therefore reaches Git Bash intact and works — no signal).
- * A doubled backslash (`d:\\share`) also arrives intact, so only the
- * single-backslash form signals; `X:/...` works unquoted either way.
+ * everything is literal; inside double quotes a `\` before `$ ` \ "` — the
+ * POSIX special few — is an escape (scanned conservatively as "escapes the
+ * next character"; identical verdict either way), so a quoted path reaches
+ * Git Bash intact and works — no signal. A doubled backslash (`d:\\share`)
+ * also arrives intact, and bash keeps a lone trailing `\` at end of input
+ * literal; only a single backslash escaping a real character signals.
+ * `X:/...` works unquoted either way.
  */
 export function unquotedWin32DrivePath(command: string): boolean {
   let quote: '"' | "'" | null = null;
@@ -92,11 +95,12 @@ export function unquotedWin32DrivePath(command: string): boolean {
       quote = ch;
       continue;
     }
-    // Drive form at an unescaped `X:`: the separator backslash is only
-    // path-mangling when it escapes something OTHER than a backslash.
+    // Drive form at an unescaped `X:`: the separator backslash only mangles
+    // the path when it escapes a REAL character other than a backslash (a
+    // trailing lone `\` at end of input stays literal in bash).
     if (ch === ":" && i > 0 && /[A-Za-z]/.test(command[i - 1]!)) {
       const next = command[i + 1];
-      if (next === "\\" && command[i + 2] !== "\\") return true;
+      if (next === "\\" && i + 2 < command.length && command[i + 2] !== "\\") return true;
     }
     if (ch === "\\") {
       i += 1; // escaped char outside quotes (`d:\\share` arrives intact)
