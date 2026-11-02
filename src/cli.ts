@@ -16,6 +16,12 @@
  *
  * pi itself is managed independently on the system (npm i -g ...); this
  * project only ever updates itself.
+ *
+ * 升级安全(spec #258 评审修复):main() 在任何配置读取之前先执行旧布局迁移
+ * (幂等、单项失败仅警告不中断命令)——否则升级后先跑 `setup` 等子命令会读
+ * 空的新配置目录,把存量用户当首跑生成新 device ID,E2EE 连续性即断。迁移
+ * 窗口期(旧桥仍在跑、新实例先行搬迁)的新旧实例并行已被 spec 接受:活锁
+ * 保留语义内建(绝不偷活锁),/update 流程(先停旧服务再升级)兜底。
  */
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -25,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import { effectiveLanguage, loadConfig, runtimeLayout } from "./config.js";
 import { errorMessage } from "./errors.js";
 import { setLocale, t } from "./i18n/index.js";
+import { buildLegacyMigrationPlan, runLegacyMigration } from "./legacy-migration.js";
 import { buildLogFilterArgs } from "./log-filter.js";
 import { globalNodeModulesDir, resolveNpmCli } from "./npm-runtime.js";
 import { projectLabelOf } from "./project-labels.js";
@@ -462,6 +469,19 @@ function cmdUpdate(): void {
 // ===========================================================================
 
 async function main(): Promise<void> {
+  // ---- 旧布局迁移(spec #258 评审修复):必须先于任何配置读取 -----------------
+  // CLI 每命令一进程,模块级 LAYOUT(runtimeLayout())只是纯路径派生,不含
+  // 配置读取;本进程首个真正的配置读取是下方语言解析的 loadConfig()。迁移
+  // 压在它之前:存量 ~/.pi 下的配置/存储先搬进新家,`setup` 才能看到「已有
+  // token」走保留分支(否则读空的新配置当首跑,生成新 device ID,E2EE 连续
+  // 性断裂)。迁移幂等、逐项失败只警告不抛(runLegacyMigration 内建),绝不
+  // 中断任何子命令;迁移日志此时还是默认语言(语言要读配置,配置要等迁移
+  // 搬家,与 standalone 同款已知取舍)。`run` 子命令随后会在 standalone 组合
+  // 根再过一遍迁移 —— 幂等主通道(旧不在即跳过)零日志,无副作用。
+  runLegacyMigration({
+    plan: buildLegacyMigrationPlan({ platform: process.platform, homedir: os.homedir(), layout: LAYOUT }),
+  });
+
   const [cmd, ...rest] = process.argv.slice(2);
   // Language wiring (issue #83): every subcommand except `setup` localizes
   // from the full chain (PI_LANGUAGE > config > system locale > en). `setup`
