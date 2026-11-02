@@ -91,7 +91,7 @@ cd ../..
 
 ### 两种配法:配置文件优先
 
-**第一种:配置文件**(推荐,全局一份):在 `~/.pi/pi-courier.json` 里加 `proxy`(一条 URL)和可选的 `noProxy`(豁免列表):
+**第一种:配置文件**(推荐,全局一份):在配置文件里加 `proxy`(一条 URL)和可选的 `noProxy`(豁免列表)—— Linux 在 `~/.config/pi-courier/pi-courier.json`,Windows 在 `%USERPROFILE%\.pi\pi-courier.json`:
 
 ```json
 {
@@ -109,7 +109,7 @@ cd ../..
 1.1.0 起,`pi-courier setup` 多了可选的出网代理一步(在向导收尾处、多工程问题 —— 多工程模式下还有空间问题 —— 之后、写配置之前;回车跳过)。已有生效代理(配置或环境变量)时,向导在第一个问题之前先报一行,并把它作为默认值 —— 回车即沿用。这一行固定以英文显示(它打在向导第一问 —— 语言选择 —— 之前,向导语言还来不及生效):
 
 ```
-🌐 outbound proxy: http://192.0.2.10:10809 (source: config; edit ~/.pi/pi-courier.json and restart to change)
+🌐 outbound proxy: http://192.0.2.10:10809 (source: config; edit /home/你/.config/pi-courier/pi-courier.json and restart to change)
 ```
 
 什么都没配时的提问长这样(真实向导输出):
@@ -161,7 +161,7 @@ pi-courier setup
 ```
 === pi-courier 配置向导 ===
 语言? [zh] (en/zh):                                              ← 机器人消息语言;回车沿用系统检测的默认值(会写入配置)
-将写入 ~/.pi/pi-courier.json(权限 600;已有配置作为默认值,直接回车沿用)
+将写入 /home/你/.config/pi-courier/pi-courier.json(权限 600;已有配置作为默认值,直接回车沿用)
 
 Matrix homeserver URL (如 https://matrix.example.com):                          ← 你的 homeserver 地址
 获取 token 方式 [1=用户名密码登录, 2=粘贴已有 token] (1):                        ← 回车 = 用户名密码登录
@@ -172,17 +172,17 @@ bot 密码:                                                                     
 信任房间 ID(可选,回车跳过;多个逗号分隔,如 !abc:server 或 !abc:server:trusted-only):   ← 群聊才需要;只用私聊回车跳过
 启用 E2EE 加密? [y/N]:                                                          ← y/n(非加密房间选 y 也没问题)
 pi 工作目录 [默认 /home/你/Projects]:                                           ← 回车用默认
-附件保存目录 [默认 /home/你/.pi/pi-courier-attachments]:                        ← 聊天里发的图片/文件落盘处
+附件保存目录 [默认 /home/你/.local/share/pi-courier/attachments]:                        ← 聊天里发的图片/文件落盘处
 单个附件大小上限 MB [默认 10]:                                                  ← 超限附件会被明确拒绝
 实例名/机器名(默认 debian;多台部署用来区分,将显示在管理房间名):                ← 回车用主机名
 启用多工程模式? [y/N](多工程=管理房间+项目房间隔离,可用 /pmctl;默认 N=单工程,一个 bot 对应一个 pi):   ← 回车=单工程(空间组织仅多工程时询问)
 
-✅ 配置已写入 ~/.pi/pi-courier.json
+✅ 配置已写入 /home/你/.config/pi-courier/pi-courier.json
    账号: @***:***
    信任用户: @***:***
    E2EE: 开启
    工作目录: /home/你/Projects
-   附件目录: /home/你/.pi/pi-courier-attachments(上限 10 MB)
+   附件目录: /home/你/.local/share/pi-courier/attachments(上限 10 MB)
    实例名: debian(用于多台部署区分,显示在管理房间名)
    多工程: 关闭(单工程)
    设备 ID: PICOURIERCM4KYDGY(固定,重跑 setup 复用;想换设备就删掉此字段)
@@ -191,7 +191,7 @@ pi 工作目录 [默认 /home/你/Projects]:                                    
 下一步: pi-courier enable(开机自启)或 pi-courier run(前台运行)
 ```
 
-向导会验证 token 并写入 `~/.pi/pi-courier.json`。1.1.0 起向导会多问一题可选的出网代理(上方的真实记录早于该步骤;回车跳过即可)—— 见[出网代理](#出网代理运行期)。不想用向导的话,手动创建这个文件也行 —— 格式见[常见问题](#4-常见问题)。
+向导会验证 token 并写入配置文件(Linux:`~/.config/pi-courier/pi-courier.json`;Windows:`%USERPROFILE%\.pi\pi-courier.json`;0.2.x 的旧 `~/.pi/pi-courier.json` 会在首次启动时自动迁移)。1.1.0 起向导会多问一题可选的出网代理(上方的真实记录早于该步骤;回车跳过即可)—— 见[出网代理](#出网代理运行期)。不想用向导的话,手动创建这个文件也行 —— 格式见[常见问题](#4-常见问题)。
 
 ### 第 2 步 —— 启动
 
@@ -276,7 +276,7 @@ pi-courier enable     # 安装 systemd 服务:开机自启 + 立即启动(Linux;
 - `/interrupt <文本>` — 空闲:直接执行;运行中:打断当前任务并发送新指令
 - `/stop` — 立即停止所有任务,同 TUI 的 Esc:排队消息一并清空
 
-**队列何去何从,提前说明**:0.3.8 起 `/stop` 与 `/interrupt` 对齐 TUI 的 Esc —— 先**清空队列**再中止,回复中逐条列出被清掉的消息,不会有消息悄悄消失。pi 低于 0.84.4(无 `clear_queue` RPC)时保持旧有行为:队列保留并在**下一轮**生效,回复会显式注明(`⚠️ 队列中仍有 N 条消息将在下一轮生效`)。0.5.0 起连**非自愿**丢失也可见:子进程重启(/reload、崩溃拉起)时若队列非空,bot 主动发 `⚠️ 子进程重启,队列中 N 条消息未执行` 逐条清单——自己 `/stop` 清掉的不告警。服务级重启(systemd/机器重启)同样覆盖,限**多工程模式的项目房**:队列快照落盘 `~/.pi/pi-courier-state/queue-snapshots.json`,下次启动逐项目房补发 `⚠️ 服务重启,队列中 N 条消息未执行`,发完即清(被 `/reload` 报过的队列绝不二次误报;单工程默认进程不在覆盖范围——它绑定的是运行时私聊)。
+**队列何去何从,提前说明**:0.3.8 起 `/stop` 与 `/interrupt` 对齐 TUI 的 Esc —— 先**清空队列**再中止,回复中逐条列出被清掉的消息,不会有消息悄悄消失。pi 低于 0.84.4(无 `clear_queue` RPC)时保持旧有行为:队列保留并在**下一轮**生效,回复会显式注明(`⚠️ 队列中仍有 N 条消息将在下一轮生效`)。0.5.0 起连**非自愿**丢失也可见:子进程重启(/reload、崩溃拉起)时若队列非空,bot 主动发 `⚠️ 子进程重启,队列中 N 条消息未执行` 逐条清单——自己 `/stop` 清掉的不告警。服务级重启(systemd/机器重启)同样覆盖,限**多工程模式的项目房**:队列快照落盘状态目录(Linux:`~/.local/state/pi-courier/queue-snapshots.json`;Windows:`%APPDATA%\pi-courier\state\queue-snapshots.json`),下次启动逐项目房补发 `⚠️ 服务重启,队列中 N 条消息未执行`,发完即清(被 `/reload` 报过的队列绝不二次误报;单工程默认进程不在覆盖范围——它绑定的是运行时私聊)。
 
 ### 工具循环聚合:一张「工作中」的卡片持续刷新
 
@@ -338,7 +338,7 @@ pi 跑动态工作流(多阶段、带子代理)时,bot 只发**一张活卡**并
 - 多个问题悬置时最老的先答;`/` 开头的消息仍走命令通道
 - 扩展通知按级别分档:warning / error 进房间,info 只留日志
 
-悬置问题超过 `extensionUiTimeoutMinutes` 分钟(默认 10)即自动按取消处理 —— 房间收到通知,扩展收到取消应答。该字段**不进** setup 向导:手动加进 `~/.pi/pi-courier.json`,然后 `pi-courier restart` 生效:
+悬置问题超过 `extensionUiTimeoutMinutes` 分钟(默认 10)即自动按取消处理 —— 房间收到通知,扩展收到取消应答。该字段**不进** setup 向导:手动加进配置文件(Linux:`~/.config/pi-courier/pi-courier.json`;Windows:`~/.pi/pi-courier.json`),然后 `pi-courier restart` 生效:
 
 ```json
 { "extensionUiTimeoutMinutes": 10 }
@@ -370,7 +370,7 @@ bash 回帖(`!` / `!!` / `/bash`)发帖前会截断输出:上限 `bashOutputLimi
 }
 ```
 
-- 路径支持 `~` 展开;相对路径相对 `~/.pi/` 解析;格式按扩展名识别(png / jpg / jpeg / webp / gif)。
+- 路径支持 `~` 展开;相对路径相对配置目录解析(Linux:`~/.config/pi-courier/`;Windows:`~/.pi/`);格式按扩展名识别(png / jpg / jpeg / webp / gif)。
 - **配置即期望状态**:配置后每次启动校验——图片内容或房间当前头像与最近一次上传不符时,自动重新上传覆盖(改图后重启即生效);没配的照旧「只补缺不覆盖」。
 - 文件缺失、扩展名不支持或上传失败:启动日志 warn 一次,本次回落内置图池逻辑,房间不会没有头像。
 - 项目房间配了 `projects[].avatar`(以房间 ID 为键)后,`/pmctl rename` 改名仍用你的自定义图;没配的按新名字重新从内置图池选图(同空间自动错开已占用的图,不会撞图)。
@@ -386,7 +386,7 @@ bash 回帖(`!` / `!!` / `/bash`)发帖前会截断输出:上限 `bashOutputLimi
 语言解析链(命中即停):
 
 1. 环境变量 `PI_LANGUAGE=en|zh` —— 容器/极简部署里最稳
-2. `~/.pi/pi-courier.json` 的 `"language": "zh" | "en"`(setup 向导首问并写入)
+2. 配置文件 `pi-courier.json` 的 `"language": "zh" | "en"`(Linux 在 `~/.config/pi-courier/`,Windows 在 `~/.pi/`;setup 向导首问并写入)
 3. 服务的系统 locale:Linux/macOS 上为 `LC_ALL` > `LC_MESSAGES` > `LANG`(`zh*` → 中文);Windows 不设置这些变量,改读系统区域设置 —— 中文 Windows 即中文。启动日志会打一行说明语言从哪来
 4. 最终回落英文
 
@@ -479,7 +479,7 @@ ssh -L <端口>:127.0.0.1:<端口> <用户>@<桥主机>
 支持类型:`m.image` / `m.file` / `m.audio` / `m.video` / 贴纸。图片由 pi 读取后交给视觉模型(其 read 管线自带缩放,发送前压大图,见 pi 源码);音频/视频无法直接喂给模型,但 agent 可以用 bash/ffmpeg 自行处理。限制与细节:
 
 - **单个附件上限 10 MB**(可配 `attachments.maxMb`,setup 向导可改);超限/下载失败会回执原因,**不静默**
-- 附件统一存到 `~/.pi/pi-courier-attachments/<房间>/`(可配 `attachments.directory`),**不进项目工作区**,不会弄脏 `git status`
+- 附件统一存到数据目录 —— Linux `~/.local/share/pi-courier/attachments/<房间>/`,Windows `%APPDATA%\pi-courier\attachments`(可配 `attachments.directory`),**不进项目工作区**,不会弄脏 `git status`
 - 待处理附件按"房间+发送者"记账:`/pmctl`、`/login` 等命令不消耗清单;**重启后清单清空**(回执里有路径,可手动引用)
 - 加密房间(E2EE)同样支持,附件自动解密
 - 位置消息等不支持的类型会收到礼貌提示;模型本身不支持视觉时,pi 会告知看不了图 —— 这是模型能力,与桥无关
@@ -497,7 +497,7 @@ ssh -L <端口>:127.0.0.1:<端口> <用户>@<桥主机>
 
 ### 审计日志:敏感动作留痕
 
-每个敏感动作都会向 `~/.pi/pi-courier-state/audit.jsonl`(0600,只追加)追加一行 JSON:谁、何时、在哪个房间、干了什么 —— 配对成败、`/trusted` 与 `/revoke`、bash 执行(`!` `!!` `/bash`)、`/pmctl rm`、`/login` 家族、`/reload`、队列清理、离线积压批量执行,以及每一次访客拦截。文件 10MB 轮转(保留两份旧档);文件不可写时服务照常跑但向管理房间告警 —— 审计故障可见,但绝不放大成可用性故障。第二层加固:附件与引用进 prompt 时自带来源标注(见上文两节),第三方内容以数据身份进上下文,不冒充指令。
+每个敏感动作都会向状态目录里的审计日志(Linux:`~/.local/state/pi-courier/audit.jsonl`;Windows:`%APPDATA%\pi-courier\state\audit.jsonl`;0600,只追加)追加一行 JSON:谁、何时、在哪个房间、干了什么 —— 配对成败、`/trusted` 与 `/revoke`、bash 执行(`!` `!!` `/bash`)、`/pmctl rm`、`/login` 家族、`/reload`、队列清理、离线积压批量执行,以及每一次访客拦截。文件 10MB 轮转(保留两份旧档);文件不可写时服务照常跑但向管理房间告警 —— 审计故障可见,但绝不放大成可用性故障。第二层加固:附件与引用进 prompt 时自带来源标注(见上文两节),第三方内容以数据身份进上下文,不冒充指令。
 
 ### 单工程 / 多工程模式
 
@@ -698,7 +698,7 @@ npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs p
 - **单实例锁**行为一致:崩溃残留的锁会被下次启动自动接管,无论从控制台还是任务计划程序启动。
 - 配置文件权限检查(0600)在 Windows 上跳过:系统无法表达 POSIX 权限位,继续检查只会每次启动误报。
 
-**已知限制**:服务管理子命令(`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`)仅支持 Linux(systemd),在其他平台会直接报错退出;`pi-courier logs` 的过滤依赖 journald(Linux)。配置、会话、附件与状态数据与 Linux 相同,都在 `%USERPROFILE%\.pi\` 下。
+**已知限制**:服务管理子命令(`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`)仅支持 Linux(systemd),在其他平台会直接报错退出;`pi-courier logs` 的过滤依赖 journald(Linux)。配置(`pi-courier.json`)与 pi 自身会话(`agent/sessions`)仍在 `%USERPROFILE%\.pi\` 下;附件、数据与运行状态在 `%APPDATA%\pi-courier\`(运行状态在其 `state\` 子目录)。
 
 ## 4. 常见问题
 
@@ -727,7 +727,7 @@ A: 历史消息无法解密(新设备没有旧密钥)。**正常**,新消息不�
 A: bot 的新设备没拿到房间密钥。bot 账号没有交叉签名,最可靠的解法是**用非加密房间**(新建房间时不勾选加密,把 bot 拉进来)—— 配置 `encryption: true` 也照常处理非加密房间。
 
 **Q: 报 `M_BAD_JSON: Provided device_id in device_keys does not match...`?**
-A: 本地加密存储与 token 的设备身份不一致(换过 token / 粘贴了别的设备的 token)。**0.1.20 起用密码登录走固定 device_id,重跑 setup 不再出现此问题**。仍遇到时:删除加密存储重启 `rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart`(每次重跑 setup / 换 token 都顺手删一次)。
+A: 本地加密存储与 token 的设备身份不一致(换过 token / 粘贴了别的设备的 token)。**0.1.20 起用密码登录走固定 device_id,重跑 setup 不再出现此问题**。仍遇到时:删除加密存储重启 `rm -rf ~/.local/share/pi-courier/matrix-crypto && pi-courier restart`(Windows:删 `%APPDATA%\pi-courier\matrix-crypto`)(每次重跑 setup / 换 token 都顺手删一次)。
 
 **Q: 报 `One time key signed_curve25519:... already exists`(M_UNKNOWN)?**
 A: token 在服务器上已绑定旧设备,但本地与服务器的 OTK 记账错位 —— **删本地 crypto store 无效**(device ID 由服务器按 token 指定,删了重建还是同一个)。**必须换 token**:重跑 `pi-courier setup`,在"保留现有 token?"处输 `n` 重新获取(或直接密码登录),新 token = 新设备 = 服务器干净。换 token 后如遇 device 残留问题再配合删 crypto store。
@@ -747,7 +747,7 @@ A: 0.1.1 起 bridge 会给 pi 传 `--continue`,按 workdir 恢复最近会话。
 **Q: Element(网页客户端)拦截 `/` 开头的消息?**
 A: 用 `//` 转义发送字面文本(如 `//compact` 会发出 `/compact`)。
 
-**Q: `~/.pi/pi-courier.json` 里到底有什么?**
+**Q: 配置文件里到底有什么?**(Linux:`~/.config/pi-courier/pi-courier.json`;Windows:`%USERPROFILE%\.pi\pi-courier.json`)
 A: 向导生成的配置,示例:
 
 ```json
