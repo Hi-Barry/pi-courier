@@ -260,7 +260,7 @@ pi 0.83.0 就绪。
 
 **`src/transports/matrix-client.ts`** —— Matrix client 端口 + 生产适配器(spec #99 票1/#100)
 - `MatrixClientPort`:两个适配器(消息 I/O + RoomOps)实际用到的 SDK 表面全集(连接生命周期/事件注册/读取/出站/媒体/房间能力六组),同时是「用了 matrix-bot-sdk 哪些表面」的依赖足迹文档
-- `createMatrixClient(config)` 生产工厂:封装 `~/.pi` 下两个存储路径(SimpleFsStorageProvider + Rust crypto SQLite,构造失败降级仅警告)、真实客户端构造、自注册的 best-effort 自动加入监听(0.3.1 起弃用 SDK 的 AutojoinRoomsMixin——它把 joinRoom 的 rejected promise 从监听器原样返回,EventEmitter 丢弃返回值,任何加不进的邀请都会以 unhandled rejection 杀死进程,issue #110;改为自注册带 catch 的监听,失败仅 warn)、SDK 日志门面接入;真实 MatrixClient 结构化满足端口,测试注入内存假客户端(matrix-fakes.ts 共享 fixture)
+- `createMatrixClient(config)` 生产工厂:封装布局注入的两个存储路径(dataDir 下 `matrix-store.json` + `matrix-crypto/`,spec #258 票03 起由组合根经工厂闭包传入;SimpleFsStorageProvider + Rust crypto SQLite,构造失败降级仅警告)、真实客户端构造、自注册的 best-effort 自动加入监听(0.3.1 起弃用 SDK 的 AutojoinRoomsMixin——它把 joinRoom 的 rejected promise 从监听器原样返回,EventEmitter 丢弃返回值,任何加不进的邀请都会以 unhandled rejection 杀死进程,issue #110;改为自注册带 catch 的监听,失败仅 warn)、SDK 日志门面接入;真实 MatrixClient 结构化满足端口,测试注入内存假客户端(matrix-fakes.ts 共享 fixture)
 
 **`src/transports/matrix-rooms.ts`** —— Matrix RoomOps 适配器(spec #22 从 matrix.ts 拆出)
 - `MatrixRoomOps implements RoomOps`:createRoom/createSpace、空间挂链/摘链(m.space.child + m.room.parent)、邀请/改名/权力等级/退房、`encryptionAvailable`
@@ -274,7 +274,7 @@ pi 0.83.0 就绪。
 **`src/transports/attachments.ts`** —— 附件存储(spec #66)
 - `AttachmentStore.save`:大小上限预检(info.size)+ 下载后真实字节复查、60s 下载超时、mxc 去重(文件被删自动重下)、房间键安全化 + 哈希前缀文件名(防路径穿越/同名不覆盖);`sanitizeMediaFilename` 与 `EncryptedMediaFile` 同址——谁落盘谁拥有文件名契约(spec #99/#101 自 matrix-utils 归位)
 - `MediaSource` 下载接缝可注入(测试用 fake);部署缺加密半边时回执明确原因;组合根(standalone)以 `matrix.mediaSource` 组装并把 store 交给 provider(`setAttachmentStore`)
-- 目录默认 `~/.pi/pi-courier-attachments/`(与 `~/.pi` 下其他 pi-courier-* 状态文件平齐;spec 文本写的是 `~/.pi/pi-courier/attachments/`,实施时改名并在关票评论披露),上限默认 10 MB —— `attachments.directory` / `attachments.maxMb` 配置 + `PI_ATTACHMENTS_DIR` / `PI_ATTACHMENTS_MAX_MB` 环境变量 + setup 向导两项询问
+- 目录默认数据根下 `attachments/`(spec #258 票03 换线,spec 文本当初写的 `~/.pi/pi-courier/attachments/` 与实施名几经演变:旧布局为 `~/.pi/pi-courier-attachments/`,现由启动期迁移自动搬入 dataDir),上限默认 10 MB —— `attachments.directory` / `attachments.maxMb` 配置 + `PI_ATTACHMENTS_DIR` / `PI_ATTACHMENTS_MAX_MB` 环境变量 + setup 向导两项询问
 
 **`src/logger.ts`** —— 分级日志门面(spec #34 后支持项目标签;spec #99 票4/#105 起静音策略单点)
 - 输出 `[ISO时间] [LEVEL] [标签] 消息`;`withLabel()` 派生视图打项目标签(视图动态读父阈值);字符串参数换行净化为 `⏎`,一次调用恒一条物理行(打标行不会被续行破坏)
@@ -326,6 +326,10 @@ pi 0.83.0 就绪。
 - **undici 依赖缘由**:Node 内置 fetch 在全部受支持版本默认不理会代理环境变量,22.19–22.20 连 `NODE_USE_ENV_PROXY` 开关都没有,必须代码级装配;与上游 pi 同款做法(`setGlobalDispatcher` + `install()`,让 fetch 与调度器在同一 undici 实现上),不抬 engines 门槛;`proxyTunnel: true` 与矩阵 request 腿的 CONNECT 隧道行为对齐
 - **pi 子进程 spawn 注入自洽**(PiRpc.proxySpawnEnv):spawn 点现算生效三元组合入子进程 env(`PiRpcOptions.proxyConfig` 优先、缺省 loadConfig 兜底),不依赖入口接线是否先跑——cli、pmctl 等任何入口直接拉起 PiRpc 都正确;因上游 spawn 按 `{...process.env, ...options.env}` 合成无法删键,「配置出场未填 noProxy」以空串压掉 shell 遗留 `NO_PROXY`,env 兜底解析不出豁免则两键不写
 - **测试三缝**:缝 A 纯函数直测(`proxy.test.ts`:优先级/env 兜底/大小写/scheme 白名单/noProxy 语义/双语报错);缝 B 注入断言(`proxy-apply.test.ts` 假 env + spy installer 断言覆写与装配时机、`pi-rpc-proxy-env.test.ts` spawn env 三态、`setup-proxy.test.ts` 假 stdin 测向导默认值/校验/跳过);缝 C 真实集成(`proxy-apply.test.ts` 内起本地假 CONNECT 代理 + 假源站,断言全局 fetch 真实经代理到达源站,全程回环零外网)
+
+**`src/paths.ts`** —— 跨平台目录布局解析单点(spec #258 票01):纯函数 `resolveLayout({ platform, homedir, env })` 从注入输入解析三根分离布局(win32:config=~/.pi、data=%APPDATA%\pi-courier;linux:三个 XDG 根;darwin:Library/Application Support)+ 全量派生叶子(Matrix 存储/加密库/附件落 dataDir,锁/心跳/审计/台账/快照/告警戳/logs/run.log 落 stateDir);叶子名去 `pi-courier-` 前缀(例外:configPath 名不变,piHome 系恒 ~/.pi 不随迁移)。运行时消费经 `runtimeLayout()`(config.ts 缓存的进程内唯一实例,组合根与其余模块共用,不再各自 resolveLayout)。
+
+**`src/legacy-migration.ts`** —— 旧布局自动迁移(spec #258 票02,时序冻结于票03):`buildLegacyMigrationPlan` 纯函数生成旧→新映射表(~/.pi 下带前缀的 Matrix 存储/crypto/附件/状态叶子 → 三根新家;非 Windows 配置随迁,Windows 配置原地不动;旧锁只删不迁),`runLegacyMigration` 逐项独立执行——旧不存在即跳过(幂等主通道,二次启动零日志)、新旧并存信新家保留旧件警告一次、rename 同卷原子 + EXDEV 回退 copy、单项失败仅警告不抛不卡启动;活锁绝不偷(陈旧判断单点 = lock.ts 的 `lockIsStale`)。两个组合根(standalone 与 cli)都在任何配置读取之前执行,CLI 侧缺失会导致升级后先跑 `setup` 等子命令读空的新配置生成新 device ID(评审修复补齐)。
 
 **`src/standalone.ts`** —— 独立入口(组合根只接线,spec #99 票7/#106)
 - 单实例锁(lock.ts)

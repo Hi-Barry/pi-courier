@@ -34,19 +34,17 @@ export interface LayoutInput {
   env: Record<string, string | undefined>;
 }
 
-/** 三大根目录;派生路径(锁、日志、Matrix 存储等)见 `Layout`。 */
-export interface DirLayout {
+/** 完整布局 = 三大根(configDir/dataDir/stateDir)+ 全量派生路径。派生只认
+ *  解析后的根(根变了叶子跟着走);唯二例外是 piHome 系(pi CLI 的家,全平台
+ *  恒 ~/.pi,不随 configDir 迁移)。评审修复:原独立的 DirLayout 导出无外部
+ *  消费,收敛进本 interface(三大根即前三个字段)。 */
+export interface Layout {
   /** 配置根:pi-courier.json、agent/sessions(RPC 会话,原样不动)。 */
   configDir: string;
   /** 数据根:Matrix 存储/加密库/附件等「内容资产」。 */
   dataDir: string;
   /** 状态根:心跳/审计/台账/锁/日志等「可重建运行痕迹」。 */
   stateDir: string;
-}
-
-/** 完整布局 = 三大根 + 全量派生路径。派生只认解析后的根(根变了叶子跟着走);
- *  唯二例外是 piHome 系(pi CLI 的家,全平台恒 ~/.pi,不随 configDir 迁移)。 */
-export interface Layout extends DirLayout {
   /** 配置文件(configDir/pi-courier.json;名字与存量约定一致,不带目录名前缀)。 */
   configPath: string;
   /** pi CLI 的家(homedir/.pi,全平台不动)。pi 自身的凭据/模型配置/会话都
@@ -93,7 +91,7 @@ export function resolveLayout(input: LayoutInput): Layout {
   const { platform, homedir, env } = input;
   // 分隔符跟随输入平台而非宿主:linux CI 上也能解析出正确的 win32 反斜杠路径。
   const join = platform === "win32" ? path.win32.join : path.posix.join;
-  let roots: DirLayout;
+  let roots: Pick<Layout, "configDir" | "dataDir" | "stateDir">;
   if (platform === "win32") {
     const dataDir = join(
       envRoot(env, "APPDATA") ?? join(homedir, "AppData", "Roaming"),

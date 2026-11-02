@@ -48,8 +48,10 @@
 # 经 cmd 层执行,任务名不带引号。真机验收口径见 PR/票评。
 
 param(
-  # 心跳文件(桥的状态根 stateDir,spec #258 新布局;APPDATA 缺失的极端
-  # 场景由 watchdog-core.mjs 的默认解析兜底回 ~/AppData/Roaming)
+  # 心跳文件(桥的状态根 stateDir,spec #258 新布局)。注:本壳恒向核心传
+  # --heartbeat,核心按平台解析默认值的兜底仅在省略 --heartbeat 时生效;
+  # APPDATA 为空时此默认值会展开成残缺的相对路径(\pi-courier\state\...),
+  # 非标准布局请显式传 -HeartbeatPath。
   [string]$HeartbeatPath = "$env:APPDATA\pi-courier\state\heartbeat.json",
   # 过期秒(默认 180 = 6 × 30s 心跳间隔,换算关系见文件头)
   [int]$StaleSeconds = 180,

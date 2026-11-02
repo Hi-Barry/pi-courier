@@ -1,10 +1,11 @@
 /**
  * 旧布局自动迁移(spec #258 票02 / issue #260)。
  *
- * 为什么独立成模块:0.2.x 的布局把数据/状态全堆在 ~/.pi 下(带 pi-courier-
- * 前缀的叶子),票01 的三根分离布局(dataDir/stateDir/configDir)要求存量
- * 用户首次升级时无感搬迁。迁移发生在「进程启动早期、拿单实例锁之前」(票03
- * 组合根接线;本票只交付模块,不碰任何消费点)。
+ * 为什么独立成模块:旧布局(≤1.3.0,实际存量即 1.3.0)把数据/状态全堆在
+ * ~/.pi 下(带 pi-courier-前缀的叶子),票01 的三根分离布局
+ * (dataDir/stateDir/configDir)要求存量用户首次升级时无感搬迁。迁移发生在
+ * 「进程启动早期、拿单实例锁之前」(票03 组合根接线;评审修复后 standalone
+ * 与 cli 两个组合根都接线)。
  *
  * 映射表(探索笔记为唯一事实来源,buildLegacyMigrationPlan 按平台生成):
  *  - ~/.pi/pi-courier-matrix-store.json → <dataDir>/matrix-store.json
@@ -40,6 +41,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { errorMessage } from "./errors.js";
 import { t } from "./i18n/index.js";
+import { lockIsStale } from "./lock.js";
 import { logger } from "./logger.js";
 import type { Layout } from "./paths.js";
 
@@ -167,36 +169,16 @@ export interface LegacyMigrationDeps {
   /** 新家目录创建缝:默认 mkdir -p + 0700(config.ts 同做法)。 */
   mkdir?: (dir: string) => void;
   /**
-   * 旧锁陈旧判断缝:返回 true 才允许删。默认语义与 lock.ts 的接管判断同源:
-   * 内容损坏(无有效持有声明)、持有者是自己 PID、持有进程确死(ESRCH)三者
-   * 之一 → 陈旧;活着或探测不了(EPERM 等)→ 保留,绝不偷活锁。
+   * 旧锁陈旧判断缝:返回 true 才允许删。默认 = lock.ts 的 lockIsStale(接管
+   * 判断同源单点,评审修复:此前的同语义复制品已删):内容损坏(无有效持有
+   * 声明)、持有者是自己 PID、持有进程确死(ESRCH)三者之一 → 陈旧;活着或
+   * 探测不了(EPERM 等)→ 保留,绝不偷活锁。
    */
   isLockStale?: (lockPath: string) => boolean;
   /** 清单日志缝(逐项搬移与汇总):默认 logger.info。 */
   log?: (message: string) => void;
   /** 警告缝(新旧并存/单项失败/活锁保留):默认 logger.warn。 */
   warn?: (message: string) => void;
-}
-
-/** 默认陈旧判断:与 lock.ts 的「损坏=无声明、活进程不偷、ESRCH 才接管」完全同语义。 */
-function defaultIsLockStale(lockPath: string): boolean {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(lockPath, "utf-8");
-  } catch {
-    return true; // 读不到 = 无有效持有声明(存在性由调用方先行判断)
-  }
-  const sep = raw.indexOf(":");
-  if (sep <= 0) return true; // 损坏内容(空/无冒号)= 无效声明
-  const pid = Number.parseInt(raw.slice(0, sep), 10);
-  if (Number.isNaN(pid)) return true;
-  if (pid === process.pid) return true; // 己方 PID:acquireLock 同款接管语义
-  try {
-    process.kill(pid, 0);
-    return false; // 活进程持有,绝不偷
-  } catch (err) {
-    return (err as NodeJS.ErrnoException)?.code === "ESRCH"; // 探测不了按活着算
-  }
 }
 
 /**
@@ -210,7 +192,7 @@ export function runLegacyMigration(deps: LegacyMigrationDeps): LegacyMigrationRe
   const remove = deps.remove ?? ((target: string) => fs.rmSync(target, { recursive: true }));
   const mkdir =
     deps.mkdir ?? ((dir: string) => fs.mkdirSync(dir, { recursive: true, mode: 0o700 }));
-  const isLockStale = deps.isLockStale ?? defaultIsLockStale;
+  const isLockStale = deps.isLockStale ?? lockIsStale;
   const log = deps.log ?? ((message: string) => logger.info(message));
   const warn = deps.warn ?? ((message: string) => logger.warn(message));
 

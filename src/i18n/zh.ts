@@ -746,6 +746,8 @@ const zh = {
   "startup.workdirSaved": "工作目录: {workdir}(已保存到 {path},改配置后重启即生效)",
   "startup.cryptoDeviceMismatch": "   → 本地加密存储与 token 的设备身份不一致(换过 token / 重登过)。",
   "startup.cryptoResetHint": "     解法:删除加密存储后重启 — rm -rf {path} && pi-courier restart",
+  "startup.otkMismatch": "   → 服务器端 device 的 one-time key 记账与本地不一致。",
+  "startup.otkResetHint": "     解法:重跑 `pi-courier setup`,在\"保留现有 token?\"处输 n 换新 token(新设备=服务器干净)。",
 
   // ── proxy(出网代理,spec #201 票 #202)───────────────────────────────
   "proxy.active":

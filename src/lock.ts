@@ -58,6 +58,20 @@ function processIsGone(pid: number): boolean {
   }
 }
 
+/**
+ * 锁陈旧判定(单点,spec #258 评审修复:legacy-migration 的 defaultIsLockStale
+ * 复制品由此收敛,改 import 本函数)。与 acquireLock 的接管判断完全同源同义:
+ * 读不到或内容损坏(无有效持有声明)、持有者是本进程 PID、持有进程确死
+ * (ESRCH)三者之一 → 陈旧;活进程或探测不了(EPERM 等)→ 不陈旧,绝不偷
+ * 活锁。零项目依赖约束不变(只触及 fs/path/process,见上方注)。
+ */
+export function lockIsStale(lockPath: string): boolean {
+  const existing = readLockFile(lockPath);
+  if (existing === null) return true; // 读不到 = 无有效持有声明(存在性由调用方先行判断)
+  if (existing.pid === process.pid) return true; // 己方 PID:acquireLock 同款接管语义
+  return processIsGone(existing.pid);
+}
+
 /** 取单实例锁(持有声明写在注入的 lockPath)。同进程重入幂等;活锁不偷。 */
 export function acquireLock(lockPath: string): boolean {
   // Layer 1: same-process guard — reject when a different owner instance in

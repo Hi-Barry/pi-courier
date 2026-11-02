@@ -6,8 +6,8 @@
  * homeserver 的房间发送 API。「bot 死了」不再等于「告警通道也没了」。
  *
  * 自带冷却:上次告警时间戳落盘(默认状态根 stateDir/watchdog-alert-stamp,
- * 平台解析与 watchdog-core.mjs 的 defaultStateDir 同语义,与心跳同目录),
- * 默认 30 分钟窗口 —— 服务反复崩溃时收到的告警是有限几条,
+ * 平台解析单点在同目录 layout-defaults.mjs,与 watchdog-core.mjs 共用,
+ * 与心跳同目录),默认 30 分钟窗口 —— 服务反复崩溃时收到的告警是有限几条,
  * 不是每分钟一条轰炸。窗口内第二条例行调用被静默抑制;发送失败不更新时间戳
  * (下一轮看门狗重试)。
  *
@@ -23,6 +23,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { defaultStateDir } from "./layout-defaults.mjs";
 
 /** 冷却窗口默认(毫秒):30 分钟(spec #247 票06)。 */
 export const DEFAULT_COOLDOWN_MS = 30 * 60_000;
@@ -42,22 +43,8 @@ export function defaultConfigPath() {
   return path.join(xdgConfig, "pi-courier", "pi-courier.json");
 }
 
-/** 默认状态根(与 watchdog-core.mjs 的 defaultStateDir 同语义,spec #258
- *  冻结布局;本文件零跨文件依赖,故独立复刻一份):win32=%APPDATA%\
- *  pi-courier\state(APPDATA 缺失回退 ~/AppData/Roaming),darwin=~/Library/
- *  Application Support/pi-courier/state,其余=$XDG_STATE_HOME/pi-courier
- *  (未设置/空串按缺省 ~/.local/state/pi-courier 处理)。 */
-export function defaultStateDir() {
-  if (process.platform === "win32") {
-    const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-    return path.join(appData, "pi-courier", "state");
-  }
-  if (process.platform === "darwin") {
-    return path.join(os.homedir(), "Library", "Application Support", "pi-courier", "state");
-  }
-  const xdgState = process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
-  return path.join(xdgState, "pi-courier");
-}
+/** 默认状态根解析单点在同目录 layout-defaults.mjs(评审修复:此处原复刻的
+ *  defaultStateDir 已删,与 watchdog-core.mjs 共用一份,spec #258 冻结布局)。 */
 
 export function defaultStampPath() {
   return path.join(defaultStateDir(), "watchdog-alert-stamp");

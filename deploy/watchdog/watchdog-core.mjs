@@ -5,7 +5,7 @@
  * 零桥代码依赖:只读桥的心跳文件(状态根 stateDir/heartbeat.json,spec #258
  * 新布局:win32=%APPDATA%\pi-courier\state、darwin=~/Library/Application
  * Support/pi-courier/state、其余=$XDG_STATE_HOME/pi-courier 缺省
- * ~/.local/state/pi-courier,解析见 defaultStateDir;由桥内周期自检 tick
+ * ~/.local/state/pi-courier,解析见同目录 layout-defaults.mjs);由桥内周期自检 tick
  * 每 30 秒原子写),按需执行注入的「判活 / 任务控制 /
  * 告警」命令。平台壳(POSIX bash / Windows PowerShell)只做参数解析与调用
  * 本核心 —— 判定逻辑只有这一份,两个平台共用。
@@ -45,8 +45,8 @@
 
 import { execSync } from "node:child_process";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { defaultStateDir } from "./layout-defaults.mjs";
 
 /** 心跳过期默认秒数:180 = 6 × 30 秒心跳间隔(换算关系见文件头)。 */
 export const DEFAULT_STALE_SECONDS = 180;
@@ -55,27 +55,9 @@ export const DEFAULT_STALE_SECONDS = 180;
  *  「心跳仍新鲜但 PID 消失」的宽限期 = 2 × 该值(覆盖 RestartSec + 首拍延迟)。 */
 export const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30;
 
-/** 默认状态根(spec #258 冻结布局,与 src/paths.ts 同语义)。本文件是零桥
- *  代码依赖的独立部署产物,不 import 桥代码,故按平台在此复刻一份:
- *   win32:  %APPDATA%\pi-courier\state(APPDATA 未设置/空串回退
- *           ~/AppData/Roaming,与 paths.ts 的 envRoot 缺省语义一致)
- *   darwin: ~/Library/Application Support/pi-courier/state
- *   其余:   $XDG_STATE_HOME/pi-courier(未设置/空串按缺省
- *           ~/.local/state/pi-courier 处理) */
-export function defaultStateDir() {
-  if (process.platform === "win32") {
-    const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-    return path.join(appData, "pi-courier", "state");
-  }
-  if (process.platform === "darwin") {
-    return path.join(os.homedir(), "Library", "Application Support", "pi-courier", "state");
-  }
-  const xdgState = process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
-  return path.join(xdgState, "pi-courier");
-}
-
 /** 默认心跳文件路径(桥的状态根下,票02 的写侧契约;非默认布局可用
- *  --heartbeat 显式传参覆盖)。 */
+ *  --heartbeat 显式传参覆盖。状态根平台解析单点在同目录 layout-defaults.mjs,
+ *  与 matrix-alert.mjs 共用)。 */
 export function defaultHeartbeatPath() {
   return path.join(defaultStateDir(), "heartbeat.json");
 }

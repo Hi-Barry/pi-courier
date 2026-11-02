@@ -672,7 +672,8 @@ Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDA
 - **Autostart via Task Scheduler** (no admin needed, fires at every logon) — verified recipe:
 
   ```powershell
-  $action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c pi-courier run >> %USERPROFILE%\pi-courier-run.log 2>&1'
+  New-Item -ItemType Directory -Force "$env:APPDATA\pi-courier\state\logs" | Out-Null  # create the log dir once (the redirect below won't mkdir -p)
+  $action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c pi-courier run >> %APPDATA%\pi-courier\state\logs\run.log 2>&1'
   $trigger = New-ScheduledTaskTrigger -AtLogOn
   Register-ScheduledTask -TaskName 'pi-courier' -Action $action -Trigger $trigger
   Start-ScheduledTask -TaskName 'pi-courier'   # start right now; it refires on every logon

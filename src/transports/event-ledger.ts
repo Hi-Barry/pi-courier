@@ -3,7 +3,8 @@
  * 查台账」的另一半 —— 每条真正受理过的 Matrix 事件记一行 JSONL,重启后
  * stale 且台账未见过的 = 离线积压,交给 router 征询,不再无声蒸发。
  *
- * 磁盘形态(~/.pi/pi-courier-state/event-ledger.jsonl,0600):每行一条
+ * 磁盘形态(stateDir/event-ledger.jsonl,0600;spec #258 三根分离布局,旧
+ * ~/.pi/pi-courier-state/ 由启动期迁移搬入):每行一条
  * `{"id":"$…","ts":…}`;首行 `{"init":<首运时刻>}` 标记台账诞生 —— 文件不
  * 存在的首个会话里 stale 一律维持全丢(全新部署/升级首启的初始同步回放
  * 无法与真积压区分),只从实时事件开始记账;自第二个会话起查台账。

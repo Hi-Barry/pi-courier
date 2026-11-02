@@ -21,8 +21,8 @@ deploy/docker/
     └── state/            # 桥状态根:心跳/审计/台账/快照/锁/日志
 ```
 
-容器内挂载点与宿主侧目录一一对应(0.2.x 老用户的 `./data` 整卷平铺文件,
-首启由桥自动搬进 config/lib/state,见[从 0.2.x 升级](#从-02x-升级)):
+容器内挂载点与宿主侧目录一一对应(旧布局(≤1.3.0)用户的 `./data` 整卷平铺
+文件,首启由桥自动搬进 config/lib/state,见[从旧布局升级](#从旧布局升级)):
 
 | 宿主侧 | 容器内 | 内容 |
 |---|---|---|
@@ -158,11 +158,11 @@ git pull && docker compose build && docker compose up -d
 # docker compose build --no-cache
 ```
 
-### 从 0.2.x 升级
+### 从旧布局升级
 
-0.2.x 的 compose 只挂一卷 `./data:/root/.pi`,配置/数据/状态全平铺在该卷根
-(`pi-courier.json`、`pi-courier-matrix-*`、`pi-courier-state/` 等)。新布局把
-桥的三根拆成独立卷,两种升级方式二选一:
+旧布局(≤ 1.3.0,实际存量即 1.3.0)的 compose 只挂一卷 `./data:/root/.pi`,
+配置/数据/状态全平铺在该卷根(`pi-courier.json`、`pi-courier-matrix-*`、
+`pi-courier-state/` 等)。新布局把桥的三根拆成独立卷,两种升级方式二选一:
 
 **方式一(推荐,零手动搬动):继续用旧整卷,首启自动迁移**
 

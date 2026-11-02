@@ -663,7 +663,8 @@ npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs p
 - **任务计划程序自启**(无需管理员,每次登录触发)——真机验证过的配方:
 
   ```powershell
-  $action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c pi-courier run >> %USERPROFILE%\pi-courier-run.log 2>&1'
+  New-Item -ItemType Directory -Force "$env:APPDATA\pi-courier\state\logs" | Out-Null  # 先建一次日志目录(下方重定向不会自建父目录)
+  $action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c pi-courier run >> %APPDATA%\pi-courier\state\logs\run.log 2>&1'
   $trigger = New-ScheduledTaskTrigger -AtLogOn
   Register-ScheduledTask -TaskName 'pi-courier' -Action $action -Trigger $trigger
   Start-ScheduledTask -TaskName 'pi-courier'   # 立即启动;此后每次登录自动拉起
