@@ -7,16 +7,29 @@
 ```
 deploy/docker/
 ├── Dockerfile            # 镜像构建(装 pi + pi-courier + 默认配置模板)
-├── docker-compose.yml    # 编排(数据卷 ./data ↔ 容器 /root/.pi)
-├── entrypoint.sh         # 首次启动:自动把默认配置模板拷入数据目录
+├── docker-compose.yml    # 编排(四卷:pi 的家 + 桥配置/数据/状态,见下)
+├── entrypoint.sh         # 首次启动:自动把默认配置模板拷入 agent 目录
 ├── defaults/             # 模板源(构建进镜像 /opt/pi-courier/defaults/)
 │   └── agent/
 │       ├── models.json   # 完整模型数据(24 模型,开箱即用)
 │       ├── auth.json     # API key 占位(也可用 pi TUI 配置)
 │       └── settings.json # 默认 provider + 模型
 └── data/                 # 运行时数据(自动创建;含 key/token,已 gitignore)
-    └── agent/            # 首次启动自动从模板填充
+    ├── agent/            # pi 的家:凭据/模型/会话(首次启动自动从模板填充)
+    ├── config/           # 桥配置根:pi-courier.json(setup 向导写入)
+    ├── lib/              # 桥数据根:Matrix 存储/加密库/附件(删了要重新配对)
+    └── state/            # 桥状态根:心跳/审计/台账/快照/锁/日志
 ```
+
+容器内挂载点与宿主侧目录一一对应(0.2.x 老用户的 `./data` 整卷平铺文件,
+首启由桥自动搬进 config/lib/state,见[从 0.2.x 升级](#从-02x-升级)):
+
+| 宿主侧 | 容器内 | 内容 |
+|---|---|---|
+| `./data` | `/root/.pi` | pi CLI 的家:agent/ 凭据、模型、会话(全平台恒 `~/.pi`,不随三根分离迁移) |
+| `./data/config` | `/root/.config/pi-courier` | 桥配置根:`pi-courier.json` |
+| `./data/lib` | `/root/.local/share/pi-courier` | 桥数据根:`matrix-store.json`、`matrix-crypto/`、`attachments/` |
+| `./data/state` | `/root/.local/state/pi-courier` | 桥状态根:心跳/审计/台账/快照/锁/`logs/` |
 
 ## 部署步骤(实测流程)
 
@@ -55,7 +68,7 @@ docker compose up -d
 首次启动 entrypoint 会自动把 LLM 配置模板拷入 `./data/agent/`(models.json / auth.json / settings.json)。此时容器处于"等待配置"状态,日志会提示(属正常):
 
 ```
-[pi-courier] first run: initializing /root/.pi/agent from template
+[pi-courier] first run: seeding /root/.pi/agent/auth.json from template
 [WARN] ⚠️ 未配置 Matrix 连接(缺少 homeserver 或 access token)。
 [WARN]    请运行 `pi-courier setup` 完成配置,然后重启服务。
 [WARN]    等待配置中… (Ctrl+C / SIGTERM 退出)
@@ -84,7 +97,7 @@ exit
 ```
 
 - **信任用户**:可以直接回车默认(bot 自己),之后第一个给你发消息的人通过验证码自动配对(见第 7 步)
-- 向导写入容器内 `/root/.pi/pi-courier.json`(宿主 `./data/pi-courier.json`)
+- 向导写入容器内 `/root/.config/pi-courier/pi-courier.json`(宿主 `./data/config/pi-courier.json`)
 
 ### 6. 重启生效 + 查看日志
 
@@ -145,6 +158,45 @@ git pull && docker compose build && docker compose up -d
 # docker compose build --no-cache
 ```
 
+### 从 0.2.x 升级
+
+0.2.x 的 compose 只挂一卷 `./data:/root/.pi`,配置/数据/状态全平铺在该卷根
+(`pi-courier.json`、`pi-courier-matrix-*`、`pi-courier-state/` 等)。新布局把
+桥的三根拆成独立卷,两种升级方式二选一:
+
+**方式一(推荐,零手动搬动):继续用旧整卷,首启自动迁移**
+
+直接换用新 compose 文件并重建容器(`docker compose up -d`)。`./data` 仍挂在
+`/root/.pi`,桥首启自带的旧布局迁移器会把旧平铺文件自动搬进三个新卷:
+
+- `pi-courier.json` → `./data/config/pi-courier.json`
+- `pi-courier-matrix-store.json` → `./data/lib/matrix-store.json`
+- `pi-courier-matrix-crypto/` → `./data/lib/matrix-crypto/`
+- `pi-courier-attachments/` → `./data/lib/attachments/`
+- `pi-courier-state/` 的五个叶子(心跳/审计/台账/快照/告警戳) → `./data/state/`
+
+迁移是移动不是复制:正常迁移后旧平铺文件从 `./data` 根消失,只剩 `agent/`。
+若某项目标位置已有新文件(新旧并存,比如手动搬过一半),桥信新家、旧文件原样
+保留并警告一次;单项失败只警告不卡启动,下次启动自动重试。pi 的会话
+(`./data/agent/`)原地不动。
+
+**方式二:手动拆卷(想立刻得到干净布局时)**
+
+```bash
+cd deploy/docker
+mkdir -p data/config data/lib data/state
+mv data/pi-courier.json data/config/
+mv data/pi-courier-matrix-store.json data/lib/matrix-store.json
+mv data/pi-courier-matrix-crypto data/lib/matrix-crypto
+mv data/pi-courier-attachments data/lib/attachments
+mv data/pi-courier-state/* data/state/
+rm -f data/pi-courier.lock
+```
+
+然后换新 compose 文件 `docker compose up -d`。注意叶子名去掉了 `pi-courier-`
+前缀(如 `pi-courier-matrix-store.json` → `matrix-store.json`),搬错名字等同
+没搬 —— 桥会把旧文件再迁一遍并警告新旧并存。
+
 ### 10. 映射宿主机项目目录(可选)
 
 让 pi 在容器里直接操作宿主机上的代码:
@@ -198,9 +250,9 @@ docker logs -f pi-courier
 | 启动显示 `model: unknown` | `./data/agent/auth.json` 没填 key,或用 pi TUI `/login` 配置 |
 | 发消息没有回复 | 按顺序查:`docker logs` 看 Matrix 连接、pi RPC 连接、模型是否 unknown |
 | 发消息后日志只有 `Challenge code`,没有回复 | 这是首次配对 —— 把 6 位验证码回复给 bot |
-| `M_BAD_JSON: device_id does not match` | 重登录过,删 `./data/pi-courier-matrix-crypto` 重启 |
+| `M_BAD_JSON: device_id does not match` | 重登录过,删 `./data/lib/matrix-crypto` 重启 |
 | `One time key ... already exists`(M_UNKNOWN) | token 绑定旧设备且服务器 OTK 记账错位,删 store 无效 → **换 token**(setup 时"保留现有 token?"输 n 重新获取) |
 | 加密房间解不开新消息 | bot 无交叉签名,改用非加密房间 |
-| 会话重启丢失 | 0.1.1+ 自动 `--continue`,确认 `./data` 卷没被删 |
-| 想用新配置 | 改 `./data/pi-courier.json` → `docker compose restart` |
+| 会话重启丢失 | 0.1.1+ 自动 `--continue`,确认 `./data`(pi 会话)与 `./data/lib` 卷没被删 |
+| 想用新配置 | 改 `./data/config/pi-courier.json` → `docker compose restart` |
 | workdir 文件丢失(容器重建后) | 未映射 projects 卷;取消注释 `- ./projects:/root/Projects` |
