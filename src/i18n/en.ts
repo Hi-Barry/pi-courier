@@ -794,6 +794,8 @@ Note: pi itself is installed and upgraded independently on the system
   "startup.workdirSaved": "Workdir: {workdir} (saved to {path}; restart to apply)",
   "startup.cryptoDeviceMismatch": "   → The local crypto store's device identity doesn't match the token (token changed, or re-logged in).",
   "startup.cryptoResetHint": "     Fix: delete the crypto store and restart — rm -rf {path} && pi-courier restart",
+  "startup.otkMismatch": "   → The server-side device's one-time key accounting is out of sync with the local store.",
+  "startup.otkResetHint": "     Fix: rerun `pi-courier setup` and answer n at \"Keep the existing token?\" to get a fresh token (a new device starts clean on the server).",
 
   // ── proxy (outbound proxy, spec #201 ticket #202) ──────────────────────
   "proxy.active":
