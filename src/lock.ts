@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 
 /**
@@ -12,11 +11,16 @@ import * as path from "node:path";
  *                    atomic (exclusive create); takeover of a stale lock goes
  *                    through unlink + exclusive re-create so two concurrent
  *                    takers cannot both win.
+ *
+ * 注入缝(spec #258 票03):锁路径由组合根注入(acquireLock/releaseLock 的
+ * lockPath 参数,取布局解析的 layout.lockPath = stateDir/pi-courier.lock)。
+ * 锁从 ~/.pi 挪进 stateDir:它本质是运行痕迹而非配置;旧锁不迁移,由
+ * legacy-migration 在启动早期按陈旧判断清理,新锁在此按需重建。
  */
 
-// 锁模块刻意零依赖:跨进程竞争测试以原生 node 直跑本文件(TS type-stripping
-// 解析不了 .js→.ts 源内导入),故配置目录独立计算,不引 config(审计批3 评审)。
-const LOCK_PATH = path.join(os.homedir(), ".pi", "pi-courier.lock");
+// 锁模块刻意零项目依赖:跨进程竞争测试以原生 node 直跑本文件(TS
+// type-stripping 解析不了 .js→.ts 源内导入),故不能引 paths/config 取锁路径
+// (审计批3 评审;票03 维持该约束,路径改为调用方注入而非模块内计算)。
 
 const g = global as any;
 if (!g.__msgBridgeInstanceId) {
@@ -27,10 +31,10 @@ const instanceId: string = g.__msgBridgeInstanceId;
 /** Parse "pid:owner" out of the lock file; null when unreadable or corrupt
  *  (empty, no colon, non-numeric pid). A corrupt file carries no valid
  *  ownership claim. */
-function readLockFile(): { pid: number; owner: string } | null {
+function readLockFile(lockPath: string): { pid: number; owner: string } | null {
   let raw: string;
   try {
-    raw = fs.readFileSync(LOCK_PATH, "utf-8");
+    raw = fs.readFileSync(lockPath, "utf-8");
   } catch {
     return null;
   }
@@ -54,7 +58,8 @@ function processIsGone(pid: number): boolean {
   }
 }
 
-export function acquireLock(): boolean {
+/** 取单实例锁(持有声明写在注入的 lockPath)。同进程重入幂等;活锁不偷。 */
+export function acquireLock(lockPath: string): boolean {
   // Layer 1: same-process guard — reject when a different owner instance in
   // this process already holds the connection.
   if (g.__msgBridgeConnected && g.__msgBridgeOwner !== instanceId) {
@@ -67,27 +72,27 @@ export function acquireLock(): boolean {
   // dead process's lock is taken over, anything else is respected.
   const content = `${process.pid}:${instanceId}`;
   try {
-    const configDir = path.join(os.homedir(), ".pi");
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    const lockDir = path.dirname(lockPath);
+    if (!fs.existsSync(lockDir)) {
+      fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 });
     }
     try {
-      fs.writeFileSync(LOCK_PATH, content, { mode: 0o600, flag: "wx" });
+      fs.writeFileSync(lockPath, content, { mode: 0o600, flag: "wx" });
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code !== "EEXIST") throw err;
-      const existing = readLockFile();
+      const existing = readLockFile(lockPath);
       const takeover =
         existing === null ||
         existing.pid === process.pid ||
         processIsGone(existing.pid);
       if (!takeover) return false; // a live competitor holds the lock
       try {
-        fs.unlinkSync(LOCK_PATH);
+        fs.unlinkSync(lockPath);
       } catch {
         // already gone — someone else's takeover, re-race below
       }
       try {
-        fs.writeFileSync(LOCK_PATH, content, { mode: 0o600, flag: "wx" });
+        fs.writeFileSync(lockPath, content, { mode: 0o600, flag: "wx" });
       } catch (err2) {
         if ((err2 as NodeJS.ErrnoException)?.code !== "EEXIST") throw err2;
         return false; // lost the takeover race to a live writer
@@ -97,7 +102,7 @@ export function acquireLock(): boolean {
     // Lock file mechanics failed — exclusivity cannot be guaranteed, so fail
     // closed instead of letting a second bridge believe it owns the room.
     console.warn(
-      `[lock] acquiring ${LOCK_PATH} failed: ${err instanceof Error ? err.message : String(err)}`
+      `[lock] acquiring ${lockPath} failed: ${err instanceof Error ? err.message : String(err)}`
     );
     return false;
   }
@@ -107,16 +112,17 @@ export function acquireLock(): boolean {
   return true;
 }
 
-export function releaseLock(): void {
+/** 放锁(只unlink归属可验证的锁;损坏条目留着无害,acquire 会接管)。 */
+export function releaseLock(lockPath: string): void {
   if (g.__msgBridgeOwner !== instanceId) return;
   g.__msgBridgeConnected = false;
   g.__msgBridgeOwner = undefined;
   try {
-    const lock = readLockFile();
+    const lock = readLockFile(lockPath);
     // Only unlink a lock that verifiably belongs to us; a corrupt entry stays
     // (harmless — acquire treats it as having no valid claim and takes over).
     if (lock && lock.pid === process.pid && lock.owner === instanceId) {
-      fs.unlinkSync(LOCK_PATH);
+      fs.unlinkSync(lockPath);
     }
   } catch {
     // ignore — best-effort cleanup

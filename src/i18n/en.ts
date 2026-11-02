@@ -653,7 +653,7 @@ const en: Record<MessageKey, string> = {
   // ── setup ─────────────────────────────────────────────────────────────
   "setup.title": "=== pi-courier setup wizard ===",
   "setup.languagePrompt": "Language? [{def}] (en/zh): ",
-  "setup.header": "Writes ~/.pi/pi-courier.json (mode 600; an existing config prefills the defaults — press Enter to keep them)\n",
+  "setup.header": "Writes {path} (mode 600; an existing config prefills the defaults — press Enter to keep them)\n",
   "setup.homeserver.default": "Matrix homeserver URL [default {def}]: ",
   "setup.homeserver.plain": "Matrix homeserver URL (e.g. https://matrix.example.com): ",
   "setup.homeserver.empty": "homeserver URL must not be empty",
@@ -701,7 +701,7 @@ const en: Record<MessageKey, string> = {
   "setup.proxy.envInvalid":
     "⚠️ Ignored an unusable proxy from the environment: {message}\n   (type a working http/https proxy here, or press Enter to skip)",
   "setup.proxy.exemptList": "exempt {list}",
-  "setup.done.title": "\n✅ Config written to ~/.pi/pi-courier.json",
+  "setup.done.title": "\n✅ Config written to {path}",
   "setup.done.account": "   account: {user}",
   "setup.done.trusted": "   trusted user: {user}",
   "setup.done.e2ee": "   E2EE: {state}",
@@ -783,15 +783,21 @@ Note: pi itself is installed and upgraded independently on the system
   "hint.bus.tail3": "   if /run/user/$(id -u) does not exist, log in as that user once, or run loginctl enable-linger <user> as root.",
 
   // ── startup ───────────────────────────────────────────────────────────
+  // Config-file paths are interpolated via {path} (spec #258 ticket 03):
+  // Linux's configDir moved to ~/.config/pi-courier, so copy never hardcodes
+  // ~/.pi — call sites inject the layout-resolved value.
   "startup.language.system":
-    "language: {locale} (detected from the system locale; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",
+    "language: {locale} (detected from the system locale; set \"language\" in {path} or PI_LANGUAGE to override)",
   "startup.language.default":
-    "language: {locale} (default; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",
+    "language: {locale} (default; set \"language\" in {path} or PI_LANGUAGE to override)",
   "startup.pairingNotice": "🔐 Pairing code for @{username}: {code} (valid for 2 minutes; send it to that user to pair)",
+  "startup.workdirSaved": "Workdir: {workdir} (saved to {path}; restart to apply)",
+  "startup.cryptoDeviceMismatch": "   → The local crypto store's device identity doesn't match the token (token changed, or re-logged in).",
+  "startup.cryptoResetHint": "     Fix: delete the crypto store and restart — rm -rf {path} && pi-courier restart",
 
   // ── proxy (outbound proxy, spec #201 ticket #202) ──────────────────────
   "proxy.active":
-    "🌐 outbound proxy: {proxy} (source: {source}; edit ~/.pi/pi-courier.json and restart to change)",
+    "🌐 outbound proxy: {proxy} (source: {source}; edit {path} and restart to change)",
   "proxy.unsupportedScheme":
     "❌ Proxy \"{value}\" (from {origin}) is not supported in this version — only http/https proxies are supported; use an address starting with http:// or https://",
 

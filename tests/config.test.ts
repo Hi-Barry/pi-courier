@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { tmpdir } from 'os';
+
+/** 配置目录按平台分支(spec #258 票03 布局冻结):win32 = ~/.pi,其余平台
+ *  = ~/.config/pi-courier。测试断言经它计算,与布局解析保持同构。 */
+function expectedConfigDir(home: string): string {
+  return process.platform === 'win32' ? join(home, '.pi') : join(home, '.config', 'pi-courier');
+}
 
 describe('config', () => {
   let tmpDir: string;
@@ -91,7 +97,7 @@ describe('config', () => {
     const { saveConfig } = await importConfig();
     saveConfig({});
 
-    const stats = statSync(join(tmpDir, '.pi'));
+    const stats = statSync(expectedConfigDir(tmpDir));
     expect(stats.mode & 0o777).toBe(0o700);
   });
 
@@ -99,13 +105,13 @@ describe('config', () => {
     const { saveConfig } = await importConfig();
     saveConfig({});
 
-    const stats = statSync(join(tmpDir, '.pi', 'pi-courier.json'));
+    const stats = statSync(join(expectedConfigDir(tmpDir), 'pi-courier.json'));
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
   it.skipIf(process.platform === "win32")('tightens a pre-existing loose config file to 600 (audit batch 1 票8)', async () => {
-    mkdirSync(join(tmpDir, '.pi'), { recursive: true });
-    const configPath = join(tmpDir, '.pi', 'pi-courier.json');
+    mkdirSync(expectedConfigDir(tmpDir), { recursive: true });
+    const configPath = join(expectedConfigDir(tmpDir), 'pi-courier.json');
     writeFileSync(configPath, '{"legacy": true}', { mode: 0o644 });
     expect(statSync(configPath).mode & 0o777).toBe(0o644);
 
@@ -113,12 +119,14 @@ describe('config', () => {
     saveConfig({ debug: true });
 
     expect(statSync(configPath).mode & 0o777).toBe(0o600);
-    expect(statSync(join(tmpDir, '.pi')).mode & 0o777).toBe(0o700);
+    expect(statSync(expectedConfigDir(tmpDir)).mode & 0o777).toBe(0o700);
   });
 
   it('ConfigStore.update survives an injected persist failure without throwing (audit batch 1 票8)', async () => {
-    // .pi exists as a regular FILE → saveConfig's writeFileSync throws.
-    writeFileSync(join(tmpDir, '.pi'), 'not a directory');
+    // The config DIR exists as a regular FILE → saveConfig's writeFileSync
+    // throws(ENOTDIR)。configDir = 布局解析(票03);先建它的父目录再落文件。
+    mkdirSync(dirname(expectedConfigDir(tmpDir)), { recursive: true });
+    writeFileSync(expectedConfigDir(tmpDir), 'not a directory');
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
@@ -159,7 +167,7 @@ describe('config', () => {
   });
 
   it('handles corrupted config file gracefully', async () => {
-    const piDir = join(tmpDir, '.pi');
+    const piDir = expectedConfigDir(tmpDir);
     mkdirSync(piDir, { recursive: true });
     writeFileSync(join(piDir, 'pi-courier.json'), '{invalid json!!!');
 
@@ -170,7 +178,7 @@ describe('config', () => {
   });
 
   it('still applies env vars when config file is corrupted', async () => {
-    const piDir = join(tmpDir, '.pi');
+    const piDir = expectedConfigDir(tmpDir);
     mkdirSync(piDir, { recursive: true });
     writeFileSync(join(piDir, 'pi-courier.json'), 'not json');
 
@@ -205,9 +213,9 @@ describe('config', () => {
     expect(loadConfig().hideToolCalls).toBeUndefined();
   });
   it('projects 畸形条目(null/标量)加载时清洗剔除并警告,不炸启动(审计稳定性批 票15)', async () => {
-    mkdirSync(join(tmpDir, '.pi'), { recursive: true });
+    mkdirSync(expectedConfigDir(tmpDir), { recursive: true });
     writeFileSync(
-      join(tmpDir, '.pi', 'pi-courier.json'),
+      join(expectedConfigDir(tmpDir), 'pi-courier.json'),
       JSON.stringify({
         projects: {
           '!good:server': { name: 'ok' },
@@ -231,8 +239,8 @@ describe('config', () => {
   });
 
   it('配置根为数组时整体忽略文件内容,加载不抛(审计稳定性批 票15)', async () => {
-    mkdirSync(join(tmpDir, '.pi'), { recursive: true });
-    writeFileSync(join(tmpDir, '.pi', 'pi-courier.json'), '[1,2,3]', 'utf-8');
+    mkdirSync(expectedConfigDir(tmpDir), { recursive: true });
+    writeFileSync(join(expectedConfigDir(tmpDir), 'pi-courier.json'), '[1,2,3]', 'utf-8');
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const { loadConfig } = await importConfig();
@@ -269,7 +277,7 @@ describe('ConfigStore', () => {
   // POSIX mode bits: meaningless on Windows (libuv reports 0666/0444 only).
   it.skipIf(process.platform === "win32")('persists updates to disk with 600 permissions and no format change', async () => {
     const { ConfigStore } = await importConfig();
-    const piDir = join(tmpDir, '.pi');
+    const piDir = expectedConfigDir(tmpDir);
     const path = join(piDir, 'pi-courier.json');
 
     const store = new ConfigStore({ autoConnect: true });
@@ -319,11 +327,11 @@ describe('ConfigStore', () => {
     const store = new ConfigStore({ projects: { '!p:server': { workdir: '/w' } } });
 
     expect(store.get().projects?.['!p:server'].workdir).toBe('/w');
-    expect(existsSync(join(tmpDir, '.pi'))).toBe(false);
+    expect(existsSync(expectedConfigDir(tmpDir))).toBe(false);
   });
 
   it('without an initial object it loads once from disk', async () => {
-    const piDir = join(tmpDir, '.pi');
+    const piDir = expectedConfigDir(tmpDir);
     mkdirSync(piDir, { recursive: true });
     writeFileSync(join(piDir, 'pi-courier.json'), JSON.stringify({ workdir: '/from/disk' }));
 
@@ -523,7 +531,10 @@ describe('custom avatar path derive (spec #84 v5)', () => {
     expect(cfg.customAvatarPath('')).toBeUndefined();
     expect(cfg.customAvatarPath('   ')).toBeUndefined();
     expect(cfg.customAvatarPath('~/pix/face.png')).toBe(join(tmpDir, 'pix/face.png'));
-    expect(cfg.customAvatarPath('avatars/face.png')).toBe(join(tmpDir, '.pi', 'avatars/face.png'));
+    // 相对路径基准 = configDir(票03:基准跟随配置目录迁移,存量配置零破坏)。
+    expect(cfg.customAvatarPath('avatars/face.png')).toBe(
+      join(expectedConfigDir(tmpDir), 'avatars/face.png'),
+    );
     expect(cfg.customAvatarPath('/abs/face.png')).toBe('/abs/face.png');
     // surrounding whitespace is trimmed, the inner value survives
     expect(cfg.customAvatarPath('  /abs/face.png  ')).toBe('/abs/face.png');
@@ -547,7 +558,9 @@ describe('custom avatar path derive (spec #84 v5)', () => {
     expect(cfg.spaceAvatarPath({})).toBeUndefined();
     expect(cfg.botAvatarPath({ botAvatar: '~/f.png' })).toBe(join(tmpDir, 'f.png'));
     expect(cfg.botAvatarPath({})).toBeUndefined();
-    expect(cfg.projectAvatarPath({ workdir: '/w', avatar: 'a.png' })).toBe(join(tmpDir, '.pi', 'a.png'));
+    expect(cfg.projectAvatarPath({ workdir: '/w', avatar: 'a.png' })).toBe(
+      join(expectedConfigDir(tmpDir), 'a.png'),
+    );
     expect(cfg.projectAvatarPath(undefined)).toBeUndefined();
   });
 });

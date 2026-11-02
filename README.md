@@ -91,7 +91,7 @@ Skip this section if the machine has direct internet access. Since 1.1.0 the bri
 
 ### Two ways to configure: the config file wins
 
-**Way 1 — the config file** (recommended, one global copy): add `proxy` (a single URL) and optionally `noProxy` (exemption list) to `~/.pi/pi-courier.json`:
+**Way 1 — the config file** (recommended, one global copy): add `proxy` (a single URL) and optionally `noProxy` (exemption list) to the config file — `~/.config/pi-courier/pi-courier.json` on Linux, `%USERPROFILE%\.pi\pi-courier.json` on Windows:
 
 ```json
 {
@@ -109,7 +109,7 @@ When both are present **the config file wins** — a leftover shell variable can
 Since 1.1.0 `pi-courier setup` has an optional outbound-proxy step (asked near the end, after the multi-project question — and the space question in multi-project mode — and just before the config is written; leave blank to skip). When a proxy is already in effect (config or env), setup announces it before the first question and offers it as the default — press Enter to keep it. This announce line always prints in English, because it appears before the wizard's first question — the language choice:
 
 ```
-🌐 outbound proxy: http://192.0.2.10:10809 (source: config; edit ~/.pi/pi-courier.json and restart to change)
+🌐 outbound proxy: http://192.0.2.10:10809 (source: config; edit /home/you/.config/pi-courier/pi-courier.json and restart to change)
 ```
 
 With nothing in effect the prompts are (real wizard output):
@@ -161,7 +161,7 @@ It walks you through, prompting for each value (defaults in brackets; press Ente
 ```
 === pi-courier setup wizard ===
 Language? [en] (en/zh):                                          ← bot message language; Enter keeps the locale-detected default (persisted to the config)
-Writes ~/.pi/pi-courier.json (mode 600; an existing config prefills the defaults — press Enter to keep them)
+Writes /home/you/.config/pi-courier/pi-courier.json (mode 600; an existing config prefills the defaults — press Enter to keep them)
 
 Matrix homeserver URL (e.g. https://matrix.example.com):                        ← your homeserver URL
 How to get the token [1=password login, 2=paste an existing token] (1):        ← Enter = password login
@@ -172,17 +172,17 @@ Trusted user (admin) MXID [default @***:***]:                                  �
 Trusted room IDs (optional, Enter to skip; comma-separated, e.g. !abc:server or !abc:server:trusted-only):   ← for group chats; skip for DM-only
 Enable E2EE encryption? [y/N]:                                                 ← y/n (y is fine even on unencrypted rooms)
 pi workdir [default /home/you/Projects]:                                       ← Enter keeps the default
-Attachment save directory [default /home/you/.pi/pi-courier-attachments]:      ← where chat images/files land
+Attachment save directory [default /home/you/.local/share/pi-courier/attachments]:      ← where chat images/files land
 Per-attachment size limit in MB [default 10]:                                  ← oversize attachments are rejected with a notice
 Instance/machine name (default debian; tells multi-machine deployments apart, shown in the management room name):   ← Enter keeps the hostname
 Enable multi-project mode? [y/N] (multi-project = management room + isolated project rooms with /pmctl; default N = single-project, one bot to one pi):   ← Enter for single-project (Spaces are only asked in multi-project mode)
 
-✅ Config written to ~/.pi/pi-courier.json
+✅ Config written to /home/you/.config/pi-courier/pi-courier.json
    account: @***:***
    trusted user: @***:***
    E2EE: enabled
    workdir: /home/you/Projects
-   attachment dir: /home/you/.pi/pi-courier-attachments (limit 10 MB)
+   attachment dir: /home/you/.local/share/pi-courier/attachments (limit 10 MB)
    instance name: debian (differentiates multi-machine deployments; shown in the management room name)
    multi-project: off (single-project)
    device ID: PICOURIERZNLMIKUW (fixed; reused when you re-run setup — delete this field to get a new device)
@@ -191,7 +191,7 @@ Enable multi-project mode? [y/N] (multi-project = management room + isolated pro
 Next: pi-courier enable (auto-start on boot) or pi-courier run (foreground)
 ```
 
-The wizard verifies the token and writes `~/.pi/pi-courier.json`. Since 1.1.0 it also asks one optional extra question — the outbound proxy (the transcript above predates that step; press Enter to skip) — see [Outbound proxy](#outbound-proxy-runtime). To skip the wizard, create that file manually — the format is in the [FAQ](#4-faq).
+The wizard verifies the token and writes the config file (`~/.config/pi-courier/pi-courier.json` on Linux, `%USERPROFILE%\.pi\pi-courier.json` on Windows; a 0.2.x `~/.pi/pi-courier.json` is migrated automatically on the first start). Since 1.1.0 it also asks one optional extra question — the outbound proxy (the transcript above predates that step; press Enter to skip) — see [Outbound proxy](#outbound-proxy-runtime). To skip the wizard, create that file manually — the format is in the [FAQ](#4-faq).
 
 ### Step 2 — Start it
 
@@ -276,7 +276,7 @@ Since 0.1.39 sending mirrors pi's TUI. A plain text message is always sent with 
 - `/interrupt <text>` — idle: runs directly; mid-task: stops the current task and sends the new instruction
 - `/stop` — stop everything now, the TUI's Esc: queued messages are cleared too
 
-**What happens to the queue, stated up front**: since 0.3.8 `/stop` and `/interrupt` mirror the TUI's Esc — the queue is cleared **before** the abort, and the reply lists exactly which queued messages were dropped, so nothing disappears unseen. On a pi older than 0.84.4 (no `clear_queue` RPC) the old behaviour applies: the queue survives and fires on the **next** turn; the reply says so explicitly (`⚠️ N queued message(s) will take effect on the next turn:`). Since 0.5.0 even **involuntary** loss is visible: if the queue is non-empty when the subprocess restarts (/reload or a crash respawn), the bot proactively posts `⚠️ Subprocess restarted — N queued message(s) never ran` with the full list — a queue you cleared yourself via `/stop` never triggers the warning. Service-level restarts (systemd/machine) are covered too, for **project rooms in multi-project mode**: the snapshot lives in `~/.pi/pi-courier-state/queue-snapshots.json`, and the next start posts `⚠️ Service restarted — N queued message(s) never ran` per project room before wiping it (a queue already reported by `/reload` is never reported twice; the single-project default process is out of scope — its room binding is a runtime DM).
+**What happens to the queue, stated up front**: since 0.3.8 `/stop` and `/interrupt` mirror the TUI's Esc — the queue is cleared **before** the abort, and the reply lists exactly which queued messages were dropped, so nothing disappears unseen. On a pi older than 0.84.4 (no `clear_queue` RPC) the old behaviour applies: the queue survives and fires on the **next** turn; the reply says so explicitly (`⚠️ N queued message(s) will take effect on the next turn:`). Since 0.5.0 even **involuntary** loss is visible: if the queue is non-empty when the subprocess restarts (/reload or a crash respawn), the bot proactively posts `⚠️ Subprocess restarted — N queued message(s) never ran` with the full list — a queue you cleared yourself via `/stop` never triggers the warning. Service-level restarts (systemd/machine) are covered too, for **project rooms in multi-project mode**: the snapshot lives in the state dir (`~/.local/state/pi-courier/queue-snapshots.json` on Linux, `%APPDATA%\pi-courier\state\queue-snapshots.json` on Windows), and the next start posts `⚠️ Service restarted — N queued message(s) never ran` per project room before wiping it (a queue already reported by `/reload` is never reported twice; the single-project default process is out of scope — its room binding is a runtime DM).
 
 ### Tool-loop aggregation: one "working" card, continuously refreshed
 
@@ -338,7 +338,7 @@ When an extension asks you something (confirm / select / input / editor dialogs 
 - several questions pending: the oldest is answered first; messages starting with `/` still go through the command channel
 - extension notifications are filtered by level: warning / error reach the room, info stays in the log
 
-Pending questions auto-cancel after `extensionUiTimeoutMinutes` (default 10) — the room gets a notice and the extension receives a cancel. This field is **not** part of the setup wizard: add it to `~/.pi/pi-courier.json` by hand, then `pi-courier restart`:
+Pending questions auto-cancel after `extensionUiTimeoutMinutes` (default 10) — the room gets a notice and the extension receives a cancel. This field is **not** part of the setup wizard: add it to the config file by hand (`~/.config/pi-courier/pi-courier.json` on Linux, `~/.pi/pi-courier.json` on Windows), then `pi-courier restart`:
 
 ```json
 { "extensionUiTimeoutMinutes": 10 }
@@ -370,7 +370,7 @@ Not happy with the bundled pick? Point any target at your own image and restart 
 }
 ```
 
-- Paths support `~` expansion; relative paths resolve against `~/.pi/`; the format is picked by extension (png / jpg / jpeg / webp / gif).
+- Paths support `~` expansion; relative paths resolve against the config dir (`~/.config/pi-courier/` on Linux, `~/.pi/` on Windows); the format is picked by extension (png / jpg / jpeg / webp / gif).
 - **Config is desired state**: while configured, every start verifies the target — when the file content or the current avatar no longer matches the last upload, the custom image is re-uploaded automatically (edit the file, restart, done). Targets without an override keep the "fill missing only, never overwrite" rule.
 - Missing file, unsupported extension or failed upload: one startup warning, then the run falls back to the bundled pool logic — a room never ends up without a face.
 - A project room with `projects[].avatar` (keyed by room ID) keeps your custom image across `/pmctl rename`; rooms without one re-pick from the bundled pool by the new name (first free slot in the space, so siblings never share an image).
@@ -386,7 +386,7 @@ All bot messages — command replies, pairing prompts, extension questions, mana
 How the language is picked (first match wins):
 
 1. `PI_LANGUAGE=en|zh` environment variable — the most reliable option in containers/minimal deployments
-2. `"language": "zh" | "en"` in `~/.pi/pi-courier.json` (the setup wizard asks and writes it)
+2. `"language": "zh" | "en"` in the config file `pi-courier.json` (`~/.config/pi-courier/` on Linux, `~/.pi/` on Windows; the setup wizard asks and writes it)
 3. The system locale of the service: on Linux/macOS `LC_ALL` > `LC_MESSAGES` > `LANG` (`zh*` → Chinese); on Windows (which sets none of those variables) the system regional setting is read instead — a Chinese Windows yields Chinese. At startup the log prints one line explaining where the language came from
 4. English as the final fallback
 
@@ -480,7 +480,7 @@ Just **paste or send files** in Element — the bot saves them first, the agent 
 Supported: `m.image` / `m.file` / `m.audio` / `m.video` / stickers. Images are handed to the vision model by pi (its `read` pipeline downscales large images before the model call, per pi's own source); audio/video can't be ingested by models directly, but the agent can process them with bash/ffmpeg. Limits and details:
 
 - **10 MB per attachment** (configurable via `attachments.maxMb`, also in the setup wizard); oversize/download failures answer with the reason — never silence
-- Attachments land in `~/.pi/pi-courier-attachments/<room>/` (configurable via `attachments.directory`) — **outside your project workdirs**, so `git status` stays clean
+- Attachments land in the data dir — `~/.local/share/pi-courier/attachments/<room>/` on Linux, `%APPDATA%\pi-courier\attachments` on Windows (configurable via `attachments.directory`) — **outside your project workdirs**, so `git status` stays clean
 - Pending attachments are tracked per room+sender: `/pmctl`, `/login` and other commands don't consume the queue; a **restart clears it** (the receipt shows the path — reference it manually if needed)
 - Encrypted rooms (E2EE) are supported — attachments are decrypted automatically
 - Unsupported types (e.g. location) get a polite notice; if the model itself lacks vision, pi will say so — that's the model, not the bridge
@@ -498,7 +498,7 @@ Sharing the bot with teammates doesn't have to mean sharing admin power. List gu
 
 ### Audit trail: sensitive actions leave a trace
 
-Every sensitive action appends one JSONL line to `~/.pi/pi-courier-state/audit.jsonl` (0600, append-only): who, when, what, in which room — pairing successes and failures, `/trusted` //revoke`, bash execution (`!`, `!!`, `/bash`), `/pmctl rm`, `/login` family, `/reload`, queue clears and offline-backlog batch executions, plus every guest denial. The file rotates at 10 MB (two rotated siblings kept); if the file becomes unwritable the service keeps running but warns the management room — an audit outage is visible, never fatal. As a second hardening layer, attachments and reply-quotes enter the prompt with their source labeled (see the sections above), so third-party content arrives as data, not as instructions.
+Every sensitive action appends one JSONL line to the audit log in the state dir (`~/.local/state/pi-courier/audit.jsonl` on Linux, `%APPDATA%\pi-courier\state\audit.jsonl` on Windows; 0600, append-only): who, when, what, in which room — pairing successes and failures, `/trusted` //revoke`, bash execution (`!`, `!!`, `/bash`), `/pmctl rm`, `/login` family, `/reload`, queue clears and offline-backlog batch executions, plus every guest denial. The file rotates at 10 MB (two rotated siblings kept); if the file becomes unwritable the service keeps running but warns the management room — an audit outage is visible, never fatal. As a second hardening layer, attachments and reply-quotes enter the prompt with their source labeled (see the sections above), so third-party content arrives as data, not as instructions.
 
 ### Single-project vs multi-project mode
 
@@ -707,7 +707,7 @@ Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDA
 - **Single-instance lock** works the same: a stale lock left by a crashed process is taken over by the next start, whether launched from a console or the Task Scheduler.
 - The config-file permission check (0600) is skipped on Windows: the OS cannot express POSIX modes there, so checking would warn on every start.
 
-**Known limitations**: the service-management subcommands (`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`) are Linux-only (systemd) and exit with an explanation; `pi-courier logs` filtering relies on journald (Linux). Config, sessions, attachments and state live under `%USERPROFILE%\.pi\` exactly as on Linux.
+**Known limitations**: the service-management subcommands (`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`) are Linux-only (systemd) and exit with an explanation; `pi-courier logs` filtering relies on journald (Linux). Config (`pi-courier.json`) and pi's own sessions (`agent/sessions`) stay under `%USERPROFILE%\.pi\`; attachments, data and runtime state live under `%APPDATA%\pi-courier\` (runtime state in its `state\` subdirectory).
 
 ## 4. FAQ
 
@@ -736,7 +736,7 @@ A: Historical events that can't be decrypted (new device without old keys). Norm
 A: The bot's new device never received the room keys. The bot account has no cross-signing, so the most reliable fix is to **use a non-encrypted room** (create a room without encryption and invite the bot) — the bridge handles plain rooms fine even with `encryption: true`.
 
 **Q: `M_BAD_JSON: Provided device_id in device_keys does not match...`?**
-A: The crypto store's device identity doesn't match the token's device (re-logged, or a pasted token from another device). **Since 0.1.20 password login uses a fixed device ID, so re-running setup no longer triggers this.** If it still happens: delete the crypto store and restart — `rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart` (do this whenever you re-run setup / change the token).
+A: The crypto store's device identity doesn't match the token's device (re-logged, or a pasted token from another device). **Since 0.1.20 password login uses a fixed device ID, so re-running setup no longer triggers this.** If it still happens: delete the crypto store and restart — `rm -rf ~/.local/share/pi-courier/matrix-crypto && pi-courier restart` (`%APPDATA%\pi-courier\matrix-crypto` on Windows; do this whenever you re-run setup / change the token).
 
 **Q: `One time key signed_curve25519:... already exists` (M_UNKNOWN)?**
 A: The token is bound to an old device on the server and the local OTK bookkeeping is out of sync — **deleting the local crypto store does NOT help** (the server assigns the device ID from the token, so a rebuilt store uses the same device). **You must get a new token**: re-run `pi-courier setup` and answer `n` to "keep the existing token?" (or log in with the password); a new token = a new device = clean server state. Pair with a crypto-store delete if device residue persists.
@@ -756,7 +756,7 @@ A: Since v0.1.1 the bridge passes `--continue` to pi, resuming the most recent s
 **Q: Element (web client) intercepts `/`-prefixed messages?**
 A: Prefix with `//` to send a literal slash (`//compact` sends `/compact`).
 
-**Q: What exactly is in `~/.pi/pi-courier.json`?**
+**Q: What exactly is in the config file?** (`~/.config/pi-courier/pi-courier.json` on Linux, `%USERPROFILE%\.pi\pi-courier.json` on Windows)
 A: The wizard-generated config. Example:
 
 ```json

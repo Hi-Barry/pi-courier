@@ -3,7 +3,8 @@
  * pi-courier CLI — one command for everything.
  *
  *   pi-courier setup    first-run configuration wizard (Matrix account,
- *                      trusted user, workdir; writes ~/.pi/pi-courier.json)
+ *                      trusted user, workdir; writes the bridge config file
+ *                      at the layout's configDir/pi-courier.json)
  *   pi-courier run      run in the foreground (workdir from config, --workdir overrides)
  *   pi-courier enable   install a user-level systemd service (auto-start) and start it
  *   pi-courier start    start the systemd service
@@ -21,7 +22,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CONFIG_DIR, effectiveLanguage, loadConfig } from "./config.js";
+import { effectiveLanguage, loadConfig, runtimeLayout } from "./config.js";
 import { errorMessage } from "./errors.js";
 import { setLocale, t } from "./i18n/index.js";
 import { buildLogFilterArgs } from "./log-filter.js";
@@ -36,6 +37,10 @@ suppressKnownWarnings();
 
 const SERVICE_NAME = "pi-courier";
 const SERVICE_UNIT = `${SERVICE_NAME}.service`;
+
+// CLI 侧布局(spec #258 票03):手动停意图与被停服务同 stateDir(布局解析
+// 单例,与 standalone 组合根同源)。CLI 每命令一进程,模块级解析一次即可。
+const LAYOUT = runtimeLayout();
 
 /** Read the installed pi-courier version from package.json. */
 function packageVersion(): string {
@@ -84,7 +89,7 @@ async function cmdSetup(): Promise<void> {
   const { applyProxySettings } = await import("./proxy.js");
   const settings = applyProxySettings(loadConfig());
   if (settings.source !== "none") {
-    console.log(t("proxy.active", { proxy: settings.proxy, source: settings.source }));
+    console.log(t("proxy.active", { proxy: settings.proxy, source: settings.source, path: LAYOUT.configPath }));
   }
   const { runSetup } = await import("./setup.js");
   await runSetup();
@@ -227,7 +232,7 @@ function runSystemctl(args: string[]): void {
  * 写失败只告警不阻断停止;调用方在 systemctl 结果确认后 settle 回滚/保留。
  */
 function beginServiceStop(): ManualStopIntent {
-  const intent = beginManualStopIntent(path.join(CONFIG_DIR, "pi-courier-state"));
+  const intent = beginManualStopIntent(LAYOUT.stateDir);
   if (!intent.written) {
     console.error(t("cli.service.stopMarkerFailed", { path: intent.markerPath }));
   }
