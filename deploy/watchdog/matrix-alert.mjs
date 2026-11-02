@@ -5,8 +5,9 @@
  * 单文件、零桥代码依赖:直读 ~/.pi/pi-courier.json 的 Matrix 凭据与管理房
  * ID,直调 homeserver 的房间发送 API。「bot 死了」不再等于「告警通道也没了」。
  *
- * 自带冷却:上次告警时间戳落盘(默认 ~/.pi/pi-courier-state/watchdog-alert-stamp,
- * 与心跳同目录),默认 30 分钟窗口 —— 服务反复崩溃时收到的告警是有限几条,
+ * 自带冷却:上次告警时间戳落盘(默认状态根 stateDir/watchdog-alert-stamp,
+ * 平台解析与 watchdog-core.mjs 的 defaultStateDir 同语义,与心跳同目录),
+ * 默认 30 分钟窗口 —— 服务反复崩溃时收到的告警是有限几条,
  * 不是每分钟一条轰炸。窗口内第二条例行调用被静默抑制;发送失败不更新时间戳
  * (下一轮看门狗重试)。
  *
@@ -15,7 +16,7 @@
  *
  * 用法:
  *   node matrix-alert.mjs --message "pi-courier watchdog: restarted"
- *   [--config ~/.pi/pi-courier.json] [--stamp ~/.pi/pi-courier-state/watchdog-alert-stamp]
+ *   [--config ~/.pi/pi-courier.json] [--stamp <状态根>/watchdog-alert-stamp]
  *   [--cooldown-minutes 30] [--timeout-ms 10000]
  */
 
@@ -28,12 +29,32 @@ export const DEFAULT_COOLDOWN_MS = 30 * 60_000;
 /** 发送网络超时默认(毫秒):挂起的 homeserver 请求不能拖住看门狗壳。 */
 export const DEFAULT_TIMEOUT_MS = 10_000;
 
+/** 配置默认路径(刻意不动,spec #258 冻结布局:Windows 配置仍在
+ *  %USERPROFILE%\.pi\pi-courier.json;Linux 侧旧文件迁移后原样保留、
+ *  只警告不删,显式 --config 可覆盖)。 */
 export function defaultConfigPath() {
   return path.join(os.homedir(), ".pi", "pi-courier.json");
 }
 
+/** 默认状态根(与 watchdog-core.mjs 的 defaultStateDir 同语义,spec #258
+ *  冻结布局;本文件零跨文件依赖,故独立复刻一份):win32=%APPDATA%\
+ *  pi-courier\state(APPDATA 缺失回退 ~/AppData/Roaming),darwin=~/Library/
+ *  Application Support/pi-courier/state,其余=$XDG_STATE_HOME/pi-courier
+ *  (未设置/空串按缺省 ~/.local/state/pi-courier 处理)。 */
+export function defaultStateDir() {
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+    return path.join(appData, "pi-courier", "state");
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "pi-courier", "state");
+  }
+  const xdgState = process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
+  return path.join(xdgState, "pi-courier");
+}
+
 export function defaultStampPath() {
-  return path.join(os.homedir(), ".pi", "pi-courier-state", "watchdog-alert-stamp");
+  return path.join(defaultStateDir(), "watchdog-alert-stamp");
 }
 
 /** 从桥配置里取发送凭据(与桥 managementRooms 派生同序:显式列表优先,

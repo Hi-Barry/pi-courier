@@ -140,7 +140,15 @@ describe("CLI 参数解析(parseAlertArgs)", () => {
     expect(parseAlertArgs(["--bogus"])).toBeNull();
   });
 
-  it("默认戳路径在派生状态目录(与心跳同目录)", () => {
-    expect(defaultStampPath()).toContain(path.join(".pi", "pi-courier-state"));
+  it("默认戳路径在派生状态根(spec #258 新布局,与心跳同目录)", () => {
+    const stamp = defaultStampPath();
+    expect(path.basename(stamp)).toBe("watchdog-alert-stamp");
+    // win32/darwin = <dataDir>/state/watchdog-alert-stamp;linux 系 = XDG state/pi-courier/watchdog-alert-stamp
+    const expected =
+      process.platform === "linux"
+        ? path.join("pi-courier", "watchdog-alert-stamp")
+        : path.join("pi-courier", "state", "watchdog-alert-stamp");
+    expect(stamp).toContain(expected);
+    expect(stamp).not.toContain(path.join(".pi", "pi-courier-state"));
   });
 });
