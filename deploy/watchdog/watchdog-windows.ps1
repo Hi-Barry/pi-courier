@@ -23,24 +23,34 @@
 # 默认值(或安装处覆盖)同步调整;README 与 watchdog-core.mjs 文件头注释互指。
 #
 # 安装(任务计划程序每分钟触发;与 deploy/pi-courier.user.service 同风格,
-# 管理员 PowerShell 一次性注册):
+# PowerShell 一次性注册,与桥任务同用户上下文、无需管理员。用
+# Register-ScheduledTask 原生参数传值;旧 schtasks /create 的 /tr 拼引号
+# 写法已废弃 —— 用户名/安装路径含空格时它的多层引号转义极易翻车,本方案
+# 把脚本路径用内嵌双引号包进 -Argument,一层解析、空格安全):
 #
-#   schtasks /create /tn "pi-courier-watchdog" `
-#     /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\pi-courier\deploy\watchdog\watchdog-windows.ps1 -TaskName pi-courier" `
-#     /sc minute /mo 1 /f
+#   $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+#     -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\pi-courier\deploy\watchdog\watchdog-windows.ps1" -TaskName pi-courier'
+#   $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+#     -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration ([TimeSpan]::MaxValue)
+#   Register-ScheduledTask -TaskName "pi-courier-watchdog" -Action $action -Trigger $trigger -Force
 #
-# 卸载:schtasks /delete /tn "pi-courier-watchdog" /f
+#   (-RepetitionInterval + -RepetitionDuration MaxValue 是旧
+#   `schtasks /sc minute /mo 1` 的等价物:每分钟触发、无限重复。)
+#
+# 卸载:Unregister-ScheduledTask -TaskName "pi-courier-watchdog" -Confirm:$false
 #
 # 前置:任务计划程序里先有桥本身的登录触发任务(任务名 -TaskName,默认
 # pi-courier);告警与 POSIX 壳共用同目录 matrix-alert.mjs(读
 # %USERPROFILE%\.pi\pi-courier.json 凭据,30 分钟冷却),-NoAlert 可关闭。
 #
-# 注意:任务名与脚本路径请避免空格(schtasks 与 cmd 的引号转义层级多,
-# 真机验收口径见 PR/票评;含空格路径请先验证)。
+# 注意:脚本路径含空格由上面的内嵌引号方案兜住;任务名(pi-courier 与
+# pi-courier-watchdog)仍请避免空格 —— 僵死分支的 schtasks /end、/run 模板
+# 经 cmd 层执行,任务名不带引号。真机验收口径见 PR/票评。
 
 param(
-  # 心跳文件(桥的派生状态目录,票02 写侧契约)
-  [string]$HeartbeatPath = "$env:USERPROFILE\.pi\pi-courier-state\heartbeat.json",
+  # 心跳文件(桥的状态根 stateDir,spec #258 新布局;APPDATA 缺失的极端
+  # 场景由 watchdog-core.mjs 的默认解析兜底回 ~/AppData/Roaming)
+  [string]$HeartbeatPath = "$env:APPDATA\pi-courier\state\heartbeat.json",
   # 过期秒(默认 180 = 6 × 30s 心跳间隔,换算关系见文件头)
   [int]$StaleSeconds = 180,
   # 心跳间隔秒(默认 30;PID 消失后的宽限期 = 2 × 该值)
