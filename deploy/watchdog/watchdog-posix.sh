@@ -14,7 +14,7 @@
 # 同风格):
 #
 #   方式一(crontab -e):
-#     * * * * * /opt/pi-courier/deploy/watchdog/watchdog-posix.sh >> ~/.pi/pi-courier-state/watchdog.log 2>&1
+#     * * * * * /opt/pi-courier/deploy/watchdog/watchdog-posix.sh >> ~/.local/state/pi-courier/watchdog.log 2>&1
 #
 #   方式二(systemd timer,~/.config/systemd/user/pi-courier-watchdog.service):
 #     [Unit]
@@ -39,7 +39,8 @@
 #
 # 可覆盖的环境变量/参数:
 #   PI_COURIER_SERVICE   systemd 服务名(默认 pi-pi-courier,与 user unit 一致)
-#   PI_COURIER_HEARTBEAT 心跳文件路径(默认 ~/.pi/pi-courier-state/heartbeat.json)
+#   PI_COURIER_HEARTBEAT 心跳文件路径(默认 ${XDG_STATE_HOME:-~/.local/state}/pi-courier/heartbeat.json,
+#                        spec #258 新布局状态根;旧路径可显式传参覆盖)
 #   PI_COURIER_ALERT     自定义告警命令模板(含 {message} 占位;{message} 由
 #                        判定核心按宿主 shell 安全引用)。默认调同目录
 #                        matrix-alert.mjs;置 off / 空串关闭告警
@@ -52,7 +53,9 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE="${PI_COURIER_SERVICE:-pi-pi-courier}"
-HEARTBEAT="${PI_COURIER_HEARTBEAT:-$HOME/.pi/pi-courier-state/heartbeat.json}"
+# XDG 语义:未设置或空串一律按缺省 ~/.local/state 处理(spec #258 新布局,
+# 与 src/paths.ts 的 linux 分支一致;旧布局用 PI_COURIER_HEARTBEAT / --heartbeat 覆盖)
+HEARTBEAT="${PI_COURIER_HEARTBEAT:-${XDG_STATE_HOME:-$HOME/.local/state}/pi-courier/heartbeat.json}"
 STALE_SECONDS="180"
 HEARTBEAT_INTERVAL_SECONDS="30"
 

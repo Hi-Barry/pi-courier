@@ -2,8 +2,11 @@
 /**
  * pi-courier 看门狗 —— 判定核心(spec #247 票06)。
  *
- * 零桥代码依赖:只读桥的心跳文件(~/.pi/pi-courier-state/heartbeat.json,
- * 由桥内周期自检 tick 每 30 秒原子写),按需执行注入的「判活 / 任务控制 /
+ * 零桥代码依赖:只读桥的心跳文件(状态根 stateDir/heartbeat.json,spec #258
+ * 新布局:win32=%APPDATA%\pi-courier\state、darwin=~/Library/Application
+ * Support/pi-courier/state、其余=$XDG_STATE_HOME/pi-courier 缺省
+ * ~/.local/state/pi-courier,解析见 defaultStateDir;由桥内周期自检 tick
+ * 每 30 秒原子写),按需执行注入的「判活 / 任务控制 /
  * 告警」命令。平台壳(POSIX bash / Windows PowerShell)只做参数解析与调用
  * 本核心 —— 判定逻辑只有这一份,两个平台共用。
  *
@@ -52,9 +55,29 @@ export const DEFAULT_STALE_SECONDS = 180;
  *  「心跳仍新鲜但 PID 消失」的宽限期 = 2 × 该值(覆盖 RestartSec + 首拍延迟)。 */
 export const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30;
 
-/** 默认心跳文件路径(桥的派生状态目录,票02 的写侧契约)。 */
+/** 默认状态根(spec #258 冻结布局,与 src/paths.ts 同语义)。本文件是零桥
+ *  代码依赖的独立部署产物,不 import 桥代码,故按平台在此复刻一份:
+ *   win32:  %APPDATA%\pi-courier\state(APPDATA 未设置/空串回退
+ *           ~/AppData/Roaming,与 paths.ts 的 envRoot 缺省语义一致)
+ *   darwin: ~/Library/Application Support/pi-courier/state
+ *   其余:   $XDG_STATE_HOME/pi-courier(未设置/空串按缺省
+ *           ~/.local/state/pi-courier 处理) */
+export function defaultStateDir() {
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+    return path.join(appData, "pi-courier", "state");
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "pi-courier", "state");
+  }
+  const xdgState = process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
+  return path.join(xdgState, "pi-courier");
+}
+
+/** 默认心跳文件路径(桥的状态根下,票02 的写侧契约;旧布局
+ *  ~/.pi/pi-courier-state 可用 --heartbeat 显式传参覆盖)。 */
 export function defaultHeartbeatPath() {
-  return path.join(os.homedir(), ".pi", "pi-courier-state", "heartbeat.json");
+  return path.join(defaultStateDir(), "heartbeat.json");
 }
 
 /** 人工停止标记的默认路径:与心跳同目录(桥在正常信号退出前写、启动时清)。
@@ -260,7 +283,7 @@ export function runWatchdogCore(opts) {
 
 /**
  * CLI 参数解析(壳透传;导出以便测试直测)。
- *   --heartbeat <path>       心跳文件(默认 ~/.pi/pi-courier-state/heartbeat.json)
+ *   --heartbeat <path>       心跳文件(默认 <stateDir>/heartbeat.json,平台解析见 defaultStateDir)
  *   --pause-marker <path>    人工停止标记(默认与心跳同目录/watchdog-paused)
  *   --heartbeat-interval-seconds <n>  心跳间隔秒(默认 30;PID 消失后的宽限)
  *   --stale-seconds <n>      过期秒(默认 180 = 6 × 30s 心跳间隔)
