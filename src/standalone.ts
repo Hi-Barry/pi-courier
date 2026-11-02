@@ -30,6 +30,7 @@ import {
   presetProblems,
   resolveLanguage,
   rpcRespawnLimit,
+  runtimeLayout,
   THINKING_LEVELS,
 } from "./config.js";
 import { errorMessage } from "./errors.js";
@@ -38,7 +39,6 @@ import { setLocale, t } from "./i18n/index.js";
 import { buildLegacyMigrationPlan, runLegacyMigration } from "./legacy-migration.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
-import { resolveLayout } from "./paths.js";
 import { applyProxySettings } from "./proxy.js";
 import { ReminderClock } from "./reminders/reminder-clock.js";
 import type { ReminderEntry } from "./reminders/reminder-store.js";
@@ -107,14 +107,16 @@ function parseArgs(argv: string[]): { workdir?: string; logLevel?: string } {
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   // ---- 布局解析 + 旧布局迁移(spec #258 票03)--------------------------------
-  // 进程内第一件事:解析三根分离布局(configDir/dataDir/stateDir,票01)并
-  // 在拿单实例锁「之前」执行旧布局迁移(票02 时序冻结)—— 旧 ~/.pi 下的
-  // Matrix 存储/crypto/附件/状态叶子(含非 Windows 的配置文件)先搬进新家,
-  // 之后锁、ConfigStore、Matrix SDK 存储才在新位置落盘。迁移逐项独立、失败
-  // 只警告不抛(runLegacyMigration 内建),绝不卡死启动;迁移清单经日志缝
-  // (logger.info/warn)可见,这里不再重复包装。迁移日志先于语言解析:此时
-  // locale 还是默认值,属已知可接受(语言要读配置,配置要等迁移搬家)。
-  const layout = resolveLayout({ platform: process.platform, homedir: os.homedir(), env: process.env });
+  // 进程内第一件事:经 runtimeLayout()(config.ts 的进程内唯一布局实例,
+  // 与 cli.ts 及其余消费模块同源缓存)解析三根分离布局(configDir/dataDir/
+  // stateDir,票01),并在拿单实例锁「之前」执行旧布局迁移(票02 时序冻结)
+  // —— 旧 ~/.pi 下的 Matrix 存储/crypto/附件/状态叶子(含非 Windows 的配置
+  // 文件)先搬进新家,之后锁、ConfigStore、Matrix SDK 存储才在新位置落盘。
+  // 迁移逐项独立、失败只警告不抛(runLegacyMigration 内建),绝不卡死启动;
+  // 迁移清单经日志缝(logger.info/warn)可见,这里不再重复包装。迁移日志
+  // 先于语言解析:此时 locale 还是默认值,属已知可接受(语言要读配置,配置
+  // 要等迁移搬家)。
+  const layout = runtimeLayout();
   runLegacyMigration({
     plan: buildLegacyMigrationPlan({ platform: process.platform, homedir: os.homedir(), layout }),
   });
@@ -700,8 +702,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // 排障路径跟随布局(spec #258 票03):加密库已迁 dataDir/matrix-crypto。
       logger.warn(t("startup.cryptoResetHint", { path: layout.matrixCryptoDir }));
     } else if (msg.includes("One time key") || msg.includes("already exists")) {
-      logger.warn("   → 服务器端 device 的 one-time key 记账与本地不一致。");
-      logger.warn("     解法:重跑 `pi-courier setup`,在\"保留现有 token?\"处输 n 换新 token(新设备=服务器干净)。");
+      logger.warn(t("startup.otkMismatch"));
+      logger.warn(t("startup.otkResetHint"));
     }
   }
   // 连接阶段结束(成功或已处理的失败),放行离线积压结算(#136)。
@@ -805,11 +807,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
     console.error("[bridge] fatal:", err);
-    // 布局此刻可能未解析(早期异常):现场重解析一次拿锁路径,fail 也只影响清理。
+    // 布局此刻可能未解析(早期异常):现场重取一次拿锁路径,fail 也只影响清理。
     try {
-      releaseLock(
-        resolveLayout({ platform: process.platform, homedir: os.homedir(), env: process.env }).lockPath,
-      );
+      releaseLock(runtimeLayout().lockPath);
     } catch {
       // ignore — best-effort cleanup on an already-failing startup
     }
