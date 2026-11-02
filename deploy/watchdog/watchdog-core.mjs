@@ -74,8 +74,8 @@ export function defaultStateDir() {
   return path.join(xdgState, "pi-courier");
 }
 
-/** 默认心跳文件路径(桥的状态根下,票02 的写侧契约;旧布局
- *  ~/.pi/pi-courier-state 可用 --heartbeat 显式传参覆盖)。 */
+/** 默认心跳文件路径(桥的状态根下,票02 的写侧契约;非默认布局可用
+ *  --heartbeat 显式传参覆盖)。 */
 export function defaultHeartbeatPath() {
   return path.join(defaultStateDir(), "heartbeat.json");
 }

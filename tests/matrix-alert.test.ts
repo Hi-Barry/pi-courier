@@ -8,6 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  defaultConfigPath,
   defaultStampPath,
   DEFAULT_COOLDOWN_MS,
   DEFAULT_TIMEOUT_MS,
@@ -150,5 +151,28 @@ describe("CLI 参数解析(parseAlertArgs)", () => {
         : path.join("pi-courier", "state", "watchdog-alert-stamp");
     expect(stamp).toContain(expected);
     expect(stamp).not.toContain(path.join(".pi", "pi-courier-state"));
+  });
+
+  it("默认配置路径平台感知(spec #258 票05):Linux/darwin 读 XDG 配置根,Windows 仍 ~/.pi", () => {
+    const platformOrig = Object.getOwnPropertyDescriptor(process, "platform");
+    const xdgOrig = process.env.XDG_CONFIG_HOME;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      delete process.env.XDG_CONFIG_HOME;
+      expect(defaultConfigPath()).toBe(path.join(os.homedir(), ".config", "pi-courier", "pi-courier.json"));
+
+      // XDG_CONFIG_HOME 已设置/空串:与 src/paths.ts 的 envRoot 语义一致
+      process.env.XDG_CONFIG_HOME = path.join(dir, "xdg-config");
+      expect(defaultConfigPath()).toBe(path.join(dir, "xdg-config", "pi-courier", "pi-courier.json"));
+      process.env.XDG_CONFIG_HOME = "";
+      expect(defaultConfigPath()).toBe(path.join(os.homedir(), ".config", "pi-courier", "pi-courier.json"));
+
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      expect(defaultConfigPath()).toBe(path.join(os.homedir(), ".pi", "pi-courier.json"));
+    } finally {
+      if (platformOrig) Object.defineProperty(process, "platform", platformOrig);
+      if (xdgOrig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = xdgOrig;
+    }
   });
 });
