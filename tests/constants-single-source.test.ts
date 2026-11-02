@@ -4,6 +4,7 @@
  * output follow the owner's value instead of a drifted literal.
  */
 import { describe, expect, it, vi } from "vitest";
+import { join } from "path";
 import { MAX_PAIRING_ATTEMPTS, PAIRING_BLOCK_MINUTES, ChallengeAuth } from "../src/auth/challenge-auth";
 import { adminCommandHelpText, handleAdminCommand } from "../src/auth/admin-commands";
 import { COMMAND_REGISTRY, PMCTL_COMMAND } from "../src/command-registry";
@@ -11,7 +12,7 @@ import { guestCommandVerdict } from "../src/auth/guest-policy";
 import { RM_CONFIRM_WINDOW_MS } from "../src/rpc/pmctl-controller";
 import { MAX_REMINDERS_PER_ROOM } from "../src/reminders/reminder-store";
 import { PROJECT_SESSION_DIR } from "../src/rpc/project-manager";
-import { CONFIG_DIR } from "../src/config";
+import { runtimeLayout } from "../src/config";
 import { t, setLocale } from "../src/i18n";
 
 describe("constants single-source (audit engineering batch 票19)", () => {
@@ -46,8 +47,12 @@ describe("constants single-source (audit engineering batch 票19)", () => {
     expect(PROJECT_SESSION_DIR).toBe(".pi-session");
   });
 
-  it("CONFIG_DIR is the ~/.pi bridge root (consumers derive from it)", () => {
-    expect(CONFIG_DIR.endsWith(".pi")).toBe(true);
+  it("layout derivation pins: configPath/agentSessionsDir flow from runtimeLayout (spec #258 票03)", () => {
+    const layout = runtimeLayout();
+    // 配置文件恒 configDir/pi-courier.json;RPC 会话目录恒 pi CLI 家下的
+    // agent/sessions(不随 configDir 迁移,票03 修正)。消费点从布局派生。
+    expect(layout.configPath).toBe(join(layout.configDir, "pi-courier.json"));
+    expect(layout.agentSessionsDir).toBe(join(layout.piHome, "agent", "sessions"));
     // admin help text no longer hardcodes the pairing numbers (they flow from the owner)
     expect(adminCommandHelpText()).toBeDefined();
   });

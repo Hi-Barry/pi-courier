@@ -1571,8 +1571,16 @@ describe("power demotion on revoke (issue #44 票3)", () => {
     // Trust revocation persisted; exactly the revoked user left the books.
     expect(fx.store.get().auth?.trustedUsers).not.toContain("matrix:@eve:server");
     expect(fx.store.get().powerElevatedUsers).toEqual(["matrix:@barry:server"]);
+    // 配置落布局解析的 configDir(spec #258 票03):win32 = ~/.pi,其余 = ~/.config/pi-courier。
     const persisted = JSON.parse(
-      readFileSync(join(tmpDir, ".pi", "pi-courier.json"), "utf-8")
+      readFileSync(
+        join(
+          tmpDir,
+          process.platform === "win32" ? ".pi" : ".config/pi-courier",
+          "pi-courier.json"
+        ),
+        "utf-8"
+      )
     ) as { powerElevatedUsers?: string[] };
     expect(persisted.powerElevatedUsers).toEqual(["matrix:@barry:server"]);
   });

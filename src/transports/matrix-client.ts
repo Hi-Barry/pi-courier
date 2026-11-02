@@ -9,7 +9,6 @@
  * the SDK log facade; the real MatrixClient structurally satisfies the
  * port, so no wrapper class is needed.
  */
-import * as path from "node:path";
 import type { ILogger, RoomCreateOptions } from "matrix-bot-sdk";
 import {
   LogService,
@@ -18,7 +17,6 @@ import {
   RustSdkCryptoStoreType,
   SimpleFsStorageProvider,
 } from "matrix-bot-sdk";
-import { CONFIG_DIR } from "../config.js";
 import { errorMessage } from "../errors.js";
 import { logger } from "../logger.js";
 import type { EncryptedMediaFile } from "./attachments.js";
@@ -107,32 +105,51 @@ export interface MatrixClientConfig {
   encryption?: boolean;
 }
 
-export type MatrixClientFactory = (config: MatrixClientConfig) => MatrixClientPort;
+export type MatrixClientFactory = (
+  config: MatrixClientConfig,
+  paths?: MatrixStorePaths,
+) => MatrixClientPort;
+
+/**
+ * Matrix SDK 的磁盘存储路径(spec #258 票03 注入缝):组合根从布局解析取
+ * (storagePath = dataDir/matrix-store.json,cryptoDir = dataDir/matrix-crypto),
+ * 本模块不再各自拼 ~/.pi。旧 0.2.x 布局的 ~/.pi/pi-courier-matrix-store.json
+ * 与 pi-courier-matrix-crypto/ 由启动期迁移模块搬进新家。
+ */
+export interface MatrixStorePaths {
+  /** 消息存储文件(sync token、房间成员关系,重启存活)。 */
+  storagePath: string;
+  /** 加密库存放目录(原生 Rust/SQLite)。 */
+  cryptoDir: string;
+}
 
 /**
  * Production factory: builds the real matrix-bot-sdk client against the
- * on-disk stores under ~/.pi.
+ * on-disk stores at the injected paths (dataDir leaves since spec #258).
  *
- * - Storage: SimpleFsStorageProvider at ~/.pi/pi-courier-matrix-store.json
- *   (sync token, room membership — survives restarts).
- * - Crypto: RustSdkCryptoStorageProvider at ~/.pi/pi-courier-matrix-crypto
- *   (native Rust, SQLite on disk) when encryption is enabled. Crypto state
- *   persists across restarts — same device, same keys; the device must be
- *   verified once from another Matrix client (Element, etc). A native-load
- *   failure degrades to a crypto-less client (error-level log); any other
- *   construction failure propagates — silent degradation is reserved for
- *   the one expected failure, not for misconfiguration. The port's absent
- *   `crypto` member is the deployment-wide E2EE verdict.
+ * - Storage: SimpleFsStorageProvider at paths.storagePath (sync token, room
+ *   membership — survives restarts).
+ * - Crypto: RustSdkCryptoStorageProvider at paths.cryptoDir (native Rust,
+ *   SQLite on disk) when encryption is enabled. Crypto state persists across
+ *   restarts — same device, same keys; the device must be verified once from
+ *   another Matrix client (Element, etc). A native-load failure degrades to a
+ *   crypto-less client (error-level log); any other construction failure
+ *   propagates — silent degradation is reserved for the one expected failure,
+ *   not for misconfiguration. The port's absent `crypto` member is the
+ *   deployment-wide E2EE verdict. Missing paths is a wiring bug and throws
+ *   loudly at construction — there is no legacy fallback location to be
+ *   silently right about (tests inject fakes and never hit this).
  */
-export function createMatrixClient(config: MatrixClientConfig): MatrixClientPort {
-  const storagePath = path.join(CONFIG_DIR, "pi-courier-matrix-store.json");
-  const storage = new SimpleFsStorageProvider(storagePath);
+export function createMatrixClient(config: MatrixClientConfig, paths?: MatrixStorePaths): MatrixClientPort {
+  if (!paths?.storagePath || !paths?.cryptoDir) {
+    throw new Error("Matrix storage paths are required (composition root injects layout storagePath/cryptoDir)");
+  }
+  const storage = new SimpleFsStorageProvider(paths.storagePath);
 
   let cryptoProvider: RustSdkCryptoStorageProvider | undefined;
   if (config.encryption !== false) {
     try {
-      const cryptoStorePath = path.join(CONFIG_DIR, "pi-courier-matrix-crypto");
-      cryptoProvider = new RustSdkCryptoStorageProvider(cryptoStorePath, RustSdkCryptoStoreType.Sqlite);
+      cryptoProvider = new RustSdkCryptoStorageProvider(paths.cryptoDir, RustSdkCryptoStoreType.Sqlite);
       logger.info("[Matrix] E2EE crypto storage enabled (Rust/SQLite)");
     } catch (err) {
       // Degrade ONLY on the expected failure — the native binding failing to

@@ -620,7 +620,7 @@ const zh = {
   // ── setup(首跑向导;语言首问之后,以下全部跟随所选语言)───────────────
   "setup.title": "=== pi-courier 配置向导 ===",
   "setup.languagePrompt": "语言? [{def}] (en/zh): ",
-  "setup.header": "将写入 ~/.pi/pi-courier.json(权限 600;已有配置作为默认值,直接回车沿用)\n",
+  "setup.header": "将写入 {path}(权限 600;已有配置作为默认值,直接回车沿用)\n",
   "setup.homeserver.default": "Matrix homeserver URL [默认 {def}]: ",
   "setup.homeserver.plain": "Matrix homeserver URL (如 https://matrix.example.com): ",
   "setup.homeserver.empty": "homeserver URL 不能为空",
@@ -662,7 +662,7 @@ const zh = {
   "setup.proxy.envInvalid":
     "⚠️ 环境变量里的代理不可用,已忽略:{message}\n   (可直接输入可用的 http/https 代理地址,或回车跳过)",
   "setup.proxy.exemptList": "豁免 {list}",
-  "setup.done.title": "\n✅ 配置已写入 ~/.pi/pi-courier.json",
+  "setup.done.title": "\n✅ 配置已写入 {path}",
   "setup.done.account": "   账号: {user}",
   "setup.done.trusted": "   信任用户: {user}",
   "setup.done.e2ee": "   E2EE: {state}",
@@ -736,15 +736,20 @@ const zh = {
   "hint.bus.tail3": "   若 /run/user/$(id -u) 不存在,请以该用户登录一次,或由 root 执行 loginctl enable-linger <用户>。",
 
   // ── startup(语言配置可见性;语言功能自身的一部分,破例双语)─────────
+  // 配置文件路径一律经 {path} 插值(spec #258 票03):Linux 的 configDir 已迁
+  // ~/.config/pi-courier,文案不再硬编码 ~/.pi,由调用方注入布局解析值。
   "startup.language.system":
-    "language: {locale}(检测自系统 locale;如需固定,请在 ~/.pi/pi-courier.json 配置 \"language\" 或设 PI_LANGUAGE)",
+    "language: {locale}(检测自系统 locale;如需固定,请在 {path} 配置 \"language\" 或设 PI_LANGUAGE)",
   "startup.language.default":
-    "language: {locale}(默认值;如需固定,请在 ~/.pi/pi-courier.json 配置 \"language\" 或设 PI_LANGUAGE)",
+    "language: {locale}(默认值;如需固定,请在 {path} 配置 \"language\" 或设 PI_LANGUAGE)",
   "startup.pairingNotice": "🔐 配对码 @{username}: {code}(2 分钟内有效,发给该用户用于配对)",
+  "startup.workdirSaved": "工作目录: {workdir}(已保存到 {path},改配置后重启即生效)",
+  "startup.cryptoDeviceMismatch": "   → 本地加密存储与 token 的设备身份不一致(换过 token / 重登过)。",
+  "startup.cryptoResetHint": "     解法:删除加密存储后重启 — rm -rf {path} && pi-courier restart",
 
   // ── proxy(出网代理,spec #201 票 #202)───────────────────────────────
   "proxy.active":
-    "🌐 出网代理: {proxy}(来源: {source};修改 ~/.pi/pi-courier.json 后重启生效)",
+    "🌐 出网代理: {proxy}(来源: {source};修改 {path} 后重启生效)",
   "proxy.unsupportedScheme":
     "❌ 代理 \"{value}\"(来源: {origin})当前版本不支持 —— 仅支持 http/https 代理,请改用 http:// 或 https:// 开头的地址",
 
