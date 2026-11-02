@@ -44,12 +44,19 @@ export interface DirLayout {
   stateDir: string;
 }
 
-/** 完整布局 = 三大根 + 全量派生路径。派生只认解析后的根(根变了叶子跟着走)。 */
+/** 完整布局 = 三大根 + 全量派生路径。派生只认解析后的根(根变了叶子跟着走);
+ *  唯二例外是 piHome 系(pi CLI 的家,全平台恒 ~/.pi,不随 configDir 迁移)。 */
 export interface Layout extends DirLayout {
   /** 配置文件(configDir/pi-courier.json;名字与存量约定一致,不带目录名前缀)。 */
   configPath: string;
-  /** RPC 会话默认目录(configDir/agent/sessions)。刻意原位不动:会话在途
-   *  引用该路径,迁移它会断网会话,超出 spec #258 范围。 */
+  /** pi CLI 的家(homedir/.pi,全平台不动)。pi 自身的凭据/模型配置/会话都
+   *  在这里,与桥的三根分离布局无关 —— 桥在 Linux 的 configDir 迁去
+   *  ~/.config/pi-courier 后,piHome 仍钉在 ~/.pi(票03 修正:agentSessionsDir
+   *  曾按 configDir 派生,会把 pi 的会话目录带跑)。 */
+  piHome: string;
+  /** RPC 会话默认目录(piHome/agent/sessions,恒 ~/.pi/agent/sessions)。
+   *  刻意原位不动:会话在途引用该路径,迁移它会断网会话,超出 spec #258
+   *  范围。 */
   agentSessionsDir: string;
   /** Matrix 消息存储(dataDir/matrix-store.json;旧名 pi-courier-matrix-store.json)。 */
   matrixStorePath: string;
@@ -105,10 +112,14 @@ export function resolveLayout(input: LayoutInput): Layout {
   }
   const { configDir, dataDir, stateDir } = roots;
   const stateLogsDir = join(stateDir, "logs");
+  // piHome 只认 homedir,不吃任何 XDG/APPDATA 变量:pi CLI 的家是跨平台
+  // 约定(~/.pi),XDG 迁移只能动桥自己的三根,不许波及它。
+  const piHome = join(homedir, ".pi");
   return {
     ...roots,
     configPath: join(configDir, "pi-courier.json"),
-    agentSessionsDir: join(configDir, "agent", "sessions"),
+    piHome,
+    agentSessionsDir: join(piHome, "agent", "sessions"),
     matrixStorePath: join(dataDir, "matrix-store.json"),
     matrixCryptoDir: join(dataDir, "matrix-crypto"),
     attachmentsDir: join(dataDir, "attachments"),

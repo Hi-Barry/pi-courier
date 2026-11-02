@@ -119,8 +119,8 @@ describe("resolveLayout — 派生路径(冻结表叶子)", () => {
   it("linux 缺省布局下的全量派生表", () => {
     const layout = resolveLayout({ platform: "linux", homedir: "/home/u", env: {} });
     expect(layout.configPath).toBe("/home/u/.config/pi-courier/pi-courier.json");
-    // RPC 会话目录刻意留在 configDir(原样不动,票03 也不换线)。
-    expect(layout.agentSessionsDir).toBe("/home/u/.config/pi-courier/agent/sessions");
+    // RPC 会话目录恒在 piHome(pi CLI 的家,票03 修正:不随 configDir 迁移)。
+    expect(layout.agentSessionsDir).toBe("/home/u/.pi/agent/sessions");
     expect(layout.matrixStorePath).toBe("/home/u/.local/share/pi-courier/matrix-store.json");
     expect(layout.matrixCryptoDir).toBe("/home/u/.local/share/pi-courier/matrix-crypto");
     expect(layout.attachmentsDir).toBe("/home/u/.local/share/pi-courier/attachments");
@@ -176,5 +176,56 @@ describe("resolveLayout — 派生路径(冻结表叶子)", () => {
     expect(layout.matrixStorePath).toBe("/xdg/data/pi-courier/matrix-store.json");
     expect(layout.lockPath).toBe("/xdg/state/pi-courier/pi-courier.lock");
     expect(layout.runLogPath).toBe("/xdg/state/pi-courier/logs/run.log");
+  });
+});
+
+describe("resolveLayout — piHome 系(票03 修正:pi CLI 的家全平台恒 ~/.pi)", () => {
+  it("linux:piHome/agentSessionsDir 不随 configDir 迁移(回归票:曾按 configDir 派生把会话目录带跑)", () => {
+    const layout = resolveLayout({ platform: "linux", homedir: "/home/u", env: {} });
+    expect(layout.piHome).toBe("/home/u/.pi");
+    expect(layout.agentSessionsDir).toBe("/home/u/.pi/agent/sessions");
+  });
+
+  it("win32:piHome 同样恒 ~/.pi(分隔符随平台)", () => {
+    const layout = resolveLayout({
+      platform: "win32",
+      homedir: "C:\\Users\\u",
+      env: { APPDATA: "C:\\Users\\u\\AppData\\Roaming" },
+    });
+    expect(layout.piHome).toBe("C:\\Users\\u\\.pi");
+    expect(layout.agentSessionsDir).toBe("C:\\Users\\u\\.pi\\agent\\sessions");
+  });
+
+  it("darwin:piHome 恒 ~/.pi(configDir 在 ~/.config/pi-courier,互不混淆)", () => {
+    const layout = resolveLayout({ platform: "darwin", homedir: "/Users/u", env: {} });
+    expect(layout.piHome).toBe("/Users/u/.pi");
+    expect(layout.agentSessionsDir).toBe("/Users/u/.pi/agent/sessions");
+  });
+
+  it("XDG/APPDATA 覆盖不吃掉 piHome(pi 的家只认 homedir)", () => {
+    const linux = resolveLayout({
+      platform: "linux",
+      homedir: "/home/u",
+      env: { XDG_CONFIG_HOME: "/xdg/config", XDG_DATA_HOME: "/xdg/data", XDG_STATE_HOME: "/xdg/state" },
+    });
+    expect(linux.piHome).toBe("/home/u/.pi");
+    expect(linux.agentSessionsDir).toBe("/home/u/.pi/agent/sessions");
+
+    const win32 = resolveLayout({
+      platform: "win32",
+      homedir: "C:\\Users\\u",
+      env: { APPDATA: "D:\\Roaming" },
+    });
+    expect(win32.piHome).toBe("C:\\Users\\u\\.pi");
+  });
+
+  it("win32 的 configDir 仍是 ~/.pi(= piHome,配置与 pi 同根是 Windows 冻结决策)", () => {
+    const layout = resolveLayout({
+      platform: "win32",
+      homedir: "C:\\Users\\u",
+      env: { APPDATA: "C:\\Users\\u\\AppData\\Roaming" },
+    });
+    expect(layout.configDir).toBe(layout.piHome);
+    expect(layout.configPath).toBe("C:\\Users\\u\\.pi\\pi-courier.json");
   });
 });
