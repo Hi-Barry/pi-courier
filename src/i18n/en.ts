@@ -815,6 +815,21 @@ Note: pi itself is installed and upgraded independently on the system
   "workflow.result": "**Result:** {result}",
   "workflow.control.hint": "💡 You can control the workflow in plain language (e.g. \"pause\", \"resume\", \"stop\").",
   "workflow.card.superseded": "⚠️ The previous workflow was interrupted before its final state; the new workflow run continues on a new card.",
+
+  // ── migration (legacy layout auto-migration, spec #258 ticket 02/#260) ─
+  "migration.moved": "🚚 Legacy layout migration: {label}: {from} → {to}",
+  "migration.movedCrossVolume": "🚚 Legacy layout migration (cross-volume, fell back to copy): {label}: {from} → {to}",
+  "migration.bothExist":
+    "⚠️ {label} exists in both the old and new locations; trusting the new home. Old file kept as-is: {from} (clean it up manually once the new home checks out)",
+  "migration.lockRemoved": "🧹 Stale single-instance lock removed (held by no process): {path}; the new lock is rebuilt at the new location on demand",
+  "migration.lockRemoveFailed": "⚠️ Failed to remove the old single-instance lock (startup not blocked, kept as-is): {path}: {message}",
+  "migration.lockKeptLive":
+    "⚠️ The old single-instance lock is still held by a live process; kept: {path} (delete manually once no other instance is running)",
+  "migration.itemFailed": "⚠️ Legacy layout migration failed (item skipped, startup not affected): {label} {from} → {to}: {message}",
+  "migration.oldCleanupFailed":
+    "⚠️ {label} was copied to the new home {to}, but removing the old file {from} failed: {message} (next startup treats this as both-exist)",
+  "migration.summary":
+    "✅ Legacy layout migration finished: {moved} moved, {skipped} already in place, {conflicts} both-exist conflicts, {failed} failures",
 };
 
 export default en;

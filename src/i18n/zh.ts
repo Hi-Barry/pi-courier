@@ -768,6 +768,21 @@ const zh = {
   "workflow.result": "**结果:** {result}",
   "workflow.control.hint": "💡 可直接用自然语言操控工作流(如「暂停」「继续」「停止」)。",
   "workflow.card.superseded": "⚠️ 上一个工作流已中断(未到终态);继续运行的工作流将另起新卡。",
+
+  // ── migration(旧布局自动迁移,spec #258 票02/issue #260)─────────────
+  "migration.moved": "🚚 旧布局迁移:{label}:{from} → {to}",
+  "migration.movedCrossVolume": "🚚 旧布局迁移(跨卷,已回退为复制):{label}:{from} → {to}",
+  "migration.bothExist":
+    "⚠️ {label} 新旧并存,以新家为准;旧文件原样保留:{from}(确认新家无误后可手动清理)",
+  "migration.lockRemoved": "🧹 旧单实例锁已清理(无进程持有):{path};新锁会在新位置按需重建",
+  "migration.lockRemoveFailed": "⚠️ 旧单实例锁清理失败(不阻塞启动,保留原样):{path}:{message}",
+  "migration.lockKeptLive":
+    "⚠️ 旧单实例锁仍有进程持有,已保留:{path}(确认无其他实例在跑后可手动删除)",
+  "migration.itemFailed": "⚠️ 旧布局迁移失败(已跳过该项,不影响启动):{label} {from} → {to}:{message}",
+  "migration.oldCleanupFailed":
+    "⚠️ {label} 已复制到新家 {to},但清理旧文件 {from} 失败:{message}(下次启动按新旧并存处理)",
+  "migration.summary":
+    "✅ 旧布局迁移完成:{moved} 项搬移,{skipped} 项已在新家,{conflicts} 项新旧并存,{failed} 项失败",
 } as const;
 
 export type MessageKey = keyof typeof zh;
