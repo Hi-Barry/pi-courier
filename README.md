@@ -688,15 +688,12 @@ Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDA
     Install (the bridge task name defaults to `pi-courier`, matching the recipe above; replace the script path with your install directory — for an npm global install it is usually under `%APPDATA%\npm\node_modules\pi-courier\deploy\watchdog\`). Register once from PowerShell, same user context as the bridge task (no admin needed); `Register-ScheduledTask` passes the script path as a native argument with embedded double quotes inside `-Argument`, so install paths with spaces are safe. The old `schtasks /create ... /tr` quote-escaping recipe is deprecated — drop it:
 
     ```powershell
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-      -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\pi-courier\deploy\watchdog\watchdog-windows.ps1" -TaskName pi-courier'
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration ([TimeSpan]::MaxValue)
+    $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "//nologo `"$env:APPDATA\npm\node_modules\pi-courier\deploy\windows\watchdog-run-hidden.vbs`""
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
     Register-ScheduledTask -TaskName "pi-courier-watchdog" -Action $action -Trigger $trigger -Force
-    # No per-minute console flash: the watchdog is pure file + task ops, so run it
-    # headless (session 0, "run whether user is logged on or not", no password):
-    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U
-    Set-ScheduledTask -TaskName "pi-courier-watchdog" -Principal $principal
     ```
+
+    The wrapper (`watchdog-run-hidden.vbs`, ships in the package) hides the per-minute console flash while staying in the interactive session. If you can elevate, `LogonType S4U` is the alternative (headless even without logon) — plain S4U registration is access-denied from non-elevated PowerShell (real machine, 2026-11-03).
 
     (`-RepetitionInterval` + `-RepetitionDuration ([TimeSpan]::MaxValue)` is the equivalent of the old `schtasks /sc minute /mo 1`: every minute, indefinitely. Keep the task names space-free — the watchdog's restart sequence calls `schtasks /end` / `/run` with them unquoted.)
 
