@@ -25,6 +25,7 @@ import {
   extensionUiTimeoutMs,
   parseExtensionUIAnswer,
 } from "../src/rpc/extension-questions";
+import { REACTION_APPROVE, REACTION_REJECT } from "../src/rpc/reactions";
 import type { ExtensionUIResponsePayload, PiRpc } from "../src/rpc/pi-rpc";
 import type { ExternalMessage, ReplyTarget } from "../src/types";
 import { makeMsg } from "./helpers";
@@ -65,11 +66,18 @@ const silentLog: LeveledLogger = {
  * 提问机 + 注入依赖:sendReply / respond 录制房间回复与 extension_ui 回写;
  * subscribeRestart 按进程记录重启订阅,restart() 模拟子进程重启。
  * rpc 对提问机是不透明键(handle/deliver 只透传给 respond/订阅)。
+ * withReactions(#270):追加注入 replyWithId/sendReaction 双缝 —— replyWithId
+ * 录制提问卡并回 `evt-q<N>`,sendReaction 录制种植;replyWithIdReturns 覆盖
+ * event_id(传 undefined 模拟「transport 不给 id」的降级)。
  */
-function makeMachine(opts: { timeoutMs?: number | (() => number); respondError?: Error } = {}) {
+function makeMachine(
+  opts: { timeoutMs?: number | (() => number); respondError?: Error; withReactions?: boolean; replyWithIdReturns?: string } = {}
+) {
   const timeoutOpt = opts.timeoutMs;
   const replies: Reply[] = [];
   const responses: ExtensionUIResponsePayload[] = [];
+  const prompts: Reply[] = [];
+  const planted: Array<{ chatId: string; eventId: string; emoji: string }> = [];
   const listeners = new Map<PiRpc, Set<(rpc: PiRpc) => void>>();
   const machine = new ExtensionQuestions({
     sendReply: async (chatId, transport, text) => {
@@ -86,6 +94,17 @@ function makeMachine(opts: { timeoutMs?: number | (() => number); respondError?:
       listeners.set(rpc, set);
       return () => set.delete(handler);
     },
+    ...(opts.withReactions
+      ? {
+          replyWithId: async (chatId: string, transport: string, text: string) => {
+            prompts.push({ chatId, transport, text });
+            return opts.replyWithIdReturns ?? `evt-q${prompts.length}`;
+          },
+          sendReaction: async (chatId: string, eventId: string, emoji: string) => {
+            planted.push({ chatId, eventId, emoji });
+          },
+        }
+      : {}),
   });
   const rpc = { label: undefined } as unknown as PiRpc;
   const target: ReplyTarget = { chatId: "!dm:server", transport: "matrix", username: "barry" };
@@ -99,7 +118,10 @@ function makeMachine(opts: { timeoutMs?: number | (() => number); respondError?:
     forTarget: ReplyTarget | undefined = target
   ) => machine.handle(request, forRpc, forTarget, silentLog);  const deliver = (text: string, chatId = "!dm:server", forRpc: PiRpc = rpc) =>
     machine.deliver(forRpc, text, makeMsg({ text, chatId }), silentLog);
-  return { machine, replies, responses, rpc, target, restart, ask, deliver };
+  /** 点击一条提问消息上的表情(#270):与 router 的 handleReaction 同形。 */
+  const tap = (key: string, targetEventId: string, chatId = "!dm:server", forRpc: PiRpc = rpc) =>
+    machine.deliverReaction(forRpc, chatId, targetEventId, key);
+  return { machine, replies, responses, prompts, planted, rpc, target, restart, ask, deliver, tap };
 }
 
 // --- pure helpers (issue #54) ---------------------------------------------------
@@ -392,5 +414,171 @@ describe("extension questions state machine (spec #99 ticket 3 / issue #104)", (
     }
     expect(fx.replies).toHaveLength(before);
     expect(fx.responses).toHaveLength(0);
+  });
+});
+
+// --- reaction answers (spec #267 票03 / issue #270) -------------------------------
+
+describe("extension question reactions (spec #267 ticket 3 / issue #270)", () => {
+  it("a confirm question plants ✅/❌ on its own message (via the id seam, not the reply seam)", async () => {
+    const fx = makeMachine({ withReactions: true });
+    fx.ask(uiRequest("q1"));
+    expect(fx.prompts).toHaveLength(1); // 提问卡走 replyWithId 缝
+    expect(fx.prompts[0]).toMatchObject({ chatId: "!dm:server", transport: "matrix" });
+    expect(fx.replies).toHaveLength(0); // 不再走 reply 缝
+    await vi.waitFor(() => expect(fx.planted).toHaveLength(2));
+    expect(fx.planted.map((p) => p.emoji)).toEqual([REACTION_APPROVE, REACTION_REJECT]);
+    expect(fx.planted.every((p) => p.eventId === "evt-q1" && p.chatId === "!dm:server")).toBe(true);
+  });
+
+  it("question text announces the tap protocol: confirm shows ✅/❌ mapping", () => {
+    const confirm = extensionUIQuestionText(uiRequest("1"));
+    expect(confirm).toContain("也可点击下方表情:✅ = y / ❌ = n");
+  });
+
+  it("tapping ✅ answers confirmed:true with the usual receipt; ❌ answers confirmed:false", async () => {
+    const fx = makeMachine({ withReactions: true });
+    fx.ask(uiRequest("q1"));
+    await vi.waitFor(() => expect(fx.planted).toHaveLength(2));
+    expect(fx.tap(REACTION_APPROVE, "evt-q1")).toBe(true);
+    await vi.waitFor(() => expect(fx.responses).toEqual([{ id: "q1", confirmed: true }]));
+    expect(fx.replies.at(-1)!.text).toBe("✅ 已回应");
+
+    fx.ask(uiRequest("q2"));
+    await vi.waitFor(() => expect(fx.planted).toHaveLength(4));
+    expect(fx.tap(REACTION_REJECT, "evt-q2")).toBe(true);
+    await vi.waitFor(() => expect(fx.responses).toEqual([{ id: "q1", confirmed: true }, { id: "q2", confirmed: false }]));
+    expect(fx.replies.at(-1)!.text).toBe("✅ 已回应");
+  });
+
+  it("a 3-option select plants 1️⃣2️⃣3️⃣; tapping 2️⃣ (keycap shape or bare \"2\") picks the 2nd option", async () => {
+    const fx = makeMachine({ withReactions: true });
+    const select = uiRequest("q1", { method: "select", title: "选择环境", options: ["dev", "staging", "prod"] });
+    fx.ask(select);
+    expect(fx.prompts[0]!.text).toContain("1. dev");
+    expect(fx.prompts[0]!.text).toContain("也可点击下方数字表情");
+    await vi.waitFor(() => expect(fx.planted).toHaveLength(3));
+    expect(fx.planted.map((p) => p.emoji)).toEqual(["1️⃣", "2️⃣", "3️⃣"]);
+
+    expect(fx.tap("2️⃣", "evt-q1")).toBe(true);
+    await vi.waitFor(() => expect(fx.responses).toEqual([{ id: "q1", value: "staging" }]));
+
+    // 同一形状的第二题:裸数字 "2" 与键帽形等价(spec #267 双形态约定)
+    fx.ask(uiRequest("q2", { method: "select", title: "再选", options: ["a", "b", "c"] }));
+    await vi.waitFor(() => expect(fx.planted).toHaveLength(6));
+    expect(fx.tap("2", "evt-q2")).toBe(true);
+    await vi.waitFor(() => expect(fx.responses).toEqual([{ id: "q1", value: "staging" }, { id: "q2", value: "b" }]));
+  });
+
+  it("11 options: nothing planted, the text protocol replaces the reaction hint", async () => {
+    const fx = makeMachine({ withReactions: true });
+    const many = uiRequest("q1", { method: "select", title: "长清单", options: Array.from({ length: 11 }, (_, i) => `opt${i + 1}`) });
+    fx.ask(many);
+    // 无表情可种:走旧 reply 缝,文案换「选项过多」行(不提表情)
+    expect(fx.replies[0]!.text).toContain("选项过多");
+    expect(fx.replies[0]!.text).not.toContain("也可点击");
+    expect(fx.prompts).toHaveLength(0); // 不需要 event_id,连 id 缝都不走
+    expect(fx.planted).toHaveLength(0);
+    expect(fx.tap("1️⃣", "evt-q1")).toBe(false); // 没有 promptEventId,点击静默
+    expect(fx.responses).toHaveLength(0);
+  });
+
+  it("an out-of-range digit tap is silent (no respond, no receipt, no invalid re-ask)", async () => {
+    const fx = makeMachine({ withReactions: true });
+    fx.ask(uiRequest("q1", { method: "select", options: ["a", "b", "c"] }));
+    await vi.waitFor(() => expect(fx.planted).toHaveLength(3));
+    expect(fx.tap("5️⃣", "evt-q1")).toBe(false);
+    await vi.waitFor(() => expect(fx.replies).toHaveLength(0));
+    expect(fx.responses).toHaveLength(0);
+    // 提问仍悬置:文字通道的 "3" 照常作答
+    await expect(fx.deliver("3")).resolves.toBe(true);
+    expect(fx.responses).toEqual([{ id: "q1", value: "c" }]);
+  });
+
+  it("an unknown key tap is silent — the invalid-re-ask semantics belong to the text path only", async () => {
+    const fx = makeMachine({ withReactions: true });
+    fx.ask(uiRequest("q1"));
+    await vi.waitFor(() => expect(fx.planted).toHaveLength(2));
+    expect(fx.tap("👍", "evt-q1")).toBe(false);
+    await vi.waitFor(() => expect(fx.replies).toHaveLength(0));
+    expect(fx.responses).toHaveLength(0);
+    // 提问仍悬置
+    expect(fx.tap(REACTION_APPROVE, "evt-q1")).toBe(true);
+    await vi.waitFor(() => expect(fx.responses).toEqual([{ id: "q1", confirmed: true }]));
+  });
+
+  it("input and editor questions plant nothing (text-only protocol)", async () => {
+    const fx = makeMachine({ withReactions: true });
+    fx.ask(uiRequest("q1", { method: "input", title: "项目名" }));
+    expect(fx.prompts).toHaveLength(0); // 不需要 event_id,连 id 缝都不走
+    expect(fx.replies).toHaveLength(1); // 照走旧 reply 通道
+    expect(fx.replies[0]!.text).not.toContain("也可点击");
+  });
+
+  it("FIFO holds: a tap on the younger question is silent until it becomes the oldest", async () => {
+    const fx = makeMachine({ withReactions: true });
+    fx.ask(uiRequest("q-old"));
+    fx.ask(uiRequest("q-new"));
+    await vi.waitFor(() => expect(fx.planted).toHaveLength(4));
+    // younger 的表情先被点:最老优先不变量 → 静默
+    expect(fx.tap(REACTION_REJECT, "evt-q2")).toBe(false);
+    expect(fx.responses).toHaveLength(0);
+    // 最老的照常消费
+    expect(fx.tap(REACTION_REJECT, "evt-q1")).toBe(true);
+    await vi.waitFor(() => expect(fx.responses).toEqual([{ id: "q-old", confirmed: false }]));
+    // q-new 升为最老,它的表情现在有资格作答
+    expect(fx.tap(REACTION_REJECT, "evt-q2")).toBe(true);
+    await vi.waitFor(() => expect(fx.responses).toEqual([{ id: "q-old", confirmed: false }, { id: "q-new", confirmed: false }]));
+  });
+
+  it("a tap after the question was answered is silent", async () => {
+    const fx = makeMachine({ withReactions: true });
+    fx.ask(uiRequest("q1"));
+    await vi.waitFor(() => expect(fx.planted).toHaveLength(2));
+    expect(fx.tap(REACTION_APPROVE, "evt-q1")).toBe(true);
+    await vi.waitFor(() => expect(fx.responses).toEqual([{ id: "q1", confirmed: true }]));
+    const repliesAfter = fx.replies.length;
+    expect(fx.tap(REACTION_APPROVE, "evt-q1")).toBe(false);
+    expect(fx.responses).toEqual([{ id: "q1", confirmed: true }]); // 无二次 respond
+    await vi.waitFor(() => expect(fx.replies).toHaveLength(repliesAfter));
+  });
+
+  it("a tap after timeout is silent", async () => {
+    vi.useFakeTimers();
+    try {
+      const fx = makeMachine({ withReactions: true, timeoutMs: 600 });
+      fx.ask(uiRequest("q1"));
+      await vi.advanceTimersByTimeAsync(0); // 冲 replyWithId 微任务链
+      expect(fx.planted).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(600); // 过期代答取消
+      expect(fx.responses).toEqual([{ id: "q1", cancelled: true }]);
+      expect(fx.tap(REACTION_APPROVE, "evt-q1")).toBe(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fx.responses).toEqual([{ id: "q1", cancelled: true }]); // 无二次 respond
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("transport gave no id: the question posts but nothing is planted and taps stay silent", async () => {
+    const fx = makeMachine({ withReactions: true, replyWithIdReturns: "" });
+    fx.ask(uiRequest("q1"));
+    expect(fx.prompts).toHaveLength(1); // 提问照发(id 缝)
+    expect(fx.planted).toHaveLength(0); // 无 id = 无表情可点
+    expect(fx.tap(REACTION_APPROVE, "evt-q1")).toBe(false);
+    // 文字通道始终可用
+    await expect(fx.deliver("y")).resolves.toBe(true);
+    expect(fx.responses).toEqual([{ id: "q1", confirmed: true }]);
+  });
+
+  it("reaction seams not injected: the question posts via the plain reply seam and deliverReaction is a no-op", async () => {
+    const fx = makeMachine(); // 缺省不带双缝
+    fx.ask(uiRequest("q1"));
+    expect(fx.replies).toHaveLength(1); // 旧通道,行为与旧版一致
+    expect(fx.replies[0]!.text).toContain("也可点击下方表情:✅ = y / ❌ = n"); // 文案行是本票唯一有意差异
+    expect(fx.tap(REACTION_APPROVE, "evt-q1")).toBe(false);
+    expect(fx.responses).toHaveLength(0);
+    await expect(fx.deliver("y")).resolves.toBe(true);
+    expect(fx.responses).toEqual([{ id: "q1", confirmed: true }]);
   });
 });

@@ -32,6 +32,7 @@ import { inviteUserToManagementRoomOnce, inviteUserToSpaceOnce, maybeInitManagem
 import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
+import type { MatrixReaction } from "../transports/matrix.js";
 import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
 import type { UpdateOrchestrator } from "../update/updater.js";
 import { parseWorkflowProgress } from "../workflow/adapter.js";
@@ -131,6 +132,19 @@ export interface MessageRouterDeps {
    * 开卡。缺省未注入 = 聚合整体禁用(与 editReply 同门)。
    */
   sendLiveCard?: (chatId: string, transport: string, text: string) => Promise<string | undefined>;
+  /**
+   * 发一条消息并取回底层 event_id 的可选缝(票02 #269:组合根接 Matrix
+   * 的 sendMessage 穿出值)。与 sendReaction **双双注入**才启用积压征询的
+   * 表情作答;缺省未注入 = 功能禁用,行为与旧版逐字节一致(与 editReply/
+   * sendLiveCard 同门)。
+   */
+  replyWithId?: (chatId: string, transport: string, text: string) => Promise<string | undefined>;
+  /**
+   * 在一条已发出的消息上种表情的可选缝(票02 #269:组合根接 Matrix 的
+   * sendReaction)。与 replyWithId 同门;逐 emoji 失败的降级在 BacklogInbox
+   * 内部(只 debug,不影响征询照发)。
+   */
+  sendReaction?: (chatId: string, eventId: string, emoji: string) => Promise<void>;
   /** /update 热更新编排器(桥自更新 spec §8):组合根构造注入 —— slashCommands
    *  阶段按本消息预绑定 IO(reply 缝、adminRoom、allRpcs、audit)交给它。
    *  依赖面取最小结构(路由侧只调 handleCommand);Absent = /update 回
@@ -167,6 +181,13 @@ interface StageContext {
 export interface MessageRouter {
   /** Handle an incoming messenger message */
   handleIncoming(msg: ExternalMessage): Promise<void>;
+  /**
+   * reaction 统一入口(票02 #269):provider 的 onReaction 汇入后先做信任
+   * 校验(fail-closed,与消息管道 authorizationGate 同一 isTrustedUser 判定
+   * ——reaction 不走消息管道,必须自带安检),未授权静默丢弃记日志;通过后
+   * 按序尝试各流的 reaction 应答(积压流、extension 流——后者票03 #270)。
+   */
+  handleReaction(reaction: MatrixReaction): void;
   /** 管道阶段视图(spec #72 票3/C1):顺序即执行顺序,属性即不变量——
    *  供测试钉住"阶段表",供导航时一眼读出管道形状。 */
   pipeline(): PipelineStageView[];
@@ -359,9 +380,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
   // 审计 trails(issue #124):敏感动作的统一记账口 —— 谁在哪个房间干了什么。
   // actor 取 namespaced 身份(与信任/管理员判定同键);detail 一行以内,
-  // 由调用点裁剪。未注入 = 零审计,行为与现状逐字节一致。
-  const auditTrail = (event: string, msg: ExternalMessage, detail?: string): void => {
-    deps.audit?.append(event, namespacedId(msg.userId, msg.transport), msg.chatId, detail);
+  // 由调用点裁剪。未注入 = 零审计,行为与现状逐字节一致。主体是三字段
+  // 窄形状(#269:reaction 应答没有消息体可取,文字应答传整条消息,结构
+  // 兼容),审计只认 谁/哪个通道/哪个房间。
+  const auditTrail = (event: string, actor: { userId: string; transport: string; chatId: string }, detail?: string): void => {
+    deps.audit?.append(event, namespacedId(actor.userId, actor.transport), actor.chatId, detail);
   };
 
   // 模型降级链(issue #121):连败记账与耗尽提示的「只提示一次」都在
@@ -824,6 +847,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     // #136 修法B:结算定时器冻结到 transport 连接阶段结束(装配根注入,
     // 连接 try/catch 后 resolve);缺省 = 已就绪(旧语义)。
     transportsReady: deps.backlogTransportsReady,
+    // 表情作答缝(票02 #269):组合根只在 Matrix transport 存在时注入,
+    // 双双注入才启用;缺省未注入 = 功能禁用,行为与旧版逐字节一致。
+    ...(deps.replyWithId && deps.sendReaction
+      ? { replyWithId: deps.replyWithId, sendReaction: deps.sendReaction }
+      : {}),
     deliver: async (entries) => {
       for (const entry of entries) {
         const { replayed: _strip, ...realtime } = entry;
@@ -831,7 +859,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
     },
     config: () => store.get(),
-    onExecute: (msg, count) => auditTrail(AUDIT_EVENTS.backlogExecute, msg, `delivering ${count} offline backlog message(s)`),
+    onExecute: (actor, count) => auditTrail(AUDIT_EVENTS.backlogExecute, actor, `delivering ${count} offline backlog message(s)`),
   });
 
 
@@ -853,6 +881,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     respond: (rpc, payload) => rpc.respondExtensionUI(payload),
     timeoutMs: () => extensionUiTimeoutMs(store.get()),
     subscribeRestart: (rpc, handler) => rpc.onRestarted?.(handler),
+    // 表情作答缝(票03 #270):与 BacklogInbox 同门同形,双双注入才启用;
+    // 缺省未注入 = 功能禁用,提问照走 sendReply,行为与旧版逐字节一致。
+    ...(deps.replyWithId && deps.sendReaction
+      ? { replyWithId: deps.replyWithId, sendReaction: deps.sendReaction }
+      : {}),
   });
 
   // TUI ↔ Matrix 会话镜像(/attach /detach):显示靠 tail + 去重,上下文靠
@@ -1492,6 +1525,32 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
      *  清单条目已无人能消费 —— 意图随房间销账,不等 24h TTL 自然过期)。 */
     purgeRoomAttachments(roomId: string): number {
       return attachmentLedger.purgeRoom(roomId);
+    },
+
+    /** reaction 统一入口(票02 #269;票03 #270 接入 extension 流)。先信任
+     *  校验 fail-closed:reaction 不走消息管道(authorizationGate 拦不到它),
+     *  必须自带安检 —— 与消息管道同一 isTrustedUser 判定;未授权静默丢弃,
+     *  记一条 info。reaction 只会来自 Matrix transport(票01 的 onReaction
+     *  是 Matrix provider 的缝),transport 口径恒为 "matrix"。通过后按序
+     *  尝试积压流、extension 流;谁都没认领(无主/超时/未知 key)按噪音
+     *  策略静默,仅 debug 一条。 */
+    handleReaction(reaction: MatrixReaction): void {
+      if (!auth.isTrustedUser(reaction.sender, "matrix")) {
+        logger.info(`[reaction] unauthorized sender ignored: ${reaction.sender} in ${reaction.chatId}`);
+        return;
+      }
+      if (inbox.answerByReaction(reaction.chatId, reaction.targetEventId, reaction.key, reaction.sender)) return;
+      // extension 流(票03 #270):需要该房间绑定的 pi 进程(extensionCapture
+      // 的 roomRpc 同源;不 bind —— reaction 不是消息,不挪回复绑定)。起不了
+      // 进程 = 无处作答,按静默处理(噪音策略,无回执通道)。
+      void Promise.resolve(projectManager.getRpcForRoom(reaction.chatId))
+        .then((rpc) => {
+          if (questions.deliverReaction(rpc, reaction.chatId, reaction.targetEventId, reaction.key)) return;
+          logger.debug(`[reaction] no pending prompt claims ${reaction.targetEventId} (key=${reaction.key})`);
+        })
+        .catch((err: unknown) => {
+          logger.debug(`[reaction] rpc unavailable, extension reaction dropped in ${reaction.chatId}: ${errorMessage(err)}`);
+        });
     },
 
     async handleIncoming(msg: ExternalMessage): Promise<void> {

@@ -18,9 +18,20 @@ import { t } from "../i18n/index.js";
 import { isExecuteInput, isIgnoreInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
 import type { ExternalMessage, MsgBridgeConfig } from "../types.js";
+import { parseReactionKey, REACTION_APPROVE, REACTION_REJECT } from "./reactions.js";
 
 const BACKLOG_SETTLE_MS = 5_000;
 const BACKLOG_CONFIRM_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * 「执行」的落账主体(审计 actor 的最小形状):文字应答取应答消息三字段,
+ * reaction 应答取点击者 mxid + 征询所在通道。审计只认这三个字段。
+ */
+export interface BacklogAnswerActor {
+  userId: string;
+  transport: string;
+  chatId: string;
+}
 
 export interface BacklogInboxOptions {
   reply: (chatId: string, transport: string, text: string) => Promise<void>;
@@ -29,16 +40,38 @@ export interface BacklogInboxOptions {
   /** 当前生效配置(auto 分支与 off 兜底都随读随判)。 */
   config: () => MsgBridgeConfig;
   /** 「执行」落账钩子(#124 审计,#113 回填);缺省 = 不审计。 */
-  onExecute?: (msg: ExternalMessage, count: number) => void;
+  onExecute?: (actor: BacklogAnswerActor, count: number) => void;
   /** 结算冻结信号(#136 修法B):transport 连接阶段落定后 resolve;缺省
    *  = 已就绪(旧语义,直造场景与既有单测零改动)。reject 视同放行。 */
   transportsReady?: Promise<void>;
+  /**
+   * 发出征询并取回底层 event_id 的**可选**缝(票02 #269,与 sendReaction
+   * **双双注入**才启用表情作答;缺省未注入 = 功能禁用,行为与旧版逐字节
+   * 一致)。返回 undefined = transport 不给 id:征询照常有效,只是没有
+   * 表情可点(文字通道始终可用)。
+   */
+  replyWithId?: (chatId: string, transport: string, text: string) => Promise<string | undefined>;
+  /**
+   * 在一条已发出的消息上种一个表情的**可选**缝(票02 #269,与 replyWithId
+   * 同门)。逐 emoji 的失败降级在本 module 内部处理(只 debug,不影响征询)。
+   */
+  sendReaction?: (chatId: string, eventId: string, emoji: string) => Promise<void>;
+}
+
+/** 悬置征询:待决积压清单 + 超时定时器 + 征询消息的 event_id(#269)。 */
+interface AwaitingEntry {
+  entries: ExternalMessage[];
+  timer: ReturnType<typeof setTimeout>;
+  /** 征询消息自己的 event_id(replyWithId 拿到后回填;未回填 = 无表情可点)。 */
+  promptEventId?: string;
+  /** 征询发往的通道:回执与审计的 transport 口径(reaction 应答无消息体可取)。 */
+  transport: string;
 }
 
 export class BacklogInbox {
   private buffers = new Map<string, ExternalMessage[]>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
-  private awaiting = new Map<string, { entries: ExternalMessage[]; timer: ReturnType<typeof setTimeout> }>();
+  private awaiting = new Map<string, AwaitingEntry>();
   private ready: boolean;
   private freezeLogged = false;
 
@@ -77,13 +110,11 @@ export class BacklogInbox {
     const pending = this.awaiting.get(msg.chatId);
     if (!pending) return false;
     if (isExecuteInput(text)) {
-      this.awaiting.delete(msg.chatId);
-      clearTimeout(pending.timer);
-      // 审计(#124)与投递的先后无所谓:投递是 fire-and-forget,先落账。
-      this.options.onExecute?.(msg, pending.entries.length);
-      void this.options
-        .deliver(pending.entries)
-        .catch((err: unknown) => logger.error(`backlog delivery failed: ${errorMessage(err)}`));
+      this.executePending(msg.chatId, pending, {
+        userId: msg.userId,
+        transport: msg.transport,
+        chatId: msg.chatId,
+      });
       return true;
     }
     if (isIgnoreInput(text)) {
@@ -94,6 +125,45 @@ export class BacklogInbox {
       return true;
     }
     return false;
+  }
+
+  /**
+   * reaction 应答入口(票02 #269):按 (房间, 征询 event_id) 精确匹配悬置
+   * 征询,✅/❌ 等价文字「执行/忽略」——「执行」复用 executePending 的全部
+   * 语义(timer 清理/审计/投递 fire-and-forget),「忽略」同回执文案。
+   * 与文字通道的差异只有一处:回执失败无处上抛(reaction 不走管道),只
+   * debug 日志。未匹配/房间不符/未知 key → 返回 false 由调用方静默
+   * (噪音策略:不发「无效」回帖)。
+   */
+  answerByReaction(chatId: string, targetEventId: string, key: string, sender: string): boolean {
+    const pending = this.awaiting.get(chatId);
+    if (!pending || pending.promptEventId !== targetEventId) return false;
+    const verdict = parseReactionKey(key);
+    if (verdict.kind === "approve") {
+      this.executePending(chatId, pending, { userId: sender, transport: pending.transport, chatId });
+      return true;
+    }
+    if (verdict.kind === "reject") {
+      this.awaiting.delete(chatId);
+      clearTimeout(pending.timer);
+      void this.options
+        .reply(chatId, pending.transport, t("inbox.ignored", { count: pending.entries.length }))
+        .catch((err: unknown) => logger.debug(`backlog reaction receipt failed: ${errorMessage(err)}`));
+      return true;
+    }
+    return false;
+  }
+
+  /** 「执行」分支的全部语义(文字与 reaction 两路共用):悬置清理、审计
+   *  落账、投递 fire-and-forget。 */
+  private executePending(chatId: string, pending: AwaitingEntry, actor: BacklogAnswerActor): void {
+    this.awaiting.delete(chatId);
+    clearTimeout(pending.timer);
+    // 审计(#124)与投递的先后无所谓:投递是 fire-and-forget,先落账。
+    this.options.onExecute?.(actor, pending.entries.length);
+    void this.options
+      .deliver(pending.entries)
+      .catch((err: unknown) => logger.error(`backlog delivery failed: ${errorMessage(err)}`));
   }
 
   private buffer(msg: ExternalMessage): void {
@@ -169,22 +239,41 @@ export class BacklogInbox {
       // 超时默认忽略:静默丢弃,不发补充通知(征询文案已写明规则)。
       this.awaiting.delete(chatId);
     }, BACKLOG_CONFIRM_TIMEOUT_MS);
-    this.awaiting.set(chatId, { entries: merged, timer: confirmTimer });
-    void this.options
-      .reply(
-        chatId,
-        transport,
-        t("inbox.confirm.prompt", {
-          count: merged.length,
-          lines: mergedLines,
-          minutes: BACKLOG_CONFIRM_TIMEOUT_MS / 60_000,
+    const pending: AwaitingEntry = { entries: merged, timer: confirmTimer, transport };
+    this.awaiting.set(chatId, pending);
+    const promptText = t("inbox.confirm.prompt", {
+      count: merged.length,
+      lines: mergedLines,
+      minutes: BACKLOG_CONFIRM_TIMEOUT_MS / 60_000,
+    });
+    const discardPromptFailure = (err: unknown): void => {
+      // 征询发不出去(极端时序)等于没人能批准 —— 按忽略处理,积压不留悬案。
+      this.awaiting.delete(chatId);
+      clearTimeout(confirmTimer);
+      logger.warn(`backlog confirm prompt failed, backlog discarded: ${errorMessage(err)}`);
+    };
+    // 表情作答开启(replyWithId + sendReaction 双双注入,#269):征询走
+    // replyWithId 拿 event_id,拿到后把 id 记入悬置条目并 fire-and-forget
+    // 种上 ✅/❌。种表情失败只 debug —— 征询已发出,文字通道始终可用。
+    const { replyWithId, sendReaction } = this.options;
+    if (replyWithId && sendReaction) {
+      void replyWithId(chatId, transport, promptText)
+        .then((eventId) => {
+          if (!eventId) return; // transport 不给 id:征询照常有效,只是没有表情可点
+          // 竞态护栏:then 落定前若新一轮结算已替换本条(合并/清理),旧 id
+          // 不回填 —— 残留征询上的点击必须静默。
+          const entry = this.awaiting.get(chatId);
+          if (entry !== pending) return;
+          entry.promptEventId = eventId;
+          for (const emoji of [REACTION_APPROVE, REACTION_REJECT]) {
+            sendReaction(chatId, eventId, emoji).catch((err: unknown) =>
+              logger.debug(`backlog reaction plant failed (${emoji}): ${errorMessage(err)}`)
+            );
+          }
         })
-      )
-      .catch((err: unknown) => {
-        // 征询发不出去(极端时序)等于没人能批准 —— 按忽略处理,积压不留悬案。
-        this.awaiting.delete(chatId);
-        clearTimeout(confirmTimer);
-        logger.warn(`backlog confirm prompt failed, backlog discarded: ${errorMessage(err)}`);
-      });
+        .catch((err: unknown) => discardPromptFailure(err));
+      return;
+    }
+    void this.options.reply(chatId, transport, promptText).catch((err: unknown) => discardPromptFailure(err));
   }
 }

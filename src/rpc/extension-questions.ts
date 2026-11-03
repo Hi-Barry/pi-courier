@@ -6,7 +6,9 @@
  * The courier posts the question to the bound room; the user's next plain
  * message IS the answer. A courier-side timeout answers `cancelled` when
  * nobody is around. Fire-and-forget requests are presented by level (notify)
- * or ignored (TUI-only display methods).
+ * or ignored (TUI-only display methods). 票03 (#270): confirm/select 提问
+ * 消息上预种表情(reaction),点击经 router 的 handleReaction → deliverReaction
+ * 走同一应答状态机;文字通道原样保留。
  *
  * 模块形状对照 LoginManager(src/auth/headless-login.ts):副作用出口全部
  * 构造时注入(发帖 sendReply、extension_ui 应答写入口 respond、超时时长
@@ -36,6 +38,7 @@ import type { LeveledLogger } from "../logger.js";
 import { logger } from "../logger.js";
 import type { ExternalMessage, MsgBridgeConfig, ReplyTarget } from "../types.js";
 import type { ExtensionUIResponsePayload, PiRpc } from "./pi-rpc.js";
+import { digitKeycap, parseReactionKey, REACTION_APPROVE, REACTION_REJECT } from "./reactions.js";
 
 /** Runtime view of the upstream RpcExtensionUIRequest — widened like
  *  AgentEventView because the fire-and-forget methods share the wire type. */
@@ -62,7 +65,9 @@ export function extensionUiTimeoutMs(config: MsgBridgeConfig): number {
 
 /** The question message posted to the room (issue #54). The phrasing doubles
  *  as the user-facing protocol: reply content is the answer, the cancel word
- *  backs out (both 取消 and cancel accepted — i18n/parse). */
+ *  backs out (both 取消 and cancel accepted — i18n/parse). 票03 (#270): confirm
+ *  / select(≤10 项)各补一行表情提示 —— select >10 时换「选项过多」行,不提
+ *  表情(那些题上没有表情可点,提示了反而误导)。 */
 export function extensionUIQuestionText(request: ExtensionUIRequestView): string {
   const title = truncateLine(request.title ?? t("xq.untitled"), 200);
   switch (request.method) {
@@ -70,7 +75,8 @@ export function extensionUIQuestionText(request: ExtensionUIRequestView): string
       return `❓ ${title}\n${truncateLine(request.message ?? "", 300)}\n${t("xq.confirm.how")}`;
     case "select": {
       const lines = (request.options ?? []).map((option, i) => `${i + 1}. ${option}`);
-      return `❓ ${title}\n${lines.join("\n")}\n${t("xq.select.how")}`;
+      const how = (request.options?.length ?? 0) > 10 ? t("xq.select.howMany") : t("xq.select.how");
+      return `❓ ${title}\n${lines.join("\n")}\n${how}`;
     }
     default: // input / editor
       return `❓ ${title}\n${t("xq.input.how")}`;
@@ -112,6 +118,47 @@ export function parseExtensionUIAnswer(request: ExtensionUIRequestView, text: st
   }
 }
 
+/** 一道提问该种哪些表情(#270,与 hermes 的 prompt 表情组同思路):confirm 种
+ *  ✅/❌;select 选项 ≤ 10 时种键帽数字 1️⃣…N(>10 不种 —— 数字表情条读不出
+ *  「列表被截断」的语义,种了反而误导,spec #267);input/editor 不种。数组
+ *  顺序即种植顺序(✅ 在前,与积压征询一致)。 */
+function promptReactions(request: ExtensionUIRequestView): string[] {
+  switch (request.method) {
+    case "confirm":
+      return [REACTION_APPROVE, REACTION_REJECT];
+    case "select": {
+      const options = request.options ?? [];
+      return options.length <= 10 ? options.map((_, i) => digitKeycap(i + 1)) : [];
+    }
+    default:
+      return [];
+  }
+}
+
+/** reaction key → 悬置提问的等价答案(#270)。映射与文字通道的
+ *  parseExtensionUIAnswer 同源:confirm 的 ✅/❌ 等价 y/n,select 的键帽数字
+ *  (或裸数字,双形态见 reactions.ts)等价对应序号文字。返回 undefined =
+ *  该 key 对这道题不适用(未知 key / confirm 上点数字 / select 上点 ✅❌ /
+ *  序号越界),调用方静默 —— invalid 重问语义只属文字路径,reaction 路径
+ *  只产生可直接提交的答案。 */
+function reactionAnswer(request: ExtensionUIRequestView, key: string): Exclude<ExtensionUIAnswer, { kind: "invalid" }> | undefined {
+  const verdict = parseReactionKey(key);
+  switch (request.method) {
+    case "confirm":
+      if (verdict.kind === "approve") return { kind: "confirmed", confirmed: true };
+      if (verdict.kind === "reject") return { kind: "confirmed", confirmed: false };
+      return undefined;
+    case "select": {
+      if (verdict.kind !== "digit") return undefined;
+      const options = request.options ?? [];
+      if (verdict.index < 1 || verdict.index > options.length) return undefined;
+      return { kind: "value", value: options[verdict.index - 1]! };
+    }
+    default:
+      return undefined;
+  }
+}
+
 // ===========================================================================
 // ExtensionQuestions — 提问机状态机
 // ===========================================================================
@@ -127,6 +174,19 @@ export interface ExtensionQuestionsDeps {
   /** 重启生命周期订阅(与 RpcTransientState 同一接缝):子进程重启后,新
    *  进程对旧提问一无所知 —— 队列与计时器全部作废。缺省 = 不订阅。 */
   subscribeRestart?: (rpc: PiRpc, handler: (rpc: PiRpc) => void) => void;
+  /**
+   * 发出提问并取回底层 event_id 的**可选**缝(票03 #270,与 BacklogInbox 同
+   * 名同形状,与 sendReaction **双双注入**才启用表情作答;缺省未注入 =
+   * 功能禁用,提问照走 sendReply,行为与旧版一致)。返回 undefined =
+   * transport 不给 id:提问照常有效,只是没有表情可点(文字通道始终可用)。
+   */
+  replyWithId?: (chatId: string, transport: string, text: string) => Promise<string | undefined>;
+  /**
+   * 在一条已发出的提问消息上种一个表情的**可选**缝(票03 #270,与
+   * replyWithId 同门)。逐 emoji 的失败降级在本 module 内部处理(只 debug,
+   * 不影响提问照发)。
+   */
+  sendReaction?: (chatId: string, eventId: string, emoji: string) => Promise<void>;
 }
 
 /** A question asked in a room and still awaiting the answer. FIFO per rpc —
@@ -139,6 +199,9 @@ export interface PendingExtensionQuestion {
   /** 提问时刻的日志视图:expire 从计时器触发,沿用提问时刻的标签。 */
   log: LeveledLogger;
   timer: NodeJS.Timeout;
+  /** 提问消息自己的 event_id(replyWithId 拿到后回填,#270;未回填 = 无表情
+   *  可点,reaction 点击一律静默)。 */
+  promptEventId?: string;
 }
 
 export class ExtensionQuestions {
@@ -187,9 +250,7 @@ export class ExtensionQuestions {
         // A pending question must never keep the bridge process alive by itself.
         entry.timer.unref?.();
         this.queue(rpc).push(entry);
-        this.deps.sendReply(target.chatId, target.transport, extensionUIQuestionText(request)).catch((err: unknown) => {
-        logger.warn(`[xq] 问题卡片发送失败(用户看不到这道题): ${errorMessage(err)}`);
-      });
+        this.postQuestion(rpc, entry);
         log.debug(`[extension-ui] ${request.method} 提问已发往房间 (id ${request.id})`);
         return;
       }
@@ -230,6 +291,63 @@ export class ExtensionQuestions {
     return true;
   }
 
+  /** 把提问卡发到房间(#270):双缝齐备且本题有表情可种时走 replyWithId 拿
+   *  event_id,拿到后回填 promptEventId 并 fire-and-forget 种上表情组;其余
+   *  情形(缝未注入、input/editor、select >10)一律旧 sendReply 通道。发送
+   *  失败只 warn(题没送到,日志里可见);种表情失败只 debug(题已送到,
+   *  文字通道始终可用)。 */
+  private postQuestion(rpc: PiRpc, entry: PendingExtensionQuestion): void {
+    const { chatId, transport } = entry.target;
+    const text = extensionUIQuestionText(entry.request);
+    const emojis = promptReactions(entry.request);
+    const { replyWithId, sendReaction } = this.deps;
+    const warnCardSendFailure = (err: unknown): void => {
+      logger.warn(`[xq] 问题卡片发送失败(用户看不到这道题): ${errorMessage(err)}`);
+    };
+    if (!replyWithId || !sendReaction || emojis.length === 0) {
+      void this.deps.sendReply(chatId, transport, text).catch((err: unknown) => warnCardSendFailure(err));
+      return;
+    }
+    void replyWithId(chatId, transport, text)
+      .then((eventId) => {
+        if (!eventId) return; // transport 不给 id:提问照常,只是没有表情可点
+        // 竞态护栏:then 落定前若已被回答/超时/重启作废(不在队列),旧 id
+        // 不回填 —— 残留消息上的点击必须静默。
+        if (!this.questions.get(rpc)?.includes(entry)) return;
+        entry.promptEventId = eventId;
+        for (const emoji of emojis) {
+          sendReaction(chatId, eventId, emoji).catch((err: unknown) =>
+            logger.debug(`[xq] 表情种植失败 (${emoji}): ${errorMessage(err)}`)
+          );
+        }
+      })
+      .catch((err: unknown) => warnCardSendFailure(err));
+  }
+
+  /**
+   * reaction 应答入口(票03 #270):按 (房间, 提问 event_id) 精确匹配悬置
+   * 提问。FIFO 最老优先不变量不变 —— 只有队列最老的提问有资格,且
+   * targetEventId 必须等于它自己的 promptEventId(younger 提问消息上的点击
+   * 一律静默;promptEventId 未回填时同样静默)。✅/❌ 等价文字 y/n,键帽数
+   * 字等价对应序号文字;confirm 上点数字、select 上点 ✅❌、未知 key、序号
+   * 越界一律静默(噪音策略:invalid 重问语义只属文字路径)。返回 true =
+   * 该点击已被提问机消费。
+   */
+  deliverReaction(rpc: PiRpc, chatId: string, targetEventId: string, key: string): boolean {
+    const queue = this.questions.get(rpc);
+    const oldest = queue?.[0];
+    if (!oldest || oldest.target.chatId !== chatId) return false;
+    if (!oldest.promptEventId || oldest.promptEventId !== targetEventId) return false;
+    const answer = reactionAnswer(oldest.request, key);
+    if (!answer) return false;
+    // reaction 不走消息管道:回执失败无处上抛,整体 fire-and-forget + debug
+    // (与 BacklogInbox.answerByReaction 同一口径)。
+    void this.commitParsedAnswer(rpc, queue!, oldest, answer, chatId, oldest.target.transport, oldest.log).catch(
+      (err: unknown) => logger.debug(`[xq] reaction 应答收尾失败: ${errorMessage(err)}`)
+    );
+    return true;
+  }
+
   /** 进程重启失效:新子进程对旧提问一无所知 —— 队列与计时器全部作废,
    *  房间下一条普通消息回到 prompt 通道,而不是给死提问当答案。 */
   clear(rpc: PiRpc): void {
@@ -257,15 +375,25 @@ export class ExtensionQuestions {
     });
   }
 
-  /** Commit an answer to the oldest pending question (issue #54): write the
-   *  extension_ui_response and acknowledge in the room. Invalid input re-asks
-   *  without dequeuing — the question stays pending for the next message. */
+  /** Commit an answer to the oldest pending question (issue #54): parse the
+   *  room message and hand off. Invalid input re-asks without dequeuing —
+   *  that semantics belongs to the text path only (#270 的 reaction 路径在
+   *  deliverReaction 里先行解析,不适用项直接静默)。 */
   private async commitAnswer(rpc: PiRpc, queue: PendingExtensionQuestion[], entry: PendingExtensionQuestion, text: string, msg: ExternalMessage, log: LeveledLogger): Promise<void> {
     const answer = parseExtensionUIAnswer(entry.request, text);
     if (answer.kind === "invalid") {
       await this.deps.sendReply(msg.chatId, msg.transport, answer.hint);
       return;
     }
+    await this.commitParsedAnswer(rpc, queue, entry, answer, msg.chatId, msg.transport, log);
+  }
+
+  /** 提交已解析答案的全部语义(文字与 reaction 两路共用,#270):出队、写
+   *  回 extension_ui_response、房间回执。respond 失败回「答案无法回传」并
+   *  保持已出队(房间不留回答幽灵);await 语义由调用方定 —— 文字路径沿管
+   *  道上抛,reaction 路径整体 fire-and-forget(见 deliverReaction)。invalid
+   *  不进这里:文字路径先拦截重问,reaction 路径根本不产生 invalid。 */
+  private async commitParsedAnswer(rpc: PiRpc, queue: PendingExtensionQuestion[], entry: PendingExtensionQuestion, answer: Exclude<ExtensionUIAnswer, { kind: "invalid" }>, chatId: string, transport: string, log: LeveledLogger): Promise<void> {
     queue.splice(queue.indexOf(entry), 1);
     clearTimeout(entry.timer);
     const payload: ExtensionUIResponsePayload =
@@ -278,12 +406,12 @@ export class ExtensionQuestions {
       await this.deps.respond(rpc, payload);
     } catch (err) {
       log.error(`[extension-ui] 应答回写失败 (id ${entry.request.id}): ${errorMessage(err)}`);
-      await this.deps.sendReply(msg.chatId, msg.transport, t("xq.answer.lost"));
+      await this.deps.sendReply(chatId, transport, t("xq.answer.lost"));
       return;
     }
     await this.deps.sendReply(
-      msg.chatId,
-      msg.transport,
+      chatId,
+      transport,
       answer.kind === "cancel" ? t("xq.answer.cancelled") : t("xq.answer.ok")
     );
   }

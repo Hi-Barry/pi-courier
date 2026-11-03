@@ -101,7 +101,7 @@ const zh = {
   "cmd.queue.clearUnsupported": "⚠️ 上游 pi 版本过旧(<0.84.4),不支持清队,队列保留:",
   "queue.lost.notice": "⚠️ 子进程重启,队列中 {count} 条消息未执行:\n{lines}",
   "queue.lost.service.notice": "⚠️ 服务重启,队列中 {count} 条消息未执行:\n{lines}",
-  "inbox.confirm.prompt": "📬 离线期间收到 {count} 条消息(重启前的积压):\n{lines}\n回复「执行」按序处理;回复「忽略」丢弃({minutes} 分钟内有效,超时视为忽略)。",
+  "inbox.confirm.prompt": "📬 离线期间收到 {count} 条消息(重启前的积压):\n{lines}\n回复「执行」按序处理;回复「忽略」丢弃({minutes} 分钟内有效,超时视为忽略)。\n也可点击下方表情:✅ 执行 / ❌ 忽略。",
   "inbox.auto.notice": "📬 离线积压 {count} 条,按序执行中:\n{lines}",
   "inbox.entry.line": "- @{user}:{preview}",
   "inbox.ignored": "🗑️ 已忽略 {count} 条离线积压消息。",
@@ -432,8 +432,9 @@ const zh = {
 
   // ── xq(扩展 UI 提问机,extension-questions.ts)───────────────────────
   "xq.untitled": "(无标题)",
-  "xq.confirm.how": "回复 y / n(发送「取消」放弃)",
-  "xq.select.how": "回复序号选择(发送「取消」放弃)",
+  "xq.confirm.how": "回复 y / n(发送「取消」放弃);也可点击下方表情:✅ = y / ❌ = n",
+  "xq.select.how": "回复序号选择(发送「取消」放弃);也可点击下方数字表情选择",
+  "xq.select.howMany": "选项过多,不支持点击表情;请直接回复序号选择(发送「取消」放弃)",
   "xq.input.how": "直接回复内容作为答案(发送「取消」放弃)",
   "xq.confirm.invalid": "⚠️ 请回复 y 或 n(发送「取消」放弃)",
   "xq.select.invalid": "⚠️ 请回复 1 到 {max} 之间的序号(发送「取消」放弃)",

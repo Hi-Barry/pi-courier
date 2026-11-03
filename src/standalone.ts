@@ -628,6 +628,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // 一致。transport 参数仅与 sendReply 形状对齐(诊断口径),不参与适配;
     // 编辑与普通消息走同一条 per-room FIFO 发送通道,E2EE 房间由加密层自动
     // 加密,无需特殊处理。
+    // 表情作答缝(票02 #269)同门:replyWithId 取征询消息 event_id,
+    // sendReaction 种表情(票01 原语;不进 FIFO,顺序无关)。双双注入才启用,
+    // 未配置 Matrix 时同样整个不注入 = 功能禁用,行为与旧版逐字节一致。
     ...(matrix
       ? {
           sendLiveCard: (chatId: string, transport: string, text: string) => {
@@ -639,6 +642,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
             // editMessage 穿出的替换事件 event_id,router 侧无消费方:显式
             // 吞掉保持 editReply 的 Promise<void> 契约。
             await matrix!.editMessage(chatId, messageId, text);
+          },
+          replyWithId: (chatId: string, transport: string, text: string) => {
+            void transport;
+            return matrix!.sendMessage(chatId, text);
+          },
+          sendReaction: async (chatId: string, eventId: string, emoji: string) => {
+            // reaction 事件 event_id,router 侧无消费方:显式吞掉保持
+            // Promise<void> 契约。
+            await matrix!.sendReaction(chatId, eventId, emoji);
           },
         }
       : {}),
@@ -676,6 +688,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     router.handleIncoming(msg).catch((err) => {
       logger.error("❌ message handling error:", errorMessage(err));
     });
+  });
+  // reaction 入站分发(票02 #269):用户点击表情经 provider 的过滤缝汇入
+  // router 统一入口(信任闸门在 router 内,fail-closed)。
+  matrix?.onReaction((reaction) => {
+    router.handleReaction(reaction);
   });
   matrix?.onError((err) => {
     logger.error(`❌ ${matrix.type} error:`, errorMessage(err));

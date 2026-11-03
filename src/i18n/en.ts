@@ -100,7 +100,7 @@ const en: Record<MessageKey, string> = {
   "cmd.queue.clearUnsupported": "⚠️ The upstream pi is too old (<0.84.4) to clear queues; they are kept:",
   "queue.lost.notice": "⚠️ Subprocess restarted — {count} queued message(s) never ran:\n{lines}",
   "queue.lost.service.notice": "⚠️ Service restarted — {count} queued message(s) never ran:\n{lines}",
-  "inbox.confirm.prompt": "📬 {count} message(s) arrived while the bridge was offline:\n{lines}\nReply \"execute\" to run them in order, or \"ignore\" to discard (valid for {minutes} minutes; silence counts as ignore).",
+  "inbox.confirm.prompt": "📬 {count} message(s) arrived while the bridge was offline:\n{lines}\nReply \"execute\" to run them in order, or \"ignore\" to discard (valid for {minutes} minutes; silence counts as ignore).\nOr just tap the reactions below: ✅ execute / ❌ ignore.",
   "inbox.auto.notice": "📬 {count} message(s) arrived while offline — running them in order:\n{lines}",
   "inbox.entry.line": "- @{user}: {preview}",
   "inbox.ignored": "🗑️ Discarded {count} offline backlog message(s).",
@@ -446,8 +446,9 @@ const en: Record<MessageKey, string> = {
 
   // ── xq ────────────────────────────────────────────────────────────────
   "xq.untitled": "(untitled)",
-  "xq.confirm.how": "Reply y / n (send \"cancel\" to back out)",
-  "xq.select.how": "Reply with a number to choose (send \"cancel\" to back out)",
+  "xq.confirm.how": "Reply y / n (send \"cancel\" to back out); or tap the reactions below: ✅ = y / ❌ = n",
+  "xq.select.how": "Reply with a number to choose (send \"cancel\" to back out); or tap a number reaction below",
+  "xq.select.howMany": "Too many options for reaction buttons; reply with a number to choose (send \"cancel\" to back out)",
   "xq.input.how": "Reply directly with the content as the answer (send \"cancel\" to back out)",
   "xq.confirm.invalid": "⚠️ Please reply y or n (send \"cancel\" to back out)",
   "xq.select.invalid": "⚠️ Please reply with a number between 1 and {max} (send \"cancel\" to back out)",
