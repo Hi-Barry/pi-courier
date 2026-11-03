@@ -43,6 +43,7 @@ import { McpLoginFlow } from "../mcp/mcp-login-flow.js";
 import { formatReminderTime, parseReminderTime } from "../reminders/reminder-parse.js";
 import { MAX_REMINDERS_PER_ROOM, type ReminderEntry } from "../reminders/reminder-store.js";
 import type { UpdateCommandIO } from "../update/updater.js";
+import { unquotedWin32DrivePath } from "../win32-path.js";
 import { findModelMatch, sameModel } from "./model-switch.js";
 import type { BashResultView, PiRpc, UpstreamQueues } from "./pi-rpc.js";
 import { BashTimeoutError, upstreamClearQueueSend } from "./pi-rpc.js";
@@ -257,12 +258,16 @@ export function bashTimeoutText(err: unknown): string | undefined {
 
 /** bash 结果的统一回帖(/bash 与 `!`/`!!` 共用):命令行 + 代码块输出 +
  *  退出码;被中止时显示已捕获的部分输出,不打退出码。excluded 附注语义。
- *  limit = 截断上限(字符,config bashOutputLimit 派生;缺省用默认值)。 */
+ *  limit = 截断上限(字符,config bashOutputLimit 派生;缺省用默认值)。
+ *  platform 可注入(缺省当前进程)供任意 CI 回归 win32 提示分支(spec #256):
+ *  win32 上命令以非零码失败且含未加引号的 `X:\` 路径时,末尾附一行 bash
+ *  路径写法提示 —— 只提示,不改写命令。 */
 export function formatBashReply(
   command: string,
   result: BashResultView,
   excluded = false,
   limit: number = BASH_OUTPUT_LIMIT_DEFAULT,
+  platform: NodeJS.Platform = process.platform,
 ): string {
   const suffix = excluded ? t("cmd.bash.notWritten") : "";
   const output = result.output.length > limit
@@ -271,7 +276,14 @@ export function formatBashReply(
   if (result.cancelled) {
     return `${t("cmd.bash.aborted", { command, suffix })}\n\`\`\`\n${output || t("common.noOutput")}\n\`\`\``;
   }
-  return `$ ${command}${suffix}\n\`\`\`\n${output || t("common.noOutput")}\n\`\`\`\n${t("common.exitCode", { code: result.exitCode })}`;
+  const reply = `$ ${command}${suffix}\n\`\`\`\n${output || t("common.noOutput")}\n\`\`\`\n${t("common.exitCode", { code: result.exitCode })}`;
+  const winPathHint = platform === "win32"
+    && typeof result.exitCode === "number"
+    && result.exitCode !== 0
+    && unquotedWin32DrivePath(command)
+  ? `\n${t("cmd.bash.winPathHint")}`
+  : "";
+  return reply + winPathHint;
 }
 
 /** Total queued messages in a snapshot (0 when absent). */
