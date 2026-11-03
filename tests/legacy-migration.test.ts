@@ -131,6 +131,10 @@ afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+/** 日志字符串断言专用:plan 以 platform:"linux" 钉死,日志里的旧路径用
+ *  正斜杠拼接;Windows runner 上 path.join 会产出反斜杠,必须同形比较。 */
+const logPath = (...parts: string[]) => parts.join("/");
+
 function makeLinuxPlan() {
   const layout = resolveLayout({ platform: "linux", homedir: home, env: {} });
   const plan = buildLegacyMigrationPlan({ platform: "linux", homedir: home, layout });
@@ -218,7 +222,7 @@ describe("runLegacyMigration — 首次迁移与幂等(临时目录真实文件)
     expect(log).toHaveLength(10);
     const movedLine = log.find((l) => l.includes("matrix-store"));
     expect(movedLine).toBeDefined();
-    expect(movedLine).toContain(path.join(home, ".pi", "pi-courier-matrix-store.json"));
+    expect(movedLine).toContain(logPath(home, ".pi", "pi-courier-matrix-store.json"));
     expect(movedLine).toContain(layout.matrixStorePath);
     expect(warn).toEqual([]);
   });
@@ -280,7 +284,7 @@ describe("runLegacyMigration — 首次迁移与幂等(临时目录真实文件)
     // 每项恰好一条警告,含旧路径;其余 7 项正常搬移。
     expect(warn).toHaveLength(2);
     for (const line of warn) {
-      expect(line).toContain(path.join(home, ".pi"));
+      expect(line).toContain(logPath(home, ".pi"));
     }
     expect(result.moved).toHaveLength(7);
   });
@@ -403,7 +407,7 @@ describe("runLegacyMigration — 旧锁只删不迁(陈旧语义)", () => {
     expect(fs.existsSync(lockPath)).toBe(false);
     // 新锁不在这里建:stateDir 下没有锁文件(由后续正常流程重建)。
     expect(fs.existsSync(layout.lockPath)).toBe(false);
-    expect(log.join("\n")).toContain(lockPath);
+    expect(log.join("\n")).toContain(logPath(home, ".pi", "pi-courier.lock"));
   });
 
   it("锁内容损坏(无有效持有声明):视同陈旧,删", () => {
@@ -429,7 +433,7 @@ describe("runLegacyMigration — 旧锁只删不迁(陈旧语义)", () => {
     expect(result.lockKept).toBe(true);
     expect(result.lockRemoved).toBe(false);
     expect(fs.readFileSync(lockPath, "utf-8")).toBe(`${liveChild.pid}:another-instance`);
-    expect(warn.join("\n")).toContain(lockPath);
+    expect(warn.join("\n")).toContain(logPath(home, ".pi", "pi-courier.lock"));
   });
 
   it("isLockStale 注入缝生效:true 删 / false 留(组合根可换判断策略)", () => {
