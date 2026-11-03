@@ -50,8 +50,9 @@ export interface MatrixMessageContent {
    *  structure as an ordinary message's content. */
   "m.new_content"?: MatrixMessageContent;
   /** MSC2676 relation — rel_type "m.replace" pointing at the original
-   *  event_id being replaced. */
-  "m.relates_to"?: { rel_type: string; event_id: string };
+   *  event_id being replaced; annotation (rel_type "m.annotation") adds the
+   *  reaction `key` (m.reaction events, 票01 #268). */
+  "m.relates_to"?: { rel_type: string; event_id: string; key?: string };
 }
 
 /** Events the adapters subscribe to. room.join / room.leave deliver only
@@ -79,6 +80,10 @@ export interface MatrixClientPort {
 
   // ── 出站 ──
   sendMessage(roomId: string, content: MatrixMessageContent): Promise<string>;
+  /** 在一条已发出的消息上标注一个 reaction(票01 #268):发 m.reaction 事件,
+   *  m.relates_to 为 { rel_type: "m.annotation", event_id, key }。返回
+   *  reaction 事件自己的 event_id。 */
+  sendReaction(roomId: string, eventId: string, key: string): Promise<string>;
   setTyping(roomId: string, typing: boolean, timeoutMs?: number): Promise<unknown>;
 
   // ── 媒体 ──
@@ -206,6 +211,17 @@ export function createMatrixClient(config: MatrixClientConfig, paths?: MatrixSto
   LogService.setLogger(sdkLogAdapter);
 
   // MatrixClient structurally satisfies the port (crypto is set by the SDK
-  // iff a crypto store was handed in).
-  return client;
+  // iff a crypto store was handed in). One member the SDK lacks by name is
+  // the reaction primitive (票01 #268): attached on the instance via the SDK's
+  // generic sendEvent — an m.reaction event whose m.relates_to is the
+  // annotation triple. E2EE rooms are handled by sendEvent itself (it
+  // encrypts the payload when the room is encrypted), so reactions work in
+  // encrypted rooms too.
+  return Object.assign(client, {
+    sendReaction(roomId: string, eventId: string, key: string): Promise<string> {
+      return client.sendEvent(roomId, "m.reaction", {
+        "m.relates_to": { rel_type: "m.annotation", event_id: eventId, key },
+      });
+    },
+  });
 }

@@ -8,6 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AttachmentStore, type MediaSource } from "../src/transports/attachments.js";
+import type { EventLedger } from "../src/transports/event-ledger.js";
 import { MatrixProvider } from "../src/transports/matrix.js";
 import type { MatrixClientPort } from "../src/transports/matrix-client.js";
 import { buildGroupJoinHint } from "../src/management-room.js";
@@ -663,6 +664,178 @@ describe("MatrixProvider 出站串行队列(issue #195)", () => {
       "一",
       "二",
     ]);
+  });
+});
+
+describe("MatrixProvider 表情 reaction(票01,#268)", () => {
+  beforeEach(() => {
+    captureConsole();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sendReaction 直发:原语穿出端口,返回 reaction 事件 id,不走 per-room FIFO", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const client = clients[0];
+    client.sendReaction.mockResolvedValue("$reaction-1");
+
+    // sendMessage 的 FIFO 被挂住期间,sendReaction 仍即时出手(种表情先后顺序无关,不排队)
+    const gate = gatedSend(client);
+    const blocked = provider.sendMessage(ROOM, "在途消息");
+    await flush();
+    expect(gate.bodies).toEqual(["在途消息"]);
+
+    await expect(provider.sendReaction(ROOM, "$orig-1", "✅")).resolves.toBe("$reaction-1");
+    expect(client.sendReaction).toHaveBeenCalledTimes(1);
+    expect(client.sendReaction).toHaveBeenCalledWith(ROOM, "$orig-1", "✅");
+    expect(client.sendMessage).toHaveBeenCalledTimes(1); // 原语不进消息 FIFO
+
+    gate.release(0);
+    await blocked;
+  });
+
+  it("sendReaction 未连接抛可读错误(与 sendMessage 同契约,失败由调用方 try/catch)", async () => {
+    const { provider } = makeProvider();
+    await expect(provider.sendReaction(ROOM, "$evt", "✅")).rejects.toThrow(
+      "Matrix client not connected"
+    );
+  });
+
+  /** 可控挂点:onReaction 收到的 MatrixReaction 信封列表。 */
+  function collectReactions(provider: MatrixProvider) {
+    const received: Array<{ chatId: string; targetEventId: string; key: string; sender: string }> = [];
+    provider.onReaction((r) => received.push(r));
+    return received;
+  }
+
+  function reactionEvent(overrides: Record<string, unknown> = {}) {
+    return {
+      type: "m.reaction",
+      sender: ALICE,
+      origin_server_ts: Date.now(),
+      event_id: `$reaction-${Math.random().toString(36).slice(2)}`,
+      content: {
+        "m.relates_to": { rel_type: "m.annotation", event_id: "$target-1", key: "✅" },
+      },
+      ...overrides,
+    };
+  }
+
+  /** 台账 stub:记下 record 的每个事件 id,供正/负断言。 */
+  function fakeLedger() {
+    const recorded: string[] = [];
+    const ledger = {
+      freshStart: false,
+      seen: (id: string) => recorded.includes(id),
+      record: (id: string) => recorded.push(id),
+    } as unknown as EventLedger;
+    return { ledger, recorded };
+  }
+
+  it("bot 自己种的 reaction(sender === botUserId)不触发回调", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const client = clients[0];
+    const reactions = collectReactions(provider);
+
+    client.emit("room.event", ROOM, reactionEvent({ sender: BOT }));
+    await flush();
+    expect(reactions).toEqual([]);
+  });
+
+  it("早于 connectedAt 的迟到 reaction 不分发也不记账(重启回放静默丢弃)", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const client = clients[0];
+    const reactions = collectReactions(provider);
+    const { ledger, recorded } = fakeLedger();
+    provider.setEventLedger(ledger, "confirm");
+
+    client.emit(
+      "room.event",
+      ROOM,
+      reactionEvent({ origin_server_ts: Date.now() - 60_000, event_id: "$stale-reaction" })
+    );
+    await flush();
+    expect(reactions).toEqual([]);
+    expect(recorded).toEqual([]); // 未过过滤器 = 不受理 = 不记账
+
+    // 对照组:连接后的实时 reaction 照常分发
+    client.emit("room.event", ROOM, reactionEvent({ event_id: "$fresh-reaction" }));
+    await vi.waitFor(() => expect(reactions).toHaveLength(1));
+  });
+
+  it("受理的 reaction 事件 id 记入事件台账(幂等)", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const client = clients[0];
+    const reactions = collectReactions(provider);
+    const { ledger, recorded } = fakeLedger();
+    provider.setEventLedger(ledger, "confirm");
+
+    client.emit("room.event", ROOM, reactionEvent({ event_id: "$reaction-abc" }));
+    await vi.waitFor(() => expect(reactions).toHaveLength(1));
+    expect(recorded).toEqual(["$reaction-abc"]);
+  });
+
+  it("结构残缺的 reaction 静默丢弃:非 annotation / 缺 key / 缺 event_id / 非 m.reaction 类型不进缝", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const client = clients[0];
+    const reactions = collectReactions(provider);
+    const { ledger, recorded } = fakeLedger();
+    provider.setEventLedger(ledger, "confirm");
+
+    client.emit("room.event", ROOM, reactionEvent({
+      event_id: "$bad-rel",
+      content: { "m.relates_to": { rel_type: "m.replace", event_id: "$t", key: "✅" } },
+    }));
+    client.emit("room.event", ROOM, reactionEvent({
+      event_id: "$bad-nokey",
+      content: { "m.relates_to": { rel_type: "m.annotation", event_id: "$t" } },
+    }));
+    client.emit("room.event", ROOM, reactionEvent({
+      event_id: "$bad-notarget",
+      content: { "m.relates_to": { rel_type: "m.annotation", key: "✅" } },
+    }));
+    client.emit("room.event", ROOM, reactionEvent({
+      event_id: "$bad-norel",
+      content: {},
+    }));
+    // 非 m.reaction 的 room.event 维持原状:不进 reaction 缝(sticker 路径由既有用例钉住)
+    client.emit("room.event", ROOM, {
+      sender: ALICE,
+      origin_server_ts: Date.now(),
+      event_id: "$other",
+      type: "m.room.message",
+      content: { msgtype: "m.text", body: "普通消息" },
+    });
+    await flush();
+    expect(reactions).toEqual([]);
+    expect(recorded).toEqual([]);
+  });
+
+  it("m.reaction 经 room.event 进 onReaction:收到 (chatId/目标 event_id/key/sender) 四元组,不进消息管道", async () => {
+    const { provider, clients } = makeProvider();
+    await provider.connect();
+    const client = clients[0];
+    const reactions = collectReactions(provider);
+    const { received, wire } = collectMessages();
+    wire(provider);
+
+    client.emit("room.event", ROOM, reactionEvent());
+    await vi.waitFor(() => expect(reactions).toHaveLength(1));
+    expect(reactions[0]).toEqual({
+      chatId: ROOM,
+      targetEventId: "$target-1",
+      key: "✅",
+      sender: ALICE,
+    });
+    // reaction 不走消息管道:translator/messageHandler 不见该事件
+    await flush();
+    expect(received).toEqual([]);
   });
 });
 
