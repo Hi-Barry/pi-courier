@@ -6,8 +6,14 @@ import { logger, suppressLogLines } from "../logger.js";
 import { buildGroupJoinHint } from "../management-room.js";
 import { createQuoteCache, type QuoteCache } from "../quote-cache.js";
 import type { ExternalMessage } from "../types.js";
-import type { MediaSource } from "./attachments.js";
-import { AttachmentStore } from "./attachments.js";
+import {
+  AttachmentStore,
+  AttachmentTooLargeError,
+  DOWNLOAD_TIMEOUT_MS,
+  decryptEncryptedMedia,
+  type MediaSource,
+  readCapped,
+} from "./attachments.js";
 import type { EventLedger } from "./event-ledger.js";
 import {
   createMatrixClient,
@@ -529,32 +535,73 @@ export class MatrixProvider {
   }
 
   /**
-   * The Matrix half of the attachment download seam (issue #66): plaintext
-   * media via the authenticated v1 endpoint; E2EE rooms via the crypto
-   * client's decryptMedia (download + AES-CTR + SHA-256 in one step).
-   * `crypto` is undefined when the deployment runs without encryption.
+   * The Matrix half of the attachment download seam (issue #66): media via
+   * the authenticated v1 endpoint, streamed with a hard byte cap enforced
+   * DURING the transfer (sec 下载 OOM 修复:SDK 的 downloadContent /
+   * crypto.decryptMedia 都是整包进内存后才能判大小,谎报 sizeHint 的房间
+   * 成员或恶意联邦媒体服务器可致 OOM)。E2EE 附件 = 带上限的密文流式下载 +
+   * 本地规范解密(decryptEncryptedMedia,node:crypto,经与 Rust Attachment
+   * 双向互认验证)—— 附件解密不再依赖原生 crypto 库。
    */
   get mediaSource(): MediaSource {
     return {
-      downloadPlaintext: async (mxcUrl) => {
-        const { data } = await this.client!.downloadContent(mxcUrl);
-        return data;
-      },
+      downloadPlaintext: async (mxcUrl, maxBytes) => this.downloadMediaCapped(mxcUrl, maxBytes),
       ...(this.config.encryption !== false
         ? {
-            downloadEncrypted: async (file) => {
-              const crypto = this.client?.crypto;
-              if (!crypto) {
-                throw new Error(t("attach.e2eeNativeMissing"));
-              }
-              // Our EncryptedMediaFile is a structural subset of the SDK's
-              // EncryptedFile; at runtime this IS the event's original object,
-              // so every field the Rust decrypt needs (kty/key_ops/…) is there.
-              return crypto.decryptMedia(file);
-            },
+            downloadEncrypted: async (file, maxBytes) =>
+              decryptEncryptedMedia(file, await this.downloadMediaCapped(file.url, maxBytes)),
           }
         : {}),
     };
+  }
+
+  /**
+   * 流式下载一个 mxc 的原始字节(明文或密文),全程实施 maxBytes 硬上限。
+   * 端点与转义规则同 SDK 0.8.0 的 downloadContent(认证版 v1 媒体端点),
+   * 但逐块计数、超限即中止。fetch 走进程全局调度:配置了代理时由 proxy.ts
+   * 装配的 EnvHttpProxyAgent 接管,与 SDK request 腿共用同一套代理规则。
+   */
+  private async downloadMediaCapped(mxcUrl: string, maxBytes: number): Promise<Buffer> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+    timer.unref?.();
+    try {
+      const res = await fetch(mediaDownloadUrl(this.config.homeserverUrl, mxcUrl), {
+        headers: { Authorization: `Bearer ${this.config.accessToken}` },
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        // 错误体也必须有界读:恶意服务器同样可以在错误响应里塞大 body。
+        const detail = (await readBoundedErrorText(res)).trim().slice(0, 200);
+        throw new Error(`HTTP ${res.status}${detail ? `: ${detail}` : ""}`);
+      }
+      // Content-Length 先拒:声明超限就不读 body(便宜的一手;分块传输/
+      // 谎报长度由 readCapped 的逐块计数兜住)。
+      const declared = Number(res.headers.get("content-length"));
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        controller.abort();
+        throw new AttachmentTooLargeError(declared, maxBytes);
+      }
+      try {
+        return await readCapped(res.body as ReadableStream<Uint8Array>, maxBytes);
+      } catch (err) {
+        // 超限中止时确保连接被掐断(readCapped 抛出走迭代器 return,
+        // 这里再兜一层 abort,双保险)。
+        if (err instanceof AttachmentTooLargeError) controller.abort();
+        throw err;
+      }
+    } catch (err) {
+      // 上限判定原样上抛(store 据此给"附件过大"回执);超时翻成人话
+      // (与 attachments.ts withTimeout 同一文案);其余原样交给 store
+      // 统一包装成下载失败回执。
+      if (err instanceof AttachmentTooLargeError) throw err;
+      if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
+        throw new Error(t("attach.downloadTimeout", { seconds: DOWNLOAD_TIMEOUT_MS / 1000 }));
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
 }
@@ -577,6 +624,45 @@ export interface MatrixReaction {
 
 // ─── 纯函数区(spec #99/#101:自 matrix-utils.ts 归位到唯一属主 transport)───
 // 出站渲染、事件过滤、群聊判定——无 SDK/网络依赖,可直测。
+
+/**
+ * mxc:// → 认证版 v1 媒体下载 URL。端点与转义规则与 SDK 0.8.0 的
+ * downloadContent 完全一致(domain/mediaId 分别 encodeURIComponent,mediaId
+ * 只取路径首段,忽略尾部文件名段),保证与 SDK 行为逐字对齐。
+ */
+export function mediaDownloadUrl(homeserverUrl: string, mxcUrl: string): string {
+  if (!mxcUrl.toLowerCase().startsWith("mxc://")) {
+    throw new Error("'mxcUrl' does not begin with mxc://");
+  }
+  const urlParts = mxcUrl.substring("mxc://".length).split("/");
+  const domain = encodeURIComponent(urlParts[0] ?? "");
+  const mediaId = encodeURIComponent(urlParts[1]?.split("/")[0] ?? "");
+  if (!domain || !mediaId) {
+    throw new Error(`invalid mxc URI: ${mxcUrl}`);
+  }
+  return `${homeserverUrl}/_matrix/client/v1/media/download/${domain}/${mediaId}?allow_remote=true`;
+}
+
+/**
+ * 有界读一个错误响应体(≤2KB):错误路径同样不能被大 body 打爆内存 ——
+ * 恶意服务器可以在 4xx/5xx 响应里塞任意大的错误页。读一半断流不影响
+ * 主错误(外层关心的是 HTTP 状态码与错误摘要)。
+ */
+async function readBoundedErrorText(res: Response): Promise<string> {
+  if (!res.body) return "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for await (const chunk of res.body) {
+      chunks.push(chunk);
+      total += chunk.length;
+      if (total >= 2048) break;
+    }
+  } catch {
+    // 错误体读不出来就空着,主错误照抛
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 // html:false escapes raw HTML (pi output must never inject tags);
 // breaks:true keeps chat-style single newlines as <br>;

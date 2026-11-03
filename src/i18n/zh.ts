@@ -606,6 +606,7 @@ const zh = {
   "attach.e2eeRequired": "加密附件需要启用 E2EE(部署未开启加密或 crypto 原生库不可用)",
   "attach.downloadTimeout": "下载超时({seconds}s)",
   "attach.e2eeNativeMissing": "E2EE crypto 原生库不可用,无法解密加密附件",
+  "attach.hashMismatch": "附件完整性校验失败(SHA-256 不匹配),内容可能被篡改,未保存。",
   "room.notConnected": "Matrix 未连接",
   "workdir.prompt": "未配置工作目录。请输入 pi 工作目录 [默认 {fallback}]: ",
   "logs.unknownLevel": "未知日志级别: {level}(可选: debug / info / warn / error)",

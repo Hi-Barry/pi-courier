@@ -639,6 +639,7 @@ const en: Record<MessageKey, string> = {
   "attach.e2eeRequired": "Encrypted attachments require E2EE (encryption not enabled for this deployment, or the native crypto library unavailable)",
   "attach.downloadTimeout": "Download timed out ({seconds}s)",
   "attach.e2eeNativeMissing": "The E2EE crypto native library is unavailable; cannot decrypt the encrypted attachment",
+  "attach.hashMismatch": "Attachment integrity check failed (SHA-256 mismatch); content may have been tampered with and was not saved.",
   "room.notConnected": "Matrix not connected",
   "workdir.prompt": "No working directory configured. Enter the pi workdir [default {fallback}]: ",
   "logs.unknownLevel": "Unknown log level: {level} (choose: debug / info / warn / error)",
