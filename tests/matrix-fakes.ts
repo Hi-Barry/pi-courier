@@ -28,6 +28,7 @@ export interface FakeMatrixClient {
   getJoinedRooms: ReturnType<typeof vi.fn>;
   getJoinedRoomMembers: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
+  sendReaction: ReturnType<typeof vi.fn>;
   setTyping: ReturnType<typeof vi.fn>;
   downloadContent: ReturnType<typeof vi.fn>;
   createRoom: ReturnType<typeof vi.fn>;
@@ -75,6 +76,7 @@ export function fakeMatrixClient(overrides: Record<string, unknown> = {}): FakeM
     getJoinedRooms: rec("getJoinedRooms", async () => ["!room:server"]),
     getJoinedRoomMembers: rec("getJoinedRoomMembers", async () => ["@bot:server", "@alice:server"]),
     sendMessage: rec("sendMessage", async () => "$sent"),
+    sendReaction: rec("sendReaction", async () => "$reaction"),
     setTyping: rec("setTyping", async () => undefined),
     downloadContent: rec("downloadContent", async () => ({
       data: Buffer.from("BYTES"),

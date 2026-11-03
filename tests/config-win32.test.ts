@@ -4,13 +4,18 @@
  * 0644 config would warn on every single start there. On win32 the whole
  * check is skipped; on Linux the warning still fires (control case).
  *
- * Isolation follows config.test.ts: vi.resetModules + doMock('os') so the
- * module-level CONFIG_DIR resolves into a temp home, then a dynamic import;
- * process.platform is flipped via defineProperty (configurable on Node 24).
+ * Isolation: vi.resetModules + doMock('os') pin homedir into a temp dir, and
+ * resolveLayout is pinned to a POSIX-shaped layout — process.platform is
+ * flipped via defineProperty (configurable on Node 24) to drive the
+ * permission-check gate inside loadConfig, but the layout must NOT follow the
+ * flip: win32 branches also switch to path.win32 separators, which a POSIX
+ * test filesystem can never materialize. The thing under test here is the
+ * platform gate, not the layout (paths.test.ts owns that matrix).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
+import { resolveLayout } from "../src/paths.js";
 import { tmpdir } from "os";
 
 describe("loadConfig permission self-check vs platform", () => {
@@ -31,20 +36,28 @@ describe("loadConfig permission self-check vs platform", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  /** Mock homedir → tmpDir, import config fresh, hand back loadConfig. */
+  /** Mock homedir → tmpDir and pin a POSIX-shaped layout, import config
+   *  fresh, hand back loadConfig. */
   async function importConfig() {
-    vi.doMock("os", async () => {
-      const actual = await vi.importActual<typeof import("os")>("os");
-      return { ...actual, homedir: () => tmpDir };
-    });
-    const mod = await import("../src/config");
-    return { loadConfig: mod.loadConfig };
+    // 布局显式钉成 POSIX 形状并注入(测试缝):不依赖 builtin mock 与
+    // resolveLayout 的模块级 patch —— CI 上 doMock('os') 会失效(诊断已确认)。
+    const cfg = await import("../src/config");
+    cfg.setRuntimeLayoutForTests(
+      resolveLayout({ platform: "linux", homedir: tmpDir, env: {} }),
+      tmpDir
+    );
+    return { loadConfig: cfg.loadConfig };
+  }
+
+  /** POSIX-shaped config dir (matches the pinned linux layout). */
+  function configDir(): string {
+    return join(tmpDir, ".config", "pi-courier");
   }
 
   /** Write a valid config with 0644 (over-wide by the 0600 contract). */
   function writeLooseConfig(): void {
-    mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-    const configPath = join(tmpDir, ".pi", "pi-courier.json");
+    mkdirSync(configDir(), { recursive: true });
+    const configPath = join(configDir(), "pi-courier.json");
     writeFileSync(configPath, JSON.stringify({ workdir: "/tmp/work" }));
     chmodSync(configPath, 0o644);
   }

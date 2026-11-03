@@ -35,12 +35,16 @@ vi.mock("matrix-bot-sdk", async (importOriginal) => {
 
 describe("createMatrixClient E2EE degradation (audit batch 1 票10)", () => {
   let home: string;
+  let storePaths: { storagePath: string; cryptoDir: string };
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-courier.mclient-")));
-    fs.mkdirSync(path.join(home, ".pi"), { recursive: true });
+    // 存储路径注入缝(spec #258 票03):组合根传布局解析的 dataDir 叶子;
+    // 测试注入临时路径,SDK 存储不再耦合真实 ~/.pi。
+    const dataDir = path.join(home, "data", "pi-courier");
+    storePaths = { storagePath: path.join(dataDir, "matrix-store.json"), cryptoDir: path.join(dataDir, "matrix-crypto") };
     errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
     warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
   });
@@ -52,12 +56,21 @@ describe("createMatrixClient E2EE degradation (audit batch 1 票10)", () => {
   });
 
   function makeClient(overrides: Record<string, unknown> = {}) {
-    return createMatrixClient({
-      homeserverUrl: "http://localhost:8008",
-      accessToken: "test-token",
-      ...overrides,
-    });
+    return createMatrixClient(
+      {
+        homeserverUrl: "http://localhost:8008",
+        accessToken: "test-token",
+        ...overrides,
+      },
+      storePaths
+    );
   }
+
+  it("missing store paths is a wiring bug — throws loudly (no legacy fallback)", () => {
+    expect(() =>
+      createMatrixClient({ homeserverUrl: "http://localhost:8008", accessToken: "t" }, undefined as never)
+    ).toThrow(/storage paths are required/i);
+  });
 
   it("native binding load failure (ERR_DLOPEN_FAILED): degrades with an error-level log", () => {
     const err = new Error("Could not locate the bindings file") as NodeJS.ErrnoException;
@@ -117,5 +130,35 @@ describe("createMatrixClient E2EE degradation (audit batch 1 票10)", () => {
 
     expect(() => makeClient()).toThrow("EACCES: crypto store path not writable");
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("sendReaction:发 m.reaction 事件,m.relates_to 为 annotation 三元组,事件 id 穿出(票01 #268)", async () => {
+    // encryption:false 绕开 crypto 构造(SDK 对 mock 的 crypto 类会拒绝实例化;
+    // reaction 原语与 crypto 无关,E2EE 加密由 sendEvent 自身处理)
+    const client = makeClient({ encryption: false });
+    // 端口类型不含 SDK 的 sendEvent 成员名;运行时它是同一个真 SDK 实例,
+    // 经结构化断言取回 sendEvent 引用做 spy(工厂直返 client,同一引用必命中)。
+    const sdk = client as unknown as {
+      sendEvent: (roomId: string, eventType: string, content: unknown) => Promise<string>;
+    };
+    const sendEvent = vi.spyOn(sdk, "sendEvent").mockResolvedValue("$reaction-1");
+
+    await expect(client.sendReaction("!room:server", "$orig-1", "✅")).resolves.toBe("$reaction-1");
+    expect(sendEvent).toHaveBeenCalledTimes(1);
+    expect(sendEvent).toHaveBeenCalledWith("!room:server", "m.reaction", {
+      "m.relates_to": { rel_type: "m.annotation", event_id: "$orig-1", key: "✅" },
+    });
+  });
+
+  it("sendReaction:SDK 错误照常上抛(失败降级由调用方负责)", async () => {
+    const client = makeClient({ encryption: false });
+    const sdk = client as unknown as {
+      sendEvent: (roomId: string, eventType: string, content: unknown) => Promise<string>;
+    };
+    vi.spyOn(sdk, "sendEvent").mockRejectedValue(new Error("M_LIMIT_EXCEEDED"));
+
+    await expect(client.sendReaction("!room:server", "$orig-1", "❌")).rejects.toThrow(
+      "M_LIMIT_EXCEEDED"
+    );
   });
 });

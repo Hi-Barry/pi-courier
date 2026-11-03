@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { resolveLayout } from "../src/paths.js";
 import { ConfigStore } from "../src/config";
 import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { handleAdminCommand } from "../src/auth/admin-commands";
@@ -66,12 +67,14 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     renameProject: vi.fn(),
     stopAll: vi.fn(),
   } as unknown as ProjectManager;
+  // 内存 store(不落盘):夹具的 store.update 绝不写真实用户配置;
+  // 需要断言落盘的用例(票2/票3)各自用 mocked 路径下的 IsoConfigStore。
   const store = new ConfigStore({
     managementRooms: [],
     projects: {},
     ...(opts.multiProject === false ? {} : { multiProject: true }),
     ...(opts.space ? { space: opts.space } : {}),
-  });
+  }, () => {});
   const auth = new ChallengeAuth(
     (code) => {
       codeBox.current = code;
@@ -883,15 +886,12 @@ describe("management room invite on trust transition (issue #43 票2)", () => {
   beforeEach(async () => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-courier-router-mgmt-"));
     vi.resetModules();
-    vi.doMock("os", async () => {
-      const actual = await vi.importActual<typeof import("os")>("os");
-      return { ...actual, homedir: () => tmpDir };
-    });
-    vi.doMock("node:os", async () => {
-      const actual = await vi.importActual<typeof import("node:os")>("node:os");
-      return { ...actual, homedir: () => tmpDir };
-    });
+    // 布局显式注入(测试缝):不依赖 builtin mock(CI 上 doMock 会失效)。
     const config = await import("../src/config");
+    config.setRuntimeLayoutForTests(
+      resolveLayout({ platform: process.platform, homedir: tmpDir, env: {} }),
+      tmpDir
+    );
     IsoConfigStore = config.ConfigStore;
   });
 
@@ -1443,15 +1443,12 @@ describe("power demotion on revoke (issue #44 票3)", () => {
   beforeEach(async () => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-courier-router-demote-"));
     vi.resetModules();
-    vi.doMock("os", async () => {
-      const actual = await vi.importActual<typeof import("os")>("os");
-      return { ...actual, homedir: () => tmpDir };
-    });
-    vi.doMock("node:os", async () => {
-      const actual = await vi.importActual<typeof import("node:os")>("node:os");
-      return { ...actual, homedir: () => tmpDir };
-    });
+    // 布局显式注入(测试缝):不依赖 builtin mock(CI 上 doMock 会失效)。
     const config = await import("../src/config");
+    config.setRuntimeLayoutForTests(
+      resolveLayout({ platform: process.platform, homedir: tmpDir, env: {} }),
+      tmpDir
+    );
     IsoConfigStore = config.ConfigStore;
   });
 
@@ -1571,8 +1568,16 @@ describe("power demotion on revoke (issue #44 票3)", () => {
     // Trust revocation persisted; exactly the revoked user left the books.
     expect(fx.store.get().auth?.trustedUsers).not.toContain("matrix:@eve:server");
     expect(fx.store.get().powerElevatedUsers).toEqual(["matrix:@barry:server"]);
+    // 配置落布局解析的 configDir(spec #258 票03):win32 = ~/.pi,其余 = ~/.config/pi-courier。
     const persisted = JSON.parse(
-      readFileSync(join(tmpDir, ".pi", "pi-courier.json"), "utf-8")
+      readFileSync(
+        join(
+          tmpDir,
+          process.platform === "win32" ? ".pi" : ".config/pi-courier",
+          "pi-courier.json"
+        ),
+        "utf-8"
+      )
     ) as { powerElevatedUsers?: string[] };
     expect(persisted.powerElevatedUsers).toEqual(["matrix:@barry:server"]);
   });

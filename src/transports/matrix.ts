@@ -38,6 +38,7 @@ export class MatrixProvider {
   private _isConnected = false;
   private messageHandler?: (message: ExternalMessage) => void;
   private errorHandler?: (error: Error) => void;
+  private reactionHandler?: (reaction: MatrixReaction) => void;
   private botUserId?: string;
   private joinedRooms = new Set<string>();
   private roomMemberCount = new Map<string, number>();
@@ -168,6 +169,17 @@ export class MatrixProvider {
     // room.event); in plaintext rooms it arrives as-is. The outer encrypted
     // payload (type m.room.encrypted) fails this filter.
     this.client.on("room.event", (roomId: string, event: any) => {
+      // Reactions (票01 #268): m.reaction 也只从 room.event 进(room.message
+      // 不发非消息事件),E2EE 房同样经 SDK 解密后补发。走自己的分发缝,
+      // 与消息管道互不相通。
+      if (event?.type === "m.reaction") {
+        try {
+          this.handleReaction(roomId, event);
+        } catch (err) {
+          this.errorHandler?.(err as Error);
+        }
+        return;
+      }
       if (event?.type !== "m.sticker") return;
       void this.handleMessage(roomId, event).catch((err: Error) => this.errorHandler?.(err));
     });
@@ -307,6 +319,22 @@ export class MatrixProvider {
   }
 
   /**
+   * 在一条已发出的消息上种一个表情 reaction(票01,#268):向端口原语直传
+   * (roomId, 目标 event_id, key),端口生产实现发 m.reaction 事件(E2EE 房由
+   * SDK 自动加密)。返回 reaction 事件自己的 event_id。
+   *
+   * 刻意不走 per-room FIFO:种表情的先后顺序无关紧要,不必排在消息链后;
+   * 未连接时报与 sendMessage 相同的可读错误,SDK 错误照常上抛——逐表情的
+   * try/catch 降级由调用方(种表情的各流)负责。
+   */
+  async sendReaction(chatId: string, targetEventId: string, key: string): Promise<string> {
+    if (!this.client) {
+      throw new Error("Matrix client not connected");
+    }
+    return this.client.sendReaction(chatId, targetEventId, key);
+  }
+
+  /**
    * Per-room FIFO 发送链(issue #195):homeserver 按收到顺序把事件排进
    * 房间事件流(txnId 只做幂等去重不参与排序),并发 PUT 即乱序 —— 分片
    * 回复、终答与紧随的回执都可能颠倒。这里让同房间的消息严格按入队顺序
@@ -348,6 +376,15 @@ export class MatrixProvider {
 
   onMessage(handler: (message: ExternalMessage) => void): void {
     this.messageHandler = handler;
+  }
+
+  /**
+   * reaction 入站订阅缝(票01,#268):m.reaction 事件(用户点击表情)经
+   * room.event 过滤后从这里分发,一房一回调(与 onMessage 同风格,后注册
+   * 覆盖前者)。无订阅者时事件照常被消费丢弃——原语先行,消费方后续票接线。
+   */
+  onReaction(handler: (reaction: MatrixReaction) => void): void {
+    this.reactionHandler = handler;
   }
 
   onError(handler: (error: Error) => void): void {
@@ -393,6 +430,44 @@ export class MatrixProvider {
     if (outcome.info) logger.info(outcome.info);
     if (outcome.warn) logger.warn(outcome.warn);
     if (outcome.message) this.messageHandler?.(outcome.message);
+  }
+
+  /**
+   * m.reaction 入站分发(票01,#268):room.event 放行后走到这里。次序与
+   * shouldSkipEvent 的语义对齐——先过滤(bot 自己种的、结构畸形的),再新鲜度
+   * (早于 connectedAt 的重启回放直接丢),过了全部过滤器才算受理,受理才记
+   * 台账(幂等;与实时消息「受理即记账」同一原则),最后触发 onReaction。
+   * 静默忽略是有意的噪音策略:不认识的 reaction 不回任何帖子。
+   */
+  private handleReaction(roomId: string, event: any): void {
+    if (!this.client || !this.botUserId) return;
+    // bot 自己种的表情不当用户应答(防「自己确认自己」循环)
+    if (event?.sender === this.botUserId) return;
+    const sender = event?.sender;
+    const relates = event?.content?.["m.relates_to"] as
+      | { rel_type?: unknown; event_id?: unknown; key?: unknown }
+      | undefined;
+    // 只认 annotation 关系,且四元组字段齐全,残缺事件静默丢弃
+    if (relates?.rel_type !== "m.annotation") return;
+    const { event_id: targetEventId, key } = relates;
+    if (
+      typeof sender !== "string" ||
+      typeof targetEventId !== "string" ||
+      !targetEventId ||
+      typeof key !== "string" ||
+      !key
+    ) {
+      logger.debug(`[Matrix] ignoring malformed reaction event ${event?.event_id ?? "(no id)"}`);
+      return;
+    }
+    // 重启回放的迟到 reaction:早于本连接的建立点,直接丢(不发回调、不记账)
+    const eventTs = event.origin_server_ts || 0;
+    if (eventTs < this.connectedAt) return;
+    // 受理即记账(幂等):与实时消息同一原则——过了过滤器就算受理
+    if (this.eventLedger && typeof event.event_id === "string" && event.event_id) {
+      this.eventLedger.record(event.event_id);
+    }
+    this.reactionHandler?.({ chatId: roomId, targetEventId, key, sender });
   }
 
   /**
@@ -482,6 +557,22 @@ export class MatrixProvider {
     };
   }
 
+}
+
+/**
+ * reaction 入站信封(票01,#268):m.reaction 不进消息管道,经 onReaction
+ * 自带四元组分发——router 侧(后续票)凭 targetEventId 认领悬置的征询/提问,
+ * key 原样上抛(emoji 语义映射不在 transport 层)。
+ */
+export interface MatrixReaction {
+  /** 房间 id(= chatId,与 ExternalMessage.chatId 同一口径)。 */
+  chatId: string;
+  /** 被标注的目标事件 id(m.relates_to.event_id)。 */
+  targetEventId: string;
+  /** 原始 reaction key(✅/❌/键帽数字等),未做任何归一化。 */
+  key: string;
+  /** 点击者(mxid;bot 自己种的已在分发前过滤)。 */
+  sender: string;
 }
 
 // ─── 纯函数区(spec #99/#101:自 matrix-utils.ts 归位到唯一属主 transport)───

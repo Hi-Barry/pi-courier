@@ -21,7 +21,7 @@ import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import { AUDIT_EVENTS } from "../audit/audit-log.js";
 import { adminCommandHelpText } from "../auth/admin-commands.js";
 import { BANG_COMMAND } from "../command-registry.js";
-import { BASH_OUTPUT_LIMIT_DEFAULT, CONFIG_DIR, parseModelRef } from "../config.js";
+import { BASH_OUTPUT_LIMIT_DEFAULT, parseModelRef, runtimeLayout } from "../config.js";
 import { errorMessage } from "../errors.js";
 import { truncateLine } from "../formatting.js";
 import { type MessageKey, t } from "../i18n/index.js";
@@ -619,9 +619,12 @@ export function listSessions(dir: string): SessionSummary[] {
   return sessions.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
-/** The session dir a process scans: its own --session-dir, else pi's default. */
+/** The session dir a process scans: its own --session-dir, else pi's default.
+ *  pi 默认目录恒在 piHome(pi CLI 的家 ~/.pi/agent/sessions,布局解析的
+ *  agentSessionsDir)—— 刻意不随桥的 configDir 迁移,否则 Linux 升级会把
+ *  pi 的会话目录带跑(spec #258 票03 修正)。 */
 export function resolveSessionDir(rpc: PiRpc): string {
-  return rpc.sessionDir ?? path.join(CONFIG_DIR, "agent", "sessions");
+  return rpc.sessionDir ?? runtimeLayout().agentSessionsDir;
 }
 
 /**

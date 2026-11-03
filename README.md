@@ -91,7 +91,7 @@ Skip this section if the machine has direct internet access. Since 1.1.0 the bri
 
 ### Two ways to configure: the config file wins
 
-**Way 1 — the config file** (recommended, one global copy): add `proxy` (a single URL) and optionally `noProxy` (exemption list) to `~/.pi/pi-courier.json`:
+**Way 1 — the config file** (recommended, one global copy): add `proxy` (a single URL) and optionally `noProxy` (exemption list) to the config file — `~/.config/pi-courier/pi-courier.json` on Linux, `%USERPROFILE%\.pi\pi-courier.json` on Windows:
 
 ```json
 {
@@ -109,7 +109,7 @@ When both are present **the config file wins** — a leftover shell variable can
 Since 1.1.0 `pi-courier setup` has an optional outbound-proxy step (asked near the end, after the multi-project question — and the space question in multi-project mode — and just before the config is written; leave blank to skip). When a proxy is already in effect (config or env), setup announces it before the first question and offers it as the default — press Enter to keep it. This announce line always prints in English, because it appears before the wizard's first question — the language choice:
 
 ```
-🌐 outbound proxy: http://192.0.2.10:10809 (source: config; edit ~/.pi/pi-courier.json and restart to change)
+🌐 outbound proxy: http://192.0.2.10:10809 (source: config; edit /home/you/.config/pi-courier/pi-courier.json and restart to change)
 ```
 
 With nothing in effect the prompts are (real wizard output):
@@ -161,7 +161,7 @@ It walks you through, prompting for each value (defaults in brackets; press Ente
 ```
 === pi-courier setup wizard ===
 Language? [en] (en/zh):                                          ← bot message language; Enter keeps the locale-detected default (persisted to the config)
-Writes ~/.pi/pi-courier.json (mode 600; an existing config prefills the defaults — press Enter to keep them)
+Writes /home/you/.config/pi-courier/pi-courier.json (mode 600; an existing config prefills the defaults — press Enter to keep them)
 
 Matrix homeserver URL (e.g. https://matrix.example.com):                        ← your homeserver URL
 How to get the token [1=password login, 2=paste an existing token] (1):        ← Enter = password login
@@ -172,17 +172,17 @@ Trusted user (admin) MXID [default @***:***]:                                  �
 Trusted room IDs (optional, Enter to skip; comma-separated, e.g. !abc:server or !abc:server:trusted-only):   ← for group chats; skip for DM-only
 Enable E2EE encryption? [y/N]:                                                 ← y/n (y is fine even on unencrypted rooms)
 pi workdir [default /home/you/Projects]:                                       ← Enter keeps the default
-Attachment save directory [default /home/you/.pi/pi-courier-attachments]:      ← where chat images/files land
+Attachment save directory [default /home/you/.local/share/pi-courier/attachments]:      ← where chat images/files land
 Per-attachment size limit in MB [default 10]:                                  ← oversize attachments are rejected with a notice
 Instance/machine name (default debian; tells multi-machine deployments apart, shown in the management room name):   ← Enter keeps the hostname
 Enable multi-project mode? [y/N] (multi-project = management room + isolated project rooms with /pmctl; default N = single-project, one bot to one pi):   ← Enter for single-project (Spaces are only asked in multi-project mode)
 
-✅ Config written to ~/.pi/pi-courier.json
+✅ Config written to /home/you/.config/pi-courier/pi-courier.json
    account: @***:***
    trusted user: @***:***
    E2EE: enabled
    workdir: /home/you/Projects
-   attachment dir: /home/you/.pi/pi-courier-attachments (limit 10 MB)
+   attachment dir: /home/you/.local/share/pi-courier/attachments (limit 10 MB)
    instance name: debian (differentiates multi-machine deployments; shown in the management room name)
    multi-project: off (single-project)
    device ID: PICOURIERZNLMIKUW (fixed; reused when you re-run setup — delete this field to get a new device)
@@ -191,7 +191,7 @@ Enable multi-project mode? [y/N] (multi-project = management room + isolated pro
 Next: pi-courier enable (auto-start on boot) or pi-courier run (foreground)
 ```
 
-The wizard verifies the token and writes `~/.pi/pi-courier.json`. Since 1.1.0 it also asks one optional extra question — the outbound proxy (the transcript above predates that step; press Enter to skip) — see [Outbound proxy](#outbound-proxy-runtime). To skip the wizard, create that file manually — the format is in the [FAQ](#4-faq).
+The wizard verifies the token and writes the config file (`~/.config/pi-courier/pi-courier.json` on Linux, `%USERPROFILE%\.pi\pi-courier.json` on Windows; a 0.2.x `~/.pi/pi-courier.json` is migrated automatically on the first start). Since 1.1.0 it also asks one optional extra question — the outbound proxy (the transcript above predates that step; press Enter to skip) — see [Outbound proxy](#outbound-proxy-runtime). To skip the wizard, create that file manually — the format is in the [FAQ](#4-faq).
 
 ### Step 2 — Start it
 
@@ -276,7 +276,7 @@ Since 0.1.39 sending mirrors pi's TUI. A plain text message is always sent with 
 - `/interrupt <text>` — idle: runs directly; mid-task: stops the current task and sends the new instruction
 - `/stop` — stop everything now, the TUI's Esc: queued messages are cleared too
 
-**What happens to the queue, stated up front**: since 0.3.8 `/stop` and `/interrupt` mirror the TUI's Esc — the queue is cleared **before** the abort, and the reply lists exactly which queued messages were dropped, so nothing disappears unseen. On a pi older than 0.84.4 (no `clear_queue` RPC) the old behaviour applies: the queue survives and fires on the **next** turn; the reply says so explicitly (`⚠️ N queued message(s) will take effect on the next turn:`). Since 0.5.0 even **involuntary** loss is visible: if the queue is non-empty when the subprocess restarts (/reload or a crash respawn), the bot proactively posts `⚠️ Subprocess restarted — N queued message(s) never ran` with the full list — a queue you cleared yourself via `/stop` never triggers the warning. Service-level restarts (systemd/machine) are covered too, for **project rooms in multi-project mode**: the snapshot lives in `~/.pi/pi-courier-state/queue-snapshots.json`, and the next start posts `⚠️ Service restarted — N queued message(s) never ran` per project room before wiping it (a queue already reported by `/reload` is never reported twice; the single-project default process is out of scope — its room binding is a runtime DM).
+**What happens to the queue, stated up front**: since 0.3.8 `/stop` and `/interrupt` mirror the TUI's Esc — the queue is cleared **before** the abort, and the reply lists exactly which queued messages were dropped, so nothing disappears unseen. On a pi older than 0.84.4 (no `clear_queue` RPC) the old behaviour applies: the queue survives and fires on the **next** turn; the reply says so explicitly (`⚠️ N queued message(s) will take effect on the next turn:`). Since 0.5.0 even **involuntary** loss is visible: if the queue is non-empty when the subprocess restarts (/reload or a crash respawn), the bot proactively posts `⚠️ Subprocess restarted — N queued message(s) never ran` with the full list — a queue you cleared yourself via `/stop` never triggers the warning. Service-level restarts (systemd/machine) are covered too, for **project rooms in multi-project mode**: the snapshot lives in the state dir (`~/.local/state/pi-courier/queue-snapshots.json` on Linux, `%APPDATA%\pi-courier\state\queue-snapshots.json` on Windows), and the next start posts `⚠️ Service restarted — N queued message(s) never ran` per project room before wiping it (a queue already reported by `/reload` is never reported twice; the single-project default process is out of scope — its room binding is a runtime DM).
 
 ### Tool-loop aggregation: one "working" card, continuously refreshed
 
@@ -338,7 +338,9 @@ When an extension asks you something (confirm / select / input / editor dialogs 
 - several questions pending: the oldest is answered first; messages starting with `/` still go through the command channel
 - extension notifications are filtered by level: warning / error reach the room, info stays in the log
 
-Pending questions auto-cancel after `extensionUiTimeoutMinutes` (default 10) — the room gets a notice and the extension receives a cancel. This field is **not** part of the setup wizard: add it to `~/.pi/pi-courier.json` by hand, then `pi-courier restart`:
+confirm and select questions can also be answered by **tapping a reaction**: once the question is posted, a row of reactions grows underneath automatically — confirm gets ✅ (= `y`) / ❌ (= `n`); select gets a digit keycap per option (1️⃣…🔟) when there are 10 options or fewer — tap the digit to pick that option — and no reactions at all beyond 10 options (keep replying with a number). Reactions ride the same state machine as typed replies: they share the same timeout (the `extensionUiTimeoutMinutes` below covers taps too) and the same trust boundary — only trusted users' taps count; taps from anyone else are silently ignored and never produce a reply. The text channel stays exactly as it was for those who prefer typing; on transports without reaction support the flow degrades to plain-text interaction automatically — no config switch needed.
+
+Pending questions auto-cancel after `extensionUiTimeoutMinutes` (default 10) — the room gets a notice and the extension receives a cancel. This field is **not** part of the setup wizard: add it to the config file by hand (`~/.config/pi-courier/pi-courier.json` on Linux, `~/.pi/pi-courier.json` on Windows), then `pi-courier restart`:
 
 ```json
 { "extensionUiTimeoutMinutes": 10 }
@@ -370,7 +372,7 @@ Not happy with the bundled pick? Point any target at your own image and restart 
 }
 ```
 
-- Paths support `~` expansion; relative paths resolve against `~/.pi/`; the format is picked by extension (png / jpg / jpeg / webp / gif).
+- Paths support `~` expansion; relative paths resolve against the config dir (`~/.config/pi-courier/` on Linux, `~/.pi/` on Windows); the format is picked by extension (png / jpg / jpeg / webp / gif).
 - **Config is desired state**: while configured, every start verifies the target — when the file content or the current avatar no longer matches the last upload, the custom image is re-uploaded automatically (edit the file, restart, done). Targets without an override keep the "fill missing only, never overwrite" rule.
 - Missing file, unsupported extension or failed upload: one startup warning, then the run falls back to the bundled pool logic — a room never ends up without a face.
 - A project room with `projects[].avatar` (keyed by room ID) keeps your custom image across `/pmctl rename`; rooms without one re-pick from the bundled pool by the new name (first free slot in the space, so siblings never share an image).
@@ -386,7 +388,7 @@ All bot messages — command replies, pairing prompts, extension questions, mana
 How the language is picked (first match wins):
 
 1. `PI_LANGUAGE=en|zh` environment variable — the most reliable option in containers/minimal deployments
-2. `"language": "zh" | "en"` in `~/.pi/pi-courier.json` (the setup wizard asks and writes it)
+2. `"language": "zh" | "en"` in the config file `pi-courier.json` (`~/.config/pi-courier/` on Linux, `~/.pi/` on Windows; the setup wizard asks and writes it)
 3. The system locale of the service: on Linux/macOS `LC_ALL` > `LC_MESSAGES` > `LANG` (`zh*` → Chinese); on Windows (which sets none of those variables) the system regional setting is read instead — a Chinese Windows yields Chinese. At startup the log prints one line explaining where the language came from
 4. English as the final fallback
 
@@ -480,7 +482,7 @@ Just **paste or send files** in Element — the bot saves them first, the agent 
 Supported: `m.image` / `m.file` / `m.audio` / `m.video` / stickers. Images are handed to the vision model by pi (its `read` pipeline downscales large images before the model call, per pi's own source); audio/video can't be ingested by models directly, but the agent can process them with bash/ffmpeg. Limits and details:
 
 - **10 MB per attachment** (configurable via `attachments.maxMb`, also in the setup wizard); oversize/download failures answer with the reason — never silence
-- Attachments land in `~/.pi/pi-courier-attachments/<room>/` (configurable via `attachments.directory`) — **outside your project workdirs**, so `git status` stays clean
+- Attachments land in the data dir — `~/.local/share/pi-courier/attachments/<room>/` on Linux, `%APPDATA%\pi-courier\attachments` on Windows (configurable via `attachments.directory`) — **outside your project workdirs**, so `git status` stays clean
 - Pending attachments are tracked per room+sender: `/pmctl`, `/login` and other commands don't consume the queue; a **restart clears it** (the receipt shows the path — reference it manually if needed)
 - Encrypted rooms (E2EE) are supported — attachments are decrypted automatically
 - Unsupported types (e.g. location) get a polite notice; if the model itself lacks vision, pi will say so — that's the model, not the bridge
@@ -498,7 +500,7 @@ Sharing the bot with teammates doesn't have to mean sharing admin power. List gu
 
 ### Audit trail: sensitive actions leave a trace
 
-Every sensitive action appends one JSONL line to `~/.pi/pi-courier-state/audit.jsonl` (0600, append-only): who, when, what, in which room — pairing successes and failures, `/trusted` //revoke`, bash execution (`!`, `!!`, `/bash`), `/pmctl rm`, `/login` family, `/reload`, queue clears and offline-backlog batch executions, plus every guest denial. The file rotates at 10 MB (two rotated siblings kept); if the file becomes unwritable the service keeps running but warns the management room — an audit outage is visible, never fatal. As a second hardening layer, attachments and reply-quotes enter the prompt with their source labeled (see the sections above), so third-party content arrives as data, not as instructions.
+Every sensitive action appends one JSONL line to the audit log in the state dir (`~/.local/state/pi-courier/audit.jsonl` on Linux, `%APPDATA%\pi-courier\state\audit.jsonl` on Windows; 0600, append-only): who, when, what, in which room — pairing successes and failures, `/trusted` //revoke`, bash execution (`!`, `!!`, `/bash`), `/pmctl rm`, `/login` family, `/reload`, queue clears and offline-backlog batch executions, plus every guest denial. The file rotates at 10 MB (two rotated siblings kept); if the file becomes unwritable the service keeps running but warns the management room — an audit outage is visible, never fatal. As a second hardening layer, attachments and reply-quotes enter the prompt with their source labeled (see the sections above), so third-party content arrives as data, not as instructions.
 
 ### Single-project vs multi-project mode
 
@@ -509,7 +511,7 @@ Every sensitive action appends one JSONL line to `~/.pi/pi-courier-state/audit.j
 - answer `y` to "Enable multi-project mode?" during setup
 - or later send `/multiproject on` and restart with `pi-courier restart`
 
-> **Offline inbox** (since 0.5.0): messages sent while the bot was down are **no longer lost** — after a restart the bot settles them per room ("N message(s) arrived while offline" + the full list); reply **"execute"** to run them in order or **"ignore"** to discard (valid 10 minutes; silence counts as ignore). This is the default; set `inbox.mode: "auto"` to run them after a notice, or `"off"` to restore the old drop-quietly behaviour. Backlog from untrusted senders still goes through the normal gate — it never becomes a privilege bypass.
+> **Offline inbox** (since 0.5.0): messages sent while the bot was down are **no longer lost** — after a restart the bot settles them per room ("N message(s) arrived while offline" + the full list); reply **"execute"** to run them in order or **"ignore"** to discard (valid 10 minutes; silence counts as ignore). This is the default; set `inbox.mode: "auto"` to run them after a notice, or `"off"` to restore the old drop-quietly behaviour. Backlog from untrusted senders still goes through the normal gate — it never becomes a privilege bypass. The prompt message also grows ✅ / ❌ reactions underneath — one tap counts as replying **"execute"** / "ignore"; reactions share the same timer as typing (silence still counts as ignore), only trusted users' taps count, unauthorized taps are silently ignored, the text channel stays as-is, and when reactions cannot be planted (or the transport does not support them) the prompt goes out as plain text as before.
 
 `/multiproject` (trusted users): `on` / `off` (both take effect on restart); no args shows the current mode. The management-room / project-room mechanisms below only exist in multi-project mode.
 
@@ -610,18 +612,18 @@ The systemd unit ships with `Restart=on-failure` + `RestartSec=5`: a **crash** (
 
 systemd cannot see a **hang**: the process and its PID are still there, but the event loop is stuck. The unit still shows active, journal gets no new lines, and the bridge stops answering. The independent watchdog `deploy/watchdog/watchdog-posix.sh` fills that gap:
 
-- runs every minute from cron / a systemd timer; reads `~/.pi/pi-courier-state/heartbeat.json` (written atomically every 30 seconds, along with disk and heap levels);
+- runs every minute from cron / a systemd timer; reads `~/.local/state/pi-courier/heartbeat.json` (`$XDG_STATE_HOME/pi-courier` when set; written atomically every 30 seconds, along with disk and heap levels);
 - heartbeat older than **180 seconds** (= 6 × 30; the stale threshold lives as a script constant and can be overridden with `--stale-seconds`) or the PID in it no longer exists → `systemctl --user restart`. A missing PID waits **2 × the heartbeat interval** (60 seconds by default, overridable with `--heartbeat-interval-seconds`) before declaring death, covering RestartSec and the first-beat delay so a stale beat from the previous instance cannot kick a starting instance again;
-- after the restart, the sibling `matrix-alert.mjs` reads the Matrix credentials and management room from `~/.pi/pi-courier.json` (`managementRooms[0]`, falling back to `space.roomId`) and calls the homeserver room-send API directly. The cooldown is 30 minutes by default (stamp file `~/.pi/pi-courier-state/watchdog-alert-stamp`); a failed send does not write the stamp, so the next minute retries. Alerts do not depend on the bridge — when the bot is dead, they still get out;
+- after the restart, the sibling `matrix-alert.mjs` reads the Matrix credentials and management room from the bridge config file (`~/.config/pi-courier/pi-courier.json` on Linux; `managementRooms[0]`, falling back to `space.roomId`) and calls the homeserver room-send API directly. The cooldown is 30 minutes by default (stamp file `~/.local/state/pi-courier/watchdog-alert-stamp`); a failed send does not write the stamp, so the next minute retries. Alerts do not depend on the bridge — when the bot is dead, they still get out;
 - a missing heartbeat file (the bridge has never had its first run) is treated as an installation error: no alert, no action;
-- **a deliberate stop is never undone**: `pi-courier stop` writes `~/.pi/pi-courier-state/watchdog-paused` *before* calling systemctl (so the marker lands even when the process is hung and its signal handlers never run); the watchdog skips its check while the marker exists, and the next bridge start removes it. `pi-courier restart` has the process write the marker on SIGTERM, and the new instance clears it on startup. A raw `systemctl stop` or `kill -9` does not write the marker and will still be treated as a failure — use `pi-courier stop` for maintenance, or stop the watchdog first. `pi-courier update` also writes the marker before stopping; if the upgrade fails midway the service stays stopped, and `pi-courier start` clears the marker once it is fixed.
+- **a deliberate stop is never undone**: `pi-courier stop` writes `~/.local/state/pi-courier/watchdog-paused` *before* calling systemctl (so the marker lands even when the process is hung and its signal handlers never run); the watchdog skips its check while the marker exists, and the next bridge start removes it. `pi-courier restart` has the process write the marker on SIGTERM, and the new instance clears it on startup. A raw `systemctl stop` or `kill -9` does not write the marker and will still be treated as a failure — use `pi-courier stop` for maintenance, or stop the watchdog first. `pi-courier update` also writes the marker before stopping; if the upgrade fails midway the service stays stopped, and `pi-courier start` clears the marker once it is fixed.
 
 Install (either one; full comments in the script header):
 
 ```bash
 # Option 1: cron (cron usually has no XDG_RUNTIME_DIR, which makes systemctl --user fail;
 # replace 1000 with your uid, or use option 2, which is recommended)
-* * * * * XDG_RUNTIME_DIR=/run/user/1000 /opt/pi-courier/deploy/watchdog/watchdog-posix.sh >> ~/.pi/pi-courier-state/watchdog.log 2>&1
+* * * * * XDG_RUNTIME_DIR=/run/user/1000 /opt/pi-courier/deploy/watchdog/watchdog-posix.sh >> ~/.local/state/pi-courier/watchdog.log 2>&1
 ```
 
 Option 2: a systemd timer (two unit files, `systemctl --user enable --now pi-courier-watchdog.timer`). The service name defaults to `pi-pi-courier` (the name `deploy/pi-courier.user.service` installs as); override it with `PI_COURIER_SERVICE`; `PI_COURIER_ALERT=off` disables alerts (it can also hold a custom command template with a `{message}` placeholder, which the watchdog shell-quotes), and `PI_COURIER_HEARTBEAT` overrides the heartbeat path. The script hard-codes `systemctl --user` for **user units**; for a system-level unit remove `--user` and set `PI_COURIER_SERVICE`. Uninstall: stop the watchdog first (`systemctl --user disable --now pi-courier-watchdog.timer` and remove the two unit files, or delete the crontab line), then `pi-courier disable`; otherwise the watchdog will bring the service back once the stop window passes.
@@ -672,29 +674,35 @@ Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDA
 - **Autostart via Task Scheduler** (no admin needed, fires at every logon) — verified recipe:
 
   ```powershell
-  $action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c pi-courier run >> %USERPROFILE%\pi-courier-run.log 2>&1'
+  $action  = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "//nologo `"$env:APPDATA\npm\node_modules\pi-courier\deploy\windows\run-hidden.vbs`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn
   Register-ScheduledTask -TaskName 'pi-courier' -Action $action -Trigger $trigger
   Start-ScheduledTask -TaskName 'pi-courier'   # start right now; it refires on every logon
   ```
 
+  The launcher (`run-hidden.vbs`, ships in the package) starts the bridge with a **hidden console** (window style 0) and creates the log dir itself — no permanent black window on your desktop. It deliberately keeps the **interactive session**: agent-spawned GUI processes (browsers, UAC prompts, desktop automation) still appear on your desktop, which is why the bridge task itself must NOT use S4U/session 0.
+
   This is a **logon-triggered** task: it starts at every logon only. It does not restart a process that crashes, is killed or hangs mid-session; after the process dies the task may still show Running. There are two ways to add self-healing:
 
   - **Auto-logon (automatic desktop login)**: lets the machine log in after a reboot so the logon task fires. The cost is credentials and a desktop session left on an unattended machine (a security risk), and it only covers "nobody logged in after a reboot" — it still cannot detect a hang.
-  - **Watchdog (recommended)**: an independent scheduled task runs `deploy/watchdog/watchdog-windows.ps1` every minute and reads `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`. If the heartbeat is older than **180 seconds** (= 6 × 30, overridable with `-StaleSeconds`) or its PID no longer exists (a missing PID also waits 2 × the heartbeat interval, 60s by default) → ① if the PID is still alive (hang), `taskkill /F /PID` kills the old instance first (the single-instance lock is not preempted from a live process; without the kill the new instance exits immediately); ② `schtasks /end` terminates the stuck task instance (an end failure does not block the next step); ③ `schtasks /run` starts it. The sibling `matrix-alert.mjs` then reads the credentials and management room from `%USERPROFILE%\.pi\pi-courier.json` and posts a Matrix alert (30-minute cooldown by default). A missing heartbeat file is treated as an installation error: no alert, no action. The watchdog itself needs `node` on PATH.
+  - **Watchdog (recommended)**: an independent scheduled task runs `deploy/watchdog/watchdog-windows.ps1` every minute and reads `%APPDATA%\pi-courier\state\heartbeat.json`. If the heartbeat is older than **180 seconds** (= 6 × 30, overridable with `-StaleSeconds`) or its PID no longer exists (a missing PID also waits 2 × the heartbeat interval, 60s by default) → ① if the PID is still alive (hang), `taskkill /F /PID` kills the old instance first (the single-instance lock is not preempted from a live process; without the kill the new instance exits immediately); ② `schtasks /end` terminates the stuck task instance (an end failure does not block the next step); ③ `schtasks /run` starts it. The sibling `matrix-alert.mjs` then reads the credentials and management room from `%USERPROFILE%\.pi\pi-courier.json` and posts a Matrix alert (30-minute cooldown by default). A missing heartbeat file is treated as an installation error: no alert, no action. The watchdog itself needs `node` on PATH.
 
-    Install (the bridge task name defaults to `pi-courier`, matching the recipe above; replace the script path with your install directory — for an npm global install it is usually under `%APPDATA%\npm\node_modules\pi-courier\deploy\watchdog\`):
+    Install (the bridge task name defaults to `pi-courier`, matching the recipe above; replace the script path with your install directory — for an npm global install it is usually under `%APPDATA%\npm\node_modules\pi-courier\deploy\watchdog\`). Register once from PowerShell, same user context as the bridge task (no admin needed); `Register-ScheduledTask` passes the script path as a native argument with embedded double quotes inside `-Argument`, so install paths with spaces are safe. The old `schtasks /create ... /tr` quote-escaping recipe is deprecated — drop it:
 
     ```powershell
-    schtasks /create /tn "pi-courier-watchdog" `
-      /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\pi-courier\deploy\watchdog\watchdog-windows.ps1 -TaskName pi-courier" `
-      /sc minute /mo 1 /f
+    $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "//nologo `"$env:APPDATA\npm\node_modules\pi-courier\deploy\windows\watchdog-run-hidden.vbs`""
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
+    Register-ScheduledTask -TaskName "pi-courier-watchdog" -Action $action -Trigger $trigger -Force
     ```
 
-    Parameters: `-TaskName` the bridge task name; `-HeartbeatPath` heartbeat file (default `%USERPROFILE%\.pi\pi-courier-state\heartbeat.json`); `-StaleSeconds` stale threshold (default 180 = 6 × 30, see the script header for the conversion); `-HeartbeatIntervalSeconds` heartbeat interval (default 30; the missing-PID grace is 2 × this value); `-NoAlert` disables the Matrix alert. Ctrl+C / Ctrl+Break writes the manual-stop marker so the watchdog will not bring the service back (`pi-courier stop` is Linux-only); `schtasks /end` is a hard kill and does not write it — stop the watchdog task before maintenance or uninstall. Uninstall:
+    The wrapper (`watchdog-run-hidden.vbs`, ships in the package) hides the per-minute console flash while staying in the interactive session. If you can elevate, `LogonType S4U` is the alternative (headless even without logon) — plain S4U registration is access-denied from non-elevated PowerShell (real machine, 2026-11-03).
+
+    (`-RepetitionInterval` + `-RepetitionDuration ([TimeSpan]::MaxValue)` is the equivalent of the old `schtasks /sc minute /mo 1`: every minute, indefinitely. Keep the task names space-free — the watchdog's restart sequence calls `schtasks /end` / `/run` with them unquoted.)
+
+    Parameters: `-TaskName` the bridge task name; `-HeartbeatPath` heartbeat file (default `%APPDATA%\pi-courier\state\heartbeat.json`); `-StaleSeconds` stale threshold (default 180 = 6 × 30, see the script header for the conversion); `-HeartbeatIntervalSeconds` heartbeat interval (default 30; the missing-PID grace is 2 × this value); `-NoAlert` disables the Matrix alert. Ctrl+C / Ctrl+Break writes the manual-stop marker so the watchdog will not bring the service back (`pi-courier stop` is Linux-only); `schtasks /end` is a hard kill and does not write it — stop the watchdog task before maintenance or uninstall. Uninstall:
 
     ```powershell
-    schtasks /delete /tn "pi-courier-watchdog" /f
+    Unregister-ScheduledTask -TaskName "pi-courier-watchdog" -Confirm:$false
     ```
 
     Delete the watchdog task before stopping the bridge / deleting the bridge task — otherwise the watchdog will bring the bridge back once the stop window passes.
@@ -704,7 +712,7 @@ Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDA
 - **Single-instance lock** works the same: a stale lock left by a crashed process is taken over by the next start, whether launched from a console or the Task Scheduler.
 - The config-file permission check (0600) is skipped on Windows: the OS cannot express POSIX modes there, so checking would warn on every start.
 
-**Known limitations**: the service-management subcommands (`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`) are Linux-only (systemd) and exit with an explanation; `pi-courier logs` filtering relies on journald (Linux). Config, sessions, attachments and state live under `%USERPROFILE%\.pi\` exactly as on Linux.
+**Known limitations**: the service-management subcommands (`enable` / `start` / `stop` / `restart` / `status` / `logs` / `disable`) are Linux-only (systemd) and exit with an explanation; `pi-courier logs` filtering relies on journald (Linux). Config (`pi-courier.json`) and pi's own sessions (`agent/sessions`) stay under `%USERPROFILE%\.pi\`; attachments, data and runtime state live under `%APPDATA%\pi-courier\` (runtime state in its `state\` subdirectory).
 
 ## 4. FAQ
 
@@ -733,7 +741,7 @@ A: Historical events that can't be decrypted (new device without old keys). Norm
 A: The bot's new device never received the room keys. The bot account has no cross-signing, so the most reliable fix is to **use a non-encrypted room** (create a room without encryption and invite the bot) — the bridge handles plain rooms fine even with `encryption: true`.
 
 **Q: `M_BAD_JSON: Provided device_id in device_keys does not match...`?**
-A: The crypto store's device identity doesn't match the token's device (re-logged, or a pasted token from another device). **Since 0.1.20 password login uses a fixed device ID, so re-running setup no longer triggers this.** If it still happens: delete the crypto store and restart — `rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart` (do this whenever you re-run setup / change the token).
+A: The crypto store's device identity doesn't match the token's device (re-logged, or a pasted token from another device). **Since 0.1.20 password login uses a fixed device ID, so re-running setup no longer triggers this.** If it still happens: delete the crypto store and restart — `rm -rf ~/.local/share/pi-courier/matrix-crypto && pi-courier restart` (`%APPDATA%\pi-courier\matrix-crypto` on Windows; do this whenever you re-run setup / change the token).
 
 **Q: `One time key signed_curve25519:... already exists` (M_UNKNOWN)?**
 A: The token is bound to an old device on the server and the local OTK bookkeeping is out of sync — **deleting the local crypto store does NOT help** (the server assigns the device ID from the token, so a rebuilt store uses the same device). **You must get a new token**: re-run `pi-courier setup` and answer `n` to "keep the existing token?" (or log in with the password); a new token = a new device = clean server state. Pair with a crypto-store delete if device residue persists.
@@ -753,7 +761,7 @@ A: Since v0.1.1 the bridge passes `--continue` to pi, resuming the most recent s
 **Q: Element (web client) intercepts `/`-prefixed messages?**
 A: Prefix with `//` to send a literal slash (`//compact` sends `/compact`).
 
-**Q: What exactly is in `~/.pi/pi-courier.json`?**
+**Q: What exactly is in the config file?** (`~/.config/pi-courier/pi-courier.json` on Linux, `%USERPROFILE%\.pi\pi-courier.json` on Windows)
 A: The wizard-generated config. Example:
 
 ```json

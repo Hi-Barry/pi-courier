@@ -4,7 +4,8 @@
  * 桥进程内每 tick(默认 30 秒,config.resilience.heartbeatIntervalSeconds)
  * 做两件事,共用一个定时器是 spec 刻意决策(定时器数量不翻倍):
  *  1. 附加周期检查(onTick 注入缝,票04 的资源水位守卫挂这里,决策优先);
- *  2. 原子写一个心跳 JSON 到派生状态目录(~/.pi/pi-courier-state/):
+ *  2. 原子写一个心跳 JSON 到状态根 stateDir(spec #258 三根分离布局,路径
+ *     解析见 paths.ts;旧 ~/.pi/pi-courier-state/ 由启动期迁移搬入):
  *     { ts, pid, version, diskFreeBytes, heapUsed, heapLimit }。
  *
  * 心跳是外部看门狗(票06/07)判定进程死活与僵死的唯一依据。写失败

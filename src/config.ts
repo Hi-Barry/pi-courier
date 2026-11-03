@@ -4,11 +4,63 @@ import * as path from "node:path";
 import { defaultWindowsLocale, detectSystemLanguage } from "./i18n/detect.js";
 import type { Locale } from "./i18n/index.js";
 import { nextManagementRooms } from "./management-room.js";
+import type { Layout } from "./paths.js";
+import { resolveLayout } from "./paths.js";
 import type { MsgBridgeConfig, ProjectConfig, SpaceConfig } from "./types.js";
 
-/** 桥的配置目录 ~/.pi(单一持有:Matrix 客户端存储路径等从这里取 —— 审计工程批 票19)。 */
-export const CONFIG_DIR = path.join(os.homedir(), ".pi");
-const CONFIG_PATH = path.join(CONFIG_DIR, "pi-courier.json");
+// ── 布局注入缝(spec #258 票03)────────────────────────────────────
+// 配置读写、附件默认目录、头像相对路径基准不再各自拼 ~/.pi,全部从票01 的
+// 布局解析(configDir/dataDir/stateDir 三根分离)取。注入缝与 resilience 系
+// 同款:运行时零参走这里的默认实现(platform/homedir/env 取自进程),进程内
+// 只解析一次并缓存;组合根(standalone.ts/cli.ts)与测试经 `runtimeLayout()`
+// 拿同一实例做其余接线,配置侧不另立路径来源。测试隔离沿用既有做法
+// (vi.resetModules + doMock('os') → 缓存随模块重置,重解析用注入的 homedir;
+// win32 布局的 configDir 仍是 ~/.pi,Linux 迁到 ~/.config/pi-courier)。
+let cachedLayout: Layout | undefined;
+
+/** 测试缝的家目录覆盖(见 setRuntimeLayoutForTests);生产恒为 undefined。 */
+let homedirOverride: string | undefined;
+
+/** 进程内唯一的布局实例(组合根与其余消费模块共用;模块加载后首次调用解析)。 */
+export function runtimeLayout(): Layout {
+  cachedLayout ??= resolveLayout({
+    platform: process.platform,
+    homedir: runtimeHomedir(),
+    env: process.env,
+  });
+  return cachedLayout;
+}
+
+/** 家目录的唯一读取口:懒求值 + 测试缝覆盖(`~` 展开与默认项目根共用)。 */
+export function runtimeHomedir(): string {
+  return homedirOverride ?? os.homedir();
+}
+
+/**
+ * 测试缝:把布局钉死为给定值(显式覆盖缓存,后续调用一律返回它)。
+ * 迁移动机(CI 回归,spec #258 后续):四个测试文件原先靠 vi.doMock('os'/
+ * 'node:os') 注入 temp homedir,GitHub runner 上该 builtin mock 对
+ * src/config 内部 import 失效(本地不可复现,已用 CI 诊断确认),导致
+ * 读真实 HOME。测试改为注入布局后不再依赖任何 builtin mock。
+ * 传 undefined 恢复自然解析(仅测试用,生产代码从不调用)。
+ */
+export function setRuntimeLayoutForTests(layout: Layout | undefined, homedir?: string): void {
+  cachedLayout = layout;
+  homedirOverride = homedir;
+}
+
+/**
+ * 配置目录/文件路径按「首次调用」惰性定格(而非模块加载时):vitest 的
+ * homedir mock 在静态 import 之后才注册,模块加载即定格会让测试读写真实
+ * 用户配置(CI 跨文件污染 + 开发机配置被测试覆盖的根因)。惰性化后与
+ * runtimeLayout 的文档语义一致——首次调用解析,进程内仍只有一份结果。
+ */
+function configDir(): string {
+  return runtimeLayout().configDir;
+}
+function configPath(): string {
+  return runtimeLayout().configPath;
+}
 
 /** Nested map fields whose entries are dereferenced downstream — a hand-edited
  *  `null`/scalar entry used to crash loading with a TypeError (audit stability
@@ -50,7 +102,7 @@ function sanitizeFileConfig(fileConfig: unknown): Record<string, unknown> {
 export function loadConfig(): MsgBridgeConfig {
   const config: MsgBridgeConfig = {};
 
-  if (fs.existsSync(CONFIG_PATH)) {
+  if (fs.existsSync(configPath())) {
     try {
       // Permission self-check is POSIX-only (evaluation 2026-10-13): libuv
       // reports only 0666/0444 for regular files on Windows, so the 0600
@@ -58,14 +110,14 @@ export function loadConfig(): MsgBridgeConfig {
       // single start. The 0600/0700 writes below stay — on Windows libuv
       // maps them to "writable", which is harmless.
       if (process.platform !== "win32") {
-        const stats = fs.statSync(CONFIG_PATH);
+        const stats = fs.statSync(configPath());
         const mode = stats.mode & 0o777;
         if ((mode & 0o077) !== 0) {
-          console.warn(`⚠️  Config file ${CONFIG_PATH} has insecure permissions (${mode.toString(8)}). Should be 0600.`);
+          console.warn(`⚠️  Config file ${configPath()} has insecure permissions (${mode.toString(8)}). Should be 0600.`);
         }
       }
 
-      const fileConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+      const fileConfig = JSON.parse(fs.readFileSync(configPath(), "utf-8"));
       Object.assign(config, sanitizeFileConfig(fileConfig));
     } catch (err) {
       console.error("Failed to load config file:", err);
@@ -139,16 +191,16 @@ export function loadConfig(): MsgBridgeConfig {
  * Save config to file with secure permissions.
  */
 export function saveConfig(config: MsgBridgeConfig): void {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  if (!fs.existsSync(configDir())) {
+    fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
   }
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+  fs.writeFileSync(configPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
   // mode only applies when the file is CREATED — a pre-existing file (e.g.
   // written loose by an older version) keeps whatever it had. Enforce the
   // documented 0600/0700 contract explicitly.
   try {
-    fs.chmodSync(CONFIG_PATH, 0o600);
-    fs.chmodSync(CONFIG_DIR, 0o700);
+    fs.chmodSync(configPath(), 0o600);
+    fs.chmodSync(configDir(), 0o700);
   } catch (err) {
     console.warn("Failed to set config file permissions:", err);
   }
@@ -157,7 +209,7 @@ export function saveConfig(config: MsgBridgeConfig): void {
 /** Default project root (~userHome/Projects) — shared by first-run workdir
  *  resolution and the setup wizard so the fallback cannot drift. */
 export function defaultProjectsRoot(): string {
-  return path.join(os.homedir(), "Projects");
+  return path.join(runtimeHomedir(), "Projects");
 }
 
 /** Runtime read side of the config identity boundary — the rule lives in
@@ -178,9 +230,10 @@ export function effectiveWorkdir(cfg: MsgBridgeConfig): string {
   return cfg.workdir ?? defaultProjectsRoot();
 }
 
-/** 附件保存根目录(spec #66):默认与 ~/.pi 下其他 pi-courier-* 状态文件平齐。 */
+/** 附件保存根目录(spec #66):默认落数据根的 attachments/(spec #258 票03
+ *  换线,旧 ~/.pi/pi-courier-attachments 经迁移进 dataDir;显式配置仍优先)。 */
 export function attachmentsDirectory(cfg: MsgBridgeConfig): string {
-  return cfg.attachments?.directory ?? path.join(CONFIG_DIR, "pi-courier-attachments");
+  return cfg.attachments?.directory ?? runtimeLayout().attachmentsDir;
 }
 
 /** 单个附件上限(MB):默认 10。 */
@@ -306,8 +359,11 @@ export function rpcRespawnLimit(cfg: MsgBridgeConfig): number {
 }
 
 // ── 自定义头像路径派生(spec #84 v5 用户覆盖)────────────────────────
-// 空间/bot/项目三个消费位共用一条归一规则:~ 展开、相对 ~/.pi/ 解析、
+// 空间/bot/项目三个消费位共用一条归一规则:~ 展开、相对 configDir 解析、
 // 扩展名白名单定 mimetype。派生只有这一处解释,自愈与 /pmctl 同源。
+// 基准刻意跟随 configDir(spec #258 票03):配置文件迁到哪,配置里的相对
+// 路径就相对哪解析 —— 存量配置零破坏(旧基准 ~/.pi 与 Linux 新基准
+// ~/.config/pi-courier 在迁移后是同一个「configDir」语义)。
 
 /** 自定义头像支持的扩展名 → mimetype;白名单外一律视为配置无效。 */
 const CUSTOM_AVATAR_MIME: Record<string, string> = {
@@ -319,12 +375,12 @@ const CUSTOM_AVATAR_MIME: Record<string, string> = {
 };
 
 /** 归一一条自定义头像路径:空白串视为未配置;前缀 ~ 展开到用户主目录;
- *  相对路径相对 ~/.pi/(CONFIG_DIR)解析。返回值恒为绝对路径或 undefined。 */
+ *  相对路径相对 configDir()解析。返回值恒为绝对路径或 undefined。 */
 export function customAvatarPath(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
-  const expanded = trimmed.startsWith("~") ? path.join(os.homedir(), trimmed.slice(1)) : trimmed;
-  return path.isAbsolute(expanded) ? expanded : path.join(CONFIG_DIR, expanded);
+  const expanded = trimmed.startsWith("~") ? path.join(runtimeHomedir(), trimmed.slice(1)) : trimmed;
+  return path.isAbsolute(expanded) ? expanded : path.join(configDir(), expanded);
 }
 
 /** 自定义头像的 mimetype(按扩展名,大小写不敏感);白名单外返回 undefined。 */
@@ -542,8 +598,14 @@ export function presetProblems(cfg: MsgBridgeConfig): PresetProblem[] {
 export class ConfigStore {
   private config: MsgBridgeConfig;
 
-  /** `initial` injects a ready-made config (tests); default loads from disk once. */
-  constructor(initial?: MsgBridgeConfig) {
+  /** `initial` injects a ready-made config (tests); default loads from disk once.
+   *  `persist` is the write seam: tests pass a no-op so fixtures never touch
+   *  the real user config file — the suite used to pollute it, and the shared
+   *  file on CI broke unrelated config tests. */
+  constructor(
+    initial?: MsgBridgeConfig,
+    private readonly persist: (config: MsgBridgeConfig) => void = saveConfig
+  ) {
     this.config = initial ?? loadConfig();
   }
 
@@ -560,7 +622,7 @@ export class ConfigStore {
   update(patch: Partial<MsgBridgeConfig>): void {
     this.config = { ...this.config, ...patch };
     try {
-      saveConfig(this.config);
+      this.persist(this.config);
     } catch (err) {
       console.warn(`config persist failed (memory copy stays authoritative): ${(err as Error).message}`);
     }
