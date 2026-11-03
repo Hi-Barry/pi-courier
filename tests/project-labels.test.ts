@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectLabelOf, validateProjectLabel } from "../src/project-labels";
+import { normalizeLabelKey, projectLabelOf, validateProjectLabel } from "../src/project-labels";
 
 describe("validateProjectLabel 判定边界(审计工程批 票21)", () => {
   it("astral 字符按感知字符计数,NFKC 归一后视为同标签", () => {
@@ -9,6 +9,20 @@ describe("validateProjectLabel 判定边界(审计工程批 票21)", () => {
     // NFKC:全角 A 与半角 A、组合重音与预合成 é 视为冲突(NFKC 不折 ß/ss)
     expect(validateProjectLabel("Ａpp", ["App"])).toContain("App");
     expect(validateProjectLabel("cafe\u0301", ["caf\u00e9"])).toContain("caf\u00e9");
+  });
+});
+
+describe("normalizeLabelKey / 唯一性双侧 NFKC 口径(工单 fix-label-nfkc-two-side-normalization)", () => {
+  it("口径 = NFKC 兼容分解 + 大小写折叠,是三处按名比较的唯一基准", () => {
+    expect(normalizeLabelKey("Ａpp")).toBe(normalizeLabelKey("App"));
+    expect(normalizeLabelKey("cafe\u0301")).toBe(normalizeLabelKey("caf\u00e9"));
+    expect(normalizeLabelKey("MyApp")).toBe("myapp");
+  });
+
+  it("存量侧也是 NFKC 不稳定形式时同样判冲突(旧实现存量侧仅 toLowerCase,双向漏检)", () => {
+    // 旧实现:候选侧 NFKC、存量侧只折叠 → 以下两条都能重复注册成功
+    expect(validateProjectLabel("App", ["Ａpp"])).toContain("Ａpp");
+    expect(validateProjectLabel("Ａpp", ["App"])).toContain("App");
   });
 });
 
