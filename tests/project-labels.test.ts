@@ -20,8 +20,12 @@ describe("normalizeLabelKey / 唯一性双侧 NFKC 口径(工单 fix-label-nfkc-
   });
 
   it("存量侧也是 NFKC 不稳定形式时同样判冲突(旧实现存量侧仅 toLowerCase,双向漏检)", () => {
-    // 旧实现:候选侧 NFKC、存量侧只折叠 → 以下两条都能重复注册成功
-    expect(validateProjectLabel("App", ["Ａpp"])).toContain("Ａpp");
+    // 旧实现:候选侧 NFKC、存量侧只折叠 → 以下两条都能重复注册成功。
+    // 文案以 zh 表为锚:提示必须写「NFKC 归一」,不能退回「仅大小写不同」
+    // (组合重音等变体与大小写无关)。
+    const clash = validateProjectLabel("App", ["Ａpp"]);
+    expect(clash).toContain("Ａpp");
+    expect(clash).toContain("NFKC 归一");
     expect(validateProjectLabel("Ａpp", ["App"])).toContain("App");
   });
 });
