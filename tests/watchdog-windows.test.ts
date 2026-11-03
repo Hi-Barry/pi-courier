@@ -165,7 +165,9 @@ describe("Windows 壳脚本契约(票07:部署产物与安装注释)", () => {
     expect(SHELL).toContain('"--kill-command", $killCommand');
     expect(SHELL).toContain('"--end-command", $endCommand');
     expect(SHELL).toContain('"--restart-command", $restartCommand');
-    expect(SHELL).toContain('--alert-command", "node `"$alert`" --message {message}');
+    // 告警模板经 String.Format 构造并对内嵌引号预转义(\""):PS 5.1 原生参数
+    // 传递不转义内嵌双引号,空格路径会被撕碎(2026-11-03 真机实测,spec #258)。
+    expect(SHELL).toContain("--alert-command\", ('node \"{0}\" --message {{message}}' -f $alert).Replace('\"', '\\\"')");
     expect(SHELL).toContain('if (-not $NoAlert)');
   });
 

@@ -1,4 +1,4 @@
-# pi-courier 看门狗 —— Windows 壳(spec #247 票07)。
+﻿# pi-courier 看门狗 —— Windows 壳(spec #247 票07)。
 #
 # 判定逻辑全在 watchdog-core.mjs(零桥代码依赖,与 POSIX 壳共用同一核心);
 # 本壳只做参数解析、拼接 Windows 完整重启序列的命令模板并调用核心。
@@ -89,7 +89,10 @@ $coreArgs = @(
   "--restart-command", $restartCommand
 )
 if (-not $NoAlert) {
-  $coreArgs += @("--alert-command", "node `"$alert`" --message {message}")
+  # 告警模板引号预转义(\""):Windows PowerShell 5.1 的原生参数传递不转义内嵌
+  # 双引号(PS7.3+ 才修),模板含用户名空格路径时会被撕成碎片;预转义后在
+  # 5.1(原样透传)与 7.3+(再转义)下 node 收到的 argv 一致。
+  $coreArgs += @("--alert-command", ('node "{0}" --message {{message}}' -f $alert).Replace('"', '\"'))
 }
 
 & $nodeCommand.Source $core @coreArgs
