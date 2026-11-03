@@ -496,7 +496,7 @@ describe("space ensure", () => {
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith(
       "!space:server",
       "mxc://server/avatar",
-      expect.objectContaining({ mimetype: "image/png", width: 256, height: 256 })
+      expect.objectContaining({ mimetype: "image/png", w: 256, h: 256 })
     );
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!mgmt:server", "mxc://server/avatar", expect.anything());
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith("!proj:server", "mxc://server/avatar", expect.anything());

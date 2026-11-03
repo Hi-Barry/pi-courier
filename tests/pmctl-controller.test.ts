@@ -170,7 +170,7 @@ describe("PmctlController", () => {
     expect(roomOps.setRoomAvatar).toHaveBeenCalledWith(
       "!newroom:server",
       "mxc://server/avatar",
-      expect.objectContaining({ mimetype: "image/png", width: 256, height: 256 })
+      expect.objectContaining({ mimetype: "image/png", w: 256, h: 256 })
     );
     expect(replies.at(-1)).toContain("创建完成");
     expect(replies.at(-1)).not.toContain("头像设置失败");
