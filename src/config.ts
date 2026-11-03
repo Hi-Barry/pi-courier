@@ -120,6 +120,10 @@ export function loadConfig(): MsgBridgeConfig {
       const fileConfig = JSON.parse(fs.readFileSync(configPath(), "utf-8"));
       Object.assign(config, sanitizeFileConfig(fileConfig));
     } catch (err) {
+      // Preserve the original bytes BEFORE any later update() can overwrite
+      // this file with a config derived from the empty fallback (see
+      // preserveCorruptConfigFile) — sec-atomic-config-write.
+      preserveCorruptConfigFile();
       console.error("Failed to load config file:", err);
     }
   }
@@ -189,20 +193,111 @@ export function loadConfig(): MsgBridgeConfig {
 
 /**
  * Save config to file with secure permissions.
+ *
+ * Atomic replace (sec-atomic-config-write): the payload lands in a temp file
+ * in the SAME directory (rename is only atomic within one filesystem), is
+ * fsynced, then renamed over config.json. A crash/power loss/ENOSPC inside
+ * the write window can now only leave the OLD config intact plus a stray
+ * temp file — config.json itself is never truncated, so the trust ledger
+ * (matrix token, trusted users, management rooms, projects) survives.
  */
 export function saveConfig(config: MsgBridgeConfig): void {
   if (!fs.existsSync(configDir())) {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
   }
-  fs.writeFileSync(configPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
-  // mode only applies when the file is CREATED — a pre-existing file (e.g.
-  // written loose by an older version) keeps whatever it had. Enforce the
-  // documented 0600/0700 contract explicitly.
+  const target = configPath();
+  const payload = JSON.stringify(config, null, 2);
+  // Temp name carries pid+time+random: concurrent processes never collide,
+  // and a stale temp from a killed process is self-evidently inert (the
+  // loader only ever reads configPath()).
+  const tempPath = `${target}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   try {
-    fs.chmodSync(configPath(), 0o600);
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(tempPath, "w", 0o600);
+      fs.writeSync(fd, payload);
+      // Flush payload BEFORE the rename: without this, power loss right
+      // after the rename can leave a valid-looking config.json backed by
+      // unflushed (empty) blocks. Best-effort — some filesystems reject
+      // fsync; the old code never fsynced, so rename still strictly improves.
+      try {
+        fs.fsyncSync(fd);
+      } catch {
+        // fsync unsupported/failed — proceed with the rename anyway.
+      }
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+    try {
+      fs.renameSync(tempPath, target);
+    } catch (renameErr) {
+      // rename over an existing target can fail on Windows (EPERM) when a
+      // scanner transiently holds the file. Fall back to the pre-atomic
+      // direct write so the save still lands where it always did — degraded
+      // but loud, never a silent save loss.
+      console.warn(`Atomic config replace failed; falling back to direct write: ${(renameErr as Error).message}`);
+      fs.writeFileSync(target, payload, { mode: 0o600 });
+    }
+    // POSIX durability: persist the directory entry itself so the rename
+    // survives power loss. Windows cannot open directories this way — skip.
+    if (process.platform !== "win32") {
+      try {
+        const dirFd = fs.openSync(configDir(), "r");
+        try {
+          fs.fsyncSync(dirFd);
+        } finally {
+          fs.closeSync(dirFd);
+        }
+      } catch {
+        // Best-effort: filesystems that refuse directory fsync are skipped.
+      }
+    }
+  } finally {
+    // Temp cleanup on EVERY path: success (already renamed away → ENOENT,
+    // swallowed) or failure (a stray tmp file must not accumulate).
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // Nothing to clean — the temp was renamed over the target or never
+      // got created (the original error propagates untouched).
+    }
+  }
+  // mode only applies when the file is CREATED — and umask can still bite.
+  // Enforce the documented 0600/0700 contract explicitly (also covers the
+  // non-atomic fallback path above).
+  try {
+    fs.chmodSync(target, 0o600);
     fs.chmodSync(configDir(), 0o700);
   } catch (err) {
     console.warn("Failed to set config file permissions:", err);
+  }
+}
+
+/** Fixed-name backup for a corrupt config file, next to the original —
+ *  bounded (each corrupt load overwrites it; never accumulates). */
+function corruptConfigBackupPath(): string {
+  return `${configPath()}.broken`;
+}
+
+/**
+ * Preserve the bytes of an unparseable config file (sec-atomic-config-write):
+ * loadConfig swallows parse errors and returns an empty-derived config, so a
+ * later update() would otherwise overwrite the original file with the残缺
+ * config — silently destroying the trust ledger it still holds (matrix
+ * token, trusted users, management rooms, projects). Copying the raw bytes
+ * to `<configPath>.broken` first means nothing is ever silently lost; the
+ * user can recover or inspect the original. Best-effort: any failure here
+ * only warns, the "never block startup" contract is untouched.
+ */
+function preserveCorruptConfigFile(): void {
+  try {
+    const raw = fs.readFileSync(configPath());
+    fs.writeFileSync(corruptConfigBackupPath(), raw, { mode: 0o600 });
+    console.warn(
+      `⚠️  Corrupt config file preserved at ${corruptConfigBackupPath()} — fix or restore it; the original will not be silently overwritten.`
+    );
+  } catch (backupErr) {
+    console.warn(`Failed to preserve corrupt config file: ${(backupErr as Error).message}`);
   }
 }
 
