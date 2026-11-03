@@ -10,7 +10,12 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AttachmentStore, AttachmentTooLargeError, type MediaSource } from "../src/transports/attachments.js";
+import {
+  AttachmentStore,
+  AttachmentTooLargeError,
+  DOWNLOAD_TIMEOUT_MS,
+  type MediaSource,
+} from "../src/transports/attachments.js";
 import type { EventLedger } from "../src/transports/event-ledger.js";
 import { MatrixProvider, mediaDownloadUrl } from "../src/transports/matrix.js";
 import type { MatrixClientPort } from "../src/transports/matrix-client.js";
@@ -885,14 +890,19 @@ const RUST_VECTOR = {
   ciphertext: Buffer.from("OBH25QKW+H0OqUTbip7zSCdZInVniH4Owv1plfeipA==", "base64"),
 };
 
-/** 本地媒体服务器:handler 自定义响应;close 由测试 finally 收尾。 */
+/** 本地媒体服务器:handler 自定义响应;close 由测试 finally 收尾。
+ *  close 前先 closeAllConnections —— 挂起不响应的连接不掐,close 永不回调。 */
 async function startMediaServer(handler: (req: http.IncomingMessage, res: http.ServerResponse) => void) {
   const server = http.createServer(handler);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const addr = server.address() as net.AddressInfo;
   return {
     url: `http://127.0.0.1:${addr.port}`,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
   };
 }
 
@@ -977,6 +987,26 @@ describe("MatrixProvider.mediaSource", () => {
       await expect(provider.mediaSource.downloadPlaintext("mxc://s/liar", 100))
         .rejects.toThrow(AttachmentTooLargeError);
     } finally {
+      await server.close();
+    }
+  });
+
+  it("挂起不响应:DOWNLOAD_TIMEOUT_MS 到点中止,翻成 attach.downloadTimeout 文案", async () => {
+    // 服务器收到请求后故意不回:等客户端 60s 超时掐连接。真实等 60s 不可
+    // 接受,用 fake timers 推进 downloadMediaCapped 自己的 abort 定时器,
+    // 钉住 AbortError → i18n 超时文案的映射分支。
+    const server = await startMediaServer(() => {
+      // 故意不回响应头
+    });
+    vi.useFakeTimers();
+    try {
+      const { provider } = makeProvider({ homeserverUrl: server.url });
+      const pending = provider.mediaSource.downloadPlaintext("mxc://s/hang", 100);
+      const assertion = expect(pending).rejects.toThrow("下载超时(60s)");
+      await vi.advanceTimersByTimeAsync(DOWNLOAD_TIMEOUT_MS);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
       await server.close();
     }
   });

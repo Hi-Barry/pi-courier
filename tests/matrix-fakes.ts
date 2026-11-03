@@ -30,7 +30,6 @@ export interface FakeMatrixClient {
   sendMessage: ReturnType<typeof vi.fn>;
   sendReaction: ReturnType<typeof vi.fn>;
   setTyping: ReturnType<typeof vi.fn>;
-  downloadContent: ReturnType<typeof vi.fn>;
   createRoom: ReturnType<typeof vi.fn>;
   sendStateEvent: ReturnType<typeof vi.fn>;
   getRoomStateEvent: ReturnType<typeof vi.fn>;
@@ -40,12 +39,13 @@ export interface FakeMatrixClient {
   getUserProfile: ReturnType<typeof vi.fn>;
   uploadContent: ReturnType<typeof vi.fn>;
   leaveRoom: ReturnType<typeof vi.fn>;
-  crypto?: { decryptMedia: ReturnType<typeof vi.fn> };
+  /** 端口 crypto 成员只被当存在性判据消费(附件解密已本地化,无方法面)。 */
+  crypto?: Record<string, unknown>;
 }
 
-/** 端口 crypto 成员的假解密器(decryptMedia 恒返回 DECRYPTED 字节)。 */
-export function fakeCrypto() {
-  return { decryptMedia: vi.fn(async (_file: unknown) => Buffer.from("DECRYPTED")) };
+/** 端口 crypto 成员的假在场值(仅用于「crypto 在场」的存在性判据)。 */
+export function fakeCrypto(): Record<string, unknown> {
+  return {};
 }
 
 export function fakeMatrixClient(overrides: Record<string, unknown> = {}): FakeMatrixClient {
@@ -78,10 +78,6 @@ export function fakeMatrixClient(overrides: Record<string, unknown> = {}): FakeM
     sendMessage: rec("sendMessage", async () => "$sent"),
     sendReaction: rec("sendReaction", async () => "$reaction"),
     setTyping: rec("setTyping", async () => undefined),
-    downloadContent: rec("downloadContent", async () => ({
-      data: Buffer.from("BYTES"),
-      contentType: "image/png",
-    })),
     createRoom: rec("createRoom", async () => "!created:server"),
     sendStateEvent: rec("sendStateEvent", async () => "$state"),
     getRoomStateEvent: rec("getRoomStateEvent", async () => ({})),
