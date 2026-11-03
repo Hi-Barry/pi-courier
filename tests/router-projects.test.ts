@@ -66,12 +66,14 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     renameProject: vi.fn(),
     stopAll: vi.fn(),
   } as unknown as ProjectManager;
+  // 内存 store(不落盘):夹具的 store.update 绝不写真实用户配置;
+  // 需要断言落盘的用例(票2/票3)各自用 mocked 路径下的 IsoConfigStore。
   const store = new ConfigStore({
     managementRooms: [],
     projects: {},
     ...(opts.multiProject === false ? {} : { multiProject: true }),
     ...(opts.space ? { space: opts.space } : {}),
-  });
+  }, () => {});
   const auth = new ChallengeAuth(
     (code) => {
       codeBox.current = code;

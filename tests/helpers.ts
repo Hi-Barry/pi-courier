@@ -132,7 +132,9 @@ export function makeRouterFixture(options: RouterFixtureOptions = {}): RouterFix
       roomForRpc: vi.fn().mockReturnValue(undefined),
       projectFallbacks: vi.fn().mockReturnValue(undefined),
     } as unknown as ProjectManager);
-  const store = options.store ?? new ConfigStore({});
+  // 夹具默认内存 store:update() 不落盘 —— 测试绝不写真实用户配置
+  // (saveConfig 的持久化路径只由安装/向导与显式注入的 store 触达)。
+  const store = options.store ?? new ConfigStore({}, () => {});
   const auth = options.auth ?? new ChallengeAuth(() => {}, () => {});
   if (!options.auth) {
     auth.loadFromConfig({

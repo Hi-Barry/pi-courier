@@ -19,7 +19,7 @@ describe("resolveWorkdir", () => {
       return { ...actual, homedir: () => tmpDir };
     });
     vi.doMock("node:os", async () => {
-      const actual = await vi.importActual<typeof import("os")>("os");
+      const actual = await vi.importActual<typeof import("node:os")>("node:os");
       return { ...actual, homedir: () => tmpDir };
     });
     vi.resetModules();

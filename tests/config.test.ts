@@ -28,6 +28,10 @@ describe('config', () => {
       const actual = await vi.importActual<typeof import('os')>('os');
       return { ...actual, homedir: () => tmpDir };
     });
+    vi.doMock('node:os', async () => {
+      const actual = await vi.importActual<typeof import('node:os')>('node:os');
+      return { ...actual, homedir: () => tmpDir };
+    });
     return await import('../src/config');
   }
 
@@ -269,6 +273,10 @@ describe('ConfigStore', () => {
   async function importConfig() {
     vi.doMock('os', async () => {
       const actual = await vi.importActual<typeof import('os')>('os');
+      return { ...actual, homedir: () => tmpDir };
+    });
+    vi.doMock('node:os', async () => {
+      const actual = await vi.importActual<typeof import('node:os')>('node:os');
       return { ...actual, homedir: () => tmpDir };
     });
     return await import('../src/config');

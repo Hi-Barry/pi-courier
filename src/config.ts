@@ -28,8 +28,18 @@ export function runtimeLayout(): Layout {
   return cachedLayout;
 }
 
-const CONFIG_DIR = runtimeLayout().configDir;
-const CONFIG_PATH = runtimeLayout().configPath;
+/**
+ * 配置目录/文件路径按「首次调用」惰性定格(而非模块加载时):vitest 的
+ * homedir mock 在静态 import 之后才注册,模块加载即定格会让测试读写真实
+ * 用户配置(CI 跨文件污染 + 开发机配置被测试覆盖的根因)。惰性化后与
+ * runtimeLayout 的文档语义一致——首次调用解析,进程内仍只有一份结果。
+ */
+function configDir(): string {
+  return runtimeLayout().configDir;
+}
+function configPath(): string {
+  return runtimeLayout().configPath;
+}
 
 /** Nested map fields whose entries are dereferenced downstream — a hand-edited
  *  `null`/scalar entry used to crash loading with a TypeError (audit stability
@@ -71,7 +81,7 @@ function sanitizeFileConfig(fileConfig: unknown): Record<string, unknown> {
 export function loadConfig(): MsgBridgeConfig {
   const config: MsgBridgeConfig = {};
 
-  if (fs.existsSync(CONFIG_PATH)) {
+  if (fs.existsSync(configPath())) {
     try {
       // Permission self-check is POSIX-only (evaluation 2026-10-13): libuv
       // reports only 0666/0444 for regular files on Windows, so the 0600
@@ -79,14 +89,14 @@ export function loadConfig(): MsgBridgeConfig {
       // single start. The 0600/0700 writes below stay — on Windows libuv
       // maps them to "writable", which is harmless.
       if (process.platform !== "win32") {
-        const stats = fs.statSync(CONFIG_PATH);
+        const stats = fs.statSync(configPath());
         const mode = stats.mode & 0o777;
         if ((mode & 0o077) !== 0) {
-          console.warn(`⚠️  Config file ${CONFIG_PATH} has insecure permissions (${mode.toString(8)}). Should be 0600.`);
+          console.warn(`⚠️  Config file ${configPath()} has insecure permissions (${mode.toString(8)}). Should be 0600.`);
         }
       }
 
-      const fileConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+      const fileConfig = JSON.parse(fs.readFileSync(configPath(), "utf-8"));
       Object.assign(config, sanitizeFileConfig(fileConfig));
     } catch (err) {
       console.error("Failed to load config file:", err);
@@ -160,16 +170,16 @@ export function loadConfig(): MsgBridgeConfig {
  * Save config to file with secure permissions.
  */
 export function saveConfig(config: MsgBridgeConfig): void {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  if (!fs.existsSync(configDir())) {
+    fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
   }
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+  fs.writeFileSync(configPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
   // mode only applies when the file is CREATED — a pre-existing file (e.g.
   // written loose by an older version) keeps whatever it had. Enforce the
   // documented 0600/0700 contract explicitly.
   try {
-    fs.chmodSync(CONFIG_PATH, 0o600);
-    fs.chmodSync(CONFIG_DIR, 0o700);
+    fs.chmodSync(configPath(), 0o600);
+    fs.chmodSync(configDir(), 0o700);
   } catch (err) {
     console.warn("Failed to set config file permissions:", err);
   }
@@ -344,12 +354,12 @@ const CUSTOM_AVATAR_MIME: Record<string, string> = {
 };
 
 /** 归一一条自定义头像路径:空白串视为未配置;前缀 ~ 展开到用户主目录;
- *  相对路径相对 configDir(CONFIG_DIR)解析。返回值恒为绝对路径或 undefined。 */
+ *  相对路径相对 configDir()解析。返回值恒为绝对路径或 undefined。 */
 export function customAvatarPath(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   const expanded = trimmed.startsWith("~") ? path.join(os.homedir(), trimmed.slice(1)) : trimmed;
-  return path.isAbsolute(expanded) ? expanded : path.join(CONFIG_DIR, expanded);
+  return path.isAbsolute(expanded) ? expanded : path.join(configDir(), expanded);
 }
 
 /** 自定义头像的 mimetype(按扩展名,大小写不敏感);白名单外返回 undefined。 */
@@ -567,8 +577,14 @@ export function presetProblems(cfg: MsgBridgeConfig): PresetProblem[] {
 export class ConfigStore {
   private config: MsgBridgeConfig;
 
-  /** `initial` injects a ready-made config (tests); default loads from disk once. */
-  constructor(initial?: MsgBridgeConfig) {
+  /** `initial` injects a ready-made config (tests); default loads from disk once.
+   *  `persist` is the write seam: tests pass a no-op so fixtures never touch
+   *  the real user config file — the suite used to pollute it, and the shared
+   *  file on CI broke unrelated config tests. */
+  constructor(
+    initial?: MsgBridgeConfig,
+    private readonly persist: (config: MsgBridgeConfig) => void = saveConfig
+  ) {
     this.config = initial ?? loadConfig();
   }
 
@@ -585,7 +601,7 @@ export class ConfigStore {
   update(patch: Partial<MsgBridgeConfig>): void {
     this.config = { ...this.config, ...patch };
     try {
-      saveConfig(this.config);
+      this.persist(this.config);
     } catch (err) {
       console.warn(`config persist failed (memory copy stays authoritative): ${(err as Error).message}`);
     }
