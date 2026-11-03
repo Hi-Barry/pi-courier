@@ -665,12 +665,13 @@ npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs p
 - **任务计划程序自启**(无需管理员,每次登录触发)——真机验证过的配方:
 
   ```powershell
-  New-Item -ItemType Directory -Force "$env:APPDATA\pi-courier\state\logs" | Out-Null  # 先建一次日志目录(下方重定向不会自建父目录)
-  $action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c pi-courier run >> %APPDATA%\pi-courier\state\logs\run.log 2>&1'
+  $action  = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "//nologo `"$env:APPDATA\npm\node_modules\pi-courier\deploy\windows\run-hidden.vbs`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn
   Register-ScheduledTask -TaskName 'pi-courier' -Action $action -Trigger $trigger
   Start-ScheduledTask -TaskName 'pi-courier'   # 立即启动;此后每次登录自动拉起
   ```
+
+  启动器(`run-hidden.vbs`,随包发布)以**隐藏控制台**(窗口样式 0)拉起桥并自建日志目录——桌面不再有常驻黑窗。它刻意保留**交互会话**:agent 拉起的 GUI 进程(浏览器、UAC 弹窗、桌面自动化)照常出现在你的桌面上,这也是桥任务**不要**改用 S4U/session 0 的原因。
 
   这是**登录触发型**任务:只在每次登录时拉起。进程中途崩溃、被杀死或僵死,任务都不会重新拉起;进程死掉后任务状态还可能停留在 Running。补自愈有两条路线:
 
@@ -680,11 +681,12 @@ npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs p
     安装(桥的任务名默认 `pi-courier`,与上面的配方一致;把脚本路径换成你的实际安装目录,npm 全局安装通常在 `%APPDATA%\npm\node_modules\pi-courier\deploy\watchdog\`)。PowerShell 一次性注册,与桥任务同用户上下文、无需管理员;`Register-ScheduledTask` 按原生参数传值,`-Argument` 里用内嵌双引号包住脚本路径,含空格的安装路径也安全。旧 `schtasks /create ... /tr` 拼引号写法已废弃,不要再抄:
 
     ```powershell
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-      -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\pi-courier\deploy\watchdog\watchdog-windows.ps1" -TaskName pi-courier'
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration ([TimeSpan]::MaxValue)
+    $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "//nologo `"$env:APPDATA\npm\node_modules\pi-courier\deploy\windows\watchdog-run-hidden.vbs`""
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
     Register-ScheduledTask -TaskName "pi-courier-watchdog" -Action $action -Trigger $trigger -Force
     ```
+
+    壳脚本(`watchdog-run-hidden.vbs`,随包发布)隐藏每分钟的控制台闪窗,同时保留交互会话。若可提权,`LogonType S4U` 是备选(无登录也能无头运行)——非提权 PowerShell 直接注册 S4U 会被拒绝访问(2026-11-03 真机实测)。
 
     (`-RepetitionInterval` + `-RepetitionDuration ([TimeSpan]::MaxValue)` 等价旧 `schtasks /sc minute /mo 1`:每分钟触发、无限重复。任务名请保持不带空格 —— 看门狗重启序列会以不带引号的形式调 `schtasks /end` / `/run`。)
 
