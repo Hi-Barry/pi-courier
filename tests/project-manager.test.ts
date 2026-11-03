@@ -38,7 +38,7 @@ function makePM(
 ) {
   const rpcs: ReturnType<typeof fakeRpc>[] = [];
   const defaultRpc = fakeRpc() as unknown as PiRpc;
-  const store = new ConfigStore({ projects, managementRooms: [], workdir: "/home/u/Projects", ...(multiProject ? { multiProject: true } : {}) });
+  const store = new ConfigStore({ projects, managementRooms: [], workdir: "/home/u/Projects", ...(multiProject ? { multiProject: true } : {}) }, () => {});
   const notices: Array<{ roomId: string; text: string }> = [];
   const pm = new ProjectManager({
     defaultRpc,
