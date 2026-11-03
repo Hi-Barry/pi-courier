@@ -135,6 +135,19 @@ afterEach(() => {
  *  正斜杠拼接;Windows runner 上 path.join 会产出反斜杠,必须同形比较。 */
 const logPath = (...parts: string[]) => parts.join("/");
 
+/** EXDEV 故障注入:仅对「from → 最终目标」的搬移抛 EXDEV;临时件落位(同
+ *  目录 rename)放行 —— 真实世界 EXDEV 只发生在跨设备的首次 rename,落位
+ *  rename 与目标同目录、同卷,绝不会再 EXDEV(sec-exdev-copy-atomic)。 */
+function renameExdevUnlessTmp(from: string, to: string): void {
+  if (from.includes(".legacy-migration-tmp-")) {
+    fs.renameSync(from, to);
+    return;
+  }
+  const err: NodeJS.ErrnoException = new Error("invalid cross-device link");
+  err.code = "EXDEV";
+  throw err;
+}
+
 function makeLinuxPlan() {
   const layout = resolveLayout({ platform: "linux", homedir: home, env: {} });
   const plan = buildLegacyMigrationPlan({ platform: "linux", homedir: home, layout });
@@ -294,11 +307,7 @@ describe("runLegacyMigration — 首次迁移与幂等(临时目录真实文件)
     const { layout, plan } = makeLinuxPlan();
     const result = runLegacyMigration({
       plan,
-      rename: () => {
-        const err: NodeJS.ErrnoException = new Error("invalid cross-device link");
-        err.code = "EXDEV";
-        throw err;
-      },
+      rename: renameExdevUnlessTmp,
       log: (m) => log.push(m),
       warn: (m) => warn.push(m),
     });
@@ -317,16 +326,109 @@ describe("runLegacyMigration — 首次迁移与幂等(临时目录真实文件)
     expect(log.join("\n")).toContain("跨卷");
   });
 
+  it("EXDEV 回退 copy 中途失败:新家不留残件、临时件已清、旧件原地,下次启动干净重试(sec-exdev-copy-atomic 回归)", () => {
+    seedLegacyLayout();
+    const { layout, plan } = makeLinuxPlan();
+    const storeItem = plan.items.find((i) => i.label === "matrix-store")!;
+    const copyTargets: string[] = [];
+    const first = runLegacyMigration({
+      plan,
+      rename: renameExdevUnlessTmp,
+      copy: (from, to) => {
+        copyTargets.push(to);
+        if (from.endsWith("pi-courier-matrix-store.json")) {
+          // 模拟 cpSync 中途失败:在临时件上留下部分写入残件后抛错。
+          fs.writeFileSync(to, '{"rooms":1,"par');
+          throw new Error("ENOSPC fake: no space left on device");
+        }
+        fs.cpSync(from, to, { recursive: true });
+      },
+      log: (m) => log.push(m),
+      warn: (m) => warn.push(m),
+    });
+    expect(first.failed.map((f) => f.item.label)).toEqual(["matrix-store"]);
+    expect(first.failed[0].error).toContain("ENOSPC fake");
+    // 复制的目的地一律是与最终目标同目录的临时件,绝不直接落在最终路径上。
+    expect(copyTargets).toHaveLength(9);
+    for (const item of plan.items) {
+      expect(copyTargets.filter((t) => t.startsWith(`${item.to}.legacy-migration-tmp-`))).toHaveLength(1);
+    }
+    // 残件进不了新家:to 从未落位,失败后临时件也已被清(dataDir 只剩另两项的落位结果)。
+    expect(fs.existsSync(storeItem.to)).toBe(false);
+    expect(fs.readdirSync(layout.dataDir).sort()).toEqual(["attachments", "matrix-crypto"]);
+    // 旧件原地未动,数据无损。
+    expect(fs.readFileSync(path.join(home, ".pi", "pi-courier-matrix-store.json"), "utf-8")).toBe('{"rooms":1}');
+    // 下次启动(故障消失):干净重试成功;残件没有把该项误判成「新旧并存信新家」。
+    const second = runLegacyMigration({ plan });
+    expect(second.failed).toEqual([]);
+    expect(second.bothExisted).toEqual([]);
+    expect(second.moved.map((m) => m.item.label)).toEqual(["matrix-store"]);
+    expect(fs.readFileSync(storeItem.to, "utf-8")).toBe('{"rooms":1}');
+  });
+
+  it("EXDEV 回退中落位 rename 失败:临时件已清、报 failed、下次启动可重试", () => {
+    seedLegacyLayout();
+    const { layout, plan } = makeLinuxPlan();
+    const storeItem = plan.items.find((i) => i.label === "matrix-store")!;
+    const first = runLegacyMigration({
+      plan,
+      rename: (from, to) => {
+        // 只让 matrix-store 的同目录落位失败(如 Windows 上目标被占用),
+        // 其余项(含所有临时件落位)照常。
+        if (from.startsWith(`${storeItem.to}.legacy-migration-tmp-`)) {
+          throw new Error("EIO fake: rename failed");
+        }
+        renameExdevUnlessTmp(from, to);
+      },
+      warn: (m) => warn.push(m),
+    });
+    expect(first.failed.map((f) => f.item.label)).toEqual(["matrix-store"]);
+    expect(first.failed[0].error).toContain("EIO fake");
+    expect(fs.existsSync(storeItem.to)).toBe(false);
+    // 落位失败同样清临时件:dataDir 不留 .legacy-migration-tmp- 残件。
+    expect(fs.readdirSync(layout.dataDir).sort()).toEqual(["attachments", "matrix-crypto"]);
+    // 下次启动重试成功,不被残件误判成并存。
+    const second = runLegacyMigration({ plan });
+    expect(second.failed).toEqual([]);
+    expect(second.bothExisted).toEqual([]);
+    expect(fs.readFileSync(storeItem.to, "utf-8")).toBe('{"rooms":1}');
+  });
+
+  it("copy 失败且临时件清理也失败:主错误照常上报 failed,另追加临时件清理警告", () => {
+    seedLegacyLayout();
+    const { layout, plan } = makeLinuxPlan();
+    const storeItem = plan.items.find((i) => i.label === "matrix-store")!;
+    const first = runLegacyMigration({
+      plan,
+      rename: renameExdevUnlessTmp,
+      copy: (from, to) => {
+        if (from.endsWith("pi-courier-matrix-store.json")) {
+          fs.writeFileSync(to, '{"rooms":1,"par');
+          throw new Error("ENOSPC fake: no space left on device");
+        }
+        fs.cpSync(from, to, { recursive: true });
+      },
+      remove: (target) => {
+        if (target.startsWith(`${storeItem.to}.legacy-migration-tmp-`)) {
+          throw new Error("EACCES fake: tmp rm denied");
+        }
+        fs.rmSync(target, { recursive: true });
+      },
+      warn: (m) => warn.push(m),
+    });
+    expect(first.failed.map((f) => f.item.label)).toEqual(["matrix-store"]);
+    // 主错误不被清理失败吞掉;清理失败另有警告(含临时件路径)。
+    expect(first.failed[0].error).toContain("ENOSPC fake");
+    expect(warn.join("\n")).toContain("EACCES fake");
+    expect(fs.existsSync(storeItem.to)).toBe(false);
+  });
+
   it("copy 成功但清旧失败:算搬移完成、旧件保留、警告;下次启动按并存信新家", () => {
     seedLegacyLayout();
     const { layout, plan } = makeLinuxPlan();
     const first = runLegacyMigration({
       plan,
-      rename: () => {
-        const err: NodeJS.ErrnoException = new Error("invalid cross-device link");
-        err.code = "EXDEV";
-        throw err;
-      },
+      rename: renameExdevUnlessTmp,
       remove: () => {
         throw new Error("EBUSY fake: old file busy");
       },

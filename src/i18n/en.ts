@@ -838,6 +838,8 @@ Note: pi itself is installed and upgraded independently on the system
   "migration.itemFailed": "⚠️ Legacy layout migration failed (item skipped, startup not affected): {label} {from} → {to}: {message}",
   "migration.oldCleanupFailed":
     "⚠️ {label} was copied to the new home {to}, but removing the old file {from} failed: {message} (next startup treats this as both-exist)",
+  "migration.tmpCleanupFailed":
+    "⚠️ Cleaning up the temporary file {tmp} failed after {label}'s migration failed: {message} (the leftover does not affect the retry on next startup)",
   "migration.summary":
     "✅ Legacy layout migration finished: {moved} moved, {skipped} already in place, {conflicts} both-exist conflicts, {failed} failures",
 };
