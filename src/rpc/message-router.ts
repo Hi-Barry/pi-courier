@@ -32,6 +32,7 @@ import { inviteUserToManagementRoomOnce, inviteUserToSpaceOnce, maybeInitManagem
 import type { JsonStateFile } from "../state/json-file.js";
 import { formatBytes } from "../transports/attachments.js";
 import type { RoomOps } from "../transports/interface.js";
+import type { MatrixReaction } from "../transports/matrix.js";
 import type { ExternalMessage, MessageAttachment, ReplyTarget } from "../types.js";
 import type { UpdateOrchestrator } from "../update/updater.js";
 import { parseWorkflowProgress } from "../workflow/adapter.js";
@@ -131,6 +132,19 @@ export interface MessageRouterDeps {
    * 开卡。缺省未注入 = 聚合整体禁用(与 editReply 同门)。
    */
   sendLiveCard?: (chatId: string, transport: string, text: string) => Promise<string | undefined>;
+  /**
+   * 发一条消息并取回底层 event_id 的可选缝(票02 #269:组合根接 Matrix
+   * 的 sendMessage 穿出值)。与 sendReaction **双双注入**才启用积压征询的
+   * 表情作答;缺省未注入 = 功能禁用,行为与旧版逐字节一致(与 editReply/
+   * sendLiveCard 同门)。
+   */
+  replyWithId?: (chatId: string, transport: string, text: string) => Promise<string | undefined>;
+  /**
+   * 在一条已发出的消息上种表情的可选缝(票02 #269:组合根接 Matrix 的
+   * sendReaction)。与 replyWithId 同门;逐 emoji 失败的降级在 BacklogInbox
+   * 内部(只 debug,不影响征询照发)。
+   */
+  sendReaction?: (chatId: string, eventId: string, emoji: string) => Promise<void>;
   /** /update 热更新编排器(桥自更新 spec §8):组合根构造注入 —— slashCommands
    *  阶段按本消息预绑定 IO(reply 缝、adminRoom、allRpcs、audit)交给它。
    *  依赖面取最小结构(路由侧只调 handleCommand);Absent = /update 回
@@ -167,6 +181,13 @@ interface StageContext {
 export interface MessageRouter {
   /** Handle an incoming messenger message */
   handleIncoming(msg: ExternalMessage): Promise<void>;
+  /**
+   * reaction 统一入口(票02 #269):provider 的 onReaction 汇入后先做信任
+   * 校验(fail-closed,与消息管道 authorizationGate 同一 isTrustedUser 判定
+   * ——reaction 不走消息管道,必须自带安检),未授权静默丢弃记日志;通过后
+   * 按序尝试各流的 reaction 应答(本票:积压流;extension 流在票03 接入)。
+   */
+  handleReaction(reaction: MatrixReaction): void;
   /** 管道阶段视图(spec #72 票3/C1):顺序即执行顺序,属性即不变量——
    *  供测试钉住"阶段表",供导航时一眼读出管道形状。 */
   pipeline(): PipelineStageView[];
@@ -359,9 +380,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
   // 审计 trails(issue #124):敏感动作的统一记账口 —— 谁在哪个房间干了什么。
   // actor 取 namespaced 身份(与信任/管理员判定同键);detail 一行以内,
-  // 由调用点裁剪。未注入 = 零审计,行为与现状逐字节一致。
-  const auditTrail = (event: string, msg: ExternalMessage, detail?: string): void => {
-    deps.audit?.append(event, namespacedId(msg.userId, msg.transport), msg.chatId, detail);
+  // 由调用点裁剪。未注入 = 零审计,行为与现状逐字节一致。主体是三字段
+  // 窄形状(#269:reaction 应答没有消息体可取,文字应答传整条消息,结构
+  // 兼容),审计只认 谁/哪个通道/哪个房间。
+  const auditTrail = (event: string, actor: { userId: string; transport: string; chatId: string }, detail?: string): void => {
+    deps.audit?.append(event, namespacedId(actor.userId, actor.transport), actor.chatId, detail);
   };
 
   // 模型降级链(issue #121):连败记账与耗尽提示的「只提示一次」都在
@@ -824,6 +847,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     // #136 修法B:结算定时器冻结到 transport 连接阶段结束(装配根注入,
     // 连接 try/catch 后 resolve);缺省 = 已就绪(旧语义)。
     transportsReady: deps.backlogTransportsReady,
+    // 表情作答缝(票02 #269):组合根只在 Matrix transport 存在时注入,
+    // 双双注入才启用;缺省未注入 = 功能禁用,行为与旧版逐字节一致。
+    ...(deps.replyWithId && deps.sendReaction
+      ? { replyWithId: deps.replyWithId, sendReaction: deps.sendReaction }
+      : {}),
     deliver: async (entries) => {
       for (const entry of entries) {
         const { replayed: _strip, ...realtime } = entry;
@@ -831,7 +859,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
     },
     config: () => store.get(),
-    onExecute: (msg, count) => auditTrail(AUDIT_EVENTS.backlogExecute, msg, `delivering ${count} offline backlog message(s)`),
+    onExecute: (actor, count) => auditTrail(AUDIT_EVENTS.backlogExecute, actor, `delivering ${count} offline backlog message(s)`),
   });
 
 
@@ -1494,12 +1522,28 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       return attachmentLedger.purgeRoom(roomId);
     },
 
+    /** reaction 统一入口(票02 #269)。先信任校验 fail-closed:reaction 不走
+     *  消息管道(authorizationGate 拦不到它),必须自带安检 —— 与消息管道
+     *  同一 isTrustedUser 判定;未授权静默丢弃,记一条 info。reaction 只会
+     *  来自 Matrix transport(票01 的 onReaction 是 Matrix provider 的缝),
+     *  transport 口径恒为 "matrix"。通过后按序尝试各流应答;谁都没认领
+     *  (无主/超时/未知 key)按噪音策略静默,仅 debug 一条。 */
+    handleReaction(reaction: MatrixReaction): void {
+      if (!auth.isTrustedUser(reaction.sender, "matrix")) {
+        logger.info(`[reaction] unauthorized sender ignored: ${reaction.sender} in ${reaction.chatId}`);
+        return;
+      }
+      const consumed = inbox.answerByReaction(reaction.chatId, reaction.targetEventId, reaction.key, reaction.sender);
+      if (!consumed) {
+        logger.debug(`[reaction] no pending prompt claims ${reaction.targetEventId} (key=${reaction.key})`);
+      }
+    },
+
     async handleIncoming(msg: ExternalMessage): Promise<void> {
       const text = msg.payload.kind === "text" ? msg.payload.text.trim() : "";
       // 空文本本身直接返回 — 非文本载荷(附件/失败/不支持)必须继续走,
       // 否则就是又一个静默吞消息的点(issue #66 票3)。
       if (msg.payload.kind === "text" && !text) return;
-
       // Project tagging (spec #34): a mapped room's lines carry its label;
       // everything else (single-project mode, DM, unmapped rooms) resolves to
       // undefined = the plain logger, byte-identical to the old output.
