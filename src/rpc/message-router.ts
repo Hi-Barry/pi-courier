@@ -1558,6 +1558,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // 空文本本身直接返回 — 非文本载荷(附件/失败/不支持)必须继续走,
       // 否则就是又一个静默吞消息的点(issue #66 票3)。
       if (msg.payload.kind === "text" && !text) return;
+
       // Project tagging (spec #34): a mapped room's lines carry its label;
       // everything else (single-project mode, DM, unmapped rooms) resolves to
       // undefined = the plain logger, byte-identical to the old output.

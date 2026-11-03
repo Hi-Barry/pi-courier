@@ -301,10 +301,11 @@ export class ExtensionQuestions {
     const text = extensionUIQuestionText(entry.request);
     const emojis = promptReactions(entry.request);
     const { replyWithId, sendReaction } = this.deps;
+    const warnCardSendFailure = (err: unknown): void => {
+      logger.warn(`[xq] 问题卡片发送失败(用户看不到这道题): ${errorMessage(err)}`);
+    };
     if (!replyWithId || !sendReaction || emojis.length === 0) {
-      void this.deps.sendReply(chatId, transport, text).catch((err: unknown) => {
-        logger.warn(`[xq] 问题卡片发送失败(用户看不到这道题): ${errorMessage(err)}`);
-      });
+      void this.deps.sendReply(chatId, transport, text).catch((err: unknown) => warnCardSendFailure(err));
       return;
     }
     void replyWithId(chatId, transport, text)
@@ -320,9 +321,7 @@ export class ExtensionQuestions {
           );
         }
       })
-      .catch((err: unknown) => {
-        logger.warn(`[xq] 问题卡片发送失败(用户看不到这道题): ${errorMessage(err)}`);
-      });
+      .catch((err: unknown) => warnCardSendFailure(err));
   }
 
   /**

@@ -246,6 +246,12 @@ export class BacklogInbox {
       lines: mergedLines,
       minutes: BACKLOG_CONFIRM_TIMEOUT_MS / 60_000,
     });
+    const discardPromptFailure = (err: unknown): void => {
+      // 征询发不出去(极端时序)等于没人能批准 —— 按忽略处理,积压不留悬案。
+      this.awaiting.delete(chatId);
+      clearTimeout(confirmTimer);
+      logger.warn(`backlog confirm prompt failed, backlog discarded: ${errorMessage(err)}`);
+    };
     // 表情作答开启(replyWithId + sendReaction 双双注入,#269):征询走
     // replyWithId 拿 event_id,拿到后把 id 记入悬置条目并 fire-and-forget
     // 种上 ✅/❌。种表情失败只 debug —— 征询已发出,文字通道始终可用。
@@ -265,19 +271,9 @@ export class BacklogInbox {
             );
           }
         })
-        .catch((err: unknown) => {
-          // 征询发不出去(极端时序)等于没人能批准 —— 按忽略处理,积压不留悬案。
-          this.awaiting.delete(chatId);
-          clearTimeout(confirmTimer);
-          logger.warn(`backlog confirm prompt failed, backlog discarded: ${errorMessage(err)}`);
-        });
+        .catch((err: unknown) => discardPromptFailure(err));
       return;
     }
-    void this.options.reply(chatId, transport, promptText).catch((err: unknown) => {
-      // 征询发不出去(极端时序)等于没人能批准 —— 按忽略处理,积压不留悬案。
-      this.awaiting.delete(chatId);
-      clearTimeout(confirmTimer);
-      logger.warn(`backlog confirm prompt failed, backlog discarded: ${errorMessage(err)}`);
-    });
+    void this.options.reply(chatId, transport, promptText).catch((err: unknown) => discardPromptFailure(err));
   }
 }
