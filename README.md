@@ -338,6 +338,8 @@ When an extension asks you something (confirm / select / input / editor dialogs 
 - several questions pending: the oldest is answered first; messages starting with `/` still go through the command channel
 - extension notifications are filtered by level: warning / error reach the room, info stays in the log
 
+confirm and select questions can also be answered by **tapping a reaction**: once the question is posted, a row of reactions grows underneath automatically — confirm gets ✅ (= `y`) / ❌ (= `n`); select gets a digit keycap per option (1️⃣…🔟) when there are 10 options or fewer — tap the digit to pick that option — and no reactions at all beyond 10 options (keep replying with a number). Reactions ride the same state machine as typed replies: they share the same timeout (the `extensionUiTimeoutMinutes` below covers taps too) and the same trust boundary — only trusted users' taps count; taps from anyone else are silently ignored and never produce a reply. The text channel stays exactly as it was for those who prefer typing; on transports without reaction support the flow degrades to plain-text interaction automatically — no config switch needed.
+
 Pending questions auto-cancel after `extensionUiTimeoutMinutes` (default 10) — the room gets a notice and the extension receives a cancel. This field is **not** part of the setup wizard: add it to the config file by hand (`~/.config/pi-courier/pi-courier.json` on Linux, `~/.pi/pi-courier.json` on Windows), then `pi-courier restart`:
 
 ```json
@@ -509,7 +511,7 @@ Every sensitive action appends one JSONL line to the audit log in the state dir 
 - answer `y` to "Enable multi-project mode?" during setup
 - or later send `/multiproject on` and restart with `pi-courier restart`
 
-> **Offline inbox** (since 0.5.0): messages sent while the bot was down are **no longer lost** — after a restart the bot settles them per room ("N message(s) arrived while offline" + the full list); reply **"execute"** to run them in order or **"ignore"** to discard (valid 10 minutes; silence counts as ignore). This is the default; set `inbox.mode: "auto"` to run them after a notice, or `"off"` to restore the old drop-quietly behaviour. Backlog from untrusted senders still goes through the normal gate — it never becomes a privilege bypass.
+> **Offline inbox** (since 0.5.0): messages sent while the bot was down are **no longer lost** — after a restart the bot settles them per room ("N message(s) arrived while offline" + the full list); reply **"execute"** to run them in order or **"ignore"** to discard (valid 10 minutes; silence counts as ignore). This is the default; set `inbox.mode: "auto"` to run them after a notice, or `"off"` to restore the old drop-quietly behaviour. Backlog from untrusted senders still goes through the normal gate — it never becomes a privilege bypass. The prompt message also grows ✅ / ❌ reactions underneath — one tap counts as replying **"execute"** / "ignore"; reactions share the same timer as typing (silence still counts as ignore), only trusted users' taps count, unauthorized taps are silently ignored, the text channel stays as-is, and when reactions cannot be planted (or the transport does not support them) the prompt goes out as plain text as before.
 
 `/multiproject` (trusted users): `on` / `off` (both take effect on restart); no args shows the current mode. The management-room / project-room mechanisms below only exist in multi-project mode.
 
