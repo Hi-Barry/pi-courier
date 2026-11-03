@@ -363,8 +363,13 @@ describe("formatBashReply — win32 未加引号路径提示(spec #256)", () => 
     expect(formatBashReply("dir d:\\share\\Projects", winFail, false, 30000, "darwin")).not.toContain("/d/share/Projects");
   });
 
-  it("缺省 platform 参数即当前进程(CI 上非 win32)→ 不提示", () => {
-    expect(formatBashReply("dir d:\\share\\Projects", winFail)).not.toContain("/d/share/Projects");
+  it("缺省 platform 参数即当前进程 → 提示行为随运行平台(linux 不提示 / win32 提示)", () => {
+    const out = formatBashReply("dir d:\\share\\Projects", winFail);
+    if (process.platform === "win32") {
+      expect(out).toContain("/d/share/Projects");
+    } else {
+      expect(out).not.toContain("/d/share/Projects");
+    }
   });
 
   it("win32 失败但路径已写对(引号/正斜杠/双反斜杠)→ 不提示", () => {
