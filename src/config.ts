@@ -215,7 +215,22 @@ export function saveConfig(config: MsgBridgeConfig): void {
     let fd: number | undefined;
     try {
       fd = fs.openSync(tempPath, "w", 0o600);
-      fs.writeSync(fd, payload);
+      // POSIX write allows SHORT WRITES — under ENOSPC, ext4 commonly returns
+      // the byte count written so far instead of throwing (verified: ulimit -f
+      // 1 → writeSync(4096) returns 1024, fsync succeeds). writeFileSync used
+      // to loop internally; keep that full-write guarantee here: loop until
+      // every byte lands, and treat a non-positive step as failure. Falling
+      // short of the payload must NEVER reach the rename — a truncated config
+      // is exactly the corruption this ticket exists to prevent.
+      const buf = Buffer.from(payload, "utf-8");
+      let written = 0;
+      while (written < buf.length) {
+        const n = fs.writeSync(fd, buf, written, buf.length - written);
+        if (n <= 0) {
+          throw new Error(`Short write to config temp file: ${written}/${buf.length} bytes written (disk full?)`);
+        }
+        written += n;
+      }
       // Flush payload BEFORE the rename: without this, power loss right
       // after the rename can leave a valid-looking config.json backed by
       // unflushed (empty) blocks. Best-effort — some filesystems reject
