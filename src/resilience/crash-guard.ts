@@ -50,10 +50,24 @@ export interface CrashGuard {
   handleCrash(kind: string, error: unknown): Promise<void>;
 }
 
-/** 死因单行摘要(错误名 + 消息;非 Error 值 String 化)—— 给管理房留言。 */
+/**
+ * 死因单行摘要(错误名 + 消息;非 Error 值安全 String 化)—— 给管理房留言。
+ * 永不抛错:不可原语化对象(如 Symbol.toPrimitive 抛错的壳、null 原型对象)
+ * 会让 String() 抛 TypeError,此处退回 Object.prototype.toString 内部标签,
+ * 连标签都取不到(Symbol.toStringTag getter 掷毒)再退字面量 —— 死因摘要
+ * 自身绝不允许成为二次崩溃源。
+ */
 export function crashReason(error: unknown): string {
-  if (error instanceof Error) return `${error.name}: ${error.message}`;
-  return String(error);
+  try {
+    if (error instanceof Error) return `${error.name}: ${error.message}`;
+    return String(error);
+  } catch {
+    try {
+      return Object.prototype.toString.call(error);
+    } catch {
+      return `[unstringifiable ${typeof error}]`;
+    }
+  }
 }
 
 export function createCrashGuard(deps: CrashGuardDeps): CrashGuard {
@@ -63,9 +77,14 @@ export function createCrashGuard(deps: CrashGuardDeps): CrashGuard {
     if (entered) return;
     entered = true;
 
-    const reason = crashReason(error);
-    // ① 结构化死因进日志:错误名 + 消息 + 栈。log 自身抛错也直接硬退。
+    // 死因摘要也放在 ① 环 try 内:摘要环节自身抛错时仍走硬退兜底,守卫
+    // 不至于整体失效(三环全跳 + entered 已置位吞掉后续)。crashReason
+    // 本体已承诺永不抛错,这里是结构性保险。
+    let reason: string;
+    // ① 结构化死因进日志:错误名 + 消息 + 栈。crashReason/log 自身抛错
+    // 也直接硬退。
     try {
+      reason = crashReason(error);
       const stack = error instanceof Error ? (error.stack ?? "") : "";
       deps.log(`[crash] ${kind}: ${reason}${stack ? `\n${stack}` : ""}`);
     } catch {
