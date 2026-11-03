@@ -1,14 +1,16 @@
 /**
- * reaction 快捷应答的 router 侧(spec #267 票02,#269):真实管道 + fake
- * timers —— 统一入口的信任闸门(fail-closed)、积压征询的 ✅/❌ 种植与
- * 点击应答、噪音策略(超时/无主/未知 key 静默)与未注入缝的零回归全在
- * 本文件钉死。rpc/授权边界 fake,其余全真(与 router-backlog 同装配)。
+ * reaction 快捷应答的 router 侧(spec #267 票02,#269;票03 #270 追加 extension
+ * 流):真实管道 + fake timers —— 统一入口的信任闸门(fail-closed)、积压征询
+ * 的 ✅/❌ 种植与点击应答、extension 提问的端到端表情应答、噪音策略(超时/
+ * 无主/未知 key 静默)与未注入缝的零回归全在本文件钉死。rpc/授权边界 fake,
+ * 其余全真(与 router-backlog 同装配)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REACTION_APPROVE, REACTION_REJECT } from "../src/rpc/reactions";
+import type { ExtensionUIRequestView } from "../src/rpc/extension-questions";
+import type { ExtensionUIResponsePayload, PiRpc } from "../src/rpc/pi-rpc";
 import type { MessageRouter } from "../src/rpc/message-router";
 import type { MatrixReaction } from "../src/transports/matrix";
-import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ExternalMessage } from "../src/types";
 import { ConfigStore } from "../src/config";
 import { makeMsg, makeRouterFixture } from "./helpers";
@@ -224,5 +226,178 @@ describe("backlog confirm reactions (spec #267 票02)", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(prompt).not.toHaveBeenCalled();
     expect(replies).toHaveLength(1);
+  });
+});
+
+describe("extension question reactions end-to-end (spec #267 票03, #270)", () => {
+  let replies: Array<{ chatId: string; transport: string; text: string }>;
+  let prompts: Array<{ chatId: string; transport: string; text: string }>;
+  let planted: Array<{ chatId: string; eventId: string; emoji: string }>;
+  let extensionResponses: ExtensionUIResponsePayload[];
+  let prompt: ReturnType<typeof vi.fn>;
+  let router: MessageRouter;
+  let store: ConfigStore;
+  let rpc: PiRpc;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    replies = [];
+    prompts = [];
+    planted = [];
+    extensionResponses = [];
+    prompt = vi.fn().mockResolvedValue(undefined);
+    store = new ConfigStore({});
+    router = buildRouter();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** extension 流装配:rpc 带 respondExtensionUI,双缝录制提问卡与种植。 */
+  function buildRouter(trusted: string[] = ["matrix:@barry:server"]) {
+    rpc = {
+      prompt,
+      respondExtensionUI: vi.fn().mockImplementation(async (payload: ExtensionUIResponsePayload) => {
+        extensionResponses.push(payload);
+      }),
+      getState: vi.fn().mockResolvedValue({ isStreaming: false, model: { id: "m" }, pendingMessageCount: 0 }),
+      label: undefined,
+      onEvent: vi.fn(),
+    } as unknown as PiRpc;
+    const fixture = makeRouterFixture({
+      store,
+      rpc,
+      trusted,
+      sendReply: async (chatId: string, transport: string, text: string) => {
+        replies.push({ chatId, transport, text });
+      },
+      extra: {
+        replyWithId: async (chatId: string, transport: string, text: string) => {
+          prompts.push({ chatId, transport, text });
+          return `evt-prompt-${prompts.length}`;
+        },
+        sendReaction: async (chatId: string, eventId: string, emoji: string) => {
+          planted.push({ chatId, eventId, emoji });
+        },
+      },
+    });
+    return fixture.router;
+  }
+
+  /** 绑定房间后经事件路径发出一道 extension 提问,返回提问消息 event_id。 */
+  async function askInDm(request: ExtensionUIRequestView): Promise<string> {
+    await router.handleIncoming(makeMsg({ text: "start a task" }));
+    prompt.mockClear(); // 绑定用的 prompt 不在被测断言里
+    router.handleEvent(request, rpc);
+    await vi.advanceTimersByTimeAsync(0); // 冲 replyWithId 微任务链
+    expect(prompts).toHaveLength(1);
+    return "evt-prompt-1";
+  }
+
+  const confirmRequest = (id = "q1"): ExtensionUIRequestView =>
+    ({
+      type: "extension_ui_request",
+      id,
+      method: "confirm",
+      title: "允许部署?",
+      message: "将执行 deploy.sh",
+    }) as ExtensionUIRequestView;
+
+  const tap = (key: string, sender = "@barry:server", targetEventId = "evt-prompt-1"): MatrixReaction => ({
+    chatId: "!dm:server",
+    targetEventId,
+    key,
+    sender,
+  });
+
+  it("confirm 提问在其消息上种 ✅/❌;点 ✅ → respond confirmed:true + 既有回执", async () => {
+    const promptId = await askInDm(confirmRequest());
+    expect(replies).toHaveLength(0); // 提问卡走 id 缝,不经 reply 缝
+    expect(planted.map((p) => p.emoji)).toEqual([REACTION_APPROVE, REACTION_REJECT]);
+    expect(planted.every((p) => p.eventId === promptId && p.chatId === "!dm:server")).toBe(true);
+
+    router.handleReaction(tap(REACTION_APPROVE));
+    await vi.waitFor(() => expect(replies.map((r) => r.text)).toEqual(["✅ 已回应"]));
+    expect(extensionResponses).toEqual([{ id: "q1", confirmed: true }]);
+    expect(prompt).not.toHaveBeenCalled(); // 不漏进对话管道
+  });
+
+  it("点 ❌ → respond confirmed:false", async () => {
+    await askInDm(confirmRequest());
+    router.handleReaction(tap(REACTION_REJECT));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(extensionResponses).toEqual([{ id: "q1", confirmed: false }]);
+  });
+
+  it("select 提问种键帽数字;点 2️⃣ → respond value=第 2 项", async () => {
+    const select = {
+      type: "extension_ui_request",
+      id: "q1",
+      method: "select",
+      title: "选择环境",
+      options: ["dev", "staging", "prod"],
+    } as ExtensionUIRequestView;
+    await askInDm(select);
+    expect(planted.map((p) => p.emoji)).toEqual(["1️⃣", "2️⃣", "3️⃣"]);
+    router.handleReaction(tap("2️⃣"));
+    await vi.waitFor(() => expect(replies.map((r) => r.text)).toEqual(["✅ 已回应"]));
+    expect(extensionResponses).toEqual([{ id: "q1", value: "staging" }]);
+  });
+
+  it("非信任 sender 点击 extension 表情:闸门静默(fail-closed),信任用户随后可答", async () => {
+    const promptId = await askInDm(confirmRequest());
+    router.handleReaction(tap(REACTION_APPROVE, "@mallory:server", promptId));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(extensionResponses).toHaveLength(0);
+    expect(replies).toHaveLength(0);
+    router.handleReaction(tap(REACTION_APPROVE, "@barry:server", promptId));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(extensionResponses).toEqual([{ id: "q1", confirmed: true }]);
+  });
+
+  it("extension 流在分发链上位于积压流之后:积压征询先认领,extension 不受干扰", async () => {
+    // 只有 extension 悬置时,点击落在 extension(主链路已在上面钉死);这里钉
+    // 无主 target 依旧全链静默(两流都没吃 → 仅 debug,无回帖无 respond)。
+    await askInDm(confirmRequest());
+    router.handleReaction(tap("👍", "@barry:server", "evt-prompt-1"));
+    router.handleReaction(tap(REACTION_APPROVE, "@barry:server", "evt-unknown"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(extensionResponses).toHaveLength(0);
+    expect(replies).toHaveLength(0);
+  });
+
+  it("replyWithId/sendReaction 未注入:extension 提问照走旧 reply 通道,点击静默", async () => {
+    const rpc = {
+      prompt,
+      respondExtensionUI: vi.fn().mockImplementation(async (payload: ExtensionUIResponsePayload) => {
+        extensionResponses.push(payload);
+      }),
+      getState: vi.fn().mockResolvedValue({ isStreaming: false, model: { id: "m" }, pendingMessageCount: 0 }),
+      label: undefined,
+      onEvent: vi.fn(),
+    } as unknown as PiRpc;
+    const fixture = makeRouterFixture({
+      store,
+      rpc,
+      sendReply: async (chatId: string, transport: string, text: string) => {
+        replies.push({ chatId, transport, text });
+      },
+    });
+    router = fixture.router;
+    await router.handleIncoming(makeMsg({ text: "start a task" }));
+    prompt.mockClear();
+    router.handleEvent(confirmRequest(), rpc);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(replies).toHaveLength(1); // 提问卡走旧 reply 通道
+    expect(replies[0]!.text).toContain("❓ 允许部署?");
+    expect(planted).toHaveLength(0);
+    router.handleReaction(tap(REACTION_APPROVE));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(extensionResponses).toHaveLength(0); // 表情入口不消费
+    // 文字通道照常作答
+    await router.handleIncoming(makeMsg({ text: "y", messageId: "m2" }));
+    expect(extensionResponses).toEqual([{ id: "q1", confirmed: true }]);
   });
 });

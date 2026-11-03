@@ -185,7 +185,7 @@ export interface MessageRouter {
    * reaction 统一入口(票02 #269):provider 的 onReaction 汇入后先做信任
    * 校验(fail-closed,与消息管道 authorizationGate 同一 isTrustedUser 判定
    * ——reaction 不走消息管道,必须自带安检),未授权静默丢弃记日志;通过后
-   * 按序尝试各流的 reaction 应答(本票:积压流;extension 流在票03 接入)。
+   * 按序尝试各流的 reaction 应答(积压流、extension 流——后者票03 #270)。
    */
   handleReaction(reaction: MatrixReaction): void;
   /** 管道阶段视图(spec #72 票3/C1):顺序即执行顺序,属性即不变量——
@@ -881,6 +881,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     respond: (rpc, payload) => rpc.respondExtensionUI(payload),
     timeoutMs: () => extensionUiTimeoutMs(store.get()),
     subscribeRestart: (rpc, handler) => rpc.onRestarted?.(handler),
+    // 表情作答缝(票03 #270):与 BacklogInbox 同门同形,双双注入才启用;
+    // 缺省未注入 = 功能禁用,提问照走 sendReply,行为与旧版逐字节一致。
+    ...(deps.replyWithId && deps.sendReaction
+      ? { replyWithId: deps.replyWithId, sendReaction: deps.sendReaction }
+      : {}),
   });
 
   // TUI ↔ Matrix 会话镜像(/attach /detach):显示靠 tail + 去重,上下文靠
@@ -1522,21 +1527,30 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       return attachmentLedger.purgeRoom(roomId);
     },
 
-    /** reaction 统一入口(票02 #269)。先信任校验 fail-closed:reaction 不走
-     *  消息管道(authorizationGate 拦不到它),必须自带安检 —— 与消息管道
-     *  同一 isTrustedUser 判定;未授权静默丢弃,记一条 info。reaction 只会
-     *  来自 Matrix transport(票01 的 onReaction 是 Matrix provider 的缝),
-     *  transport 口径恒为 "matrix"。通过后按序尝试各流应答;谁都没认领
-     *  (无主/超时/未知 key)按噪音策略静默,仅 debug 一条。 */
+    /** reaction 统一入口(票02 #269;票03 #270 接入 extension 流)。先信任
+     *  校验 fail-closed:reaction 不走消息管道(authorizationGate 拦不到它),
+     *  必须自带安检 —— 与消息管道同一 isTrustedUser 判定;未授权静默丢弃,
+     *  记一条 info。reaction 只会来自 Matrix transport(票01 的 onReaction
+     *  是 Matrix provider 的缝),transport 口径恒为 "matrix"。通过后按序
+     *  尝试积压流、extension 流;谁都没认领(无主/超时/未知 key)按噪音
+     *  策略静默,仅 debug 一条。 */
     handleReaction(reaction: MatrixReaction): void {
       if (!auth.isTrustedUser(reaction.sender, "matrix")) {
         logger.info(`[reaction] unauthorized sender ignored: ${reaction.sender} in ${reaction.chatId}`);
         return;
       }
-      const consumed = inbox.answerByReaction(reaction.chatId, reaction.targetEventId, reaction.key, reaction.sender);
-      if (!consumed) {
-        logger.debug(`[reaction] no pending prompt claims ${reaction.targetEventId} (key=${reaction.key})`);
-      }
+      if (inbox.answerByReaction(reaction.chatId, reaction.targetEventId, reaction.key, reaction.sender)) return;
+      // extension 流(票03 #270):需要该房间绑定的 pi 进程(extensionCapture
+      // 的 roomRpc 同源;不 bind —— reaction 不是消息,不挪回复绑定)。起不了
+      // 进程 = 无处作答,按静默处理(噪音策略,无回执通道)。
+      void Promise.resolve(projectManager.getRpcForRoom(reaction.chatId))
+        .then((rpc) => {
+          if (questions.deliverReaction(rpc, reaction.chatId, reaction.targetEventId, reaction.key)) return;
+          logger.debug(`[reaction] no pending prompt claims ${reaction.targetEventId} (key=${reaction.key})`);
+        })
+        .catch((err: unknown) => {
+          logger.debug(`[reaction] rpc unavailable, extension reaction dropped in ${reaction.chatId}: ${errorMessage(err)}`);
+        });
     },
 
     async handleIncoming(msg: ExternalMessage): Promise<void> {

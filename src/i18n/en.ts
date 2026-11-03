@@ -446,8 +446,9 @@ const en: Record<MessageKey, string> = {
 
   // ── xq ────────────────────────────────────────────────────────────────
   "xq.untitled": "(untitled)",
-  "xq.confirm.how": "Reply y / n (send \"cancel\" to back out)",
-  "xq.select.how": "Reply with a number to choose (send \"cancel\" to back out)",
+  "xq.confirm.how": "Reply y / n (send \"cancel\" to back out); or tap the reactions below: ✅ = y / ❌ = n",
+  "xq.select.how": "Reply with a number to choose (send \"cancel\" to back out); or tap a number reaction below",
+  "xq.select.howMany": "Too many options for reaction buttons; reply with a number to choose (send \"cancel\" to back out)",
   "xq.input.how": "Reply directly with the content as the answer (send \"cancel\" to back out)",
   "xq.confirm.invalid": "⚠️ Please reply y or n (send \"cancel\" to back out)",
   "xq.select.invalid": "⚠️ Please reply with a number between 1 and {max} (send \"cancel\" to back out)",
