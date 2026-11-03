@@ -672,12 +672,13 @@ Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDA
 - **Autostart via Task Scheduler** (no admin needed, fires at every logon) — verified recipe:
 
   ```powershell
-  New-Item -ItemType Directory -Force "$env:APPDATA\pi-courier\state\logs" | Out-Null  # create the log dir once (the redirect below won't mkdir -p)
-  $action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c pi-courier run >> %APPDATA%\pi-courier\state\logs\run.log 2>&1'
+  $action  = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "//nologo `"$env:APPDATA\npm\node_modules\pi-courier\deploy\windows\run-hidden.vbs`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn
   Register-ScheduledTask -TaskName 'pi-courier' -Action $action -Trigger $trigger
   Start-ScheduledTask -TaskName 'pi-courier'   # start right now; it refires on every logon
   ```
+
+  The launcher (`run-hidden.vbs`, ships in the package) starts the bridge with a **hidden console** (window style 0) and creates the log dir itself — no permanent black window on your desktop. It deliberately keeps the **interactive session**: agent-spawned GUI processes (browsers, UAC prompts, desktop automation) still appear on your desktop, which is why the bridge task itself must NOT use S4U/session 0.
 
   This is a **logon-triggered** task: it starts at every logon only. It does not restart a process that crashes, is killed or hangs mid-session; after the process dies the task may still show Running. There are two ways to add self-healing:
 
@@ -691,6 +692,10 @@ Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDA
       -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\pi-courier\deploy\watchdog\watchdog-windows.ps1" -TaskName pi-courier'
     $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration ([TimeSpan]::MaxValue)
     Register-ScheduledTask -TaskName "pi-courier-watchdog" -Action $action -Trigger $trigger -Force
+    # No per-minute console flash: the watchdog is pure file + task ops, so run it
+    # headless (session 0, "run whether user is logged on or not", no password):
+    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U
+    Set-ScheduledTask -TaskName "pi-courier-watchdog" -Principal $principal
     ```
 
     (`-RepetitionInterval` + `-RepetitionDuration ([TimeSpan]::MaxValue)` is the equivalent of the old `schtasks /sc minute /mo 1`: every minute, indefinitely. Keep the task names space-free — the watchdog's restart sequence calls `schtasks /end` / `/run` with them unquoted.)
