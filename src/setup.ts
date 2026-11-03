@@ -4,7 +4,8 @@
  * Usage: node dist/standalone.js --setup
  *
  * Walks through: Matrix homeserver → bot login (or pasted token) → trusted
- * admin user → E2EE toggle, then writes ~/.pi/pi-courier.json.
+ * admin user → E2EE toggle, then writes the bridge config file at the
+ * layout's configDir/pi-courier.json (spec #258 票03; saveConfig owns the path).
  */
 
 import { stdin, stdout } from "node:process";
@@ -16,6 +17,7 @@ import {
   effectiveWorkdir,
   loadConfig,
   nativeMxid,
+  runtimeLayout,
   saveConfig,
 } from "./config.js";
 import { errorMessage } from "./errors.js";
@@ -234,7 +236,7 @@ export async function runSetup(): Promise<void> {
     const langRaw = (await ask(t("setup.languagePrompt", { def: langDefault }))).trim().toLowerCase();
     const lang: Locale = langRaw === "zh" || langRaw === "en" ? langRaw : langDefault;
     setLocale(lang);
-    console.log(t("setup.header"));
+    console.log(t("setup.header", { path: runtimeLayout().configPath }));
 
     // ---- 1. homeserver ----------------------------------------------------
     const hsDefault = existing.matrix?.homeserverUrl ?? "";
@@ -434,7 +436,7 @@ export async function runSetup(): Promise<void> {
     };
     saveConfig(merged);
 
-    console.log(t("setup.done.title"));
+    console.log(t("setup.done.title", { path: runtimeLayout().configPath }));
     console.log(t("setup.done.account", { user: botUserId }));
     console.log(t("setup.done.trusted", { user: adminRaw }));
     console.log(t("setup.done.e2ee", { state: encryption ? t("common.enabled") : t("common.disabled") }));

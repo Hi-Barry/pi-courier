@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  defaultHeartbeatPath,
   defaultPidAlive,
   DEFAULT_STALE_SECONDS,
   fillCommand,
@@ -276,6 +277,19 @@ describe("CLI 参数解析(parseCoreArgs)", () => {
     expect(opts?.alertCommand).toContain("alert.mjs");
 
     expect(parseCoreArgs(["--stale-seconds", "120"])).toBeNull();
+  });
+
+  it("默认心跳路径落在 spec #258 新布局状态根(--heartbeat 显式传参仍可覆盖)", () => {
+    // 只锚定平台相关的尾段,不受宿主 HOME/XDG 环境污染:
+    // win32/darwin = <dataDir>/state/heartbeat.json;linux 系 = XDG state/pi-courier/heartbeat.json
+    const heartbeat = defaultHeartbeatPath();
+    expect(path.basename(heartbeat)).toBe("heartbeat.json");
+    const expected =
+      process.platform === "linux"
+        ? path.join("pi-courier", "heartbeat.json")
+        : path.join("pi-courier", "state", "heartbeat.json");
+    expect(heartbeat).toContain(expected);
+    expect(heartbeat).not.toContain(path.join(".pi", "pi-courier-state"));
   });
 });
 

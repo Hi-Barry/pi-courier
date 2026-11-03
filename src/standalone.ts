@@ -11,6 +11,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { AUDIT_EVENTS, AuditLog } from "./audit/audit-log.js";
@@ -19,7 +20,6 @@ import {
   attachmentsDirectory,
   attachmentsMaxBytes,
   bashTimeoutMinutes,
-  CONFIG_DIR,
   ConfigStore,
   diskHardMb,
   diskSoftMb,
@@ -30,11 +30,13 @@ import {
   presetProblems,
   resolveLanguage,
   rpcRespawnLimit,
+  runtimeLayout,
   THINKING_LEVELS,
 } from "./config.js";
 import { errorMessage } from "./errors.js";
 import { truncateLine } from "./formatting.js";
 import { setLocale, t } from "./i18n/index.js";
+import { buildLegacyMigrationPlan, runLegacyMigration } from "./legacy-migration.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
 import { applyProxySettings } from "./proxy.js";
@@ -62,6 +64,7 @@ import { AttachmentStore } from "./transports/attachments.js";
 import { FileEventLedger } from "./transports/event-ledger.js";
 import type { RoomOps } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
+import { createMatrixClient } from "./transports/matrix-client.js";
 import { consumePendingUpdate, PendingUpdateStore } from "./update/pending-update.js";
 import { UpdateOrchestrator } from "./update/updater.js";
 import { suppressKnownWarnings } from "./warnings.js";
@@ -103,8 +106,23 @@ function parseArgs(argv: string[]): { workdir?: string; logLevel?: string } {
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
-  // Single-instance guard (same lock file as the extension mode)
-  if (!acquireLock()) {
+  // ---- 布局解析 + 旧布局迁移(spec #258 票03)--------------------------------
+  // 进程内第一件事:经 runtimeLayout()(config.ts 的进程内唯一布局实例,
+  // 与 cli.ts 及其余消费模块同源缓存)解析三根分离布局(configDir/dataDir/
+  // stateDir,票01),并在拿单实例锁「之前」执行旧布局迁移(票02 时序冻结)
+  // —— 旧 ~/.pi 下的 Matrix 存储/crypto/附件/状态叶子(含非 Windows 的配置
+  // 文件)先搬进新家,之后锁、ConfigStore、Matrix SDK 存储才在新位置落盘。
+  // 迁移逐项独立、失败只警告不抛(runLegacyMigration 内建),绝不卡死启动;
+  // 迁移清单经日志缝(logger.info/warn)可见,这里不再重复包装。迁移日志
+  // 先于语言解析:此时 locale 还是默认值,属已知可接受(语言要读配置,配置
+  // 要等迁移搬家)。
+  const layout = runtimeLayout();
+  runLegacyMigration({
+    plan: buildLegacyMigrationPlan({ platform: process.platform, homedir: os.homedir(), layout }),
+  });
+
+  // Single-instance guard (lockPath injected from the resolved layout)
+  if (!acquireLock(layout.lockPath)) {
     console.error("[bridge] another pi-courier instance is already running — exiting");
     process.exit(1);
   }
@@ -123,7 +141,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     logger.info(
       t(
         language.source === "system" ? "startup.language.system" : "startup.language.default",
-        { locale: language.locale }
+        // 配置文件路径经布局注入(spec #258 票03):文案不再硬编码 ~/.pi。
+        { locale: language.locale, path: layout.configPath }
       )
     );
   }
@@ -147,7 +166,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
   }
   const workdir = await resolveWorkdir(args.workdir, store, undefined, (wd) =>
-    logger.info(`工作目录: ${wd}(已保存到 ~/.pi/pi-courier.json,改配置后重启即生效)`)
+    logger.info(t("startup.workdirSaved", { workdir: wd, path: layout.configPath }))
   );
   const config = store.get();
   const sessionDir = config.sessionDir;
@@ -158,12 +177,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const configLevel = typeof config.logLevel === "string" ? parseLogLevel(config.logLevel) : undefined;
   setLogLevel(cliLevel ?? configLevel ?? "info");
 
-  // ---- durable state (issue #114) --------------------------------------------
-  // ~/.pi/pi-courier-state/(0700)收桥的派生状态文件:磁盘是备份,内存是热路径。
-  // 配置(pi-courier.json)、Matrix SDK 存储、PID 锁各归 ~/.pi 原位,不迁。
+  // ---- durable state (issue #114 + spec #258 票03) ---------------------------
+  // stateDir(0700,布局解析的状态根)收桥的派生状态文件:磁盘是备份,内存
+  // 是热路径。心跳/审计/台账/快照/人工停止标记全部落 stateDir(旧
+  // ~/.pi/pi-courier-state/ 的五个叶子已由启动期迁移平移进来);配置在
+  // configDir、Matrix SDK 存储在 dataDir、PID 锁在 stateDir,各归各根。
   // 路径先于启动期硬阈值派生:人工停止标记必须在任何退出路径之前清除
   // (否则上次 stop 留下的标记会让看门狗一直跳过,连硬退崩溃循环都不拉起)。
-  const stateDir = path.join(CONFIG_DIR, "pi-courier-state");
+  const stateDir = layout.stateDir;
   const manualStopMarker = manualStopMarkerPath(stateDir);
   clearManualStop(manualStopMarker);
 
@@ -220,7 +241,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     heapAlertPercent: heapAlertPercent(config),
   });
   if (resourceGuard.startHardThresholdBreached()) {
-    releaseLock();
+    releaseLock(layout.lockPath);
     process.exit(CRASH_EXIT_CODE);
   }
 
@@ -232,7 +253,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // (如 socks5://)在此抛双语提示,进程经底部 catch 停下,不留连接超时。
   const proxySettings = applyProxySettings(config);
   if (proxySettings.source !== "none") {
-    logger.info(t("proxy.active", { proxy: proxySettings.proxy, source: proxySettings.source }));
+    logger.info(t("proxy.active", { proxy: proxySettings.proxy, source: proxySettings.source, path: layout.configPath }));
   }
 
   // ---- startup state (spec #99 票7 / #106) ----------------------------------
@@ -268,7 +289,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   if (config.matrix?.homeserverUrl && config.matrix?.accessToken) {
     // 赋值给外层变量(内层 const 会遮蔽,导致 !matrix 恒真——真机冒烟抓到)
-    matrix = new MatrixProvider(config.matrix, (chatId) => auth.isChannelEnabled(chatId));
+    matrix = new MatrixProvider(
+      config.matrix,
+      (chatId) => auth.isChannelEnabled(chatId),
+      // Matrix SDK 存储路径注入缝(spec #258 票03):组合根把布局解析的
+      // dataDir 叶子经工厂闭包注入 SDK 客户端 —— 存储落 dataDir/matrix-store.json
+      // 与 dataDir/matrix-crypto(旧 ~/.pi 带前缀的两者已由启动期迁移搬入),
+      // provider 与工厂类型签名保持不变。
+      (cfg) =>
+        createMatrixClient(cfg, {
+          storagePath: layout.matrixStorePath,
+          cryptoDir: layout.matrixCryptoDir,
+        }),
+    );
     // Attachment intake (issue #66): the store needs the Matrix client for
     // downloads, so it is created here and handed to the provider. Both read
     // config at construction time — changes take effect on restart like every
@@ -438,7 +471,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const shutdownChain = createShutdownChain({
     stopRpc: () => rpc.stop(),
     disconnectAll,
-    releaseLock,
+    releaseLock: () => releaseLock(layout.lockPath),
     exit: (code) => process.exit(code),
     log: (message) => logger.info(message),
   });
@@ -665,11 +698,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // users get the fix instead of a raw stack trace.
     const msg = errorMessage(err);
     if (msg.includes("M_BAD_JSON") && msg.includes("device_id")) {
-      logger.warn("   → 本地加密存储与 token 的设备身份不一致(换过 token / 重登过)。");
-      logger.warn("     解法:删除加密存储后重启 — rm -rf ~/.pi/pi-courier-matrix-crypto && pi-courier restart");
+      logger.warn(t("startup.cryptoDeviceMismatch"));
+      // 排障路径跟随布局(spec #258 票03):加密库已迁 dataDir/matrix-crypto。
+      logger.warn(t("startup.cryptoResetHint", { path: layout.matrixCryptoDir }));
     } else if (msg.includes("One time key") || msg.includes("already exists")) {
-      logger.warn("   → 服务器端 device 的 one-time key 记账与本地不一致。");
-      logger.warn("     解法:重跑 `pi-courier setup`,在\"保留现有 token?\"处输 n 换新 token(新设备=服务器干净)。");
+      logger.warn(t("startup.otkMismatch"));
+      logger.warn(t("startup.otkResetHint"));
     }
   }
   // 连接阶段结束(成功或已处理的失败),放行离线积压结算(#136)。
@@ -741,7 +775,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   } catch (err) {
     logger.error("[bridge] failed to start pi RPC:", errorMessage(err));
     await disconnectAll();
-    releaseLock();
+    releaseLock(layout.lockPath);
     process.exit(1);
   }
 
@@ -773,7 +807,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
     console.error("[bridge] fatal:", err);
-    releaseLock();
+    // 布局此刻可能未解析(早期异常):现场重取一次拿锁路径,fail 也只影响清理。
+    try {
+      releaseLock(runtimeLayout().lockPath);
+    } catch {
+      // ignore — best-effort cleanup on an already-failing startup
+    }
     process.exit(1);
   });
 }

@@ -1,10 +1,17 @@
 #!/bin/sh
 # pi-courier container entrypoint.
 #
-# First-run bootstrap: when the config volume (/root/.pi) is empty or has no
+# Volume layout (spec #258): /root/.pi is pi CLI's own home (credentials,
+# models, sessions — same on every platform); the bridge's config/data/state
+# live in the XDG dirs /root/.config/pi-courier, /root/.local/share/pi-courier
+# and /root/.local/state/pi-courier (bind-mounted from ./data/config, ./data/lib,
+# ./data/state). This script only seeds the agent home: when /root/.pi has no
 # agent config yet (fresh bind mount), copy the default templates from
 # /opt/pi-courier/defaults so the container works out of the box — the user
-# then only edits ./data/agent/auth.json (API key) and runs the setup wizard.
+# then only edits ./data/agent/auth.json (API key) and runs the setup wizard
+# (which writes the bridge config into /root/.config/pi-courier). Upgrading a
+# 0.2.x whole-volume deployment needs no migration logic here: the bridge
+# itself moves its legacy ~/.pi files into the new dirs on first start.
 
 set -e
 

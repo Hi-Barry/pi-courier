@@ -620,7 +620,7 @@ const zh = {
   // ── setup(首跑向导;语言首问之后,以下全部跟随所选语言)───────────────
   "setup.title": "=== pi-courier 配置向导 ===",
   "setup.languagePrompt": "语言? [{def}] (en/zh): ",
-  "setup.header": "将写入 ~/.pi/pi-courier.json(权限 600;已有配置作为默认值,直接回车沿用)\n",
+  "setup.header": "将写入 {path}(权限 600;已有配置作为默认值,直接回车沿用)\n",
   "setup.homeserver.default": "Matrix homeserver URL [默认 {def}]: ",
   "setup.homeserver.plain": "Matrix homeserver URL (如 https://matrix.example.com): ",
   "setup.homeserver.empty": "homeserver URL 不能为空",
@@ -662,7 +662,7 @@ const zh = {
   "setup.proxy.envInvalid":
     "⚠️ 环境变量里的代理不可用,已忽略:{message}\n   (可直接输入可用的 http/https 代理地址,或回车跳过)",
   "setup.proxy.exemptList": "豁免 {list}",
-  "setup.done.title": "\n✅ 配置已写入 ~/.pi/pi-courier.json",
+  "setup.done.title": "\n✅ 配置已写入 {path}",
   "setup.done.account": "   账号: {user}",
   "setup.done.trusted": "   信任用户: {user}",
   "setup.done.e2ee": "   E2EE: {state}",
@@ -736,15 +736,22 @@ const zh = {
   "hint.bus.tail3": "   若 /run/user/$(id -u) 不存在,请以该用户登录一次,或由 root 执行 loginctl enable-linger <用户>。",
 
   // ── startup(语言配置可见性;语言功能自身的一部分,破例双语)─────────
+  // 配置文件路径一律经 {path} 插值(spec #258 票03):Linux 的 configDir 已迁
+  // ~/.config/pi-courier,文案不再硬编码 ~/.pi,由调用方注入布局解析值。
   "startup.language.system":
-    "language: {locale}(检测自系统 locale;如需固定,请在 ~/.pi/pi-courier.json 配置 \"language\" 或设 PI_LANGUAGE)",
+    "language: {locale}(检测自系统 locale;如需固定,请在 {path} 配置 \"language\" 或设 PI_LANGUAGE)",
   "startup.language.default":
-    "language: {locale}(默认值;如需固定,请在 ~/.pi/pi-courier.json 配置 \"language\" 或设 PI_LANGUAGE)",
+    "language: {locale}(默认值;如需固定,请在 {path} 配置 \"language\" 或设 PI_LANGUAGE)",
   "startup.pairingNotice": "🔐 配对码 @{username}: {code}(2 分钟内有效,发给该用户用于配对)",
+  "startup.workdirSaved": "工作目录: {workdir}(已保存到 {path},改配置后重启即生效)",
+  "startup.cryptoDeviceMismatch": "   → 本地加密存储与 token 的设备身份不一致(换过 token / 重登过)。",
+  "startup.cryptoResetHint": "     解法:删除加密存储后重启 — rm -rf {path} && pi-courier restart",
+  "startup.otkMismatch": "   → 服务器端 device 的 one-time key 记账与本地不一致。",
+  "startup.otkResetHint": "     解法:重跑 `pi-courier setup`,在\"保留现有 token?\"处输 n 换新 token(新设备=服务器干净)。",
 
   // ── proxy(出网代理,spec #201 票 #202)───────────────────────────────
   "proxy.active":
-    "🌐 出网代理: {proxy}(来源: {source};修改 ~/.pi/pi-courier.json 后重启生效)",
+    "🌐 出网代理: {proxy}(来源: {source};修改 {path} 后重启生效)",
   "proxy.unsupportedScheme":
     "❌ 代理 \"{value}\"(来源: {origin})当前版本不支持 —— 仅支持 http/https 代理,请改用 http:// 或 https:// 开头的地址",
 
@@ -768,6 +775,21 @@ const zh = {
   "workflow.result": "**结果:** {result}",
   "workflow.control.hint": "💡 可直接用自然语言操控工作流(如「暂停」「继续」「停止」)。",
   "workflow.card.superseded": "⚠️ 上一个工作流已中断(未到终态);继续运行的工作流将另起新卡。",
+
+  // ── migration(旧布局自动迁移,spec #258 票02/issue #260)─────────────
+  "migration.moved": "🚚 旧布局迁移:{label}:{from} → {to}",
+  "migration.movedCrossVolume": "🚚 旧布局迁移(跨卷,已回退为复制):{label}:{from} → {to}",
+  "migration.bothExist":
+    "⚠️ {label} 新旧并存,以新家为准;旧文件原样保留:{from}(确认新家无误后可手动清理)",
+  "migration.lockRemoved": "🧹 旧单实例锁已清理(无进程持有):{path};新锁会在新位置按需重建",
+  "migration.lockRemoveFailed": "⚠️ 旧单实例锁清理失败(不阻塞启动,保留原样):{path}:{message}",
+  "migration.lockKeptLive":
+    "⚠️ 旧单实例锁仍有进程持有,已保留:{path}(确认无其他实例在跑后可手动删除)",
+  "migration.itemFailed": "⚠️ 旧布局迁移失败(已跳过该项,不影响启动):{label} {from} → {to}:{message}",
+  "migration.oldCleanupFailed":
+    "⚠️ {label} 已复制到新家 {to},但清理旧文件 {from} 失败:{message}(下次启动按新旧并存处理)",
+  "migration.summary":
+    "✅ 旧布局迁移完成:{moved} 项搬移,{skipped} 项已在新家,{conflicts} 项新旧并存,{failed} 项失败",
 } as const;
 
 export type MessageKey = keyof typeof zh;

@@ -4,11 +4,32 @@ import * as path from "node:path";
 import { defaultWindowsLocale, detectSystemLanguage } from "./i18n/detect.js";
 import type { Locale } from "./i18n/index.js";
 import { nextManagementRooms } from "./management-room.js";
+import type { Layout } from "./paths.js";
+import { resolveLayout } from "./paths.js";
 import type { MsgBridgeConfig, ProjectConfig, SpaceConfig } from "./types.js";
 
-/** 桥的配置目录 ~/.pi(单一持有:Matrix 客户端存储路径等从这里取 —— 审计工程批 票19)。 */
-export const CONFIG_DIR = path.join(os.homedir(), ".pi");
-const CONFIG_PATH = path.join(CONFIG_DIR, "pi-courier.json");
+// ── 布局注入缝(spec #258 票03)────────────────────────────────────
+// 配置读写、附件默认目录、头像相对路径基准不再各自拼 ~/.pi,全部从票01 的
+// 布局解析(configDir/dataDir/stateDir 三根分离)取。注入缝与 resilience 系
+// 同款:运行时零参走这里的默认实现(platform/homedir/env 取自进程),进程内
+// 只解析一次并缓存;组合根(standalone.ts/cli.ts)与测试经 `runtimeLayout()`
+// 拿同一实例做其余接线,配置侧不另立路径来源。测试隔离沿用既有做法
+// (vi.resetModules + doMock('os') → 缓存随模块重置,重解析用注入的 homedir;
+// win32 布局的 configDir 仍是 ~/.pi,Linux 迁到 ~/.config/pi-courier)。
+let cachedLayout: Layout | undefined;
+
+/** 进程内唯一的布局实例(组合根与其余消费模块共用;模块加载后首次调用解析)。 */
+export function runtimeLayout(): Layout {
+  cachedLayout ??= resolveLayout({
+    platform: process.platform,
+    homedir: os.homedir(),
+    env: process.env,
+  });
+  return cachedLayout;
+}
+
+const CONFIG_DIR = runtimeLayout().configDir;
+const CONFIG_PATH = runtimeLayout().configPath;
 
 /** Nested map fields whose entries are dereferenced downstream — a hand-edited
  *  `null`/scalar entry used to crash loading with a TypeError (audit stability
@@ -178,9 +199,10 @@ export function effectiveWorkdir(cfg: MsgBridgeConfig): string {
   return cfg.workdir ?? defaultProjectsRoot();
 }
 
-/** 附件保存根目录(spec #66):默认与 ~/.pi 下其他 pi-courier-* 状态文件平齐。 */
+/** 附件保存根目录(spec #66):默认落数据根的 attachments/(spec #258 票03
+ *  换线,旧 ~/.pi/pi-courier-attachments 经迁移进 dataDir;显式配置仍优先)。 */
 export function attachmentsDirectory(cfg: MsgBridgeConfig): string {
-  return cfg.attachments?.directory ?? path.join(CONFIG_DIR, "pi-courier-attachments");
+  return cfg.attachments?.directory ?? runtimeLayout().attachmentsDir;
 }
 
 /** 单个附件上限(MB):默认 10。 */
@@ -306,8 +328,11 @@ export function rpcRespawnLimit(cfg: MsgBridgeConfig): number {
 }
 
 // ── 自定义头像路径派生(spec #84 v5 用户覆盖)────────────────────────
-// 空间/bot/项目三个消费位共用一条归一规则:~ 展开、相对 ~/.pi/ 解析、
+// 空间/bot/项目三个消费位共用一条归一规则:~ 展开、相对 configDir 解析、
 // 扩展名白名单定 mimetype。派生只有这一处解释,自愈与 /pmctl 同源。
+// 基准刻意跟随 configDir(spec #258 票03):配置文件迁到哪,配置里的相对
+// 路径就相对哪解析 —— 存量配置零破坏(旧基准 ~/.pi 与 Linux 新基准
+// ~/.config/pi-courier 在迁移后是同一个「configDir」语义)。
 
 /** 自定义头像支持的扩展名 → mimetype;白名单外一律视为配置无效。 */
 const CUSTOM_AVATAR_MIME: Record<string, string> = {
@@ -319,7 +344,7 @@ const CUSTOM_AVATAR_MIME: Record<string, string> = {
 };
 
 /** 归一一条自定义头像路径:空白串视为未配置;前缀 ~ 展开到用户主目录;
- *  相对路径相对 ~/.pi/(CONFIG_DIR)解析。返回值恒为绝对路径或 undefined。 */
+ *  相对路径相对 configDir(CONFIG_DIR)解析。返回值恒为绝对路径或 undefined。 */
 export function customAvatarPath(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;

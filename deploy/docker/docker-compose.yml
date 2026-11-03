@@ -10,8 +10,18 @@ services:
     container_name: pi-courier
     restart: unless-stopped
     volumes:
-      # 数据目录:配置 + 会话 + 加密存储(必须持久化)
+      # pi agent 的家:pi CLI 的凭据/模型/会话(~/.pi 全平台不动,不随桥的三根
+      # 分离迁移)。宿主侧保留整卷 ./data(而非 ./data/agent):0.2.x 老用户的
+      # 旧平铺文件(pi-courier.json、pi-courier-matrix-* 等)就在这里,首启由
+      # 桥自带迁移器自动搬进下面三个新卷,搬完 ./data 只剩 agent/,零手动搬动
+      # (升级路径见 README「从 0.2.x 升级」)。
       - ./data:/root/.pi
+      # 桥配置根:pi-courier.json(setup 向导写这里)
+      - ./data/config:/root/.config/pi-courier
+      # 桥数据根:Matrix 存储/加密库/附件(必须持久化,删了要重新配对验证)
+      - ./data/lib:/root/.local/share/pi-courier
+      # 桥状态根:心跳/审计/台账/队列快照/锁/日志(可重建,但删了审计与台账就没了)
+      - ./data/state:/root/.local/state/pi-courier
       # 可选:把宿主机项目目录映射到容器内 workdir
       # (这样 pi 可以在容器里直接操作宿主机上的项目文件)
       # - ./projects:/root/Projects

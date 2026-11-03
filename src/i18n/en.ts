@@ -653,7 +653,7 @@ const en: Record<MessageKey, string> = {
   // ── setup ─────────────────────────────────────────────────────────────
   "setup.title": "=== pi-courier setup wizard ===",
   "setup.languagePrompt": "Language? [{def}] (en/zh): ",
-  "setup.header": "Writes ~/.pi/pi-courier.json (mode 600; an existing config prefills the defaults — press Enter to keep them)\n",
+  "setup.header": "Writes {path} (mode 600; an existing config prefills the defaults — press Enter to keep them)\n",
   "setup.homeserver.default": "Matrix homeserver URL [default {def}]: ",
   "setup.homeserver.plain": "Matrix homeserver URL (e.g. https://matrix.example.com): ",
   "setup.homeserver.empty": "homeserver URL must not be empty",
@@ -701,7 +701,7 @@ const en: Record<MessageKey, string> = {
   "setup.proxy.envInvalid":
     "⚠️ Ignored an unusable proxy from the environment: {message}\n   (type a working http/https proxy here, or press Enter to skip)",
   "setup.proxy.exemptList": "exempt {list}",
-  "setup.done.title": "\n✅ Config written to ~/.pi/pi-courier.json",
+  "setup.done.title": "\n✅ Config written to {path}",
   "setup.done.account": "   account: {user}",
   "setup.done.trusted": "   trusted user: {user}",
   "setup.done.e2ee": "   E2EE: {state}",
@@ -783,15 +783,23 @@ Note: pi itself is installed and upgraded independently on the system
   "hint.bus.tail3": "   if /run/user/$(id -u) does not exist, log in as that user once, or run loginctl enable-linger <user> as root.",
 
   // ── startup ───────────────────────────────────────────────────────────
+  // Config-file paths are interpolated via {path} (spec #258 ticket 03):
+  // Linux's configDir moved to ~/.config/pi-courier, so copy never hardcodes
+  // ~/.pi — call sites inject the layout-resolved value.
   "startup.language.system":
-    "language: {locale} (detected from the system locale; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",
+    "language: {locale} (detected from the system locale; set \"language\" in {path} or PI_LANGUAGE to override)",
   "startup.language.default":
-    "language: {locale} (default; set \"language\" in ~/.pi/pi-courier.json or PI_LANGUAGE to override)",
+    "language: {locale} (default; set \"language\" in {path} or PI_LANGUAGE to override)",
   "startup.pairingNotice": "🔐 Pairing code for @{username}: {code} (valid for 2 minutes; send it to that user to pair)",
+  "startup.workdirSaved": "Workdir: {workdir} (saved to {path}; restart to apply)",
+  "startup.cryptoDeviceMismatch": "   → The local crypto store's device identity doesn't match the token (token changed, or re-logged in).",
+  "startup.cryptoResetHint": "     Fix: delete the crypto store and restart — rm -rf {path} && pi-courier restart",
+  "startup.otkMismatch": "   → The server-side device's one-time key accounting is out of sync with the local store.",
+  "startup.otkResetHint": "     Fix: rerun `pi-courier setup` and answer n at \"Keep the existing token?\" to get a fresh token (a new device starts clean on the server).",
 
   // ── proxy (outbound proxy, spec #201 ticket #202) ──────────────────────
   "proxy.active":
-    "🌐 outbound proxy: {proxy} (source: {source}; edit ~/.pi/pi-courier.json and restart to change)",
+    "🌐 outbound proxy: {proxy} (source: {source}; edit {path} and restart to change)",
   "proxy.unsupportedScheme":
     "❌ Proxy \"{value}\" (from {origin}) is not supported in this version — only http/https proxies are supported; use an address starting with http:// or https://",
 
@@ -815,6 +823,21 @@ Note: pi itself is installed and upgraded independently on the system
   "workflow.result": "**Result:** {result}",
   "workflow.control.hint": "💡 You can control the workflow in plain language (e.g. \"pause\", \"resume\", \"stop\").",
   "workflow.card.superseded": "⚠️ The previous workflow was interrupted before its final state; the new workflow run continues on a new card.",
+
+  // ── migration (legacy layout auto-migration, spec #258 ticket 02/#260) ─
+  "migration.moved": "🚚 Legacy layout migration: {label}: {from} → {to}",
+  "migration.movedCrossVolume": "🚚 Legacy layout migration (cross-volume, fell back to copy): {label}: {from} → {to}",
+  "migration.bothExist":
+    "⚠️ {label} exists in both the old and new locations; trusting the new home. Old file kept as-is: {from} (clean it up manually once the new home checks out)",
+  "migration.lockRemoved": "🧹 Stale single-instance lock removed (held by no process): {path}; the new lock is rebuilt at the new location on demand",
+  "migration.lockRemoveFailed": "⚠️ Failed to remove the old single-instance lock (startup not blocked, kept as-is): {path}: {message}",
+  "migration.lockKeptLive":
+    "⚠️ The old single-instance lock is still held by a live process; kept: {path} (delete manually once no other instance is running)",
+  "migration.itemFailed": "⚠️ Legacy layout migration failed (item skipped, startup not affected): {label} {from} → {to}: {message}",
+  "migration.oldCleanupFailed":
+    "⚠️ {label} was copied to the new home {to}, but removing the old file {from} failed: {message} (next startup treats this as both-exist)",
+  "migration.summary":
+    "✅ Legacy layout migration finished: {moved} moved, {skipped} already in place, {conflicts} both-exist conflicts, {failed} failures",
 };
 
 export default en;

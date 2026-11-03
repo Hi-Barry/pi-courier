@@ -38,7 +38,9 @@ describe("resolveWorkdir", () => {
     return { resolveWorkdir, ConfigStore };
   }
 
-  const configPath = () => join(tmpDir, ".pi", "pi-courier.json");
+  // 配置目录按平台分支(spec #258 票03 布局冻结):win32 = ~/.pi,其余 = ~/.config/pi-courier。
+  const configPath = () =>
+    join(tmpDir, process.platform === "win32" ? ".pi" : ".config/pi-courier", "pi-courier.json");
 
   // POSIX mode bits: meaningless on Windows (libuv reports 0666/0444 only).
   it.skipIf(process.platform === "win32")("silent default path: falls back to ~/Projects, persists through the store", async () => {

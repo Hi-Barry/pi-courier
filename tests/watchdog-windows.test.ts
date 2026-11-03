@@ -152,8 +152,9 @@ describe("Windows 重启序列注入测试(票07:僵死必测)", () => {
 });
 
 describe("Windows 壳脚本契约(票07:部署产物与安装注释)", () => {
-  it("参数默认值与票02/06契约一致:心跳路径、180 秒过期、任务名、30 秒心跳间隔", () => {
-    expect(SHELL).toContain('$HeartbeatPath = "$env:USERPROFILE\\.pi\\pi-courier-state\\heartbeat.json"');
+  it("参数默认值与票02/06契约一致:心跳路径(spec #258 新布局)、180 秒过期、任务名、30 秒心跳间隔", () => {
+    expect(SHELL).toContain('$HeartbeatPath = "$env:APPDATA\\pi-courier\\state\\heartbeat.json"');
+    expect(SHELL).not.toContain("pi-courier-state");
     expect(SHELL).toContain("[int]$StaleSeconds = 180");
     expect(SHELL).toContain("[int]$HeartbeatIntervalSeconds = 30");
     expect(SHELL).toContain('[string]$TaskName = "pi-courier"');
@@ -164,14 +165,26 @@ describe("Windows 壳脚本契约(票07:部署产物与安装注释)", () => {
     expect(SHELL).toContain('"--kill-command", $killCommand');
     expect(SHELL).toContain('"--end-command", $endCommand');
     expect(SHELL).toContain('"--restart-command", $restartCommand');
-    expect(SHELL).toContain('--alert-command", "node `"$alert`" --message {message}');
+    // 告警模板经 String.Format 构造并对内嵌引号预转义(\""):PS 5.1 原生参数
+    // 传递不转义内嵌双引号,空格路径会被撕碎(2026-11-03 真机实测,spec #258)。
+    expect(SHELL).toContain("--alert-command\", ('node \"{0}\" --message {{message}}' -f $alert).Replace('\"', '\\\"')");
     expect(SHELL).toContain('if (-not $NoAlert)');
   });
 
-  it("文件头安装/卸载注释齐备(任务计划程序每分钟触发,换算关系互指)", () => {
-    expect(SHELL).toContain("schtasks /create /tn \"pi-courier-watchdog\"");
-    expect(SHELL).toContain("/sc minute /mo 1 /f");
-    expect(SHELL).toContain("schtasks /delete /tn \"pi-courier-watchdog\" /f");
+  it("文件头安装/卸载注释齐备(Register-ScheduledTask 每分钟触发、空格路径安全,换算关系互指)", () => {
+    expect(SHELL).toContain('New-ScheduledTaskAction -Execute "powershell.exe"');
+    // -Argument 内嵌双引号包住脚本路径 = 含空格安装路径安全
+    expect(SHELL).toContain('-File "C:\\pi-courier\\deploy\\watchdog\\watchdog-windows.ps1"');
+    expect(SHELL).toContain("New-ScheduledTaskTrigger -Once -At (Get-Date)");
+    expect(SHELL).toContain("New-TimeSpan -Minutes 1");
+    expect(SHELL).toContain("RepetitionDuration ([TimeSpan]::MaxValue)");
+    expect(SHELL).toContain('Register-ScheduledTask -TaskName "pi-courier-watchdog"');
+    expect(SHELL).toContain('Unregister-ScheduledTask -TaskName "pi-courier-watchdog"');
+    // 旧 schtasks /create 拼引号写法在头注释里明确废弃(残留文本只允许
+    // 出现在废弃说明里,不允许再出现可复制的旧安装/卸载命令)
+    expect(SHELL).toContain("已废弃");
+    expect(SHELL).not.toContain("schtasks /create /tn");
+    expect(SHELL).not.toContain("schtasks /delete");
     expect(SHELL).toContain("180 = 6 × 30 秒心跳间隔");
     expect(SHELL).toContain("watchdog-core.mjs");
   });

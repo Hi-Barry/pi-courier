@@ -35,12 +35,16 @@ vi.mock("matrix-bot-sdk", async (importOriginal) => {
 
 describe("createMatrixClient E2EE degradation (audit batch 1 票10)", () => {
   let home: string;
+  let storePaths: { storagePath: string; cryptoDir: string };
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-courier.mclient-")));
-    fs.mkdirSync(path.join(home, ".pi"), { recursive: true });
+    // 存储路径注入缝(spec #258 票03):组合根传布局解析的 dataDir 叶子;
+    // 测试注入临时路径,SDK 存储不再耦合真实 ~/.pi。
+    const dataDir = path.join(home, "data", "pi-courier");
+    storePaths = { storagePath: path.join(dataDir, "matrix-store.json"), cryptoDir: path.join(dataDir, "matrix-crypto") };
     errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
     warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
   });
@@ -52,12 +56,21 @@ describe("createMatrixClient E2EE degradation (audit batch 1 票10)", () => {
   });
 
   function makeClient(overrides: Record<string, unknown> = {}) {
-    return createMatrixClient({
-      homeserverUrl: "http://localhost:8008",
-      accessToken: "test-token",
-      ...overrides,
-    });
+    return createMatrixClient(
+      {
+        homeserverUrl: "http://localhost:8008",
+        accessToken: "test-token",
+        ...overrides,
+      },
+      storePaths
+    );
   }
+
+  it("missing store paths is a wiring bug — throws loudly (no legacy fallback)", () => {
+    expect(() =>
+      createMatrixClient({ homeserverUrl: "http://localhost:8008", accessToken: "t" }, undefined as never)
+    ).toThrow(/storage paths are required/i);
+  });
 
   it("native binding load failure (ERR_DLOPEN_FAILED): degrades with an error-level log", () => {
     const err = new Error("Could not locate the bindings file") as NodeJS.ErrnoException;

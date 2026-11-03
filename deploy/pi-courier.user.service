@@ -2,7 +2,7 @@
 #
 # Install:
 #   mkdir -p ~/.config/systemd/user
-#   cp deploy/pi-pi-courier.user.service ~/.config/systemd/user/pi-pi-courier.service
+#   cp deploy/pi-courier.user.service ~/.config/systemd/user/pi-pi-courier.service
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now pi-pi-courier
 #
@@ -25,7 +25,8 @@ WorkingDirectory=%h/Projects/pi-courier
 Environment=NVM_DIR=%h/.nvm
 # Optional: PI_MATRIX_HOMESERVER / PI_MATRIX_ACCESS_TOKEN / PI_MATRIX_TRUSTED_USERS /
 # PI_MATRIX_ENCRYPTION / PI_WORKDIR / PI_LOG_LEVEL / PI_LLM_API_KEY can live here
-# instead of ~/.pi/pi-courier.json
+# instead of the config file (~/.config/pi-courier/pi-courier.json; a legacy
+# ~/.pi/pi-courier.json is migrated there automatically on first start)
 EnvironmentFile=-%h/.config/pi-bridge.env
 ExecStart=/bin/bash -lc 'source "$NVM_DIR/nvm.sh" && exec node dist/standalone.js --workdir %h/Projects'
 Restart=on-failure

@@ -6,8 +6,8 @@
  * (remote room without via servers, banned, gone) used to kill the
  * process. These tests pin the replacement best-effort handler.
  *
- * node:os is patched file-wide so the on-disk stores land in a temp home
- * instead of the developer's real ~/.pi.
+ * The on-disk stores land in a temp data dir via the store-paths injection
+ * seam (spec #258 票03) instead of the developer's real home.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -25,12 +25,18 @@ vi.mock("node:os", async () => {
 
 describe("matrix auto-join resilience (issue #110)", () => {
   let warn: ReturnType<typeof vi.fn>;
+  let storePaths: { storagePath: string; cryptoDir: string };
 
   beforeEach(() => {
     home.dir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "pi-courier.autojoin-")),
     );
-    fs.mkdirSync(path.join(home.dir, ".pi"), { recursive: true });
+    // 存储路径注入缝(spec #258 票03):SDK 存储落临时 dataDir,不碰真实家。
+    const dataDir = path.join(home.dir, "data", "pi-courier");
+    storePaths = {
+      storagePath: path.join(dataDir, "matrix-store.json"),
+      cryptoDir: path.join(dataDir, "matrix-crypto"),
+    };
     warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
   });
 
@@ -40,11 +46,14 @@ describe("matrix auto-join resilience (issue #110)", () => {
   });
 
   function makeClient() {
-    return createMatrixClient({
-      homeserverUrl: "http://localhost:8008",
-      accessToken: "test-token",
-      encryption: false,
-    });
+    return createMatrixClient(
+      {
+        homeserverUrl: "http://localhost:8008",
+        accessToken: "test-token",
+        encryption: false,
+      },
+      storePaths
+    );
   }
 
   function emitInvite(client: unknown, roomId: string): void {
