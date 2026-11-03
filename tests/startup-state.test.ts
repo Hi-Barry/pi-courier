@@ -19,7 +19,7 @@ describe("createStartupState — 配对码去向(pairing sink)", () => {
   const mgmtConfig = { managementRooms: ["!mgmt:server"] } as MsgBridgeConfig;
 
   it("构造即可收:接线前到达的配对码被缓冲,接线后按序补发(晚绑定修复核心断言)", async () => {
-    const startup = createStartupState({ store: new ConfigStore(mgmtConfig) });
+    const startup = createStartupState({ store: new ConfigStore(mgmtConfig, () => {}) });
     const sink = vi.fn(async () => {});
 
     await startup.sendPairingNotice("code-1"); // 槽未接线 —— 不丢
@@ -33,7 +33,7 @@ describe("createStartupState — 配对码去向(pairing sink)", () => {
   });
 
   it("单飞:慢投递在途时新推送由在途 drain 接管,不双发同一码(审计稳定性批 票17)", async () => {
-    const startup = createStartupState({ store: new ConfigStore(mgmtConfig) });
+    const startup = createStartupState({ store: new ConfigStore(mgmtConfig, () => {}) });
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const calls: string[] = [];
@@ -54,7 +54,7 @@ describe("createStartupState — 配对码去向(pairing sink)", () => {
   });
 
   it("接线后直发:落地目标 = config 派生的管理房间,transport 标 matrix", async () => {
-    const startup = createStartupState({ store: new ConfigStore(mgmtConfig) });
+    const startup = createStartupState({ store: new ConfigStore(mgmtConfig, () => {}) });
     const sink = vi.fn(async () => {});
     await startup.wirePairingSink(sink);
 
@@ -65,7 +65,7 @@ describe("createStartupState — 配对码去向(pairing sink)", () => {
   });
 
   it("发出失败不丢件:失败项置顶保留,下次配对码到达时按序随队重试(评审修复钉点)", async () => {
-    const startup = createStartupState({ store: new ConfigStore(mgmtConfig) });
+    const startup = createStartupState({ store: new ConfigStore(mgmtConfig, () => {}) });
     let broken = true;
     const sink = vi.fn(async () => {
       if (broken) throw new Error("transport not connected");
@@ -87,7 +87,7 @@ describe("createStartupState — 配对码去向(pairing sink)", () => {
   });
 
   it("无管理房间时不投递(与降级为仅日志的现状一致)", async () => {
-    const startup = createStartupState({ store: new ConfigStore({} as MsgBridgeConfig) });
+    const startup = createStartupState({ store: new ConfigStore({} as MsgBridgeConfig, () => {}) });
     const sink = vi.fn(async () => {});
     await startup.wirePairingSink(sink);
 
@@ -97,7 +97,7 @@ describe("createStartupState — 配对码去向(pairing sink)", () => {
   });
 
   it("重复接线幂等:首次接线生效,后到的接线不覆盖", async () => {
-    const startup = createStartupState({ store: new ConfigStore(mgmtConfig) });
+    const startup = createStartupState({ store: new ConfigStore(mgmtConfig, () => {}) });
     const first = vi.fn(async () => {});
     const second = vi.fn(async () => {});
     await startup.wirePairingSink(first);
@@ -112,7 +112,7 @@ describe("createStartupState — 配对码去向(pairing sink)", () => {
 
 describe("createStartupState — 收养许可(降级翻转)", () => {
   it("空间模式初始不放行(管理房留给自建);降级翻转后放行", () => {
-    const store = new ConfigStore({ multiProject: true, space: { enabled: true } } as MsgBridgeConfig);
+    const store = new ConfigStore({ multiProject: true, space: { enabled: true } } as MsgBridgeConfig, () => {});
     const startup = createStartupState({ store });
 
     expect(startup.managementRoomAdoptionAllowed()).toBe(false);
@@ -121,7 +121,7 @@ describe("createStartupState — 收养许可(降级翻转)", () => {
   });
 
   it("空间就绪(未降级)则不放行:不翻转,查询保持 false", () => {
-    const store = new ConfigStore({ multiProject: true, space: { enabled: true } } as MsgBridgeConfig);
+    const store = new ConfigStore({ multiProject: true, space: { enabled: true } } as MsgBridgeConfig, () => {});
     const startup = createStartupState({ store });
 
     // 空间 ensure 返回 "ready" 的运行不会调用 allowAdoption
@@ -130,7 +130,7 @@ describe("createStartupState — 收养许可(降级翻转)", () => {
 
   it("非空间模式(单工程或空间功能关停)初始即放行", () => {
     for (const cfg of [{}, { multiProject: true }, { multiProject: true, space: { enabled: false } }]) {
-      const startup = createStartupState({ store: new ConfigStore(cfg as MsgBridgeConfig) });
+      const startup = createStartupState({ store: new ConfigStore(cfg as MsgBridgeConfig, () => {}) });
       expect(startup.managementRoomAdoptionAllowed()).toBe(true);
     }
   });
@@ -163,7 +163,7 @@ describe("runStartupHeals 编排委派(票7 自 space.ts 迁入)", () => {
       managementRooms: ["!mgmt:server"],
       auth: { trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server" },
       instanceName: "box1",
-    } as MsgBridgeConfig);
+    } as MsgBridgeConfig, () => {});
 
     await runStartupHeals(roomOps, store);
 

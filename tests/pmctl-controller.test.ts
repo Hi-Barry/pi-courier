@@ -76,12 +76,13 @@ describe("PmctlController", () => {
     // instanceName is pinned so room-name assertions ("myapp(debian)") don't
     // depend on the machine's hostname (effectiveInstanceName falls back to
     // os.hostname() — runner hostnames differ everywhere).
+    // 内存 store(不落盘):测试夹具绝不写真实用户配置。
     store = new ConfigStore({
       managementRooms: [],
       projects: {},
       instanceName: "debian",
       workdir: "/home/you/Projects",
-    });
+    }, () => {});
     controller = new PmctlController({
       projectManager: pm as unknown as ProjectManager,
       roomOps: roomOps as unknown as RoomOps,
@@ -611,7 +612,7 @@ describe("PmctlController", () => {
       workdir: "/home/you/Projects",
       multiProject: true,
       ...(spaceActive ? { space: { enabled: true, roomId: "!space:server" } } : {}),
-    });
+    }, () => {});
     return new PmctlController({
       projectManager: pm as unknown as ProjectManager,
       roomOps: roomOps as unknown as RoomOps,
