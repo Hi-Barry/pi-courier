@@ -15,6 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
+import { resolveLayout } from "../src/paths.js";
 import { tmpdir } from "os";
 
 describe("loadConfig permission self-check vs platform", () => {
@@ -38,24 +39,14 @@ describe("loadConfig permission self-check vs platform", () => {
   /** Mock homedir → tmpDir and pin a POSIX-shaped layout, import config
    *  fresh, hand back loadConfig. */
   async function importConfig() {
-    vi.doMock("os", async () => {
-      const actual = await vi.importActual<typeof import("os")>("os");
-      return { ...actual, homedir: () => tmpDir };
-    });
-    vi.doMock("node:os", async () => {
-      const actual = await vi.importActual<typeof import("node:os")>("node:os");
-      return { ...actual, homedir: () => tmpDir };
-    });
-    vi.doMock("../src/paths.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/paths.js")>("../src/paths.js");
-      return {
-        ...actual,
-        resolveLayout: (input: Parameters<typeof actual.resolveLayout>[0]) =>
-          actual.resolveLayout({ ...input, platform: "linux" }),
-      };
-    });
-    const mod = await import("../src/config");
-    return { loadConfig: mod.loadConfig };
+    // 布局显式钉成 POSIX 形状并注入(测试缝):不依赖 builtin mock 与
+    // resolveLayout 的模块级 patch —— CI 上 doMock('os') 会失效(诊断已确认)。
+    const cfg = await import("../src/config");
+    cfg.setRuntimeLayoutForTests(
+      resolveLayout({ platform: "linux", homedir: tmpDir, env: {} }),
+      tmpDir
+    );
+    return { loadConfig: cfg.loadConfig };
   }
 
   /** POSIX-shaped config dir (matches the pinned linux layout). */

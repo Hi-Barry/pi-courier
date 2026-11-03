@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
+import { resolveLayout } from '../src/paths';
 import { tmpdir } from 'os';
 
 /** 配置目录按平台分支(spec #258 票03 布局冻结):win32 = ~/.pi,其余平台
@@ -24,15 +25,14 @@ describe('config', () => {
   });
 
   async function importConfig() {
-    vi.doMock('os', async () => {
-      const actual = await vi.importActual<typeof import('os')>('os');
-      return { ...actual, homedir: () => tmpDir };
-    });
-    vi.doMock('node:os', async () => {
-      const actual = await vi.importActual<typeof import('node:os')>('node:os');
-      return { ...actual, homedir: () => tmpDir };
-    });
-    return await import('../src/config');
+    // 布局显式注入(测试缝):不依赖 builtin mock —— CI 上 vi.doMock('os')
+    // 对 src/config 内部 import 会失效,读到真实 HOME(诊断已确认)。
+    const cfg = await import('../src/config');
+    cfg.setRuntimeLayoutForTests(
+      resolveLayout({ platform: process.platform, homedir: tmpDir, env: {} }),
+      tmpDir
+    );
+    return cfg;
   }
 
   it('returns empty config when no file exists', async () => {
@@ -271,15 +271,14 @@ describe('ConfigStore', () => {
   });
 
   async function importConfig() {
-    vi.doMock('os', async () => {
-      const actual = await vi.importActual<typeof import('os')>('os');
-      return { ...actual, homedir: () => tmpDir };
-    });
-    vi.doMock('node:os', async () => {
-      const actual = await vi.importActual<typeof import('node:os')>('node:os');
-      return { ...actual, homedir: () => tmpDir };
-    });
-    return await import('../src/config');
+    // 布局显式注入(测试缝):不依赖 builtin mock —— CI 上 vi.doMock('os')
+    // 对 src/config 内部 import 会失效,读到真实 HOME(诊断已确认)。
+    const cfg = await import('../src/config');
+    cfg.setRuntimeLayoutForTests(
+      resolveLayout({ platform: process.platform, homedir: tmpDir, env: {} }),
+      tmpDir
+    );
+    return cfg;
   }
 
   // POSIX mode bits: meaningless on Windows (libuv reports 0666/0444 only).
@@ -522,15 +521,14 @@ describe('custom avatar path derive (spec #84 v5)', () => {
   });
 
   async function importConfig() {
-    vi.doMock('os', async () => {
-      const actual = await vi.importActual<typeof import('os')>('os');
-      return { ...actual, homedir: () => tmpDir };
-    });
-    vi.doMock('node:os', async () => {
-      const actual = await vi.importActual<typeof import('node:os')>('node:os');
-      return { ...actual, homedir: () => tmpDir };
-    });
-    return await import('../src/config');
+    // 布局显式注入(测试缝):不依赖 builtin mock —— CI 上 vi.doMock('os')
+    // 对 src/config 内部 import 会失效,读到真实 HOME(诊断已确认)。
+    const cfg = await import('../src/config');
+    cfg.setRuntimeLayoutForTests(
+      resolveLayout({ platform: process.platform, homedir: tmpDir, env: {} }),
+      tmpDir
+    );
+    return cfg;
   }
 
   it('normalizes ~, relative paths and blank values (absolute out)', async () => {

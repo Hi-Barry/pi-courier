@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "fs";
 import { join } from "path";
+import { resolveLayout } from "../src/paths.js";
 import { tmpdir } from "os";
 
 /** Direct tests for first-run workdir resolution. The ConfigStore is the
@@ -14,28 +15,23 @@ describe("resolveWorkdir", () => {
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-courier-workdir-"));
-    vi.doMock("os", async () => {
-      const actual = await vi.importActual<typeof import("os")>("os");
-      return { ...actual, homedir: () => tmpDir };
-    });
-    vi.doMock("node:os", async () => {
-      const actual = await vi.importActual<typeof import("node:os")>("node:os");
-      return { ...actual, homedir: () => tmpDir };
-    });
     vi.resetModules();
   });
 
   afterEach(() => {
-    vi.doUnmock("os");
-    vi.doUnmock("node:os");
     vi.resetModules();
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
   async function importModule() {
+    // 布局显式注入(测试缝):不依赖 builtin mock(CI 上 doMock 会失效)。
+    const config = await import("../src/config.js");
+    config.setRuntimeLayoutForTests(
+      resolveLayout({ platform: process.platform, homedir: tmpDir, env: {} }),
+      tmpDir
+    );
     const { resolveWorkdir } = await import("../src/workdir.js");
-    const { ConfigStore } = await import("../src/config.js");
-    return { resolveWorkdir, ConfigStore };
+    return { resolveWorkdir, ConfigStore: config.ConfigStore };
   }
 
   // 配置目录按平台分支(spec #258 票03 布局冻结):win32 = ~/.pi,其余 = ~/.config/pi-courier。

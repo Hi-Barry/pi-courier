@@ -18,14 +18,35 @@ import type { MsgBridgeConfig, ProjectConfig, SpaceConfig } from "./types.js";
 // win32 布局的 configDir 仍是 ~/.pi,Linux 迁到 ~/.config/pi-courier)。
 let cachedLayout: Layout | undefined;
 
+/** 测试缝的家目录覆盖(见 setRuntimeLayoutForTests);生产恒为 undefined。 */
+let homedirOverride: string | undefined;
+
 /** 进程内唯一的布局实例(组合根与其余消费模块共用;模块加载后首次调用解析)。 */
 export function runtimeLayout(): Layout {
   cachedLayout ??= resolveLayout({
     platform: process.platform,
-    homedir: os.homedir(),
+    homedir: runtimeHomedir(),
     env: process.env,
   });
   return cachedLayout;
+}
+
+/** 家目录的唯一读取口:懒求值 + 测试缝覆盖(`~` 展开与默认项目根共用)。 */
+export function runtimeHomedir(): string {
+  return homedirOverride ?? os.homedir();
+}
+
+/**
+ * 测试缝:把布局钉死为给定值(显式覆盖缓存,后续调用一律返回它)。
+ * 迁移动机(CI 回归,spec #258 后续):四个测试文件原先靠 vi.doMock('os'/
+ * 'node:os') 注入 temp homedir,GitHub runner 上该 builtin mock 对
+ * src/config 内部 import 失效(本地不可复现,已用 CI 诊断确认),导致
+ * 读真实 HOME。测试改为注入布局后不再依赖任何 builtin mock。
+ * 传 undefined 恢复自然解析(仅测试用,生产代码从不调用)。
+ */
+export function setRuntimeLayoutForTests(layout: Layout | undefined, homedir?: string): void {
+  cachedLayout = layout;
+  homedirOverride = homedir;
 }
 
 /**
@@ -188,7 +209,7 @@ export function saveConfig(config: MsgBridgeConfig): void {
 /** Default project root (~userHome/Projects) — shared by first-run workdir
  *  resolution and the setup wizard so the fallback cannot drift. */
 export function defaultProjectsRoot(): string {
-  return path.join(os.homedir(), "Projects");
+  return path.join(runtimeHomedir(), "Projects");
 }
 
 /** Runtime read side of the config identity boundary — the rule lives in
@@ -358,7 +379,7 @@ const CUSTOM_AVATAR_MIME: Record<string, string> = {
 export function customAvatarPath(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
-  const expanded = trimmed.startsWith("~") ? path.join(os.homedir(), trimmed.slice(1)) : trimmed;
+  const expanded = trimmed.startsWith("~") ? path.join(runtimeHomedir(), trimmed.slice(1)) : trimmed;
   return path.isAbsolute(expanded) ? expanded : path.join(configDir(), expanded);
 }
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { resolveLayout } from "../src/paths.js";
 import { ConfigStore } from "../src/config";
 import { ChallengeAuth } from "../src/auth/challenge-auth";
 import { handleAdminCommand } from "../src/auth/admin-commands";
@@ -885,15 +886,12 @@ describe("management room invite on trust transition (issue #43 票2)", () => {
   beforeEach(async () => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-courier-router-mgmt-"));
     vi.resetModules();
-    vi.doMock("os", async () => {
-      const actual = await vi.importActual<typeof import("os")>("os");
-      return { ...actual, homedir: () => tmpDir };
-    });
-    vi.doMock("node:os", async () => {
-      const actual = await vi.importActual<typeof import("node:os")>("node:os");
-      return { ...actual, homedir: () => tmpDir };
-    });
+    // 布局显式注入(测试缝):不依赖 builtin mock(CI 上 doMock 会失效)。
     const config = await import("../src/config");
+    config.setRuntimeLayoutForTests(
+      resolveLayout({ platform: process.platform, homedir: tmpDir, env: {} }),
+      tmpDir
+    );
     IsoConfigStore = config.ConfigStore;
   });
 
@@ -1445,15 +1443,12 @@ describe("power demotion on revoke (issue #44 票3)", () => {
   beforeEach(async () => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-courier-router-demote-"));
     vi.resetModules();
-    vi.doMock("os", async () => {
-      const actual = await vi.importActual<typeof import("os")>("os");
-      return { ...actual, homedir: () => tmpDir };
-    });
-    vi.doMock("node:os", async () => {
-      const actual = await vi.importActual<typeof import("node:os")>("node:os");
-      return { ...actual, homedir: () => tmpDir };
-    });
+    // 布局显式注入(测试缝):不依赖 builtin mock(CI 上 doMock 会失效)。
     const config = await import("../src/config");
+    config.setRuntimeLayoutForTests(
+      resolveLayout({ platform: process.platform, homedir: tmpDir, env: {} }),
+      tmpDir
+    );
     IsoConfigStore = config.ConfigStore;
   });
 
