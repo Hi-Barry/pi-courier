@@ -205,7 +205,10 @@ describe('config', () => {
     expect(JSON.parse(readFileSync(join(piDir, 'pi-courier.json'), 'utf-8'))).toEqual({ workdir: '/atomic/w' });
   });
 
-  it.skipIf(process.platform === 'win32')('saveConfig 写入失败(目录只读)时抛错、原配置字节原样、不留 .tmp 残留', async () => {
+  // root 绕过 DAC 权限检查:chmod 0o500 挡不住 root 的 openSync,saveConfig
+  // 会照常落盘,toThrow 必假红 —— 与 win32 一样属环境受限,显式跳过
+  // (Docker 默认 root 跑 vitest 是现实场景)。
+  it.skipIf(process.platform === 'win32' || process.geteuid?.() === 0)('saveConfig 写入失败(目录只读)时抛错、原配置字节原样、不留 .tmp 残留', async () => {
     mkdirSync(expectedConfigDir(tmpDir), { recursive: true });
     const configPath = join(expectedConfigDir(tmpDir), 'pi-courier.json');
     const original = '{"matrix":{"accessToken":"syt-keep"}}';
