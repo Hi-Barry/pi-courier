@@ -251,7 +251,23 @@ export function saveConfig(config: MsgBridgeConfig): void {
       // direct write so the save still lands where it always did — degraded
       // but loud, never a silent save loss.
       console.warn(`Atomic config replace failed; falling back to direct write: ${(renameErr as Error).message}`);
-      fs.writeFileSync(target, payload, { mode: 0o600 });
+      // The fallback opens the target with O_TRUNC: snapshot the current
+      // bytes FIRST, so that a failed fallback write (ENOSPC/EIO/scanner
+      // lock winning mid-write) cannot turn "old config intact but not
+      // replaced" into "truncated config" — the exact corruption this
+      // ticket exists to prevent.
+      let previousBytes: Buffer | undefined;
+      try {
+        previousBytes = fs.readFileSync(target);
+      } catch {
+        // Nothing to snapshot (rare race); proceed as the old code did.
+      }
+      try {
+        fs.writeFileSync(target, payload, { mode: 0o600 });
+      } catch (fallbackErr) {
+        preservePreviousConfigBytes(previousBytes, fallbackErr);
+        throw fallbackErr;
+      }
     }
     // POSIX durability: persist the directory entry itself so the rename
     // survives power loss. Windows cannot open directories this way — skip.
@@ -313,6 +329,31 @@ function preserveCorruptConfigFile(): void {
     );
   } catch (backupErr) {
     console.warn(`Failed to preserve corrupt config file: ${(backupErr as Error).message}`);
+  }
+}
+
+/**
+ * Last-resort preservation when the fallback direct write failed mid-way:
+ * the target may now be TRUNCATED (the fallback opens it with O_TRUNC).
+ * Best-effort, most-likely-to-succeed first: (1) copy the pre-fallback
+ * bytes to the .broken backup — a fresh file, same semantics as the
+ * corrupt-config preservation above; (2) attempt to restore them onto the
+ * target. Either way the original error keeps propagating: setup's direct
+ * saveConfig still fails loudly on purpose.
+ */
+function preservePreviousConfigBytes(bytes: Buffer | undefined, cause: unknown): void {
+  console.error(`Fallback config write failed: ${(cause as Error).message}`);
+  if (!bytes) return;
+  try {
+    fs.writeFileSync(corruptConfigBackupPath(), bytes, { mode: 0o600 });
+    console.warn(`⚠️  Pre-fallback config bytes preserved at ${corruptConfigBackupPath()}`);
+  } catch (backupErr) {
+    console.error(`Failed to preserve pre-fallback config bytes: ${(backupErr as Error).message}`);
+  }
+  try {
+    fs.writeFileSync(configPath(), bytes, { mode: 0o600 });
+  } catch (restoreErr) {
+    console.error(`Failed to restore previous config bytes: ${(restoreErr as Error).message}`);
   }
 }
 

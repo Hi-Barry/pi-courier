@@ -1,5 +1,5 @@
 /**
- * saveConfig 原子写的两个失败分支覆盖(sec-atomic-config-write 评审):
+ * saveConfig 原子写的失败分支覆盖(sec-atomic-config-write 评审):
  *
  * 1. POSIX short write:ulimit -f 1 下实测 fs.writeSync(4096) 返回 1024、
  *    不抛错、fsync 成功 —— saveConfig 必须循环写满,写不进(返回 <=0 或
@@ -7,14 +7,17 @@
  * 2. rename 失败回退直接写:Windows 杀毒/索引器瞬时持有目标文件时 rename
  *    报 EPERM,回退分支是该场景的主保险(e9f47df 的教训:Windows 专属
  *    路径无人看管)。
+ * 3. 回退写也失败:回退以 O_TRUNC 打开即截断,写失败(ENOSPC/EIO/锁)会把
+ *    「完好但没换上」恶化成「截断损毁」—— saveConfig 先快照原字节,失败时
+ *    落 .broken 备份并尽力写回,原错误照抛(响亮失败契约不变)。
  *
  * mock 策略:builtin namespace 属性不可配置,vi.spyOn(fs, 'writeSync') 在
  * ESM 下直接 TypeError(已实测),故用文件级 vi.mock('node:fs') 部分 mock
- * —— factory 透传全部真实实现,只把 writeSync/renameSync 换成可切换的
- * 委托口。独立成文件:config.test.ts 的其余用例继续走完全真实的 fs。
- * 若 CI 上该 mock 对 src/config 内部 import 失效(config.test.ts 注释记载
- * 过 doMock('os') 的前科),fake 不会被触发:calls===1 / warn 缺失会让
- * 断言显式变红,不会假绿。
+ * —— factory 透传全部真实实现,只把 writeSync/renameSync/writeFileSync
+ * 换成可切换的委托口。独立成文件:config.test.ts 的其余用例继续走完全
+ * 真实的 fs。若 CI 上该 mock 对 src/config 内部 import 失效(config.test.ts
+ * 注释记载过 doMock('os') 的前科),fake 不会被触发:calls===1 / warn 缺失
+ * 会让断言显式变红,不会假绿。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -31,11 +34,18 @@ const fsOverride = vi.hoisted(() => ({
   realWriteSync: undefined as
     | ((fd: number, buf: Buffer, offset?: number, length?: number) => number)
     | undefined,
+  writeFileSync: undefined as
+    | ((file: string, data: string | Buffer, options?: { mode?: number }) => void)
+    | undefined,
+  realWriteFileSync: undefined as
+    | ((file: string, data: string | Buffer, options?: { mode?: number }) => void)
+    | undefined,
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   fsOverride.realWriteSync = actual.writeSync;
+  fsOverride.realWriteFileSync = actual.writeFileSync;
   return {
     ...actual,
     // saveConfig 走 buffer 形式重载 writeSync(fd, buf, offset, length);
@@ -44,6 +54,8 @@ vi.mock('node:fs', async (importOriginal) => {
       fsOverride.writeSync ? fsOverride.writeSync(...args) : actual.writeSync(...args),
     renameSync: (...args: [oldPath: string, newPath: string]) =>
       fsOverride.renameSync ? fsOverride.renameSync(...args) : actual.renameSync(...args),
+    writeFileSync: (...args: [file: string, data: string | Buffer, options?: { mode?: number }]) =>
+      fsOverride.writeFileSync ? fsOverride.writeFileSync(...args) : actual.writeFileSync(...args),
   };
 });
 
@@ -64,6 +76,7 @@ describe('saveConfig 原子写失败分支(short write / rename 回退)(sec-atom
     process.env = { ...originalEnv };
     fsOverride.writeSync = undefined;
     fsOverride.renameSync = undefined;
+    fsOverride.writeFileSync = undefined;
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -144,6 +157,45 @@ describe('saveConfig 原子写失败分支(short write / rename 回退)(sec-atom
       // 未被 rename 消费的 temp 在 finally 里清掉
       expect(readdirSync(piDir).filter((e) => e.includes('.tmp-'))).toEqual([]);
     } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('rename 失败且回退写也失败(O_TRUNC 截断后 EIO):.broken 保住原字节并写回,原配置可找回', async () => {
+    mkdirSync(expectedConfigDir(tmpDir), { recursive: true });
+    const configPath = join(expectedConfigDir(tmpDir), 'pi-courier.json');
+    const original = '{"matrix":{"accessToken":"syt-keep"}}';
+    writeFileSync(configPath, original, { mode: 0o600 });
+
+    fsOverride.renameSync = () => {
+      throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+    };
+    // 回退写以 'w' 打开即截断:现实里 ENOSPC/杀软独占锁中途干预就发生在这个
+    // 窗口,target 此刻已是 0 字节。fake 先真实截断再抛 EIO,复刻该形态。
+    let calls = 0;
+    fsOverride.writeFileSync = (file, data, options) => {
+      calls++;
+      if (calls === 1) {
+        fsOverride.realWriteFileSync!(configPath, Buffer.alloc(0), options); // 截断发生
+        throw Object.assign(new Error('EIO: i/o error, write'), { code: 'EIO' });
+      }
+      return fsOverride.realWriteFileSync!(file, data, options); // preserve 阶段放行真实实现
+    };
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { saveConfig } = await importConfig();
+    try {
+      // 响亮失败契约不变:回退失败的错误照抛(setup 直接调 saveConfig 要炸出声)
+      expect(() => saveConfig({ workdir: '/w' })).toThrow(/EIO|i\/o error/);
+
+      // 原字节两处可找回:.broken 备份(新增文件,最可能成功)+ 写回的 config.json
+      expect(readFileSync(join(expectedConfigDir(tmpDir), 'pi-courier.json.broken'), 'utf-8')).toBe(original);
+      expect(readFileSync(configPath, 'utf-8')).toBe(original);
+      // 未被 rename 消费的 temp 照旧清理
+      expect(readdirSync(expectedConfigDir(tmpDir)).filter((e) => e.includes('.tmp-'))).toEqual([]);
+    } finally {
+      errSpy.mockRestore();
       warnSpy.mockRestore();
     }
   });
