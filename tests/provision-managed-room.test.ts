@@ -148,7 +148,7 @@ describe("provisionManagedRoom(票2:中途房 ≡ 自愈房)", () => {
     return { pm: pm as unknown as ProjectManager, registerProject };
   }
 
-  const pmctlCall = { chatId: "!mgmt:server", senderMxid: "@barry:server", isManagementRoom: true };
+  const pmctlCall = { chatId: "!mgmt:server", senderMxid: "@barry:server", isManagementRoom: true, isAdmin: true };
 
   // ---- 等价性:两条路径,同一房间意图,同一操作序列 -------------------------
 

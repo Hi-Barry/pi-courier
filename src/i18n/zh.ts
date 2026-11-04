@@ -546,6 +546,7 @@ const zh = {
   "pmctl.singleProjectMode": "❌ 当前为单工程模式,未启用项目管理。\n如需多工程:发 `/multiproject on` 并重启(pi-courier restart)。",
   "pmctl.managementRoomOnly": "❌ /pmctl 仅可在管理房间(与 bot 的私聊)使用",
   "pmctl.matrixOnly": "❌ /pmctl 不可用(仅 Matrix 部署支持)",
+  "pmctl.adminOnly": "❌ 无权限(/pmctl 仅管理员可用)",
   "pmctl.unknownOp": "❌ 未知操作: {op}\n可用操作: new / list / show / rm / mv / rename",
   "pmctl.new.usage": "用法: /pmctl new <项目名> [路径]\n路径可选:缺省为工程根下同名目录(如 newapp → ~/Projects/newapp);也可用相对路径或绝对路径。",
   "pmctl.noInviteTarget": "❌ 缺少邀请对象(未配置信任用户)",

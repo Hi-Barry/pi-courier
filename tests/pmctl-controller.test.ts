@@ -23,7 +23,7 @@ describe("PmctlController", () => {
   const reply = async (text: string) => {
     replies.push(text);
   };
-  const call = { chatId: "!mgmt:server", senderMxid: "@barry:server", isManagementRoom: true };
+  const call = { chatId: "!mgmt:server", senderMxid: "@barry:server", isManagementRoom: true, isAdmin: true };
   const handle = (text: string, overrides: Record<string, unknown> = {}) =>
     controller.handle(text, { ...call, ...overrides }, reply);
 
@@ -109,6 +109,31 @@ describe("PmctlController", () => {
   it("rejects outside the management room", async () => {
     await handle("/pmctl list", { isManagementRoom: false });
     expect(replies.at(-1)).toContain("仅可在管理房间");
+  });
+
+  // 工单 sec-pmctl-admin-gate:与 /login /mcp 对齐的 admin 门。space 模式下
+  // 配对成功的非 admin trusted 用户被邀入管理房后,此前可 /pmctl rm/mv/rename。
+
+  it("rejects a non-admin inside the management room (admin gate)", async () => {
+    await handle("/pmctl list", { isAdmin: false });
+    expect(replies.at(-1)).toContain("无权限");
+    expect(replies.at(-1)).toContain("仅管理员");
+  });
+
+  it("admin gate sits behind the room gate (non-admin outside stays room-rejected)", async () => {
+    await handle("/pmctl list", { isAdmin: false, isManagementRoom: false });
+    expect(replies.at(-1)).toContain("仅可在管理房间");
+  });
+
+  it("non-admin cannot arm or confirm /pmctl rm", async () => {
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!proj:server", { name: "myapp", workdir: "/w/myapp" }],
+    ]);
+    await handle("/pmctl rm myapp", { isAdmin: false }); // 首发也不得武装确认链
+    await handle("/pmctl rm myapp", { isAdmin: false }); // 重发(原确认词)更不得删
+    expect(pm.removeProject).not.toHaveBeenCalled();
+    expect(roomOps.leaveRoom).not.toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("仅管理员");
   });
 
   it("reports Matrix-only availability without roomOps", async () => {
@@ -746,7 +771,7 @@ describe("PmctlController", () => {
       store,
     });
     const handleIsolated = (text: string) =>
-      ctl.handle(text, { chatId: "!mgmt:server", senderMxid: "@barry:server", isManagementRoom: true }, isolatedReply);
+      ctl.handle(text, { chatId: "!mgmt:server", senderMxid: "@barry:server", isManagementRoom: true, isAdmin: true }, isolatedReply);
     return { store, ops, pmMock, replies: isolatedReplies, handle: handleIsolated };
   }
 
