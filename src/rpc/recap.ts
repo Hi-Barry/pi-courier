@@ -75,13 +75,23 @@ export function recapCcPrefix(project: string): string {
   return t("recap.cc.prefix", { project });
 }
 
+/** 在途捕获槽:rpc、终答出口与重启失效订阅的退订柄(崩溃失效用)。 */
+interface CaptureSlot {
+  rpc: PiRpc;
+  resolve: (text: string) => void;
+  reject: (err: Error) => void;
+  /** 重启生命周期订阅的退订柄:settle / prompt 失败 / 重启任一路径收尾
+   *  时撤销,长命进程不攒监听器。 */
+  offRestart?: () => void;
+}
+
 /** 交接卡的每进程记账(issue #122):「已完成对话轮」计数 + 在途捕获槽。
  *  忙拒保证同一时刻至多一个捕获在飞;/stop 打断会以失败轮收场,捕获随之
  *  reject,不会悬挂;换会话(/new //clear)reset() 归零。状态与生命周期
  *  单点持有,router 只编排投递与门控。 */
 export class RecapLedger {
   private turns = new WeakMap<PiRpc, number>();
-  private capture: { rpc: PiRpc; resolve: (text: string) => void; reject: (err: Error) => void } | undefined;
+  private capture: CaptureSlot | undefined;
 
   count(rpc: PiRpc): number {
     return this.turns.get(rpc) ?? 0;
@@ -98,7 +108,14 @@ export class RecapLedger {
   }
 
   /** 发总结 prompt 并等终答(turn_end 的最终文本)。prompt 发送失败即撤销
-   *  捕获并 reject,捕获槽不留悬案。 */
+   *  捕获并 reject,捕获槽不留悬案。
+   *
+   *  崩溃失效(票 fix-recap-capture-crash-invalidation):prompt 应答已收
+   *  后子进程崩溃/重启,turn_end 永远不会来 —— 捕获随重启生命周期订阅
+   *  (与 bash 自管通道/compact 同一接缝,PiRpc.onRestarted)自行 reject 并
+   *  清槽。Ledger 随单例 router 跨子进程存活,单槽悬挂曾让所有房间的
+   *  /recap 与 /new 自动出卡永久 RecapBusyError(全局假忙)。可选调用:
+   *  未接生命周期的 rpc(测试 mock 等)退化为旧行为,不再多依赖一步。 */
   startCapture(rpc: PiRpc): Promise<string> {
     if (this.capture) {
       // 上一张卡未 settle 就再来一张:原实现直接覆盖槽位,旧调用永远悬挂
@@ -107,9 +124,20 @@ export class RecapLedger {
       return Promise.reject(new RecapBusyError());
     }
     return new Promise<string>((resolve, reject) => {
-      this.capture = { rpc, resolve, reject };
+      const slot: CaptureSlot = { rpc, resolve, reject };
+      this.capture = slot;
+      // 槽实例引用判代次:重启触发时本捕获若已被结算/被新捕获替换,不动。
+      slot.offRestart = rpc.onRestarted?.(() => {
+        if (this.capture !== slot) return;
+        this.capture = undefined;
+        slot.offRestart?.(); // 崩溃杀掉的捕获同样撤销订阅,重启循环不攒监听器
+        reject(new Error("pi process restarted; the recap capture was aborted"));
+      });
       rpc.prompt(recapPromptText()).catch((err: unknown) => {
-        if (this.capture?.rpc === rpc) this.capture = undefined;
+        if (this.capture === slot) {
+          this.capture = undefined;
+          slot.offRestart?.();
+        }
         reject(err instanceof Error ? err : new Error(String(err)));
       });
     });
@@ -124,6 +152,7 @@ export class RecapLedger {
     if (turn.pendingTools) return "wait";
     const capture = this.capture;
     this.capture = undefined;
+    capture.offRestart?.(); // 已结算:撤销重启失效订阅,监听器不泄漏
     const body = turn.text?.trim();
     if (body) capture.resolve(body);
     else capture.reject(new RecapEmptyError());
