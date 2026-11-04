@@ -370,6 +370,16 @@ describe("PmctlController", () => {
     expect(replies.at(-1)).toContain("📁 项目: legacy-app");
   });
 
+  it("NFKC 变体拼写能按名解析到存量标签(工单 fix-label-nfkc-two-side-normalization)", async () => {
+    // 存量标签是全角 Ａpp:旧实现只有输入侧做 NFKC,存量侧只折叠 →
+    // 半角变体 targetKey="app" 与存量 "ａ" 永远失配,notFound
+    (pm.listProjects as ReturnType<typeof vi.fn>).mockReturnValue([
+      ["!proj:server", { name: "Ａpp", workdir: "/w/app" }],
+    ]);
+    await handle("/pmctl show App");
+    expect(replies.at(-1)).toContain("📁 项目: Ａpp");
+  });
+
   // ---- rm: the 60-second confirmation window ---------------------------------
 
   it("arms on first rm, confirms on the second within the window", async () => {

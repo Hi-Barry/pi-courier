@@ -534,7 +534,7 @@ const zh = {
   "label.noBrackets": "项目名不能包含方括号 [ ](会破坏日志格式)",
   "label.noWhitespace": "项目名不能包含空白字符",
   "label.tooLong": "项目名最长 {max} 字符(当前 {length})",
-  "label.caseClash": "项目名「{name}」与现有项目「{clash}」仅大小写不同(日志过滤按名字匹配,会混淆)",
+  "label.caseClash": "项目名「{name}」NFKC 归一并忽略大小写后与现有项目「{clash}」相同(日志过滤按名字匹配,会混淆)",
 
   // ── path(Windows 路径守卫,win32-path.ts,issue #190)────────────────
   "path.win32.reserved": "❌ 该路径在 Windows 上不可用:「{component}」是系统保留名(CON/PRN/AUX/NUL/COM1-9/LPT1-9),请换一个名字",

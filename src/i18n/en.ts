@@ -554,7 +554,7 @@ const en: Record<MessageKey, string> = {
   "label.noWhitespace": "Project name must not contain whitespace",
   "label.tooLong": "Project name is limited to {max} characters (got {length})",
   "label.caseClash":
-    "Project name \"{name}\" differs from existing project \"{clash}\" only by letter case (log filtering matches by name and would be ambiguous)",
+    "Project name \"{name}\" is identical to existing project \"{clash}\" after NFKC normalization and case-insensitive folding (log filtering matches by name and would be ambiguous)",
 
   // ── path (Windows path guards, win32-path.ts, issue #190) ─────────────
   "path.win32.reserved":
