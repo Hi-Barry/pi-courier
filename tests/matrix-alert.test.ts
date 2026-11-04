@@ -153,7 +153,7 @@ describe("CLI 参数解析(parseAlertArgs)", () => {
     expect(stamp).not.toContain(path.join(".pi", "pi-courier-state"));
   });
 
-  it("默认配置路径平台感知(spec #258 票05):Linux/darwin 读 XDG 配置根,Windows 仍 ~/.pi", () => {
+  it("默认配置路径平台感知(spec #258 票05):Linux 读 XDG 配置根,darwin 恒 ~/.config 不吃 XDG,Windows 仍 ~/.pi", () => {
     const platformOrig = Object.getOwnPropertyDescriptor(process, "platform");
     const xdgOrig = process.env.XDG_CONFIG_HOME;
     try {
@@ -164,6 +164,14 @@ describe("CLI 参数解析(parseAlertArgs)", () => {
       // XDG_CONFIG_HOME 已设置/空串:与 src/paths.ts 的 envRoot 语义一致
       process.env.XDG_CONFIG_HOME = path.join(dir, "xdg-config");
       expect(defaultConfigPath()).toBe(path.join(dir, "xdg-config", "pi-courier", "pi-courier.json"));
+      process.env.XDG_CONFIG_HOME = "";
+      expect(defaultConfigPath()).toBe(path.join(os.homedir(), ".config", "pi-courier", "pi-courier.json"));
+
+      // darwin 与 paths.ts 平台分支同语义:分支不读 XDG,设了也忽略(互不渗透),
+      // 否则 darwin 设 XDG 时看门狗读不到桥写的 ~/.config 配置,告警静默 no-config
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+      process.env.XDG_CONFIG_HOME = path.join(dir, "xdg-config");
+      expect(defaultConfigPath()).toBe(path.join(os.homedir(), ".config", "pi-courier", "pi-courier.json"));
       process.env.XDG_CONFIG_HOME = "";
       expect(defaultConfigPath()).toBe(path.join(os.homedir(), ".config", "pi-courier", "pi-courier.json"));
 
