@@ -76,6 +76,67 @@ export interface McpOrchestration {
   logout(name: string): Promise<McpOutcome<string>>;
   /** 登录单飞编排器(状态机与代次栅栏在 McpLoginFlow 内)。 */
   login: McpLoginFlow;
+  /** 已配置服务器的密钥值清单(读 pi 的 mcp.json:env/headers 的值、键名含
+   *  secret/token/credential/password 的字符串值)。/mcp 全家回执过它脱敏
+   *  —— list 状态卡的传输行与服务器错误详情会原样回显配置内容(E2E 实测
+   *  泄漏,工单 sec-mcp-secret-redaction 追加)。Absence = 无名单可遮(测试
+   *  场景按需装配;生产装配恒有)。 */
+  configuredSecrets?(): Promise<string[]>;
+}
+
+/** mcp.json 里算密钥的键名口径(值整体入名单)。 */
+const MCP_SECRET_KEY_RE = /secret|token|credential|password/i;
+/** 名单最小长度:更短的值误伤面大(遮坏正常文案),不入名单。 */
+const MCP_SECRET_MIN_LEN = 8;
+
+/** 读 pi 的 mcp.json 候选文件,提取密钥类值。fail-soft:文件不存在/坏 JSON
+ *  返回空数组 —— 脱敏是回执前的补充防线,不得让它打断命令本身。 */
+export function readMcpConfigSecrets(configPaths: readonly string[]): string[] {
+  const secrets = new Set<string>();
+  for (const configPath of configPaths) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    } catch {
+      continue;
+    }
+    collectMcpSecretValues(parsed, secrets, 0);
+  }
+  return [...secrets].filter((value) => value.length >= MCP_SECRET_MIN_LEN);
+}
+
+function collectMcpSecretValues(node: unknown, out: Set<string>, depth: number): void {
+  if (depth > 6 || node === null || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (const item of node) collectMcpSecretValues(item, out, depth + 1);
+    return;
+  }
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (typeof value === "string") {
+      if (/^(env|headers)$/i.test(key)) {
+        // env/headers 子树是 K=V 结构:值全收(服务器启动参数常带密钥)。
+        collectAllStringValues(value, out, 0);
+        continue;
+      }
+      if (MCP_SECRET_KEY_RE.test(key) && value.length >= MCP_SECRET_MIN_LEN) out.add(value);
+    }
+    collectMcpSecretValues(value, out, depth + 1);
+  }
+}
+
+function collectAllStringValues(node: unknown, out: Set<string>, depth: number): void {
+  if (depth > 4 || node === null || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (const item of node) collectAllStringValues(item, out, depth + 1);
+    return;
+  }
+  for (const value of Object.values(node as Record<string, unknown>)) {
+    if (typeof value === "string") {
+      if (value.length >= MCP_SECRET_MIN_LEN) out.add(value);
+    } else {
+      collectAllStringValues(value, out, depth + 1);
+    }
+  }
 }
 
 /** 真实装配:pi CLI 执行缝(缺省 = node + 解析出的 cli.js)+ 登录编排器。
@@ -87,6 +148,8 @@ export function createMcpOrchestration(deps: McpCliDeps = {}): McpOrchestration 
     remove: (name) => removeServer(name, deps),
     logout: (name) => logoutServer(name, deps),
     login: new McpLoginFlow(deps),
+    configuredSecrets: async () =>
+      readMcpConfigSecrets(deps.mcpConfigPaths ?? [path.join(runtimeLayout().piHome, "agent", "mcp.json")]),
   };
 }
 
@@ -895,16 +958,20 @@ async function handleMcpCommand(
     case "":
     case "list": {
       await reply(t("cmd.mcp.list.checking"));
+      // 配置侧密钥名单:状态卡的传输行与服务器错误详情原样回显配置内容
+      //(env/header/oauth 值跟着泄漏,E2E 实测),回执前统一脱敏。
+      const configured = (await mcp.configuredSecrets?.()) ?? [];
+      const shield = (text: string): string => redactMcpSecrets(text, configured);
       const outcome = await mcp.list();
       if (outcome.kind === "unavailable") {
-        await reply(t("cmd.mcp.unavailable", { detail: outcome.message }));
+        await reply(t("cmd.mcp.unavailable", { detail: shield(outcome.message) }));
         return;
       }
       if (outcome.kind === "failed") {
-        await reply(t("cmd.mcp.list.failed", { message: outcome.message }));
+        await reply(t("cmd.mcp.list.failed", { message: shield(outcome.message) }));
         return;
       }
-      await reply(formatMcpStatusCard(outcome.data));
+      await reply(shield(formatMcpStatusCard(outcome.data)));
       return;
     }
 
@@ -934,15 +1001,18 @@ async function handleMcpCommand(
         return;
       }
       const outcome = await mcp.add(argv);
+      // 名单并集:刚敲进来的 argv 值(scanned)+ 已配置服务器的密钥值 ——
+      // pi 的报错两边都可能回显。
+      const addSecrets = [...((await mcp.configuredSecrets?.()) ?? []), ...scanned.secrets];
       if (outcome.kind === "unavailable") {
         // pi 的报错可能引用 argv(--env/--header 的值),回执前脱敏(与
         // failed 分支同纪律:版本门诊断串同样可能带上 pi 回显的输出尾部)。
-        await reply(t("cmd.mcp.unavailable", { detail: redactMcpSecrets(outcome.message, scanned.secrets) }));
+        await reply(t("cmd.mcp.unavailable", { detail: redactMcpSecrets(outcome.message, addSecrets) }));
         return;
       }
       if (outcome.kind === "failed") {
         // pi 的报错可能引用 argv(--env/--header 的值),回执前脱敏。
-        await reply(t("cmd.mcp.add.failed", { message: redactMcpSecrets(outcome.message, scanned.secrets) }));
+        await reply(t("cmd.mcp.add.failed", { message: redactMcpSecrets(outcome.message, addSecrets) }));
         return;
       }
       // 成功回执用本地文案,不透传 pi stdout —— 它可能回显配置内容(含值)。
@@ -974,13 +1044,17 @@ async function handleMcpCommand(
       }
       const name = tokenized.argv[0]!;
       const outcome = sub === "remove" ? await mcp.remove(name) : await mcp.logout(name);
+      // 与 list 同纪律:remove/logout 的 pi 报错可能回显配置内容(含值)。
+      const configured = (await mcp.configuredSecrets?.()) ?? [];
       if (outcome.kind === "unavailable") {
-        await reply(t("cmd.mcp.unavailable", { detail: outcome.message }));
+        await reply(t("cmd.mcp.unavailable", { detail: redactMcpSecrets(outcome.message, configured) }));
         return;
       }
       if (outcome.kind === "failed") {
         await reply(
-          t(sub === "remove" ? "cmd.mcp.remove.failed" : "cmd.mcp.logout.failed", { message: outcome.message })
+          t(sub === "remove" ? "cmd.mcp.remove.failed" : "cmd.mcp.logout.failed", {
+            message: redactMcpSecrets(outcome.message, configured),
+          })
         );
         return;
       }

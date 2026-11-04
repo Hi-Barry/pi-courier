@@ -52,6 +52,8 @@ interface FakeOutcomeConfig {
   remove?: McpOutcome<string>;
   logout?: McpOutcome<string>;
   adminAllowed?: boolean;
+  /** 装配 configuredSecrets 缝(生产由 mcp.json 密钥扫描提供)。 */
+  configuredSecrets?: string[];
 }
 
 function harness(config: FakeOutcomeConfig = {}): Harness {
@@ -100,6 +102,9 @@ function harness(config: FakeOutcomeConfig = {}): Harness {
     mcp: {
       ...orchestration,
       adminAllowed: config.adminAllowed ?? true,
+      ...(config.configuredSecrets
+        ? { configuredSecrets: async () => config.configuredSecrets! }
+        : {}),
     } satisfies McpCommandContext,
   };
   return {
@@ -675,5 +680,76 @@ describe("createMcpOrchestration(真实装配)", () => {
     if (started.kind !== "started") throw new Error("意外被拒:单飞槽应空闲");
     const outcome = await started.done;
     expect(outcome.kind).toBe("failed");
+  });
+});
+
+describe("/mcp 回执脱敏(工单 sec-mcp-secret-redaction 追加:list 家族状态卡与失败回执)", () => {
+  const SECRET = "SUPERSECRET123";
+
+  it("状态卡的传输行与服务器错误详情过配置侧密钥名单遮蔽", async () => {
+    const h = harness({
+      configuredSecrets: [SECRET],
+      list: {
+        kind: "ok",
+        data: {
+          servers: [
+            {
+              name: "e2efail",
+              state: "failed",
+              transport: `sh -c "echo startup-err: ${SECRET} >&2"; exit 7`,
+              error: `write EPIPE startup-err: ${SECRET}`,
+            },
+          ],
+        },
+      },
+    });
+    await runOrThrow(h, "/mcp list");
+    const joined = h.replies.join("\n");
+    expect(joined).not.toContain(SECRET);
+    expect(joined).toContain("***");
+  });
+
+  it("list 失败回执(pi 回显的输出尾部)过名单遮蔽", async () => {
+    const h = harness({
+      configuredSecrets: [SECRET],
+      list: { kind: "failed", message: `list crashed near ${SECRET}` },
+    });
+    await runOrThrow(h, "/mcp list");
+    const joined = h.replies.join("\n");
+    expect(joined).not.toContain(SECRET);
+    expect(joined).toContain("***");
+  });
+
+  it("remove 失败回执同纪律遮蔽", async () => {
+    const h = harness({
+      configuredSecrets: [SECRET],
+      remove: { kind: "failed", message: `remove denied for ${SECRET}` },
+    });
+    await runOrThrow(h, "/mcp remove e2efail");
+    const joined = h.replies.join("\n");
+    expect(joined).not.toContain(SECRET);
+    expect(joined).toContain("***");
+  });
+
+  it("未装配 configuredSecrets 时无名单可遮,回执原样(向后兼容)", async () => {
+    const h = harness({
+      list: {
+        kind: "ok",
+        data: { servers: [{ name: "e2efail", state: "failed", error: `boom ${SECRET}` }] },
+      },
+    });
+    await runOrThrow(h, "/mcp list");
+    expect(h.replies.join("\n")).toContain(SECRET);
+  });
+
+  it("add 失败回执的名单是 配置侧 ∪ argv 侧(并集)", async () => {
+    const h = harness({
+      configuredSecrets: ["CONFIGSECRET01"],
+      add: { kind: "failed", message: "bad CONFIGSECRET01 / bad SUPERSECRET123" },
+    });
+    await runOrThrow(h, `/mcp add e2e --env K=SUPERSECRET123 --url http://127.0.0.1:9/mcp`);
+    const joined = h.replies.join("\n");
+    expect(joined).not.toContain("CONFIGSECRET01");
+    expect(joined).not.toContain("SUPERSECRET123");
   });
 });
