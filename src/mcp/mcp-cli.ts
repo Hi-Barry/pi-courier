@@ -61,6 +61,10 @@ export type McpSpawn = (
 export interface McpCliDeps {
   /** spawn 缝(默认 node child_process.spawn;测试注入假件)。 */
   spawn?: McpSpawn;
+  /** pi 的 mcp.json 候选路径(密钥扫描用;缺省 = runtimeLayout().piHome
+   *  下的 agent/mcp.json;测试注入临时文件)。仅 command-map 的密钥名单
+   *  读取,执行缝不碰它。 */
+  mcpConfigPaths?: readonly string[];
   /** pi JS 入口解析缝(默认 PiRpc.resolveCliPath;测试注入固定路径)。 */
   resolveCliPath?: () => Promise<string>;
   /** node 可执行文件(默认 process.execPath;与 cliPath 拼成 spawn 命令)。 */
