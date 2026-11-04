@@ -54,9 +54,21 @@ describe("win32PathProblem", () => {
 });
 
 describe("win32SamePath", () => {
-  it("folds case and NFKC like the label/room-name comparisons", () => {
+  it("folds case only, no compatibility folding (issue win32-samepath-case-fold)", () => {
     expect(win32SamePath("C:\\Projects\\Foo", "c:\\projects\\foo")).toBe(true);
     expect(win32SamePath("C:\\Projects\\Foo", "C:\\Projects\\bar")).toBe(false);
+  });
+
+  it("keeps NFKC-equivalent but NTFS-distinct names apart", () => {
+    // 全角拉丁字母:NFKC 会折到 ASCII,NTFS 不做兼容分解,是不同的名字
+    expect(win32SamePath("C:\\Projects\\Ｆoo", "C:\\Projects\\Foo")).toBe(false);
+    // 连字形式同理
+    expect(win32SamePath("C:\\Projects\\ﬁles", "C:\\Projects\\files")).toBe(false);
+    // 组合序列 vs 预合成字符(macOS 风格 NFD 目录名在 NTFS 上就是另一个名字)
+    expect(win32SamePath("C:\\Projects\\Cafe\u0301", "C:\\Projects\\Café")).toBe(false);
+    // 同一字符的大小写变体仍折叠:NTFS $UpCase 对这些码点照样折大小写
+    expect(win32SamePath("C:\\Projects\\Ｆoo", "C:\\Projects\\ｆoo")).toBe(true);
+    expect(win32SamePath("C:\\Projects\\Café", "C:\\PROJECTS\\CAFÉ")).toBe(true);
   });
 });
 
