@@ -40,7 +40,9 @@ export class PendingUpdateStore {
   }
 
   /** 有效条目;无文件 → undefined;条目畸形(缺字段/版本格式不过)→ warn
-   *  留痕并视作无更新(同 queue-snapshots 的 isValidEntry 保守路线)。 */
+   *  留痕并视作无更新(同 queue-snapshots 的 normalizeEntry 结构校验保守
+   *  路线:结构坏整条丢弃。该处对元素级类型坏另有强转归一层,本文件是
+   *  单条目无数组,不涉及)。 */
   read(): PendingUpdateEntry | undefined {
     const raw = this.file.load();
     if (raw === null) return undefined;

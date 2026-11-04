@@ -109,6 +109,26 @@ describe("QueueSnapshotStore", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].roomId).toBe("!ok:s");
   });
+
+  it("non-string queue elements are coerced to string — the entry survives as a loss report", () => {
+    const { store, file } = fresh();
+    writeFileSync(
+      file,
+      JSON.stringify([
+        { roomId: "!coerce:s", at: 1, snapshot: { steering: [42, "正常"], followUp: [null] } },
+        { roomId: "!obj:s", at: 2, snapshot: { steering: [{}], followUp: [] } },
+      ]),
+      "utf8"
+    );
+    const entries = store.loadValid();
+    // 结构完好的条目不因个别元素类型坏被整条剔除(与 truncateLine 票17
+    // 同款契约:强转归一),loss report 保住。
+    expect(entries.map((e) => e.roomId).sort()).toEqual(["!coerce:s", "!obj:s"]);
+    const coerced = entries.find((e) => e.roomId === "!coerce:s");
+    expect(coerced?.snapshot.steering).toEqual(["42", "正常"]);
+    expect(coerced?.snapshot.followUp).toEqual(["null"]);
+    expect(entries.find((e) => e.roomId === "!obj:s")?.snapshot.steering).toEqual(["[object Object]"]);
+  });
 });
 
 describe("consumeQueueSnapshots (startup consumption)", () => {
@@ -175,6 +195,56 @@ describe("consumeQueueSnapshots (startup consumption)", () => {
     expect(store.loadValid()).toEqual([]); // still consumed — no infinite retries
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!dead:s"));
     warnSpy.mockRestore();
+  });
+
+  it("a throw outside send (isProjectRoom / view build) drops only that room — other rooms still notify", async () => {
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const store = seeded([
+      { roomId: "!boom:s", steering: ["会让回调炸掉的"] },
+      { roomId: "!live:s", steering: ["正常房间的队列"] },
+    ]);
+    const sends: string[] = [];
+    const sent = await consumeQueueSnapshots(store, {
+      isProjectRoom: (roomId) => {
+        if (roomId === "!boom:s") throw new Error("config lookup exploded");
+        return true;
+      },
+      send: async (roomId) => {
+        sends.push(roomId);
+      },
+    });
+    expect(sent).toBe(1);
+    expect(sends).toEqual(["!live:s"]);
+    expect(store.loadValid()).toEqual([]); // 文件照清 —— 不因单房异常卡死整个批次
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!boom:s"));
+    warnSpy.mockRestore();
+  });
+
+  it("a junk-typed-element snapshot still delivers its loss notice (coerced like the in-process path)", async () => {
+    dir = mkdtempSync(join(tmpdir(), "pi-courier-qsnap-consume-"));
+    const file = join(dir, "queue-snapshots.json");
+    writeFileSync(
+      file,
+      JSON.stringify([
+        { roomId: "!junk:s", at: 1, snapshot: { steering: [42, "真的排队"], followUp: [] } },
+        { roomId: "!good:s", at: 1, snapshot: { steering: ["正常队列"], followUp: [] } },
+      ]),
+      "utf8"
+    );
+    const store = new QueueSnapshotStore(new JsonStateFile(file, []));
+    const sends: Array<{ roomId: string; text: string }> = [];
+    const sent = await consumeQueueSnapshots(store, {
+      isProjectRoom: () => true,
+      send: async (roomId, text) => {
+        sends.push({ roomId, text });
+      },
+    });
+    // 坏元素条目归一后照常补发(与阶段1进程内路径处置一致),不连累批次。
+    expect(sent).toBe(2);
+    const junkNotice = sends.find((s) => s.roomId === "!junk:s");
+    expect(junkNotice?.text).toContain("42");
+    expect(junkNotice?.text).toContain("真的排队");
+    expect(store.loadValid()).toEqual([]); // consume-once 照旧:文件清空
   });
 
   it("an empty store sends nothing", async () => {
