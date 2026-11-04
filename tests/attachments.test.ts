@@ -185,6 +185,27 @@ describe("AttachmentStore.save", () => {
     expect(b.path.includes(sanitizeRoomKey("!aaa:matrix.org"))).toBe(false);
   });
 
+  it("a vanished deduped file re-downloads and self-heals, without wiping sibling entries (sec-attachment-dedup-room)", async () => {
+    const source = countingSource();
+    const { store, root } = makeStore(source);
+    const a = await store.save(ROOM, { mxcUrl: "mxc://s/vanish", body: "vanish.png" });
+    const b = await store.save(ROOM, { mxcUrl: "mxc://s/sibling", body: "sibling.png" });
+    expect(source.calls).toBe(2);
+    await fs.promises.rm(a.path); // manual cleanup: the mapped file disappears
+    const a2 = await store.save(ROOM, { mxcUrl: "mxc://s/vanish", body: "vanish.png" });
+    expect(source.calls).toBe(3); // stale entry detected → re-download
+    expect(a2.path.startsWith(path.join(root, sanitizeRoomKey(ROOM)))).toBe(true);
+    // the stale-entry cleanup removes ONLY that mxc's entry — the room map
+    // and its sibling entry survive (locks the two-level-Map delete branch)
+    const b2 = await store.save(ROOM, { mxcUrl: "mxc://s/sibling", body: "sibling.png" });
+    expect(source.calls).toBe(3);
+    expect(b2.path).toBe(b.path);
+    // self-healed: the re-downloaded mxc dedups again
+    const a3 = await store.save(ROOM, { mxcUrl: "mxc://s/vanish", body: "vanish.png" });
+    expect(source.calls).toBe(3);
+    expect(a3.path).toBe(a2.path);
+  });
+
   it("wraps decrypt failures with a user-ready message (票2)", async () => {
     const source: MediaSource = {
       downloadPlaintext: async () => Buffer.from("x"),
