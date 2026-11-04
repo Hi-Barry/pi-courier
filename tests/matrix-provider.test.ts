@@ -1076,6 +1076,16 @@ describe("MatrixProvider.mediaSource", () => {
     expect(() => mediaDownloadUrl("https://hs.example.org", "https://evil.example/x")).toThrow("mxc://");
   });
 
+  it("mediaDownloadUrl:homeserverUrl 尾斜杠归一(与 SDK 构造函数同一语义),不拼出 //", () => {
+    // 配置带尾斜杠(setup 对用户输入只 trim)时,SDK 腿经构造函数归一化
+    // 照常工作;媒体腿自己拼 URL,不剥会得到 https://hs//_matrix/...,
+    // 收发消息正常而附件下载单独全挂(评审整改)。
+    expect(mediaDownloadUrl("https://hs.example.org/", "mxc://server/mediaId"))
+      .toBe("https://hs.example.org/_matrix/client/v1/media/download/server/mediaId?allow_remote=true");
+    expect(mediaDownloadUrl("https://hs.example.org///", "mxc://server/mediaId"))
+      .toBe("https://hs.example.org/_matrix/client/v1/media/download/server/mediaId?allow_remote=true");
+  });
+
   it("encryption:false 不暴露 downloadEncrypted", () => {
     const { provider } = makeProvider({ encryption: false });
     expect(provider.mediaSource.downloadEncrypted).toBeUndefined();

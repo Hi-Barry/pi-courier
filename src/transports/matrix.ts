@@ -629,6 +629,12 @@ export interface MatrixReaction {
  * mxc:// → 认证版 v1 媒体下载 URL。端点与转义规则与 SDK 0.8.0 的
  * downloadContent 完全一致(domain/mediaId 分别 encodeURIComponent,mediaId
  * 只取路径首段,忽略尾部文件名段),保证与 SDK 行为逐字对齐。
+ *
+ * homeserverUrl 在此剥掉尾斜杠:SDK 在构造函数里做同样的归一化
+ * (MatrixClient.js `endsWith("/")` → 去一个),SDK 各请求腿拿到的都是
+ * 无尾斜杠的值;本媒体腿自己拼 URL,若不归一,配置带尾斜杠(setup 对
+ * 用户输入只 trim)会拼出 `https://hs//_matrix/...`,收发消息正常而
+ * 附件下载单独全挂。
  */
 export function mediaDownloadUrl(homeserverUrl: string, mxcUrl: string): string {
   if (!mxcUrl.toLowerCase().startsWith("mxc://")) {
@@ -640,7 +646,8 @@ export function mediaDownloadUrl(homeserverUrl: string, mxcUrl: string): string 
   if (!domain || !mediaId) {
     throw new Error(`invalid mxc URI: ${mxcUrl}`);
   }
-  return `${homeserverUrl}/_matrix/client/v1/media/download/${domain}/${mediaId}?allow_remote=true`;
+  const base = homeserverUrl.replace(/\/+$/, "");
+  return `${base}/_matrix/client/v1/media/download/${domain}/${mediaId}?allow_remote=true`;
 }
 
 /**
