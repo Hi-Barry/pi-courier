@@ -28,15 +28,20 @@
  *  2. 新旧并存 → 信新家,旧文件原样保留,警告一次(不删旧件:用户尚未核实
  *     新家数据完整前删旧等于销毁唯一备份);
  *  3. 否则先建新家父目录(mkdir -p,0700,与 config.ts 同做法)再 rename
- *     (同卷原子);rename 报 EXDEV(跨设备)回退 copy + delete;
+ *     (同卷原子);rename 报 EXDEV(跨设备)回退 copy —— 但先复制到与目标
+ *     同目录的临时件、成功后再 rename 落位(cpSync 中途失败会留部分写入
+ *     残件,若直接落在 to 上,下次启动 exists(to) 误判为「新旧并存信新家」,
+ *     残件被信任而完整旧件被冷落,失败从此不可重试;sec-exdev-copy-atomic);
  *  4. 单项失败只警告并上报 failed,绝不抛 —— 迁移不许卡死启动,且失败项的
- *     旧文件原地未动,数据无损,下次启动自然重试。
+ *     旧文件原地未动、新家不留残件(EXDEV 回退经临时件,见上),数据无损,
+ *     下次启动自然重试。
  *
  * 注入缝(与 resilience 系同款模式,组合根零缝直接用默认实现,测试传
  * fake/真实临时目录):移动操作 rename/copy/remove、存在判断 exists、目录
  * 创建 mkdir、锁陈旧判断 isLockStale、清单日志 log/warn。
  */
 
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { errorMessage } from "./errors.js";
@@ -158,9 +163,17 @@ export interface LegacyMigrationResult {
 export interface LegacyMigrationDeps {
   /** 待执行的迁移计划(buildLegacyMigrationPlan 产出;测试可手写路径对)。 */
   plan: LegacyMigrationPlan;
-  /** 移动缝:默认 fs.renameSync(同卷原子);测试注入抛 EXDEV 的 fake。 */
+  /**
+   * 移动缝:默认 fs.renameSync(同卷原子);测试注入抛 EXDEV 的 fake。EXDEV
+   * 回退的落位(copy→临时件后 rename 到最终目标)也复用本缝;落位是同目录
+   * rename,真实世界不会有 EXDEV,fake 注入时应放行临时件路径。
+   */
   rename?: (from: string, to: string) => void;
-  /** 跨卷回退的复制缝:默认 fs.cpSync 递归(文件与目录通吃)。 */
+  /**
+   * 跨卷回退的复制缝:默认 fs.cpSync 递归(文件与目录通吃)。调用时 to 是与
+   * 最终目标同目录的临时件路径(执行器复制成功后再 rename 落位),实现方只
+   * 需如实复制,不直接触碰最终目标。
+   */
   copy?: (from: string, to: string) => void;
   /** 删除缝(copy 成功后清旧件、删陈旧旧锁):默认 fs.rmSync 递归。 */
   remove?: (target: string) => void;
@@ -217,7 +230,12 @@ export function runLegacyMigration(deps: LegacyMigrationDeps): LegacyMigrationRe
       result.bothExisted.push(item);
       continue;
     }
-    // 3. 先建新家父目录再搬:rename 同卷原子;EXDEV(跨设备)回退 copy+delete。
+    // 3. 先建新家父目录再搬:rename 同卷原子;EXDEV(跨设备)回退 copy——先
+    //    复制到与目标同目录的临时件,成功后再 rename 落位。cpSync 中途失败会
+    //    在目的地留部分写入残件,若直接落在 item.to,下次启动 exists(to) 误判
+    //    为「新旧并存信新家」,残件被信任而完整旧件被冷落,失败从此不可重试
+    //    (sec-exdev-copy-atomic)。临时件与 to 同目录,落位 rename 同卷,绝不
+    //    会再 EXDEV。
     try {
       mkdir(path.dirname(item.to));
       try {
@@ -226,9 +244,30 @@ export function runLegacyMigration(deps: LegacyMigrationDeps): LegacyMigrationRe
         log(t("migration.moved", { label: item.label, from: item.from, to: item.to }));
       } catch (err) {
         if ((err as NodeJS.ErrnoException)?.code !== "EXDEV") throw err;
-        copy(item.from, item.to);
-        // 复制成功即算搬移完成;清旧件失败不回滚(回滚反而丢已复制的新件),
-        // 旧件留下,下次启动按「新旧并存信新家」自然收敛。
+        const tmpTo = `${item.to}.legacy-migration-tmp-${randomUUID()}`;
+        try {
+          copy(item.from, tmpTo);
+          rename(tmpTo, item.to);
+        } catch (fallbackErr) {
+          // 尽力清掉临时残件:清不掉只是垃圾,不改变「to 从未落位、下次启动
+          // 可干净重试」的主结论,故清理失败只追加警告,原错误照常上报 failed。
+          if (exists(tmpTo)) {
+            try {
+              remove(tmpTo);
+            } catch (cleanupErr) {
+              warn(
+                t("migration.tmpCleanupFailed", {
+                  label: item.label,
+                  tmp: tmpTo,
+                  message: errorMessage(cleanupErr),
+                }),
+              );
+            }
+          }
+          throw fallbackErr;
+        }
+        // 复制+落位成功即算搬移完成;清旧件失败不回滚(回滚反而丢已落位的
+        // 新件),旧件留下,下次启动按「新旧并存信新家」自然收敛。
         try {
           remove(item.from);
         } catch (cleanupErr) {

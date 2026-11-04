@@ -790,6 +790,8 @@ const zh = {
   "migration.itemFailed": "⚠️ 旧布局迁移失败(已跳过该项,不影响启动):{label} {from} → {to}:{message}",
   "migration.oldCleanupFailed":
     "⚠️ {label} 已复制到新家 {to},但清理旧文件 {from} 失败:{message}(下次启动按新旧并存处理)",
+  "migration.tmpCleanupFailed":
+    "⚠️ {label} 迁移失败后清理临时件 {tmp} 也失败:{message}(残件留存不影响下次启动重试)",
   "migration.summary":
     "✅ 旧布局迁移完成:{moved} 项搬移,{skipped} 项已在新家,{conflicts} 项新旧并存,{failed} 项失败",
 } as const;
