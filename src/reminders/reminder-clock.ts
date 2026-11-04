@@ -138,11 +138,20 @@ export class ReminderClock implements ReminderController {
     this.ticking = true;
     try {
       this.timer = undefined;
-      const now = Date.now();
-      // Chunked arms can fire early (ceiling reached before dueAt): whatever is
-      // still future stays in the store and re-arms.
-      for (const entry of this.store.due(now)) {
-        await this.deliverEntry(entry, now);
+      // 补捞循环(修复单飞守卫搁浅):慢投递窗口内可能有提醒到期 —— 它们
+      // 不在第一轮 store.due(now) 快照里,而重入让位后的 arm() 与收尾
+      // arm() 都只排 dueAt>now 的未来项,无未来提醒时定时链彻底断掉,到期
+      // 项被永久搁浅。所以每轮投递后按当前时间重新检查,直到没有到期项才
+      // 收尾;补捞发生在同一个单飞 tick 内,不重入、不重复投递。
+      for (;;) {
+        const now = Date.now();
+        // Chunked arms can fire early (ceiling reached before dueAt): whatever
+        // is still future stays in the store and re-arms.
+        const due = this.store.due(now);
+        if (due.length === 0) break;
+        for (const entry of due) {
+          await this.deliverEntry(entry, now);
+        }
       }
       this.arm();
     } finally {
