@@ -9,7 +9,7 @@ import * as path from "node:path";
 import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { AttachmentStore, type MediaSource } from "../src/transports/attachments.js";
-import { createEventTranslator, classifyMessageContent, extractUsername, stripBotMention, wasBotMentioned } from "../src/transports/matrix-events.js";
+import { createEventTranslator, classifyMessageContent, extractUsername, stripBotMention, stripReplyFallback, wasBotMentioned } from "../src/transports/matrix-events.js";
 import { createQuoteCache } from "../src/quote-cache.js";
 import type { ExternalMessage } from "../src/types";
 
@@ -94,6 +94,67 @@ describe("event translator — text", () => {
     (reply as any).event_id = "$evt2";
     const { message } = await translator.translate(ROOM, reply);
     expect(message?.payload.kind === "text" && message.payload.quoted?.excerpt).toContain("被引用的旧消息");
+  });
+});
+
+describe("event translator — rich reply fallback 剥离(票 fix-strip-rich-reply-fallback)", () => {
+  /** 带 m.in_reply_to 的回复事件(fallback 按 MSC1470 前缀在 body 开头)。 */
+  function replyEvent(body: string, eventId: string, extra: Record<string, unknown> = {}) {
+    return {
+      sender: "@alice:server",
+      origin_server_ts: Date.now(),
+      event_id: eventId,
+      content: {
+        msgtype: "m.text",
+        body,
+        "m.relates_to": { "m.in_reply_to": { event_id: "$evt1" } },
+        ...extra,
+      },
+    };
+  }
+
+  it("strips the fallback quote line from payload.text", async () => {
+    const { translator } = makeTranslator();
+    await translator.translate(ROOM, textEvent("被引用的旧消息"));
+    const { message } = await translator.translate(ROOM, replyEvent("> <@alice:server> 被引用的旧消息\n\n这个是什么意思", "$evt2"));
+    expect(message?.payload.kind === "text" && message.payload.text).toBe("这个是什么意思");
+  });
+
+  it("does not flag wasMentioned when only the fallback quotes the bot", async () => {
+    const { translator } = makeTranslator({ groupChat: true });
+    const { message } = await translator.translate(ROOM, replyEvent("> <@bot:server> 原话里 @bot:server 被点名\n\n普通回复", "$evt3"));
+    expect(message?.payload.kind === "text" && message.payload.text).toBe("普通回复");
+    expect(message?.wasMentioned).toBe(false);
+  });
+
+  it("keeps wasMentioned when the reply text itself mentions the bot", async () => {
+    const { translator } = makeTranslator({ groupChat: true });
+    const { message } = await translator.translate(ROOM, replyEvent("> <@alice:server> 原话\n\n@bot:server 帮我查一下", "$evt4"));
+    expect(message?.payload.kind === "text" && message.payload.text).toBe("帮我查一下");
+    expect(message?.wasMentioned).toBe(true);
+  });
+
+  it("leaves quote-style text alone when there is no in_reply_to (不误伤手打引用)", async () => {
+    const { translator } = makeTranslator();
+    const { message } = await translator.translate(ROOM, textEvent("> 手打的引用\n\n正文"));
+    expect(message?.payload.kind === "text" && message.payload.text).toBe("> 手打的引用\n\n正文");
+  });
+
+  it("drops a reply whose body is only the fallback (正文剥空走既有丢弃路径)", async () => {
+    const { translator } = makeTranslator();
+    const { message } = await translator.translate(ROOM, replyEvent("> <@alice:server> 被引用的旧消息", "$evt5"));
+    expect(message).toBeUndefined();
+  });
+
+  it("records the stripped text as the quote excerpt for later lookups", async () => {
+    const { translator } = makeTranslator();
+    await translator.translate(ROOM, replyEvent("> <@alice:server> 旧消息\n\n我的回复", "$evtA"));
+    const later = textEvent("再引用一次");
+    (later as any).event_id = "$evtB";
+    (later as any).content["m.relates_to"] = { "m.in_reply_to": { event_id: "$evtA" } };
+    const { message } = await translator.translate(ROOM, later);
+    expect(message?.payload.kind === "text" && message.payload.quoted?.excerpt).toContain("我的回复");
+    expect(message?.payload.kind === "text" && message.payload.quoted?.excerpt).not.toContain("旧消息");
   });
 });
 
@@ -247,6 +308,36 @@ describe("stripBotMention properties", () => {
         expect(result).not.toContain(botId);
       })
     );
+  });
+});
+
+describe("stripReplyFallback", () => {
+  it("strips the single fallback line and the blank separator", () => {
+    expect(stripReplyFallback("> <@alice:server> 原话\n\n这是回复")).toBe("这是回复");
+  });
+
+  it("strips multi-line fallbacks including empty quoted lines", () => {
+    expect(stripReplyFallback("> <@alice:server> 第一行\n> 第二行\n> \n\n回复正文")).toBe("回复正文");
+  });
+
+  it("returns empty string when the body is only fallback lines", () => {
+    expect(stripReplyFallback("> <@alice:server> 原话")).toBe("");
+  });
+
+  it("tolerates a missing blank separator line (non-conformant clients)", () => {
+    expect(stripReplyFallback("> <@alice:server> 原话\n没有空行分隔的回复")).toBe("没有空行分隔的回复");
+  });
+
+  it("keeps quoted lines inside the reply body (only leading fallback is stripped)", () => {
+    expect(stripReplyFallback("回复开头\n> 这不是 fallback")).toBe("回复开头\n> 这不是 fallback");
+  });
+
+  it("keeps multi-line reply text after the fallback", () => {
+    expect(stripReplyFallback("> <@alice:server> 原话\n\n回复第一行\n回复第二行")).toBe("回复第一行\n回复第二行");
+  });
+
+  it("passes through empty input", () => {
+    expect(stripReplyFallback("")).toBe("");
   });
 });
 
