@@ -397,6 +397,33 @@ describe("/mcp add", () => {
     expect(h.replies[0]).toContain("***");
   });
 
+  it("失败回执脱敏补齐:连写 typo flag(--enva=)整 token 回显也遮(pi 对未知连写一律 Unknown option)", async () => {
+    const h = harness({
+      // pi parseOptions 对 -- 开头 token 按整个 arg 查 known 表、连写从不
+      // 拆分(cli.js:89-101):--enva=K=sk-typo-42 不在表内,`Unknown option
+      // --enva=K=sk-typo-42.` 整 token 连值回显(stderr 尾部 → 回执)。
+      add: { kind: "failed", message: 'Unknown option --enva=K=sk-typo-42.\nUse "pi mcp --help" for usage.' },
+    });
+    await runOrThrow(h, "/mcp add corp --enva=K=sk-typo-42 --url https://x");
+    // typo 只补脱敏:argv 原样透传不动,pi 裁决。
+    expect(h.addCalls[0]).toEqual(["corp", "--enva=K=sk-typo-42", "--url", "https://x"]);
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("sk-typo-42");
+    expect(h.replies[0]).toContain("***");
+  });
+
+  it("失败回执脱敏补齐:大小写不符的 --OAuth-Client-Secret= 连写回显也遮", async () => {
+    const h = harness({
+      // known 表查名精确匹配大小写:--OAuth-Client-Secret= 同样 Unknown
+      // option 整 token 回显,值是密钥本体必须遮(工单 sec-mcp-secret-redaction)。
+      add: { kind: "failed", message: "Unknown option --OAuth-Client-Secret=sk-case-99." },
+    });
+    await runOrThrow(h, "/mcp add corp --OAuth-Client-Secret=sk-case-99 --url https://x");
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("sk-case-99");
+    expect(h.replies[0]).toContain("***");
+  });
+
   it("失败回执脱敏不串扰:多 flag 值互为子串时按长度降序替换,长片段不被先替换的短片段打碎", async () => {
     const h = harness({
       // --env 值片段 "Bearer" 是 --header 值 "Bearer <token>" 的子串:名单

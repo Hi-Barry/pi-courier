@@ -834,13 +834,24 @@ function scanMcpAddArgv(argv: readonly string[]): McpAddScan {
       continue;
     }
     if (token.startsWith("--")) {
-      // 连写形态 --flag=value:pi 的 parseOptions 不拆连写,整 token 查
-      // known 表失败后 `Unknown option <整 token>.` 连值整串回显(stderr
-      // 尾部 → 回执,实测 exit=1),值部分必须入名单 —— 按第一个 = 切出
-      // flag 与 value 后走与空格形态完全相同的入名单规则;只补脱敏,
-      // argv 原样透传不动(评审 sec-mcp-secret-redaction 同根因补齐)。
+      // 连写形态 --flag=value:pi parseOptions 对 -- 开头 token 按整个 arg
+      // 查 known 表、连写从不拆分(cli.js:89-101)—— 已知 flag 连写(name
+      // 变 url=https://x)与 typo/大小写不符 flag(--enva=K=sk-…)一律
+      // `Unknown option <整 token>.` 连值整串回显(stderr 尾部 → 回执),
+      // 值必须入名单:值 + 值片段(=/: 切割,K=V/K:V 结构的值部分单独
+      // 回显也遮)一律收;三个密钥 flag 再按各自规则补切割(--env =、
+      // --header =+:、--oauth-client-secret 整值)。空格形态维持不收 ——
+      // pi 对未知空格 flag 只回显 flag 名、值不出现(cli.js:100),现状
+      // 安全。只补脱敏,argv 原样透传不动。
       const eq = token.indexOf("=");
-      if (eq >= 0) collectValueSecrets(secrets, token.slice(0, eq), token.slice(eq + 1));
+      if (eq >= 0) {
+        const value = token.slice(eq + 1);
+        if (value.length > 0) {
+          pushSecretFragments(secrets, value, "=");
+          pushSecretFragments(secrets, value, ":");
+          collectValueSecrets(secrets, token.slice(0, eq), value);
+        }
+      }
       continue;
     }
     if (name === undefined) name = token;
