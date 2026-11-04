@@ -1257,7 +1257,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         if (/^\/pmctl\s+rm(\s|$)/i.test(ctx.text.trim())) {
           auditTrail(AUDIT_EVENTS.pmctlRemove, ctx.msg, normalizeDetailLine(ctx.text));
         }
-        return await pmctl.handle(ctx.text, { chatId: ctx.msg.chatId, senderMxid: ctx.msg.userId, isManagementRoom: ctx.isManagementRoom }, async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText));
+        // 工单 sec-pmctl-admin-gate:isAdmin 按 /login 同款口径在此计算
+        //(auth.isAdminUser),控制器只收判定结果 —— 门禁决策仍在控制器。
+        return await pmctl.handle(ctx.text, { chatId: ctx.msg.chatId, senderMxid: ctx.msg.userId, isManagementRoom: ctx.isManagementRoom, isAdmin: auth.isAdminUser(ctx.msg.userId, ctx.msg.transport) }, async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText));
       },
     },
     {

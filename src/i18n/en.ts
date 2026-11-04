@@ -571,6 +571,7 @@ const en: Record<MessageKey, string> = {
     "❌ This is single-project mode; project management is off.\nTo go multi-project: send `/multiproject on` and restart (pi-courier restart).",
   "pmctl.managementRoomOnly": "❌ /pmctl is only available in the management room (a DM with the bot)",
   "pmctl.matrixOnly": "❌ /pmctl unavailable (Matrix deployments only)",
+  "pmctl.adminOnly": "❌ Not allowed (/pmctl is admin-only)",
   "pmctl.unknownOp": "❌ Unknown operation: {op}\nAvailable: new / list / show / rm / mv / rename",
   "pmctl.new.usage":
     "Usage: /pmctl new <project name> [path]\nPath is optional: defaults to a same-named directory under the project root (e.g. newapp → ~/Projects/newapp); relative and absolute paths work too.",
