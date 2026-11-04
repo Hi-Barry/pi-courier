@@ -151,6 +151,40 @@ describe("AttachmentStore.save", () => {
     expect(b.path).toBe(a.path);
   });
 
+  it("scopes dedup to the room: the same mxc in another room re-downloads into THAT room's dir (sec-attachment-dedup-room)", async () => {
+    const source = countingSource();
+    const { store, root } = makeStore(source);
+    const roomA = "!aaa:matrix.org";
+    const roomB = "!bbb:matrix.org";
+    const a = await store.save(roomA, { mxcUrl: "mxc://s/shared", body: "shared.png" });
+    const b = await store.save(roomB, { mxcUrl: "mxc://s/shared", body: "shared.png" });
+    expect(source.calls).toBe(2); // cross-room hit must NOT reuse the path
+    expect(b.path.startsWith(path.join(root, sanitizeRoomKey(roomB)))).toBe(true);
+    expect(b.path.includes(sanitizeRoomKey(roomA))).toBe(false); // no A-room key leak
+    // same-room resend still dedups (票3 behavior intact)
+    const a2 = await store.save(roomA, { mxcUrl: "mxc://s/shared", body: "shared.png" });
+    expect(source.calls).toBe(2);
+    expect(a2.path).toBe(a.path);
+  });
+
+  it("scopes encrypted-media dedup to the room too (sec-attachment-dedup-room)", async () => {
+    let decrypts = 0;
+    const source: MediaSource = {
+      downloadPlaintext: async () => Buffer.from("PLAIN"),
+      downloadEncrypted: async () => {
+        decrypts++;
+        return Buffer.from("DECRYPTED");
+      },
+    };
+    const { store, root } = makeStore(source);
+    const encFile = { url: "mxc://s/enc1", key: { k: "k" }, iv: "iv", hashes: { sha256: "h" } };
+    const a = await store.save("!aaa:matrix.org", { encryptedFile: encFile, body: "enc.png" });
+    const b = await store.save("!bbb:matrix.org", { encryptedFile: encFile, body: "enc.png" });
+    expect(decrypts).toBe(2); // no cross-room reuse of the decryption
+    expect(b.path.startsWith(path.join(root, sanitizeRoomKey("!bbb:matrix.org")))).toBe(true);
+    expect(b.path.includes(sanitizeRoomKey("!aaa:matrix.org"))).toBe(false);
+  });
+
   it("wraps decrypt failures with a user-ready message (票2)", async () => {
     const source: MediaSource = {
       downloadPlaintext: async () => Buffer.from("x"),
