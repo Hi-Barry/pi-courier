@@ -109,6 +109,21 @@ describe("QueueSnapshotStore", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].roomId).toBe("!ok:s");
   });
+
+  it("non-string queue elements make the entry invalid (deep validation)", () => {
+    const { store, file } = fresh();
+    store.save("!ok:s", snapshot(["好消息"]));
+    const raw = JSON.parse(readFileSync(file, "utf8")) as unknown[];
+    const junk = [
+      { roomId: "!n1:s", at: 1, snapshot: { steering: [42], followUp: [] } }, // 非字符串混进 steering
+      { roomId: "!n2:s", at: 1, snapshot: { steering: [], followUp: [null] } }, // 非字符串混进 followUp
+      { roomId: "!n3:s", at: 1, snapshot: { steering: [["嵌套"]], followUp: [] } }, // 数组元素
+    ];
+    writeFileSync(file, JSON.stringify([...junk, ...raw]), "utf8");
+    const entries = store.loadValid();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].roomId).toBe("!ok:s");
+  });
 });
 
 describe("consumeQueueSnapshots (startup consumption)", () => {
@@ -174,6 +189,29 @@ describe("consumeQueueSnapshots (startup consumption)", () => {
     expect(sends).toEqual(["!live:s"]);
     expect(store.loadValid()).toEqual([]); // still consumed — no infinite retries
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!dead:s"));
+    warnSpy.mockRestore();
+  });
+
+  it("a throw outside send (isProjectRoom / view build) drops only that room — other rooms still notify", async () => {
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const store = seeded([
+      { roomId: "!boom:s", steering: ["会让回调炸掉的"] },
+      { roomId: "!live:s", steering: ["正常房间的队列"] },
+    ]);
+    const sends: string[] = [];
+    const sent = await consumeQueueSnapshots(store, {
+      isProjectRoom: (roomId) => {
+        if (roomId === "!boom:s") throw new Error("config lookup exploded");
+        return true;
+      },
+      send: async (roomId) => {
+        sends.push(roomId);
+      },
+    });
+    expect(sent).toBe(1);
+    expect(sends).toEqual(["!live:s"]);
+    expect(store.loadValid()).toEqual([]); // 文件照清 —— 不因单房异常卡死整个批次
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("!boom:s"));
     warnSpy.mockRestore();
   });
 

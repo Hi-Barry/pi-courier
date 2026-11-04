@@ -79,6 +79,10 @@ function isValidEntry(entry: unknown): entry is QueueSnapshotEntry {
   const snapshot = candidate.snapshot;
   if (!snapshot || typeof snapshot !== "object") return false;
   if (!Array.isArray(snapshot.steering) || !Array.isArray(snapshot.followUp)) return false;
+  // 深校验:元素必须是 string(审计稳定批 票 sec-queue-snapshot-validate)。
+  // 只查数组不查元素时,非字符串元素会混过 loadValid,在消费路径炸开。
+  const allStrings = (list: unknown[]) => list.every((m) => typeof m === "string");
+  if (!allStrings(snapshot.steering) || !allStrings(snapshot.followUp)) return false;
   return queueTotal({ steering: snapshot.steering, followUp: snapshot.followUp }) > 0;
 }
 
@@ -108,14 +112,17 @@ export async function consumeQueueSnapshots(
   // 单房失败照旧只丢该房并留痕。
   await Promise.all(
     entries.map(async (entry) => {
-    if (!consumer.isProjectRoom(entry.roomId)) return;
-    const view = clearedQueuesView(entry.snapshot);
-    if (!view) return;
-    try {
-      await consumer.send(entry.roomId, t("queue.lost.service.notice", view));
-      sent += 1;
-      const ageMin = Math.max(0, Math.round((Date.now() - entry.at) / 60_000));
-      logger.info(`queue lost notice sent to ${entry.roomId} (snapshot ${ageMin} min old, ${view.count} message(s))`);
+      // 整个 per-room 流程都在 try 里:isProjectRoom / clearedQueuesView 抛错
+      // 只丢该房并留痕,不再让单房异常拒绝整个 Promise.all、连累其他房间的
+      // 补发与文件清理(审计稳定批 票 sec-queue-snapshot-validate)。
+      try {
+        if (!consumer.isProjectRoom(entry.roomId)) return;
+        const view = clearedQueuesView(entry.snapshot);
+        if (!view) return;
+        await consumer.send(entry.roomId, t("queue.lost.service.notice", view));
+        sent += 1;
+        const ageMin = Math.max(0, Math.round((Date.now() - entry.at) / 60_000));
+        logger.info(`queue lost notice sent to ${entry.roomId} (snapshot ${ageMin} min old, ${view.count} message(s))`);
       } catch (err) {
         logger.warn(`queue lost notice failed for ${entry.roomId} — entry dropped: ${errorMessage(err)}`);
       }
