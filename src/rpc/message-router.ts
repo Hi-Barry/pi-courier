@@ -313,17 +313,29 @@ function attachmentErrorReply(reason: string): string {
 const normalizeDetailLine = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 120);
 
 /**
- * /login 族(/login /logout /auth)审计 detail 的脱敏(spec #211):按
- * 「指令名 provider [方式词] [密钥…]」的结构假定脱敏 —— 指令名与 provider
- * 原样保留,第 3 个 token 仅当是方式词(oauth|api_key,忽略大小写)时保留,
- * 其余 token 连同其后所有内容折叠为单个 `***`。确定性 token 结构判断,不猜
- * 密钥格式:密钥只要不出现在 provider 位(漏输前两段的极端输入,有测试 pin
- * 钉住这一边界),就到不了审计文件。掩码必须发生在截断之前,超长密钥才不会
- * 因截断漏出前半截。
+ * provider 位按内容判定(sec-redact-login-detail):形如 provider id 才
+ * 原样保留 —— 全小写 kebab(字母开头、段内字母数字)、长度 ≤ 32、且不以
+ * `sk-` 开头(密钥生态最常见前缀)。其余一律按潜在密钥折叠为 `***`:
+ * 宁可掩掉一个命名怪异的 provider,也不让密钥落进审计 JSONL。已拦下的
+ * 常见形态:oc_sk_*、sk-* 系、ghp_*、xox*、JWT(eyJ…)、含下划线/大写/
+ * 数字开头的随机串、超长串。
+ */
+const looksLikeProviderId = (token: string): boolean =>
+  token.length <= 32 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(token) && !token.startsWith("sk-");
+
+/**
+ * /login 族(/login /logout /auth)审计 detail 的脱敏(spec #211 / 票
+ * sec-redact-login-detail):按「指令名 provider [方式词] [密钥…]」的结构
+ * 脱敏,且每个保留位都按内容判定 —— 指令名固定保留;provider 位仅当形如
+ * provider id(looksLikeProviderId)才保留,否则视为漏输 provider 段而顶到
+ * 该位的密钥,折叠为 `***`;第 3 个 token 仅当是方式词(oauth|api_key,
+ * 忽略大小写)时保留,其余 token 连同其后所有内容折叠为单个 `***`。
+ * 掩码必须发生在截断之前,超长密钥才不会因截断漏出前半截。
  */
 export function redactLoginDetail(text: string): string {
   const tokens = text.replace(/\s+/g, " ").trim().split(" ");
-  const kept = tokens.slice(0, 2);
+  const kept = tokens.slice(0, 1);
+  if (tokens.length > 1) kept.push(looksLikeProviderId(tokens[1]!) ? tokens[1]! : "***");
   const rest = tokens.slice(2);
   if (rest.length > 0) {
     if (/^(oauth|api_key)$/i.test(rest[0]!)) {

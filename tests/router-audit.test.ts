@@ -113,16 +113,29 @@ describe("login detail redaction (#211)", () => {
     expect(redactLoginDetail("/login opencode-go oc_sk_a b c")).toBe("/login opencode-go ***");
   });
 
-  it("结构假定边界:密钥顶到 provider 位不设防(pin 钉住语义,防误删)", () => {
-    // 按设计的结构假定,第 2 token 视为 provider 原样保留;
-    // 「/login 后漏输 provider 直接贴 key」的极端输入不在此闸门内(spec #211)。
-    expect(redactLoginDetail("/login oc_sk_x")).toBe("/login oc_sk_x");
+  it("provider 位按内容判定:漏输 provider 直接贴 key 的密钥不再落盘", () => {
+    // 反转原 #211 的结构假定 pin:第 2 token 不再无条件视为 provider,
+    // 形如密钥(下划线/sk- 前缀/超长)一律掩码(sec-redact-login-detail)。
+    expect(redactLoginDetail("/login oc_sk_x")).toBe("/login ***");
+  });
+
+  it("provider 位出现常见密钥形态一律掩码,不落明文", () => {
+    expect(redactLoginDetail("/login sk-proj-Abc123xyz")).toBe("/login ***");
+    expect(redactLoginDetail("/login ghp_16CHARSabcdefghijklmnop")).toBe("/login ***");
+    expect(redactLoginDetail("/login eyJhbGciOiJIUzI1NiJ9.payload.sig")).toBe("/login ***");
+    expect(redactLoginDetail(`/login ${"k".repeat(33)}`)).toBe("/login ***");
+  });
+
+  it("合法 provider 名保留,不受内容判定误伤", () => {
+    expect(redactLoginDetail("/login opencode-go")).toBe("/login opencode-go");
+    expect(redactLoginDetail("/login anthropic")).toBe("/login anthropic");
+    expect(redactLoginDetail("/login openai")).toBe("/login openai");
   });
 
   it("先归一空白,掩码发生在 120 截断之前", () => {
     expect(redactLoginDetail("/login \t opencode-go \n oc_sk_x")).toBe("/login opencode-go ***");
     expect(redactLoginDetail(`/login opencode-go ${"k".repeat(300)}`)).toBe("/login opencode-go ***");
-    expect(redactLoginDetail(`/login ${"p".repeat(200)}`)).toHaveLength(120);
+    expect(redactLoginDetail(`/login ${"p".repeat(200)}`)).toBe("/login ***");
   });
 });
 
