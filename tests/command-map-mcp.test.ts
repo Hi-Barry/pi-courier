@@ -397,6 +397,25 @@ describe("/mcp add", () => {
     expect(h.replies[0]).toContain("***");
   });
 
+  it("失败回执脱敏不串扰:多 flag 值互为子串时按长度降序替换,长片段不被先替换的短片段打碎", async () => {
+    const h = harness({
+      // --env 值片段 "Bearer" 是 --header 值 "Bearer <token>" 的子串:名单
+      // 顺序先替换短片段会把整串/长片段打碎、后续匹配不上,token 残段漏遮
+      // (评审 sec-mcp-secret-redaction 实证复现:env K=Bearer 撞
+      // header 'Authorization: Bearer tok-123')。
+      add: { kind: "failed", message: "header Authorization: Bearer tok-123 refused" },
+    });
+    await runOrThrow(
+      h,
+      "/mcp add corp --env K=Bearer --header 'Authorization: Bearer tok-123' --url https://x",
+    );
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("tok-123");
+    expect(h.replies[0]).not.toContain("Bearer");
+    expect(h.replies[0]).toContain("***");
+    expect(h.audits).toHaveLength(0);
+  });
+
   it("成功回执不透传 pi stdout(即使它包含 env 值)", async () => {
     const h = harness({ add: { kind: "ok", data: "Added corp (--env K=sk-secret-123)" } });
     await runOrThrow(h, "/mcp add corp --env K=sk-secret-123 --url https://x");

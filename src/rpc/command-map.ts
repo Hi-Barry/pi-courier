@@ -851,8 +851,13 @@ function scanMcpAddArgv(argv: readonly string[]): McpAddScan {
 /** 回执脱敏:--env/--header/--oauth-client-secret 的值绝不回显
  *  (整串精确替换,空值跳过)。 */
 function redactMcpSecrets(message: string, secrets: readonly string[]): string {
+  // 按长度降序替换:不同 flag 的值/值片段可能互为子串(如 --env K=Bearer 撞
+  // --header 'Authorization: Bearer <token>'),按名单原序先替换短片段会把
+  // 长整串/长片段打碎、后续匹配不上,token 残段漏遮;降序保证被包含者先遮
+  // (评审 sec-mcp-secret-redaction 实证)。拷贝排序,不动调用方名单。
+  const ordered = [...secrets].sort((a, b) => b.length - a.length);
   let out = message;
-  for (const secret of secrets) {
+  for (const secret of ordered) {
     if (secret.length > 0) out = out.split(secret).join("***");
   }
   return out;
