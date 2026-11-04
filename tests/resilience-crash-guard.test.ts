@@ -166,4 +166,40 @@ describe("crash guard(spec #247 票03)", () => {
     expect(crashReason("bare string")).toBe("bare string");
     expect(crashReason(42)).toBe("42");
   });
+
+  it("crashReason:不可原语化对象不抛错,退回安全摘要", () => {
+    const evil = {
+      [Symbol.toPrimitive]() {
+        throw new Error("no primitive");
+      },
+    };
+    const poisonedTag = {
+      get [Symbol.toStringTag]() {
+        throw new Error("no tag");
+      },
+    };
+    expect(crashReason(evil)).toBe("[object Object]");
+    expect(crashReason(Object.create(null))).toBe("[object Object]");
+    expect(crashReason(poisonedTag)).toBe("[unstringifiable object]");
+  });
+
+  it("不可原语化对象崩溃时守卫不整体失效:三环完整、非零退出", async () => {
+    const evil = {
+      [Symbol.toPrimitive]() {
+        throw new Error("no primitive");
+      },
+    };
+    const { deps, calls } = makeDeps();
+    const guard = createCrashGuard(deps);
+
+    await guard.handleCrash("uncaughtException", evil);
+
+    expect(calls).toEqual([
+      "log",
+      "notify",
+      `shutdown:uncaughtException:${CRASH_EXIT_CODE}`,
+      `hardExit:${CRASH_EXIT_CODE}`,
+    ]);
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("[object Object]"));
+  });
 });
