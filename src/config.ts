@@ -200,6 +200,8 @@ export function loadConfig(): MsgBridgeConfig {
  * the write window can now only leave the OLD config intact plus a stray
  * temp file — config.json itself is never truncated, so the trust ledger
  * (matrix token, trusted users, management rooms, projects) survives.
+ * A symlinked config (dotfiles setups) is never renamed — it is written
+ * through, preserving the link itself (see directWriteConfig).
  */
 export function saveConfig(config: MsgBridgeConfig): void {
   if (!fs.existsSync(configDir())) {
@@ -243,31 +245,36 @@ export function saveConfig(config: MsgBridgeConfig): void {
     } finally {
       if (fd !== undefined) fs.closeSync(fd);
     }
+    // A symlinked config (dotfiles managers point config.json at a tracked
+    // repo file) must keep the historical WRITE-THROUGH semantics: rename
+    // would replace the link itself and silently detach the user's file.
+    // Detect it up front; every other target goes through the atomic rename.
+    let symlinked = false;
     try {
-      fs.renameSync(tempPath, target);
-    } catch (renameErr) {
-      // rename over an existing target can fail on Windows (EPERM) when a
-      // scanner transiently holds the file. Fall back to the pre-atomic
-      // direct write so the save still lands where it always did — degraded
-      // but loud, never a silent save loss.
-      console.warn(`Atomic config replace failed; falling back to direct write: ${(renameErr as Error).message}`);
-      // The fallback opens the target with O_TRUNC: snapshot the current
-      // bytes FIRST, so that a failed fallback write (ENOSPC/EIO/scanner
-      // lock winning mid-write) cannot turn "old config intact but not
-      // replaced" into "truncated config" — the exact corruption this
-      // ticket exists to prevent.
-      let previousBytes: Buffer | undefined;
+      symlinked = fs.lstatSync(target).isSymbolicLink();
+    } catch {
+      // Target absent (first save) — nothing to inspect; rename is correct.
+    }
+    let renamed = false;
+    if (!symlinked) {
       try {
-        previousBytes = fs.readFileSync(target);
-      } catch {
-        // Nothing to snapshot (rare race); proceed as the old code did.
+        fs.renameSync(tempPath, target);
+        renamed = true;
+      } catch (renameErr) {
+        // rename over an existing target can fail on Windows (EPERM) when a
+        // scanner transiently holds the file. Fall back to the pre-atomic
+        // direct write so the save still lands where it always did — degraded
+        // but loud, never a silent save loss.
+        console.warn(`Atomic config replace failed; falling back to direct write: ${(renameErr as Error).message}`);
       }
-      try {
-        fs.writeFileSync(target, payload, { mode: 0o600 });
-      } catch (fallbackErr) {
-        preservePreviousConfigBytes(previousBytes, fallbackErr);
-        throw fallbackErr;
-      }
+    }
+    if (!renamed) {
+      // Direct write (write-through for a symlink, rename-failure fallback
+      // otherwise): directWriteConfig persists the .broken backup BEFORE it
+      // opens the target with O_TRUNC, so a crash/power loss inside that
+      // write (kill -9 never reaches the catch) can no longer leave
+      // "truncated target, original bytes only in RAM".
+      directWriteConfig(target, payload);
     }
     // POSIX durability: persist the directory entry itself so the rename
     // survives power loss. Windows cannot open directories this way — skip.
@@ -304,6 +311,61 @@ export function saveConfig(config: MsgBridgeConfig): void {
   }
 }
 
+/**
+ * Direct (non-atomic) write of the payload onto the config target — the
+ * pre-atomic behavior, still required for two shapes (sec-atomic-config-write):
+ *
+ * 1. The target is a SYMLINK (dotfiles managers point config.json at a
+ *    tracked repo file): rename would replace the link itself and silently
+ *    detach the user's file, so a direct write keeps write-through semantics.
+ * 2. rename failed (Windows: a scanner transiently holds the target, EPERM):
+ *    the degraded-but-loud fallback so the save still lands.
+ *
+ * The write below opens the target with O_TRUNC, so the crash/power-loss
+ * window inside it (kill -9 never reaches the catch) is closed BEFORE the
+ * first byte of the target is destroyed: the current bytes are snapshotted
+ * and persisted to the .broken backup first (fixed name, bounded — leaving
+ * one behind is the accepted behavior of this path). Snapshot failures split
+ * two ways: ENOENT/ENOTFOUND (target absent — first save or dangling link)
+ * proceed without a backup; anything else (EACCES …) refuses loudly and
+ * leaves the target untouched, because a failed save beats an unbacked
+ * truncation. The same refusal applies when the backup itself cannot land.
+ * A failure AFTER the truncate still routes through
+ * preservePreviousConfigBytes, and the original error keeps propagating.
+ */
+function directWriteConfig(target: string, payload: string): void {
+  let previousBytes: Buffer | undefined;
+  try {
+    previousBytes = fs.readFileSync(target);
+  } catch (snapErr) {
+    const code = (snapErr as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTFOUND") {
+      // Cannot snapshot (EACCES …): refuse the truncating write — this save
+      // fails loudly instead, target untouched.
+      throw new Error(`Refusing to overwrite config without backup: cannot read ${target} (${code ?? snapErr})`);
+    }
+    // ENOENT/ENOTFOUND: target absent (first save / dangling symlink) —
+    // nothing to back up, the write below creates it.
+  }
+  if (previousBytes !== undefined) {
+    try {
+      fs.writeFileSync(corruptConfigBackupPath(), previousBytes, { mode: 0o600 });
+    } catch (backupErr) {
+      throw new Error(
+        `Refusing to overwrite config without backup: cannot write ${corruptConfigBackupPath()} (${(backupErr as Error).message})`,
+      );
+    }
+  }
+  try {
+    fs.writeFileSync(target, payload, { mode: 0o600 });
+  } catch (fallbackErr) {
+    // The target may now be truncated; .broken already holds the original
+    // bytes — best-effort restore, then keep the failure loud.
+    preservePreviousConfigBytes(previousBytes, fallbackErr);
+    throw fallbackErr;
+  }
+}
+
 /** Fixed-name backup for a corrupt config file, next to the original —
  *  bounded (each corrupt load overwrites it; never accumulates). */
 function corruptConfigBackupPath(): string {
@@ -333,13 +395,12 @@ function preserveCorruptConfigFile(): void {
 }
 
 /**
- * Last-resort preservation when the fallback direct write failed mid-way:
- * the target may now be TRUNCATED (the fallback opens it with O_TRUNC).
- * Best-effort, most-likely-to-succeed first: (1) copy the pre-fallback
- * bytes to the .broken backup — a fresh file, same semantics as the
- * corrupt-config preservation above; (2) attempt to restore them onto the
- * target. Either way the original error keeps propagating: setup's direct
- * saveConfig still fails loudly on purpose.
+ * Last-resort preservation when the direct write failed mid-way: the target
+ * may now be TRUNCATED (the write opens it with O_TRUNC). directWriteConfig
+ * already persisted the .broken backup BEFORE truncating — this re-lands it
+ * (bounded, idempotent) and best-effort restores the bytes onto the target.
+ * Either way the original error keeps propagating: setup's direct saveConfig
+ * still fails loudly on purpose.
  */
 function preservePreviousConfigBytes(bytes: Buffer | undefined, cause: unknown): void {
   console.error(`Fallback config write failed: ${(cause as Error).message}`);

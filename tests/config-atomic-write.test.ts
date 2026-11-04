@@ -10,17 +10,34 @@
  * 3. 回退写也失败:回退以 O_TRUNC 打开即截断,写失败(ENOSPC/EIO/锁)会把
  *    「完好但没换上」恶化成「截断损毁」—— saveConfig 先快照原字节,失败时
  *    落 .broken 备份并尽力写回,原错误照抛(响亮失败契约不变)。
+ * 4. 备份先于截断(评审第 4 轮):直写窗口内 kill -9/掉电不抛错,catch 里的
+ *    备份永远没机会跑 —— .broken 必须在 O_TRUNC 之前落盘;快照读不出来
+ *    (EACCES)时响亮拒绝,宁可这轮保存失败也不无备份截断。
+ * 5. target 是符号链接(dotfiles 管理形态):rename 会替换链接本体而非写穿,
+ *    第一次原子保存就会让用户的链接静默消失 —— lstat 出 symlink 则跳过
+ *    rename 直接写穿,保留链接与真身。
  *
  * mock 策略:builtin namespace 属性不可配置,vi.spyOn(fs, 'writeSync') 在
  * ESM 下直接 TypeError(已实测),故用文件级 vi.mock('node:fs') 部分 mock
- * —— factory 透传全部真实实现,只把 writeSync/renameSync/writeFileSync
- * 换成可切换的委托口。独立成文件:config.test.ts 的其余用例继续走完全
- * 真实的 fs。若 CI 上该 mock 对 src/config 内部 import 失效(config.test.ts
- * 注释记载过 doMock('os') 的前科),fake 不会被触发:calls===1 / warn 缺失
- * 会让断言显式变红,不会假绿。
+ * —— factory 透传全部真实实现,只把 writeSync/renameSync/writeFileSync/
+ * readFileSync 换成可切换的委托口。独立成文件:config.test.ts 的其余用例
+ * 继续走完全真实的 fs。若 CI 上该 mock 对 src/config 内部 import 失效
+ * (config.test.ts 注释记载过 doMock('os') 的前科),fake 不会被触发:
+ * calls===1 / warn 缺失会让断言显式变红,不会假绿。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveLayout } from '../src/paths';
@@ -40,12 +57,25 @@ const fsOverride = vi.hoisted(() => ({
   realWriteFileSync: undefined as
     | ((file: string, data: string | Buffer, options?: { mode?: number }) => void)
     | undefined,
+  readFileSync: undefined as
+    | ((
+        file: string,
+        options?: BufferEncoding | { encoding?: BufferEncoding; flag?: string } | null,
+      ) => Buffer | string)
+    | undefined,
+  realReadFileSync: undefined as
+    | ((
+        file: string,
+        options?: BufferEncoding | { encoding?: BufferEncoding; flag?: string } | null,
+      ) => Buffer | string)
+    | undefined,
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   fsOverride.realWriteSync = actual.writeSync;
   fsOverride.realWriteFileSync = actual.writeFileSync;
+  fsOverride.realReadFileSync = actual.readFileSync;
   return {
     ...actual,
     // saveConfig 走 buffer 形式重载 writeSync(fd, buf, offset, length);
@@ -56,6 +86,9 @@ vi.mock('node:fs', async (importOriginal) => {
       fsOverride.renameSync ? fsOverride.renameSync(...args) : actual.renameSync(...args),
     writeFileSync: (...args: [file: string, data: string | Buffer, options?: { mode?: number }]) =>
       fsOverride.writeFileSync ? fsOverride.writeFileSync(...args) : actual.writeFileSync(...args),
+    readFileSync: (
+      ...args: [file: string, options?: BufferEncoding | { encoding?: BufferEncoding; flag?: string } | null]
+    ) => (fsOverride.readFileSync ? fsOverride.readFileSync(...args) : actual.readFileSync(...args)),
   };
 });
 
@@ -77,6 +110,7 @@ describe('saveConfig 原子写失败分支(short write / rename 回退)(sec-atom
     fsOverride.writeSync = undefined;
     fsOverride.renameSync = undefined;
     fsOverride.writeFileSync = undefined;
+    fsOverride.readFileSync = undefined;
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -154,6 +188,8 @@ describe('saveConfig 原子写失败分支(short write / rename 回退)(sec-atom
       expect(JSON.parse(readFileSync(join(piDir, 'pi-courier.json'), 'utf-8'))).toEqual({ workdir: '/fallback/w' });
       // 回退有响亮告警,不是静默降级
       expect(warnSpy.mock.calls.map(String).join('\n')).toContain('falling back to direct write');
+      // 首次保存(target 本就不存在):快照 ENOENT 照常直写,无原字节可备份也不误建
+      expect(existsSync(join(piDir, 'pi-courier.json.broken'))).toBe(false);
       // 未被 rename 消费的 temp 在 finally 里清掉
       expect(readdirSync(piDir).filter((e) => e.includes('.tmp-'))).toEqual([]);
     } finally {
@@ -170,16 +206,19 @@ describe('saveConfig 原子写失败分支(short write / rename 回退)(sec-atom
     fsOverride.renameSync = () => {
       throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
     };
-    // 回退写以 'w' 打开即截断:现实里 ENOSPC/杀软独占锁中途干预就发生在这个
-    // 窗口,target 此刻已是 0 字节。fake 先真实截断再抛 EIO,复刻该形态。
-    let calls = 0;
+    // 回退直写以 'w' 打开即截断:现实里 ENOSPC/杀软独占锁中途干预就发生在这个
+    // 窗口,target 此刻已是 0 字节。fake 对「第一次写 target」先真实截断再抛
+    // EIO 复刻该形态;.broken 备份(已提前落盘)与 preserve 阶段的写回放行真实实现。
+    let targetWrites = 0;
     fsOverride.writeFileSync = (file, data, options) => {
-      calls++;
-      if (calls === 1) {
-        fsOverride.realWriteFileSync!(configPath, Buffer.alloc(0), options); // 截断发生
-        throw Object.assign(new Error('EIO: i/o error, write'), { code: 'EIO' });
+      if (String(file) === configPath) {
+        targetWrites++;
+        if (targetWrites === 1) {
+          fsOverride.realWriteFileSync!(configPath, Buffer.alloc(0), options); // 截断发生
+          throw Object.assign(new Error('EIO: i/o error, write'), { code: 'EIO' });
+        }
       }
-      return fsOverride.realWriteFileSync!(file, data, options); // preserve 阶段放行真实实现
+      return fsOverride.realWriteFileSync!(file, data, options); // .broken 备份/preserve 写回放行
     };
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -198,6 +237,91 @@ describe('saveConfig 原子写失败分支(short write / rename 回退)(sec-atom
       errSpy.mockRestore();
       warnSpy.mockRestore();
     }
+  });
+
+  it('rename 失败回退直写成功:.broken 已在 O_TRUNC 之前落盘且内容为原字节(崩溃窗口封死)', async () => {
+    mkdirSync(expectedConfigDir(tmpDir), { recursive: true });
+    const configPath = join(expectedConfigDir(tmpDir), 'pi-courier.json');
+    const brokenPath = join(expectedConfigDir(tmpDir), 'pi-courier.json.broken');
+    const original = '{"matrix":{"accessToken":"syt-keep"}}';
+    writeFileSync(configPath, original, { mode: 0o600 });
+
+    fsOverride.renameSync = () => {
+      throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+    };
+    // 钉住时序:target 被 O_TRUNC 直写的那一刻(等价于进程恰在此窗口内被
+    // kill -9/掉电,后续 catch 永远没机会跑),.broken 必须已经在盘上 ——
+    // 备份先于截断,原字节不再只存在于内存快照里。
+    let brokenOnDiskAtTruncate: boolean | undefined;
+    fsOverride.writeFileSync = (file, data, options) => {
+      if (String(file) === configPath) {
+        brokenOnDiskAtTruncate = existsSync(brokenPath);
+      }
+      return fsOverride.realWriteFileSync!(file, data, options);
+    };
+
+    const { saveConfig } = await importConfig();
+    saveConfig({ workdir: '/w' });
+
+    // O_TRUNC 发生时备份已在盘上(顺序反了这条会红)
+    expect(brokenOnDiskAtTruncate).toBe(true);
+    // 保存照常成功落盘
+    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({ workdir: '/w' });
+    // 原字节在 .broken 可找回
+    expect(readFileSync(brokenPath, 'utf-8')).toBe(original);
+    expect(readdirSync(expectedConfigDir(tmpDir)).filter((e) => e.includes('.tmp-'))).toEqual([]);
+  });
+
+  it('快照读取 EACCES:响亮拒绝直写抛错,target 字节原样(宁可这轮保存失败也不无备份截断)', async () => {
+    mkdirSync(expectedConfigDir(tmpDir), { recursive: true });
+    const configPath = join(expectedConfigDir(tmpDir), 'pi-courier.json');
+    const original = '{"matrix":{"accessToken":"syt-keep"}}';
+    writeFileSync(configPath, original, { mode: 0o600 });
+
+    fsOverride.renameSync = () => {
+      throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+    };
+    // 快照读不出来(EACCES 等非 ENOENT 错误):直写以 O_TRUNC 打开即截断,
+    // 没有备份就动 target 等于裸奔 —— 必须在截断之前响亮失败。
+    // 注入 fake 而非 chmod 0o000:CI 以 root 跑时绕过 DAC,权限挡不住 root。
+    fsOverride.readFileSync = (file, options) => {
+      if (String(file) === configPath) {
+        throw Object.assign(new Error('EACCES: permission denied, open'), { code: 'EACCES' });
+      }
+      return fsOverride.realReadFileSync!(file, options);
+    };
+
+    const { saveConfig } = await importConfig();
+    expect(() => saveConfig({ workdir: '/w' })).toThrow(/Refusing to overwrite config without backup/);
+
+    // target 一个字节没动:拒绝发生在 O_TRUNC 之前
+    expect(fsOverride.realReadFileSync!(configPath, 'utf-8')).toBe(original);
+    expect(existsSync(join(expectedConfigDir(tmpDir), 'pi-courier.json.broken'))).toBe(false);
+    expect(readdirSync(expectedConfigDir(tmpDir)).filter((e) => e.includes('.tmp-'))).toEqual([]);
+  });
+
+  it.skipIf(process.platform === 'win32')('target 是符号链接(dotfiles 写穿形态):跳过 rename,链接本体保留、真身更新', async () => {
+    const piDir = expectedConfigDir(tmpDir);
+    mkdirSync(piDir, { recursive: true });
+    const realFile = join(piDir, 'real-config.json');
+    const configPath = join(piDir, 'pi-courier.json');
+    const original = '{"matrix":{"accessToken":"syt-keep"}}';
+    writeFileSync(realFile, original, { mode: 0o600 });
+    symlinkSync(realFile, configPath);
+
+    const { saveConfig } = await importConfig();
+    saveConfig(PAYLOAD);
+
+    // 链接本体没有被 rename 换掉:仍是符号链接且仍指向真身
+    // (若走了 rename,这里会变成普通文件,断言显式变红)
+    expect(lstatSync(configPath).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(configPath)).toBe(realFile);
+    // 写穿:真身更新为新配置,经链接读同样拿到新配置
+    expect(JSON.parse(readFileSync(realFile, 'utf-8'))).toEqual(PAYLOAD);
+    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual(PAYLOAD);
+    // 写穿同样先落 .broken:O_TRUNC 直写前的原字节可找回
+    expect(readFileSync(join(piDir, 'pi-courier.json.broken'), 'utf-8')).toBe(original);
+    expect(readdirSync(piDir).filter((e) => e.includes('.tmp-'))).toEqual([]);
   });
 
   it('合法配置加载不产生 .broken 备份(防 mock 文件干扰的锚:本文件默认全真实透传)', async () => {
