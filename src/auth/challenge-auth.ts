@@ -200,7 +200,8 @@ export class ChallengeAuth {
   }
 
   /** Revoke trust. Matching rule single-sourced in identity.ts
-   *  (exact first, then legacy bare-form suffix match). */
+   *  (exact first, then native-segment match for recognized
+   *  transport-prefixed entries; no suffix matches on bare entries). */
   revokeUser(revokeId: string): boolean {
     if (this.trustedUsers.has(revokeId)) {
       this.trustedUsers.delete(revokeId);
