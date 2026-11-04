@@ -31,13 +31,19 @@ export const DEFAULT_COOLDOWN_MS = 30 * 60_000;
 export const DEFAULT_TIMEOUT_MS = 10_000;
 
 /** 配置默认路径(spec #258 票05 平台感知,与 src/paths.ts 的 configDir 同
- *  语义;本文件零桥代码依赖,故独立复刻):Linux/darwin 读新配置根
+ *  语义;本文件零桥代码依赖,故独立复刻):Linux/其余 POSIX 读新配置根
  *  $XDG_CONFIG_HOME/pi-courier(未设置/空串按缺省 ~/.config 处理),桥在
  *  Linux 首启已把旧 ~/.pi/pi-courier.json 自动迁过去;Windows 不迁移,配置
- *  仍在 %USERPROFILE%\.pi\pi-courier.json。显式 --config 可覆盖。 */
+ *  仍在 %USERPROFILE%\.pi\pi-courier.json;darwin 沿 ~/.config 惯例但不吃
+ *  XDG_CONFIG_HOME(paths.ts 平台分支冻结:darwin 分支不读 XDG,桥恒写
+ *  ~/.config/pi-courier,看门狗若读 XDG 会找不到配置,告警静默 no-config
+ *  失能)。显式 --config 可覆盖。 */
 export function defaultConfigPath() {
   if (process.platform === "win32") {
     return path.join(os.homedir(), ".pi", "pi-courier.json");
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), ".config", "pi-courier", "pi-courier.json");
   }
   const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
   return path.join(xdgConfig, "pi-courier", "pi-courier.json");
