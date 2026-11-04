@@ -786,6 +786,28 @@ function pushSecretFragments(secrets: string[], value: string, separator: string
   if (trimmed.length > 0 && trimmed !== rest) secrets.push(trimmed);
 }
 
+/** 按空格形态的同一规则把一个 flag 的值收进脱敏名单(--env/--header 拆分
+ *  形态、--oauth-client-secret 整值);空格形态与连写形态共用,不认的
+ *  flag 原样 no-op(未知 flag 不猜,透传给 pi 裁决)。 */
+function collectValueSecrets(secrets: string[], token: string, value: string): void {
+  if (token === "--env") {
+    // K=V 形态(pi parsePairs 实际按 = 切):整串与「= 之后的值」
+    // 都进脱敏名单 —— pi 的报错可能只引用值部分,只遮整串会漏
+    // (spec #246 回执安全纪律)。
+    pushSecretFragments(secrets, value, "=");
+  } else if (token === "--header") {
+    // = 切割照旧(pi 对 --header 同样要求 KEY=VALUE);冒号形态
+    // (curl 风格 K:V)pi 会拒绝并整串回显,但值部分单独出现在
+    // 其它诊断/旧版 pi 模型回显里时只遮整串会漏 —— 冒号切割的
+    // 值部分(含 trim 形态)一并进名单(工单 sec-mcp-secret-redaction)。
+    pushSecretFragments(secrets, value, "=");
+    pushSecretFragments(secrets, value, ":");
+  } else if (token === "--oauth-client-secret") {
+    // 整个值就是密钥本体,无子结构可切(工单 sec-mcp-secret-redaction)。
+    secrets.push(value);
+  }
+}
+
 /**
  * 扫描 add argv:第一个位置参数 = 服务器名;--env/--header
  * /--oauth-client-secret 的值进脱敏名单(审计与回执都不落值,spec #246
@@ -806,27 +828,21 @@ function scanMcpAddArgv(argv: readonly string[]): McpAddScan {
     if (MCP_ADD_VALUED_FLAGS.has(token)) {
       const value = argv[i + 1];
       if (value !== undefined) {
-        if (token === "--env") {
-          // K=V 形态(pi parsePairs 实际按 = 切):整串与「= 之后的值」
-          // 都进脱敏名单 —— pi 的报错可能只引用值部分,只遮整串会漏
-          // (spec #246 回执安全纪律)。
-          pushSecretFragments(secrets, value, "=");
-        } else if (token === "--header") {
-          // = 切割照旧(pi 对 --header 同样要求 KEY=VALUE);冒号形态
-          // (curl 风格 K:V)pi 会拒绝并整串回显,但值部分单独出现在
-          // 其它诊断/旧版 pi 模型回显里时只遮整串会漏 —— 冒号切割的
-          // 值部分(含 trim 形态)一并进名单(工单 sec-mcp-secret-redaction)。
-          pushSecretFragments(secrets, value, "=");
-          pushSecretFragments(secrets, value, ":");
-        } else if (token === "--oauth-client-secret") {
-          // 整个值就是密钥本体,无子结构可切(工单 sec-mcp-secret-redaction)。
-          secrets.push(value);
-        }
+        collectValueSecrets(secrets, token, value);
         i += 1;
       }
       continue;
     }
-    if (token.startsWith("--")) continue;
+    if (token.startsWith("--")) {
+      // 连写形态 --flag=value:pi 的 parseOptions 不拆连写,整 token 查
+      // known 表失败后 `Unknown option <整 token>.` 连值整串回显(stderr
+      // 尾部 → 回执,实测 exit=1),值部分必须入名单 —— 按第一个 = 切出
+      // flag 与 value 后走与空格形态完全相同的入名单规则;只补脱敏,
+      // argv 原样透传不动(评审 sec-mcp-secret-redaction 同根因补齐)。
+      const eq = token.indexOf("=");
+      if (eq >= 0) collectValueSecrets(secrets, token.slice(0, eq), token.slice(eq + 1));
+      continue;
+    }
     if (name === undefined) name = token;
   }
   return { name, secrets, localFlag };

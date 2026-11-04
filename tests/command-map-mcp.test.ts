@@ -362,6 +362,41 @@ describe("/mcp add", () => {
     expect(h.replies[0]).not.toContain("tok-eq-777");
   });
 
+  it("失败回执脱敏补齐:连写形态 --oauth-client-secret=<值> 的整 token 回显也遮(pi Unknown option 路径)", async () => {
+    const h = harness({
+      // pi 1.0.0 parseOptions 不拆连写,整 token 查 known 表失败后
+      // `Unknown option <整 token>.` 写 stderr(exit=1,实测确认)。
+      add: { kind: "failed", message: 'Unknown option --oauth-client-secret=sec-eq-456.\nUse "pi mcp --help" for usage.' },
+    });
+    await runOrThrow(h, "/mcp add corp --oauth-client-secret=sec-eq-456 --url https://x");
+    // 连写只补脱敏:argv 原样透传不动,pi 裁决。
+    expect(h.addCalls[0]).toEqual(["corp", "--oauth-client-secret=sec-eq-456", "--url", "https://x"]);
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("sec-eq-456");
+    expect(h.replies[0]).toContain("***");
+  });
+
+  it("失败回执脱敏补齐:连写形态 --env=<K=V> 的值部分单独回显也遮", async () => {
+    const h = harness({
+      add: { kind: "failed", message: "invalid env value v-eq-555" },
+    });
+    await runOrThrow(h, "/mcp add corp --env=K=v-eq-555 --url https://x");
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("v-eq-555");
+    expect(h.replies[0]).toContain("***");
+  });
+
+  it("失败回执脱敏补齐:连写形态 --header=<K:V> 的冒号值部分单独回显也遮", async () => {
+    const h = harness({
+      add: { kind: "failed", message: "refused header value tok-hv-888" },
+    });
+    // 引号包成单 token:连写 + 值含空格。
+    await runOrThrow(h, "/mcp add corp '--header=X-Api: tok-hv-888' --url https://x");
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("tok-hv-888");
+    expect(h.replies[0]).toContain("***");
+  });
+
   it("成功回执不透传 pi stdout(即使它包含 env 值)", async () => {
     const h = harness({ add: { kind: "ok", data: "Added corp (--env K=sk-secret-123)" } });
     await runOrThrow(h, "/mcp add corp --env K=sk-secret-123 --url https://x");
