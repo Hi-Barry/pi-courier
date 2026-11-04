@@ -319,6 +319,49 @@ describe("/mcp add", () => {
     expect(h.audits).toHaveLength(0);
   });
 
+  it("失败回执脱敏补齐:--oauth-client-secret 的值与 --header 冒号形态的值部分也不透传", async () => {
+    const h = harness({
+      // 报错只引用值部分(trim 后形态,无前导空格),不含 --header 整串 ——
+      // 只遮整串会漏(工单 sec-mcp-secret-redaction)。
+      add: {
+        kind: "failed",
+        message: "oauth rejected: client secret sec-456 invalid; refused header value Bearer tok-abc-999",
+      },
+    });
+    await runOrThrow(
+      h,
+      "/mcp add corp --oauth-client-secret sec-456 --header 'Authorization: Bearer tok-abc-999' --url https://x",
+    );
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("sec-456");
+    expect(h.replies[0]).not.toContain("tok-abc-999");
+    expect(h.replies[0]).toContain("***");
+    expect(h.audits).toHaveLength(0);
+  });
+
+  it("unavailable 回执脱敏补齐:--header 冒号后的值部分(带前导空格的原样形态)也不透传", async () => {
+    const h = harness({
+      add: {
+        kind: "unavailable",
+        message: 'pi 不认识这条 mcp 子命令:model echoed " Bearer tok-abc-999"',
+      },
+    });
+    await runOrThrow(h, "/mcp add corp --header 'Authorization: Bearer tok-abc-999' --url https://x");
+    expect(h.replies[0]).toContain("MCP 管理不可用");
+    expect(h.replies[0]).not.toContain("tok-abc-999");
+    expect(h.replies[0]).toContain("***");
+    expect(h.audits).toHaveLength(0);
+  });
+
+  it("失败回执脱敏不回退:--header 的 KEY=VALUE(pi 实际接受形态)值部分照旧遮", async () => {
+    const h = harness({
+      add: { kind: "failed", message: 'invalid header value tok-eq-777 near "Authorization=tok-eq-777"' },
+    });
+    await runOrThrow(h, "/mcp add corp --header 'Authorization=tok-eq-777' --url https://x");
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("tok-eq-777");
+  });
+
   it("成功回执不透传 pi stdout(即使它包含 env 值)", async () => {
     const h = harness({ add: { kind: "ok", data: "Added corp (--env K=sk-secret-123)" } });
     await runOrThrow(h, "/mcp add corp --env K=sk-secret-123 --url https://x");
