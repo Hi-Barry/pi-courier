@@ -167,8 +167,12 @@ export async function decryptEncryptedMedia(file: EncryptedMediaFile, ciphertext
 }
 
 export class AttachmentStore {
-  /** mxc:// → 已存绝对路径(票3):同一张图被转发/重发时不二次下载。 */
-  private dedup = new Map<string, string>();
+  /** roomId → (mxc:// → 已存绝对路径)(票3):同一张图在本房间被转发/重发时
+   *  不二次下载。键带房间维度(sec-attachment-dedup-room):同一 mxc 在不同
+   *  房间各自落盘,绝不把别的房间子目录的绝对路径交给本房间——跨房命中会
+   *  泄漏对方 roomId 的净化形+哈希,击穿房间存储隔离。用两级 Map 而非拼接
+   *  键,免掉分隔符碰撞论证。 */
+  private dedup = new Map<string, Map<string, string>>();
 
   constructor(
     private config: AttachmentStoreConfig,
@@ -187,15 +191,18 @@ export class AttachmentStore {
       throw new AttachmentDownloadError(t("attach.noMediaUrl"));
     }
 
-    // Dedup (ticket 3): a forwarded/re-sent mxc maps to the existing file.
-    // A mapped file that vanished from disk (manual cleanup) re-downloads.
-    const known = this.dedup.get(mxcKey);
+    // Dedup (ticket 3): a forwarded/re-sent mxc maps to the existing file —
+    // scoped to THIS room (sec-attachment-dedup-room): a cross-room hit would
+    // hand out another room's subdirectory path. A mapped file that vanished
+    // from disk (manual cleanup) re-downloads.
+    const roomDedup = this.dedup.get(roomId);
+    const known = roomDedup?.get(mxcKey);
     if (known) {
       const bytes = await statSize(known).catch(() => -1);
       if (bytes >= 0) {
         return { path: known, filename: path.basename(known), bytes };
       }
-      this.dedup.delete(mxcKey);
+      roomDedup?.delete(mxcKey);
     }
 
     // Pre-check against the DECLARED size (cheap rejection before download).
@@ -247,7 +254,9 @@ export class AttachmentStore {
       throw err;
     }
 
-    this.dedup.set(mxcKey, target);
+    const byRoom = this.dedup.get(roomId) ?? new Map<string, string>();
+    this.dedup.set(roomId, byRoom);
+    byRoom.set(mxcKey, target);
     return { path: target, filename: path.basename(target), bytes: data.length };
   }
 }
