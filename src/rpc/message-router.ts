@@ -1291,7 +1291,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             await login.listProviders(msg.chatId, msg.transport);
           } else {
             const [providerId, method] = loginArgs.split(/\s+/);
-            await login.startLogin(msg.chatId, msg.transport, providerId!, method);
+            // starterId(sec-login-sender-guard):流程绑定发起者,只有 TA 的
+            // 后续消息能作答/取消 —— 管理房内其他受信成员无权代答。
+            await login.startLogin(msg.chatId, msg.transport, providerId!, msg.userId, method);
           }
           return true;
         }
@@ -1447,9 +1449,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // any pending extension_ui question (ticket requirement); 「取消」 aborts
       // the login at any moment. Messages arriving between prompts (OAuth
       // polling) are NOT consumed — the room stays usable during long waits.
+      // 身份关在 deliver 内(sec-login-sender-guard):非发起者的消息原样
+      // 落穿,isPending 仅作快速预检、不做身份裁决。
       handle: async (ctx) => {
         if (ctx.text.startsWith("/")) return false;
-        return login.isPending(ctx.msg.chatId) && (await login.deliver(ctx.msg.chatId, ctx.text));
+        return (
+          login.isPending(ctx.msg.chatId) &&
+          (await login.deliver(ctx.msg.chatId, ctx.msg.userId, ctx.text))
+        );
       },
     },
     {

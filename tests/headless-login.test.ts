@@ -230,29 +230,33 @@ function makeManager(runtime: LoginRuntime, allRpcs: PiRpc[] = []) {
 }
 
 const CHAT = "!dm:server";
+/** 流程发起者(sec-login-sender-guard):startLogin 绑定的身份,后续
+ *  deliver/cancel 只认 TA;他人用 MALLORY 对照。 */
+const STARTER = "@barry:server";
+const MALLORY = "@mallory:server";
 
 describe("LoginManager (issue #55)", () => {
   it("startLogin validates provider and method before starting anything", async () => {
     const runtime = makeRuntime();
     const { replies, manager } = makeManager(runtime);
-    await manager.startLogin(CHAT, "matrix", "nope");
+    await manager.startLogin(CHAT, "matrix", "nope", STARTER);
     expect(replies.at(-1)).toContain("❌ 未知 provider: nope");
 
-    await manager.startLogin(CHAT, "matrix", "zai", "oauth"); // zai has no oauth login (pi 1.0: openai gained ChatGPT sign-in, so it now has oauth)
+    await manager.startLogin(CHAT, "matrix", "zai", STARTER, "oauth"); // zai has no oauth login (pi 1.0: openai gained ChatGPT sign-in, so it now has oauth)
     expect(replies.at(-1)).toContain("不支持 oauth 登录");
 
-    await manager.startLogin(CHAT, "matrix", "nope", "bogus");
+    await manager.startLogin(CHAT, "matrix", "nope", STARTER, "bogus");
     expect(replies.at(-1)).toContain("❌ 未知 provider: nope");
 
     // Unambiguous provider: the only supported method is picked automatically.
-    await manager.startLogin(CHAT, "matrix", "zai");
+    await manager.startLogin(CHAT, "matrix", "zai", STARTER);
     await vi.waitFor(() =>
       expect((runtime.login as ReturnType<typeof vi.fn>).mock.calls[0]?.slice(0, 2)).toEqual(["zai", "api_key"])
     );
-    await manager.cancel(CHAT);
+    await manager.cancel(CHAT, STARTER);
 
     // Ambiguous provider without a method: ask which one.
-    await manager.startLogin(CHAT, "matrix", "anthropic");
+    await manager.startLogin(CHAT, "matrix", "anthropic", STARTER);
     expect(replies.at(-1)).toContain("支持多种登录方式(oauth / api_key)");
     expect((runtime.login as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1); // nothing new started
   });
@@ -266,11 +270,11 @@ describe("LoginManager (issue #55)", () => {
         },
       })
     );
-    void manager.startLogin(CHAT, "matrix", "anthropic", "api_key");
+    void manager.startLogin(CHAT, "matrix", "anthropic", STARTER, "api_key");
     await flush();
-    await manager.startLogin(CHAT, "matrix", "openai", "api_key");
+    await manager.startLogin(CHAT, "matrix", "openai", STARTER, "api_key");
     expect(replies.at(-1)).toContain("已有登录流程进行中");
-    await manager.cancel(CHAT);
+    await manager.cancel(CHAT, STARTER);
   });
 
   it("api_key flow: secret question → pasted key → success + idle restart summary", async () => {
@@ -284,12 +288,12 @@ describe("LoginManager (issue #55)", () => {
     });
     const { manager, replies, flush, authPath } = makeManager(runtime, [idle, busy]);
 
-    void manager.startLogin(CHAT, "matrix", "anthropic", "api_key");
+    void manager.startLogin(CHAT, "matrix", "anthropic", STARTER, "api_key");
     await flush();
     await vi.waitFor(() => expect(replies.join("\n")).toContain("粘贴你的 Anthropic API key"));
     expect(replies.join("\n")).toContain("房间历史"); // the secret warning is present
 
-    expect(await manager.deliver(CHAT, "sk-ant-test")).toBe(true);
+    expect(await manager.deliver(CHAT, STARTER, "sk-ant-test")).toBe(true);
 
     await vi.waitFor(() => expect(replies.at(-1)).toContain("登录成功"));
     const summary = replies.at(-1)!;
@@ -316,10 +320,10 @@ describe("LoginManager (issue #55)", () => {
     const idle = makeRpc(undefined, "idle");
     const { manager, replies, flush } = makeManager(runtime, [idle]);
 
-    void manager.startLogin(CHAT, "matrix", "anthropic", "api_key");
+    void manager.startLogin(CHAT, "matrix", "anthropic", STARTER, "api_key");
     await flush();
     await vi.waitFor(() => expect(replies.join("\n")).toContain("key?")); // prompt parked
-    expect(await manager.deliver(CHAT, "取消")).toBe(true);
+    expect(await manager.deliver(CHAT, STARTER, "取消")).toBe(true);
     expect(replies.at(-1)).toContain("🛑 已取消 anthropic 的登录流程");
 
     await vi.waitFor(() => expect(promptError).toBeInstanceOf(LoginCancelledError));
@@ -327,7 +331,7 @@ describe("LoginManager (issue #55)", () => {
     expect(idle.restart).not.toHaveBeenCalled();
     expect(manager.isPending(CHAT)).toBe(false);
     // After the cancel, plain messages are no longer captured.
-    expect(await manager.deliver(CHAT, "hello")).toBe(false);
+    expect(await manager.deliver(CHAT, STARTER, "hello")).toBe(false);
   });
 
   it("select prompts submit option ids; invalid input re-asks without dequeuing", async () => {
@@ -344,15 +348,15 @@ describe("LoginManager (issue #55)", () => {
     });
     const { manager, replies, flush } = makeManager(runtime);
 
-    void manager.startLogin(CHAT, "matrix", "anthropic", "oauth");
+    void manager.startLogin(CHAT, "matrix", "anthropic", STARTER, "oauth");
     await flush();
     await vi.waitFor(() => expect(replies.join("\n")).toContain("选择订阅"));
 
-    expect(await manager.deliver(CHAT, "9")).toBe(true);
+    expect(await manager.deliver(CHAT, STARTER, "9")).toBe(true);
     expect(replies.at(-1)).toContain("请回复 1 到 2 之间的序号");
     expect(manager.isPending(CHAT)).toBe(true);
 
-    expect(await manager.deliver(CHAT, "2")).toBe(true);
+    expect(await manager.deliver(CHAT, STARTER, "2")).toBe(true);
     await vi.waitFor(() => expect(replies.join("\n")).toContain("登录成功"));
   });
 
@@ -371,18 +375,18 @@ describe("LoginManager (issue #55)", () => {
     });
     const { manager, replies, flush } = makeManager(runtime);
 
-    void manager.startLogin(CHAT, "matrix", "anthropic", "api_key");
+    void manager.startLogin(CHAT, "matrix", "anthropic", STARTER, "api_key");
     await flush();
     expect(manager.isPending(CHAT)).toBe(true);
 
     // No prompt is waiting yet — the message must fall through untouched.
-    expect(await manager.deliver(CHAT, "a normal message")).toBe(false);
+    expect(await manager.deliver(CHAT, STARTER, "a normal message")).toBe(false);
 
     release();
     await vi.waitFor(() => expect(replies.join("\n")).toContain("⏳ 等待授权回调…"));
     await vi.waitFor(() => expect(replies.join("\n")).toContain("key?"));
     // The prompt is up now — the next message IS the answer.
-    expect(await manager.deliver(CHAT, "sk-late")).toBe(true);
+    expect(await manager.deliver(CHAT, STARTER, "sk-late")).toBe(true);
     await vi.waitFor(() => expect(manager.isPending(CHAT)).toBe(false));
   });
 
@@ -434,8 +438,119 @@ describe("LoginManager (issue #55)", () => {
     await manager.authStatus(CHAT, "matrix");
     expect(replies.at(-1)).toContain("❌ 读取凭据失败: auth.json unreadable");
 
-    await manager.startLogin(CHAT, "matrix", "openai", "api_key");
+    await manager.startLogin(CHAT, "matrix", "openai", STARTER, "api_key");
     await vi.waitFor(() => expect(replies.at(-1)).toContain("❌ openai 登录失败: flow exploded"));
     expect(manager.isPending(CHAT)).toBe(false);
+  });
+});
+
+// --- sender guard (sec-login-sender-guard) -------------------------------------
+//
+// 管理房里非 admin 的受信成员会被邀入(admin-commands 配对成功即发
+// managementRoomInvite effect),/login 等待 prompt(尤其 secret)时,
+// 只有流程发起者本人可以作答/取消 —— 他人的消息一律不消费、原样落穿。
+
+describe("LoginManager sender guard (sec-login-sender-guard)", () => {
+  it("a non-starter's answer is not consumed and never reaches the flow; the starter's own answer still lands", async () => {
+    let submitted: string | undefined;
+    const runtime = makeRuntime({
+      login: vi.fn(async (_p: string, _t: string, interaction: AuthInteraction) => {
+        submitted = await interaction.prompt({ type: "secret", message: "key?" });
+        return { type: "api_key", key: submitted } as Credential;
+      }),
+    });
+    const { manager, replies, flush } = makeManager(runtime);
+
+    void manager.startLogin(CHAT, "matrix", "anthropic", STARTER, "api_key");
+    await flush();
+    await vi.waitFor(() => expect(replies.join("\n")).toContain("key?"));
+
+    // 他人在 prompt 等待中贴 key:不消费,prompt 不被 resolve,流程仍挂起。
+    expect(await manager.deliver(CHAT, MALLORY, "sk-mallory-injected")).toBe(false);
+    expect(manager.isPending(CHAT)).toBe(true);
+    expect(submitted).toBeUndefined(); // 注入值从未进入流程
+
+    // 同一条消息路径,发起者本人作答照常成功 —— 且答案是他自己的。
+    expect(await manager.deliver(CHAT, STARTER, "sk-ant-owner")).toBe(true);
+    await vi.waitFor(() => expect(replies.at(-1)).toContain("登录成功"));
+    expect(submitted).toBe("sk-ant-owner");
+    expect(manager.isPending(CHAT)).toBe(false);
+  });
+
+  it("a non-starter's 「取消」 does not abort the flow; the starter can still cancel", async () => {
+    let promptError: unknown;
+    const runtime = makeRuntime({
+      login: vi.fn(async (_p: string, _t: string, interaction: AuthInteraction) => {
+        try {
+          await interaction.prompt({ type: "secret", message: "key?" });
+        } catch (err) {
+          promptError = err;
+          throw err;
+        }
+        throw new Error("should not reach here");
+      }),
+    });
+    const { manager, replies, flush } = makeManager(runtime);
+
+    void manager.startLogin(CHAT, "matrix", "anthropic", STARTER, "api_key");
+    await flush();
+    await vi.waitFor(() => expect(replies.join("\n")).toContain("key?"));
+
+    // 他人的取消词:不消费,流程原样保留,无取消回执。
+    expect(await manager.deliver(CHAT, MALLORY, "取消")).toBe(false);
+    expect(manager.isPending(CHAT)).toBe(true);
+    expect(replies.at(-1)).not.toContain("已取消");
+    expect(promptError).toBeUndefined(); // prompt 仍挂着
+
+    // 发起者本人取消仍然生效。
+    expect(await manager.deliver(CHAT, STARTER, "取消")).toBe(true);
+    expect(replies.at(-1)).toContain("🛑 已取消 anthropic 的登录流程");
+    await vi.waitFor(() => expect(promptError).toBeInstanceOf(LoginCancelledError));
+    expect(manager.isPending(CHAT)).toBe(false);
+  });
+
+  it("cancel(chatId, sender) rejects a non-starter directly (defense in depth)", async () => {
+    const runtime = makeRuntime({
+      login: vi.fn(async (_p: string, _t: string, interaction: AuthInteraction) => {
+        await interaction.prompt({ type: "secret", message: "key?" });
+        return { type: "api_key", key: "k" } as Credential;
+      }),
+    });
+    const { manager, replies, flush } = makeManager(runtime);
+
+    void manager.startLogin(CHAT, "matrix", "anthropic", STARTER, "api_key");
+    await flush();
+    await vi.waitFor(() => expect(replies.join("\n")).toContain("key?"));
+
+    expect(await manager.cancel(CHAT, MALLORY)).toBe(false);
+    expect(manager.isPending(CHAT)).toBe(true);
+    expect(replies.at(-1)).not.toContain("已取消");
+
+    expect(await manager.cancel(CHAT, STARTER)).toBe(true);
+    expect(replies.at(-1)).toContain("🛑 已取消 anthropic 的登录流程");
+  });
+
+  it("between prompts a non-starter's plain message is untouched, same as before (no warn-worthy consumption)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runtime = makeRuntime({
+      login: vi.fn(async (_p: string, _t: string, interaction: AuthInteraction) => {
+        await gate;
+        await interaction.prompt({ type: "secret", message: "key?" });
+        return { type: "api_key", key: "k" } as Credential;
+      }),
+    });
+    const { manager, flush } = makeManager(runtime);
+
+    void manager.startLogin(CHAT, "matrix", "anthropic", STARTER, "api_key");
+    await flush();
+    // OAuth 轮询窗口(无 prompt 等待):他人与发起者的消息都照旧落穿。
+    expect(await manager.deliver(CHAT, MALLORY, "chat chatter")).toBe(false);
+    expect(await manager.deliver(CHAT, STARTER, "chat chatter")).toBe(false);
+    release();
+    await vi.waitFor(() => expect(manager.isPending(CHAT)).toBe(true));
+    await manager.cancel(CHAT, STARTER);
   });
 });

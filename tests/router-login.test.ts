@@ -4,8 +4,10 @@
  * /login (list + start), the gates (admin + management room; single-project
  * DM counts as management room), the api_key round-trip over plain messages,
  * 「取消」, capture priority over pending extension_ui questions, /logout,
- * /auth and /reload all. A REAL LoginManager with a MOCK runtime factory is
- * injected — no test touches ~/.pi.
+ * /auth and /reload all — plus the sender guard (sec-login-sender-guard):
+ * only the flow starter's messages are captured, other members' fall through.
+ * A REAL LoginManager with a MOCK runtime factory is injected — no test
+ * touches ~/.pi.
  */
 import { describe, expect, it, vi } from "vitest";
 import type { AuthInteraction, Credential, CredentialInfo } from "@earendil-works/pi-ai";
@@ -297,5 +299,47 @@ describe("/reload all (issue #55)", () => {
     await vi.waitFor(() => expect(fx.lastReply()).toContain("pi 已重启"));
     expect(fx.defaultRpc.restart).toHaveBeenCalledTimes(1);
     expect(fx.busyRpc.restart).not.toHaveBeenCalled();
+  });
+});
+
+describe("/login sender guard through the router (sec-login-sender-guard)", () => {
+  it("a trusted non-admin member's answer falls through to pi; only the admin's own answer completes the login", async () => {
+    const fx = makeFixtures({ secondTrusted: "matrix:@other:server" }, runtimeWithSecretPrompt());
+    await startLogin(fx); // 发起者:默认管理员 @barry:server
+
+    // 管理房里被邀入的 @other 贴 key:登录流不消费 —— 消息落穿为普通
+    // prompt,凭据未写入,登录未成功,空闲进程不重启。
+    await fx.router.handleIncoming(
+      makeMsg({ userId: "@other:server", username: "other", text: "sk-other-injected", messageId: "m2" })
+    );
+    await vi.waitFor(() => expect(fx.defaultPrompt).toHaveBeenCalledWith("sk-other-injected"));
+    expect(fx.allText()).not.toContain("登录成功");
+    expect(fx.defaultRpc.restart).not.toHaveBeenCalled();
+    expect(fx.login.isPending("!dm:server")).toBe(true); // 流程仍挂着
+
+    // 发起者本人随后作答:照常走完,凭据落盘、空闲进程重启。
+    await fx.router.handleIncoming(makeMsg({ text: "sk-ant-owner", messageId: "m3" }));
+    await vi.waitFor(() => expect(fx.lastReply()).toContain("登录成功"));
+    expect(fx.defaultRpc.restart).toHaveBeenCalledTimes(1);
+    expect(fx.busyRpc.restart).not.toHaveBeenCalled();
+  });
+
+  it("a trusted non-admin's 「取消」 cannot abort the admin's flow; the admin's own cancel works", async () => {
+    const fx = makeFixtures({ secondTrusted: "matrix:@other:server" }, runtimeWithSecretPrompt());
+    await startLogin(fx);
+
+    // @other 的取消词:不消费,落穿为普通 prompt,流程原样保留。
+    await fx.router.handleIncoming(
+      makeMsg({ userId: "@other:server", username: "other", text: "取消", messageId: "m2" })
+    );
+    await vi.waitFor(() => expect(fx.defaultPrompt).toHaveBeenCalledWith("取消"));
+    expect(fx.allText()).not.toContain("已取消");
+    expect(fx.login.isPending("!dm:server")).toBe(true);
+
+    // 发起者本人取消:正常中止。
+    await fx.router.handleIncoming(makeMsg({ text: "取消", messageId: "m3" }));
+    await vi.waitFor(() => expect(fx.lastReply()).toContain("🛑 已取消 anthropic 的登录流程"));
+    expect(fx.login.isPending("!dm:server")).toBe(false);
+    expect(fx.defaultRpc.restart).not.toHaveBeenCalled();
   });
 });
