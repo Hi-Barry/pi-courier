@@ -53,11 +53,25 @@ export function win32PathProblem(workdir: string): Win32PathProblem | null {
   return null;
 }
 
-/** Whether two workdirs denote the same directory on case-insensitive NTFS.
- *  Compares folded forms; callers only use this on win32 — on POSIX the two
- *  case variants are genuinely different directories. */
+/**
+ * Whether two workdirs denote the same directory on case-insensitive NTFS.
+ * Folds case only — deliberately NO Unicode compatibility (NFKC)
+ * decomposition: NTFS compares names through its $UpCase table, a
+ * per-codepoint simple case mapping, so NFKC-equivalent but differently
+ * encoded names (fullwidth forms, ligatures, combining-vs-precomposed
+ * accents) are DISTINCT files there. NFKC here would merge those and reject
+ * legitimate registrations as duplicates.
+ *
+ * toLowerCase is the nearest locale-independent simple fold; it still
+ * diverges from an exact $UpCase table on a handful of exotic codepoints
+ * (e.g. U+1E9B vs U+1E61 — NTFS merges both via U+1E60, simple lowercasing
+ * keeps them apart), which errs toward accepting a registration NTFS would
+ * collide — accepted residual, the fixed bug was over-folding.
+ * Callers only use this on win32 — on POSIX the two case variants are
+ * genuinely different directories.
+ */
 export function win32SamePath(a: string, b: string): boolean {
-  return a.normalize("NFKC").toLowerCase() === b.normalize("NFKC").toLowerCase();
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 /**
