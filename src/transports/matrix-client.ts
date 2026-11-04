@@ -9,7 +9,7 @@
  * the SDK log facade; the real MatrixClient structurally satisfies the
  * port, so no wrapper class is needed.
  */
-import type { ILogger, RoomCreateOptions } from "matrix-bot-sdk";
+import type { CryptoClient, ILogger, RoomCreateOptions } from "matrix-bot-sdk";
 import {
   LogService,
   MatrixClient,
@@ -19,7 +19,6 @@ import {
 } from "matrix-bot-sdk";
 import { errorMessage } from "../errors.js";
 import { logger } from "../logger.js";
-import type { EncryptedMediaFile } from "./attachments.js";
 
 /** Whether the error is the expected "native crypto binding failed to load"
  *  failure (missing download, ABI mismatch, unsupported loader). */
@@ -29,12 +28,6 @@ function isNativeLoadFailure(err: unknown): boolean {
   return /matrix-sdk-crypto|\.node\b|dlopen|cannot find module|dynamic loading|incompatible architecture|load error/i.test(
     errorMessage(err)
   );
-}
-
-/** The crypto half of the client — present only when the Rust crypto stack
- *  loaded successfully at connect time; its presence gates E2EE features. */
-export interface MatrixClientCrypto {
-  decryptMedia(file: EncryptedMediaFile): Promise<Buffer>;
 }
 
 /** Outgoing room message content (the shape sendMessage is called with).
@@ -87,9 +80,16 @@ export interface MatrixClientPort {
   setTyping(roomId: string, typing: boolean, timeoutMs?: number): Promise<unknown>;
 
   // ── 媒体 ──
-  downloadContent(mxcUrl: string): Promise<{ data: Buffer; contentType: string }>;
-  /** Absent when the deployment runs without the crypto stack. */
-  crypto?: MatrixClientCrypto;
+  // 附件下载不走端口:SDK 的 downloadContent/decryptMedia 都是整包进内存后
+  // 才能判大小(sec 下载 OOM 修复),媒体下载经 matrix.ts 的流式带上限实现
+  // (mediaSource)。端口刻意不收留无上限的下载原语,防止未来适配器误用绕过
+  // 全部上限。
+  /** Present only when the Rust crypto stack loaded successfully at connect
+   *  time — the port consumes its PRESENCE only (E2EE availability gating);
+   *  attachment decryption is local (attachments.ts) and needs no methods.
+   *  Typed as the SDK's CryptoClient so the real client satisfies the port
+   *  structurally without a wrapper. */
+  crypto?: CryptoClient;
 
   // ── 房间能力 ──
   createRoom(properties?: RoomCreateOptions): Promise<string>;

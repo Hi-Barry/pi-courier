@@ -6,15 +6,16 @@
  * absolute paths fine) — no base64 over the RPC wire.
  *
  * The download seam (MediaSource) is injectable: tests use fakes, the
- * composition root backs it with matrix-bot-sdk downloadContent /
- * crypto.decryptMedia.
+ * composition root backs it with a streaming, byte-capped authenticated
+ * media download (matrix.ts) plus local AES-CTR decryption for E2EE
+ * attachments — the cap is enforced DURING the transfer, never after.
  *
  * The media-input shape (EncryptedMediaFile) and filename sanitization
  * (sanitizeMediaFilename) live here too — the module that writes files owns
  * the filename contract (spec #99/#101: formerly matrix-utils.ts).
  */
 
-import { createHash } from "node:crypto";
+import { createDecipheriv, createHash, timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { errorMessage } from "../errors.js";
@@ -50,18 +51,25 @@ export function sanitizeMediaFilename(body: string | undefined, mxcUrl: string):
   return `${hash}-${safe.slice(0, 150)}`;
 }
 
-/** Where bytes come from — the transport-specific half (Matrix client). */
+/** Where bytes come from — the transport-specific half (Matrix client).
+ *
+ *  大小硬上限(sec 下载 OOM 修复):两个方法都携带 maxBytes,实现方必须在
+ *  传输过程中逐块计数并在累计超过 maxBytes 时中止(掐断连接),成功返回
+ *  隐含「字节数 ≤ maxBytes」。上限只在下载完成后复检无法防 OOM —— 恶意
+ *  房间成员/联邦媒体服务器谎报 sizeHint,或分块传输不声明 Content-Length,
+ *  都能把任意大的 body 先读进内存。 */
 export interface MediaSource {
-  downloadPlaintext(mxcUrl: string): Promise<Buffer>;
+  downloadPlaintext(mxcUrl: string, maxBytes: number): Promise<Buffer>;
   /** Present only when the deployment runs with E2EE crypto available. */
-  downloadEncrypted?(file: EncryptedMediaFile): Promise<Buffer>;
+  downloadEncrypted?(file: EncryptedMediaFile, maxBytes: number): Promise<Buffer>;
 }
 
 export interface AttachmentStoreConfig {
   /** Root directory; one subdirectory per room. */
   rootDir: string;
   /** Hard cap per attachment in bytes (pre-checked against the event's
-   *  declared size, re-checked against real bytes after download). */
+   *  declared size, enforced by the MediaSource DURING the download, and
+   *  re-checked against real bytes afterwards — belt and braces). */
   maxBytes: number;
 }
 
@@ -100,8 +108,9 @@ export class AttachmentDownloadError extends Error {
   }
 }
 
-/** 单附件下载超时(ms):挂起的下载不能让"失败必回执"变成"永不回执"。 */
-const DOWNLOAD_TIMEOUT_MS = 60_000;
+/** 单附件下载超时(ms):挂起的下载不能让"失败必回执"变成"永不回执"。
+ *  导出给 matrix.ts 的流式下载做 socket 级中止(同一时刻,同一语义)。 */
+export const DOWNLOAD_TIMEOUT_MS = 60_000;
 
 /** 房间 ID → 安全子目录名("!abc:server" 含 ! 与 :,全部替换 + 哈希防碰撞)。 */
 export function sanitizeRoomKey(roomId: string): string {
@@ -114,6 +123,47 @@ export function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${bytes} B`;
+}
+
+/**
+ * 逐块读取一个字节流并实施 maxBytes 硬上限(sec 下载 OOM 修复):累计超过
+ * 上限立刻抛 AttachmentTooLargeError。从 for-await 中抛出走迭代器的
+ * return() —— web ReadableStream 的 return 即 cancel(),连接会被掐断,
+ * 服务端再大也只进过内存 maxBytes+一个分块。
+ */
+export async function readCapped(body: ReadableStream<Uint8Array>, maxBytes: number): Promise<Buffer> {
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for await (const chunk of body) {
+    total += chunk.length;
+    if (total > maxBytes) {
+      throw new AttachmentTooLargeError(total, maxBytes);
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * 按 Matrix 规范(v2 加密附件)本地解密:先校验密文的 SHA-256(防 homeserver
+ * 换包),再用 AES-256-CTR 解密 —— key 取 EncryptedFile.key.k(URL-safe 无
+ * 填充 base64,32 字节),16 字节 iv 字段本身就是初始计数块(低 64 位为 0)。
+ *
+ * 自 matrix-bot-sdk 的 crypto.decryptMedia 拆出来:decryptMedia = 整包下载 +
+ * 纯解密,下载段无法带上限;下载改由 MediaSource 的流式上限承担后,解密是
+ * 无网络参与的字节变换,用 node:crypto 就地完成。算法与
+ * @matrix-org/matrix-sdk-crypto-nodejs(Rust Attachment)经双向互认验证。
+ */
+export async function decryptEncryptedMedia(file: EncryptedMediaFile, ciphertext: Buffer): Promise<Buffer> {
+  const expected = Buffer.from(file.hashes.sha256, "base64");
+  const actual = createHash("sha256").update(ciphertext).digest();
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+    throw new Error(t("attach.hashMismatch"));
+  }
+  const key = Buffer.from(file.key.k, "base64url");
+  const iv = Buffer.from(file.iv, "base64");
+  const decipher = createDecipheriv("aes-256-ctr", key, iv);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }
 
 export class AttachmentStore {
@@ -159,17 +209,22 @@ export class AttachmentStore {
         if (!this.source.downloadEncrypted) {
           throw new Error(t("attach.e2eeRequired"));
         }
-        data = await withTimeout(this.source.downloadEncrypted(media.encryptedFile));
+        // 上限随缝下发:实现方在传输中途掐断,不是下完再看(防 OOM)。
+        data = await withTimeout(this.source.downloadEncrypted(media.encryptedFile, this.config.maxBytes));
       } else {
-        data = await withTimeout(this.source.downloadPlaintext(mxcKey));
+        data = await withTimeout(this.source.downloadPlaintext(mxcKey, this.config.maxBytes));
       }
     } catch (err) {
-      // 下载源不会抛 TooLarge(大小预检在 try 外),无需类型分流;
-      // 非 Error 拒绝也要可读(审计工程批 票20/24)。
+      // 实现方传输中途超上限抛 TooLarge —— 这就是大小判定,原样上抛,
+      // 不许包装成"下载失败";其余(含非 Error 拒绝,审计工程批 票20/24)
+      // 照旧包成可读的下载错误。
+      if (err instanceof AttachmentTooLargeError) throw err;
       throw new AttachmentDownloadError(errorMessage(err));
     }
 
     // Re-check against REAL bytes — info.size is a hint, servers lie.
+    // (主防线已前移:实现方传输中途按 maxBytes 掐断,这里是兜底,拦住
+    // 未遵守上限语义的自定义 MediaSource。)
     if (data.length > this.config.maxBytes) {
       throw new AttachmentTooLargeError(data.length, this.config.maxBytes);
     }

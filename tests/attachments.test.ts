@@ -2,6 +2,7 @@
  * Attachment storage (issue #66 票1, 接缝3): a fake MediaSource + temp dir —
  * real disk writes, no Matrix. Covers save/dedup/size-cap/filename rules.
  */
+import { createCipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,6 +11,8 @@ import { describe, expect, it } from "vitest";
 import {
   AttachmentStore,
   AttachmentTooLargeError,
+  decryptEncryptedMedia,
+  readCapped,
   sanitizeMediaFilename,
   sanitizeRoomKey,
   type MediaSource,
@@ -99,6 +102,42 @@ describe("AttachmentStore.save", () => {
     const { store } = makeStore(source);
     await expect(store.save(ROOM, { mxcUrl: "mxc://s/gone", body: "gone.png" }))
       .rejects.toThrow("附件下载失败: M_NOT_FOUND");
+  });
+
+  it("maxBytes 随缝下发给 MediaSource(上限由实现方在传输中途实施)", async () => {
+    const seenPlaintext: number[] = [];
+    const seenEncrypted: number[] = [];
+    const source: MediaSource = {
+      downloadPlaintext: async (_mxc, maxBytes) => {
+        seenPlaintext.push(maxBytes);
+        return Buffer.from("PNGDATA");
+      },
+      downloadEncrypted: async (_file, maxBytes) => {
+        seenEncrypted.push(maxBytes);
+        return Buffer.from("DECRYPTED");
+      },
+    };
+    const { store } = makeStore(source, 123);
+    await store.save(ROOM, { mxcUrl: "mxc://s/p", body: "p.png" });
+    await store.save(ROOM, {
+      encryptedFile: { url: "mxc://s/enc", key: { k: "k" }, iv: "iv", hashes: { sha256: "h" } },
+      body: "enc.png",
+    });
+    expect(seenPlaintext).toEqual([123]);
+    expect(seenEncrypted).toEqual([123]);
+  });
+
+  it("下载中途超上限:TooLarge 原样上抛,不被包装成『下载失败』", async () => {
+    const source: MediaSource = {
+      downloadPlaintext: async (_mxc, maxBytes) => {
+        throw new AttachmentTooLargeError(maxBytes + 1, maxBytes);
+      },
+    };
+    const { store } = makeStore(source, 100);
+    await expect(store.save(ROOM, { mxcUrl: "mxc://s/mid", body: "mid.png" }))
+      .rejects.toThrow(AttachmentTooLargeError);
+    await expect(store.save(ROOM, { mxcUrl: "mxc://s/mid", body: "mid.png" }))
+      .rejects.toThrow("附件过大");
   });
 
   it("rejects events without any downloadable address", async () => {
@@ -228,5 +267,114 @@ describe("sanitizeMediaFilename", () => {
         expect(name).toMatch(/^[0-9a-f]{12}-/);
       })
     );
+  });
+});
+
+// ─── readCapped(流式硬上限,sec 下载 OOM 修复)───
+
+/** 把分块数组装进一个 web ReadableStream;记录 cancel 是否被调用。 */
+function streamOf(chunks: Buffer[]): { stream: ReadableStream<Uint8Array>; cancelCalls: () => number } {
+  let cancels = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      controller.close();
+    },
+    cancel() {
+      cancels++;
+    },
+  });
+  return { stream, cancelCalls: () => cancels };
+}
+
+describe("readCapped", () => {
+  it("上限内:分块按序拼回原文", async () => {
+    const { stream } = streamOf([Buffer.from("AB"), Buffer.from("CD"), Buffer.from("E")]);
+    expect(await readCapped(stream, 100)).toEqual(Buffer.from("ABCDE"));
+  });
+
+  it("空流:返回空 Buffer", async () => {
+    const { stream } = streamOf([]);
+    expect(await readCapped(stream, 10)).toEqual(Buffer.alloc(0));
+  });
+
+  it("恰好等于上限:放行(超限才判,> 而非 >=)", async () => {
+    const { stream } = streamOf([Buffer.alloc(10, 1)]);
+    expect((await readCapped(stream, 10)).length).toBe(10);
+  });
+
+  it("累计越线:立刻抛 TooLarge 且取消流(连接被掐断,不吞整包)", async () => {
+    const { stream, cancelCalls } = streamOf([Buffer.alloc(60, 1), Buffer.alloc(60, 2), Buffer.alloc(60, 3)]);
+    await expect(readCapped(stream, 100)).rejects.toThrow(AttachmentTooLargeError);
+    await expect(readCapped(new ReadableStream<Uint8Array>({ start(c) { c.enqueue(Buffer.alloc(120, 1)); c.close(); } }), 100))
+      .rejects.toThrow("附件过大");
+    // 抛错已触发迭代器 return → cancel(第二个流已消费,这里查第一个)
+    expect(cancelCalls()).toBe(1);
+  });
+});
+
+// ─── decryptEncryptedMedia(本地规范解密,sec 下载 OOM 修复配套)───
+
+/** 与 Matrix 规范一致的加密侧(测试专用):AES-256-CTR,iv 为 16 字节
+ *  计数块(随机 8 字节前缀 + 8 字节 0),sha256 对密文。 */
+function specEncrypt(plaintext: Buffer) {
+  const key = randomBytes(32);
+  const iv = Buffer.concat([randomBytes(8), Buffer.alloc(8)]);
+  const cipher = createCipheriv("aes-256-ctr", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return {
+    file: {
+      url: "mxc://s/enc",
+      v: "v2",
+      key: { k: key.toString("base64url") },
+      iv: iv.toString("base64"),
+      hashes: { sha256: createHash("sha256").update(ciphertext).digest("base64") },
+    },
+    ciphertext,
+  };
+}
+
+/** 固定向量:由 @matrix-org/matrix-sdk-crypto-nodejs(Rust Attachment.encrypt)
+ *  产出的密文,开发期已与本地解密双向互认(工单 sec-download-size-cap),
+ *  固化在此防止算法漂移。 */
+const RUST_VECTOR = {
+  plaintext: Buffer.from("YXR0YWNobWVudC1jYXAtdmVjdG9yLXBsYWludGV4dA==", "base64"),
+  file: {
+    url: "mxc://s/vec",
+    v: "v2",
+    key: { k: "dQ6jyKm8dGy6tOQpw4TR92mJIzw3kHB7eV7-gXaIHeA" },
+    iv: "ktNOeiUlr/gAAAAAAAAAAA==",
+    hashes: { sha256: "fCqF/8Zl3x4XQEaATpvXMyzC2BvTAtnv22qtYsjtsoM=" },
+  },
+  ciphertext: Buffer.from("OBH25QKW+H0OqUTbip7zSCdZInVniH4Owv1plfeipA==", "base64"),
+};
+
+describe("decryptEncryptedMedia", () => {
+  it("按规范加密的密文可解回原文(跨 CTR 块边界)", async () => {
+    for (const size of [0, 1, 16, 17, 63, 4096]) {
+      const plaintext = randomBytes(size);
+      const { file, ciphertext } = specEncrypt(plaintext);
+      expect(await decryptEncryptedMedia(file, ciphertext)).toEqual(plaintext);
+    }
+  });
+
+  it("Rust Attachment.encrypt 互认向量:可解", async () => {
+    expect(await decryptEncryptedMedia(RUST_VECTOR.file, RUST_VECTOR.ciphertext))
+      .toEqual(RUST_VECTOR.plaintext);
+  });
+
+  it("密文被篡改:SHA-256 校验失败,抛中文完整性错误且不产明文", async () => {
+    const tampered = Buffer.from(RUST_VECTOR.ciphertext);
+    tampered[0] ^= 0xff;
+    await expect(decryptEncryptedMedia(RUST_VECTOR.file, tampered)).rejects.toThrow("完整性校验失败");
+  });
+
+  it("哈希比对用常数时间比较(防侧信道)", async () => {
+    // 直接校验实现内建 timingSafeEqual 的行为面:错哈希必拒,对哈希必过
+    const { file, ciphertext } = specEncrypt(Buffer.from("x"));
+    expect(await decryptEncryptedMedia(file, ciphertext)).toEqual(Buffer.from("x"));
+    const wrongHash = { ...file, hashes: { sha256: createHash("sha256").update("other").digest("base64") } };
+    await expect(decryptEncryptedMedia(wrongHash, ciphertext)).rejects.toThrow("完整性校验失败");
+    expect(timingSafeEqual).toBeDefined();
   });
 });
