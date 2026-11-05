@@ -60,3 +60,4 @@ windows-compat-evaluation-*.html
 # Avatar drafts (human-in-the-loop review, not shipped)
 assets/avatars-drafts/
 scripts/.avatar-drafts-v5/
+codereview-progress/

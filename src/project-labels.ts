@@ -10,9 +10,23 @@
  * Resolution: explicit name, else the workdir basename (never the raw room
  * ID — unreadable as a tag). Validation guards the line format itself: no
  * brackets/whitespace (the tag is delimited by them), length cap (bounded
- * lines), and case-insensitive uniqueness (log filtering is case-insensitive,
- * so two labels differing only in case would collide in `logs <name>`).
+ * lines), and uniqueness under normalizeLabelKey (NFKC + case fold — the
+ * matching keys log filtering and /pmctl resolve by, so two labels equal
+ * under it would collide in `logs <name>` and `/pmctl show <name>`).
  */
+
+/**
+ * 按名比较的唯一口径：NFKC 兼容分解 + 大小写折叠。
+ *
+ * 登记唯一性(validateProjectLabel)、/pmctl 按名解析(findProject)、
+ * `pi-courier logs <项目>` 匹配(log-filter)三处必须两侧同用本函数——
+ * 只归一一侧会出现「NFKC 变体重复注册成功、却永远按名解析不到」的
+ * 单侧漂移(工单 fix-label-nfkc-two-side-normalization;双侧先例见
+ * win32-path.ts 的路径比较)。
+ */
+export function normalizeLabelKey(label: string): string {
+  return label.normalize("NFKC").toLowerCase();
+}
 
 import * as path from "node:path";
 import { t } from "./i18n/index.js";
@@ -40,19 +54,20 @@ export function projectLabelOf(entry: LabelSource): string {
 const MAX_LABEL_LENGTH = 30;
 
 /** Validate a user-supplied label against the format rules and the existing
- *  labels (case-insensitive uniqueness). Returns an error message (user-
+ *  labels (uniqueness under normalizeLabelKey). Returns an error message (user-
  *  facing, in the configured locale) or null when the label is acceptable. */
 export function validateProjectLabel(candidate: string, existingLabels: string[]): string | null {
   const name = candidate.trim();
   if (!name) return t("label.empty");
   if (/[[\]]/.test(name)) return t("label.noBrackets");
   if (/\s/.test(name)) return t("label.noWhitespace");
-  // 用户感知字符数(码点)而非 UTF-16 单元;唯一性比较 NFKC 归一后折叠
-  // (与日志过滤的标签折叠口径对齐 —— 审计工程批 票21)。
+  // 用户感知字符数(码点)而非 UTF-16 单元;唯一性两侧同走 normalizeLabelKey
+  // (NFKC 归一 + 折叠)——存量侧只折叠会让 NFKC 变体重复注册成功(工单
+  // fix-label-nfkc-two-side-normalization)。
   const length = [...name].length;
   if (length > MAX_LABEL_LENGTH) return t("label.tooLong", { max: MAX_LABEL_LENGTH, length });
-  const lower = name.normalize("NFKC").toLowerCase();
-  const clash = existingLabels.find((l) => l.toLowerCase() === lower);
+  const key = normalizeLabelKey(name);
+  const clash = existingLabels.find((l) => normalizeLabelKey(l) === key);
   if (clash) return t("label.caseClash", { name, clash });
   return null;
 }

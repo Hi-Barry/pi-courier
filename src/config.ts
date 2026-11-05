@@ -120,6 +120,10 @@ export function loadConfig(): MsgBridgeConfig {
       const fileConfig = JSON.parse(fs.readFileSync(configPath(), "utf-8"));
       Object.assign(config, sanitizeFileConfig(fileConfig));
     } catch (err) {
+      // Preserve the original bytes BEFORE any later update() can overwrite
+      // this file with a config derived from the empty fallback (see
+      // preserveCorruptConfigFile) — sec-atomic-config-write.
+      preserveCorruptConfigFile();
       console.error("Failed to load config file:", err);
     }
   }
@@ -189,20 +193,228 @@ export function loadConfig(): MsgBridgeConfig {
 
 /**
  * Save config to file with secure permissions.
+ *
+ * Atomic replace (sec-atomic-config-write): the payload lands in a temp file
+ * in the SAME directory (rename is only atomic within one filesystem), is
+ * fsynced, then renamed over config.json. A crash/power loss/ENOSPC inside
+ * the write window can now only leave the OLD config intact plus a stray
+ * temp file — config.json itself is never truncated, so the trust ledger
+ * (matrix token, trusted users, management rooms, projects) survives.
+ * A symlinked config (dotfiles setups) is never renamed — it is written
+ * through, preserving the link itself (see directWriteConfig).
  */
 export function saveConfig(config: MsgBridgeConfig): void {
   if (!fs.existsSync(configDir())) {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
   }
-  fs.writeFileSync(configPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
-  // mode only applies when the file is CREATED — a pre-existing file (e.g.
-  // written loose by an older version) keeps whatever it had. Enforce the
-  // documented 0600/0700 contract explicitly.
+  const target = configPath();
+  const payload = JSON.stringify(config, null, 2);
+  // Temp name carries pid+time+random: concurrent processes never collide,
+  // and a stale temp from a killed process is self-evidently inert (the
+  // loader only ever reads configPath()).
+  const tempPath = `${target}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   try {
-    fs.chmodSync(configPath(), 0o600);
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(tempPath, "w", 0o600);
+      // POSIX write allows SHORT WRITES — under ENOSPC, ext4 commonly returns
+      // the byte count written so far instead of throwing (verified: ulimit -f
+      // 1 → writeSync(4096) returns 1024, fsync succeeds). writeFileSync used
+      // to loop internally; keep that full-write guarantee here: loop until
+      // every byte lands, and treat a non-positive step as failure. Falling
+      // short of the payload must NEVER reach the rename — a truncated config
+      // is exactly the corruption this ticket exists to prevent.
+      const buf = Buffer.from(payload, "utf-8");
+      let written = 0;
+      while (written < buf.length) {
+        const n = fs.writeSync(fd, buf, written, buf.length - written);
+        if (n <= 0) {
+          throw new Error(`Short write to config temp file: ${written}/${buf.length} bytes written (disk full?)`);
+        }
+        written += n;
+      }
+      // Flush payload BEFORE the rename: without this, power loss right
+      // after the rename can leave a valid-looking config.json backed by
+      // unflushed (empty) blocks. Best-effort — some filesystems reject
+      // fsync; the old code never fsynced, so rename still strictly improves.
+      try {
+        fs.fsyncSync(fd);
+      } catch {
+        // fsync unsupported/failed — proceed with the rename anyway.
+      }
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+    // A symlinked config (dotfiles managers point config.json at a tracked
+    // repo file) must keep the historical WRITE-THROUGH semantics: rename
+    // would replace the link itself and silently detach the user's file.
+    // Detect it up front; every other target goes through the atomic rename.
+    let symlinked = false;
+    try {
+      symlinked = fs.lstatSync(target).isSymbolicLink();
+    } catch {
+      // Target absent (first save) — nothing to inspect; rename is correct.
+    }
+    let renamed = false;
+    if (!symlinked) {
+      try {
+        fs.renameSync(tempPath, target);
+        renamed = true;
+      } catch (renameErr) {
+        // rename over an existing target can fail on Windows (EPERM) when a
+        // scanner transiently holds the file. Fall back to the pre-atomic
+        // direct write so the save still lands where it always did — degraded
+        // but loud, never a silent save loss.
+        console.warn(`Atomic config replace failed; falling back to direct write: ${(renameErr as Error).message}`);
+      }
+    }
+    if (!renamed) {
+      // Direct write (write-through for a symlink, rename-failure fallback
+      // otherwise): directWriteConfig persists the .broken backup BEFORE it
+      // opens the target with O_TRUNC, so a crash/power loss inside that
+      // write (kill -9 never reaches the catch) can no longer leave
+      // "truncated target, original bytes only in RAM".
+      directWriteConfig(target, payload);
+    }
+    // POSIX durability: persist the directory entry itself so the rename
+    // survives power loss. Windows cannot open directories this way — skip.
+    if (process.platform !== "win32") {
+      try {
+        const dirFd = fs.openSync(configDir(), "r");
+        try {
+          fs.fsyncSync(dirFd);
+        } finally {
+          fs.closeSync(dirFd);
+        }
+      } catch {
+        // Best-effort: filesystems that refuse directory fsync are skipped.
+      }
+    }
+  } finally {
+    // Temp cleanup on EVERY path: success (already renamed away → ENOENT,
+    // swallowed) or failure (a stray tmp file must not accumulate).
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // Nothing to clean — the temp was renamed over the target or never
+      // got created (the original error propagates untouched).
+    }
+  }
+  // mode only applies when the file is CREATED — and umask can still bite.
+  // Enforce the documented 0600/0700 contract explicitly (also covers the
+  // non-atomic fallback path above).
+  try {
+    fs.chmodSync(target, 0o600);
     fs.chmodSync(configDir(), 0o700);
   } catch (err) {
     console.warn("Failed to set config file permissions:", err);
+  }
+}
+
+/**
+ * Direct (non-atomic) write of the payload onto the config target — the
+ * pre-atomic behavior, still required for two shapes (sec-atomic-config-write):
+ *
+ * 1. The target is a SYMLINK (dotfiles managers point config.json at a
+ *    tracked repo file): rename would replace the link itself and silently
+ *    detach the user's file, so a direct write keeps write-through semantics.
+ * 2. rename failed (Windows: a scanner transiently holds the target, EPERM):
+ *    the degraded-but-loud fallback so the save still lands.
+ *
+ * The write below opens the target with O_TRUNC, so the crash/power-loss
+ * window inside it (kill -9 never reaches the catch) is closed BEFORE the
+ * first byte of the target is destroyed: the current bytes are snapshotted
+ * and persisted to the .broken backup first (fixed name, bounded — leaving
+ * one behind is the accepted behavior of this path). Snapshot failures split
+ * two ways: ENOENT/ENOTFOUND (target absent — first save or dangling link)
+ * proceed without a backup; anything else (EACCES …) refuses loudly and
+ * leaves the target untouched, because a failed save beats an unbacked
+ * truncation. The same refusal applies when the backup itself cannot land.
+ * A failure AFTER the truncate still routes through
+ * preservePreviousConfigBytes, and the original error keeps propagating.
+ */
+function directWriteConfig(target: string, payload: string): void {
+  let previousBytes: Buffer | undefined;
+  try {
+    previousBytes = fs.readFileSync(target);
+  } catch (snapErr) {
+    const code = (snapErr as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTFOUND") {
+      // Cannot snapshot (EACCES …): refuse the truncating write — this save
+      // fails loudly instead, target untouched.
+      throw new Error(`Refusing to overwrite config without backup: cannot read ${target} (${code ?? snapErr})`);
+    }
+    // ENOENT/ENOTFOUND: target absent (first save / dangling symlink) —
+    // nothing to back up, the write below creates it.
+  }
+  if (previousBytes !== undefined) {
+    try {
+      fs.writeFileSync(corruptConfigBackupPath(), previousBytes, { mode: 0o600 });
+    } catch (backupErr) {
+      throw new Error(
+        `Refusing to overwrite config without backup: cannot write ${corruptConfigBackupPath()} (${(backupErr as Error).message})`,
+      );
+    }
+  }
+  try {
+    fs.writeFileSync(target, payload, { mode: 0o600 });
+  } catch (fallbackErr) {
+    // The target may now be truncated; .broken already holds the original
+    // bytes — best-effort restore, then keep the failure loud.
+    preservePreviousConfigBytes(previousBytes, fallbackErr);
+    throw fallbackErr;
+  }
+}
+
+/** Fixed-name backup for a corrupt config file, next to the original —
+ *  bounded (each corrupt load overwrites it; never accumulates). */
+function corruptConfigBackupPath(): string {
+  return `${configPath()}.broken`;
+}
+
+/**
+ * Preserve the bytes of an unparseable config file (sec-atomic-config-write):
+ * loadConfig swallows parse errors and returns an empty-derived config, so a
+ * later update() would otherwise overwrite the original file with the残缺
+ * config — silently destroying the trust ledger it still holds (matrix
+ * token, trusted users, management rooms, projects). Copying the raw bytes
+ * to `<configPath>.broken` first means nothing is ever silently lost; the
+ * user can recover or inspect the original. Best-effort: any failure here
+ * only warns, the "never block startup" contract is untouched.
+ */
+function preserveCorruptConfigFile(): void {
+  try {
+    const raw = fs.readFileSync(configPath());
+    fs.writeFileSync(corruptConfigBackupPath(), raw, { mode: 0o600 });
+    console.warn(
+      `⚠️  Corrupt config file preserved at ${corruptConfigBackupPath()} — fix or restore it; the original will not be silently overwritten.`
+    );
+  } catch (backupErr) {
+    console.warn(`Failed to preserve corrupt config file: ${(backupErr as Error).message}`);
+  }
+}
+
+/**
+ * Last-resort preservation when the direct write failed mid-way: the target
+ * may now be TRUNCATED (the write opens it with O_TRUNC). directWriteConfig
+ * already persisted the .broken backup BEFORE truncating — this re-lands it
+ * (bounded, idempotent) and best-effort restores the bytes onto the target.
+ * Either way the original error keeps propagating: setup's direct saveConfig
+ * still fails loudly on purpose.
+ */
+function preservePreviousConfigBytes(bytes: Buffer | undefined, cause: unknown): void {
+  console.error(`Fallback config write failed: ${(cause as Error).message}`);
+  if (!bytes) return;
+  try {
+    fs.writeFileSync(corruptConfigBackupPath(), bytes, { mode: 0o600 });
+    console.warn(`⚠️  Pre-fallback config bytes preserved at ${corruptConfigBackupPath()}`);
+  } catch (backupErr) {
+    console.error(`Failed to preserve pre-fallback config bytes: ${(backupErr as Error).message}`);
+  }
+  try {
+    fs.writeFileSync(configPath(), bytes, { mode: 0o600 });
+  } catch (restoreErr) {
+    console.error(`Failed to restore previous config bytes: ${(restoreErr as Error).message}`);
   }
 }
 

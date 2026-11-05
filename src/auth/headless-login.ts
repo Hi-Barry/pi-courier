@@ -8,7 +8,9 @@
  * the upstream login flow; the AuthInteraction callbacks are translated into
  * chat messages — auth_url / device_code / progress become display messages,
  * prompts (secret/text/select/manual_code) become questions whose answer is
- * the room's next plain message, and 「取消」 aborts the flow at any time.
+ * the room's next plain message from the flow's STARTER — the admin who ran
+ * /login; other room members' messages fall through untouched
+ * (sec-login-sender-guard), and 「取消」 aborts the flow at any time.
  *
  * The courier holds no credentials itself: the runtime writes them straight
  * to <agentDir>/auth.json (file-locked merge write). pi subprocesses only
@@ -249,12 +251,16 @@ export interface LoginManagerDeps {
   authPath?: string;
 }
 
-/** One in-flight login flow, keyed by the room that started it. */
+/** One in-flight login flow, keyed by the room that started it. starterId
+ *  (sec-login-sender-guard) 是发起 /login 的那个用户(经 router 的 admin
+ *  门禁);只有 TA 的后续房间消息才能成为答案或触发取消 —— 管理房里被邀
+ *  入的其他受信成员(配对成功的非 admin 用户)无权代答/代取消。 */
 interface PendingLogin {
   chatId: string;
   transport: string;
   providerId: string;
   method: "oauth" | "api_key";
+  starterId: string;
   controller: AbortController;
   /** The prompt currently waiting for a room message (undefined between
    *  prompts — e.g. while polling an OAuth callback server). */
@@ -289,8 +295,16 @@ export class LoginManager {
   }
 
   /** /login <provider> [oauth|api_key] — start a flow. Gates (admin +
-   *  management room) are the router's job; this validates the target. */
-  async startLogin(chatId: string, transport: string, providerId: string, method?: string): Promise<void> {
+   *  management room) are the router's job; this validates the target.
+   *  starterId(/login 调用者的 transport 原生 userId)随流程绑定,是后续
+   *  deliver/cancel 的唯一合法身份(sec-login-sender-guard)。 */
+  async startLogin(
+    chatId: string,
+    transport: string,
+    providerId: string,
+    starterId: string,
+    method?: string,
+  ): Promise<void> {
     if (this.pending.has(chatId)) {
       await this.deps.sendReply(chatId, transport, t("login.pendingInRoom"));
       return;
@@ -327,6 +341,7 @@ export class LoginManager {
       transport,
       providerId,
       method: chosen,
+      starterId,
       controller: new AbortController(),
       finished: false,
     };
@@ -344,12 +359,27 @@ export class LoginManager {
   /** Feed a plain room message into the pending flow. Returns true when the
    *  message was consumed. 「取消」 aborts at ANY moment; otherwise only
    *  messages arriving while a prompt is waiting count as the answer — the
-   *  room stays usable during long OAuth waits (device polling etc.). */
-  async deliver(chatId: string, text: string): Promise<boolean> {
+   *  room stays usable during long OAuth waits (device polling etc.).
+   *
+   *  发送者校验(sec-login-sender-guard):只有流程发起者的输入才可能被
+   *  消费 —— 答案与取消词都一样。他人的消息返回 false 落穿到后续 capture/
+   *  prompt 管线(消息不吞、房间照常可用),管理房内被邀入的其他受信成员
+   *  从此无法横向注入 secret 答案写入共享 auth.json,也无法中止他人流程。
+   *  留痕只在「本会被消费」的分支(取消词或 prompt 等待中):OAuth 轮询
+   *  窗口内他人的普通消息本就走 !current 的既有 false 出口,不刷日志。 */
+  async deliver(chatId: string, senderId: string, text: string): Promise<boolean> {
     const entry = this.pending.get(chatId);
     if (!entry || entry.finished) return false;
+    if (entry.starterId !== senderId) {
+      if (isCancelInput(text) || entry.current) {
+        logger.warn(
+          `[login] 拒绝非发起者的输入: ${senderId} 不是房间 ${chatId} 登录流程的发起者(${entry.starterId}),消息不作为答案/取消采纳`,
+        );
+      }
+      return false;
+    }
     if (isCancelInput(text)) {
-      await this.cancel(chatId);
+      await this.cancel(chatId, senderId);
       return true;
     }
     const current = entry.current;
@@ -366,10 +396,13 @@ export class LoginManager {
     return true;
   }
 
-  /** Abort the room's pending flow (cancel word or a replacement command). */
-  async cancel(chatId: string): Promise<boolean> {
+  /** Abort the room's pending flow (cancel word or a replacement command).
+   *  senderId 必须是流程发起者 —— deliver 的取消词路径已先验过,这里是
+   *  纵深防御:任何绕过 deliver 的直接调用同样过不了身份关。 */
+  async cancel(chatId: string, senderId: string): Promise<boolean> {
     const entry = this.pending.get(chatId);
     if (!entry || entry.finished) return false;
+    if (entry.starterId !== senderId) return false;
     entry.finished = true;
     this.pending.delete(chatId);
     // Aborting rejects the parked prompt (LoginCancelledError) → upstream

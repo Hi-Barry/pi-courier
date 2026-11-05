@@ -101,6 +101,47 @@ describe("ReminderClock (issue #117)", () => {
     expect([store.list().length]).toEqual([0]);
   });
 
+  it("a reminder that becomes due during a slow delivery is caught up by the same tick, not stranded (fix-reminder-clock-mid-tick-due)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const store = new ReminderStore(new JsonStateFile<ReminderEntry[]>(file, []));
+    const deliveries: ReminderDelivery[] = [];
+    const clock = new ReminderClock(store, async (d) => {
+      deliveries.push(d);
+      if (d.text.includes("慢投递")) await gate; // 第一条投递挂起,制造慢投递窗口
+    });
+    await clock.start();
+    clock.add({ chatId: "!r:s", transport: "matrix", userId: "matrix:@barry:server", username: "barry", text: "慢投递", dueAt: BASE + 30_000 });
+    // B 比 A 晚 5s 到期:arm() 只给最早的 A 排了定时器,B 的送达完全依赖
+    // A 那轮 tick。A 的投递窗口里墙钟继续走(真实世界如此;假时钟要手动
+    // 推),B 在窗口内到期 —— 它不在 A 轮的 store.due 快照里,重入让位后
+    // 的 arm() 与收尾 arm() 又只排 dueAt>now 的未来项,无未来提醒时定时
+    // 链彻底断掉,B 被永久搁浅。修复后应由外层 tick 收尾前补捞。
+    clock.add({ chatId: "!r:s", transport: "matrix", userId: "matrix:@barry:server", username: "barry", text: "窗口内到期", dueAt: BASE + 35_000 });
+
+    const firstFire = vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(0); // 让第一轮 tick 进入 await gate
+    expect(deliveries).toHaveLength(1); // 只有 A 在投递,B 还没被投
+
+    // 慢投递窗口内时间流逝:B(35s)在窗口内到期。
+    vi.setSystemTime(BASE + 36_000);
+    // 窗口内还有一次重入触发:守卫让位,只 arm() —— 此时 B 已到期,arm()
+    // 排不出未来项,不得由此产生重复投递或把 B 永久搁浅。
+    const inner = clock as unknown as { tick(): Promise<void> };
+    await inner.tick();
+    expect(deliveries).toHaveLength(1);
+
+    release();
+    await firstFire;
+
+    // B 恰好投递一次(不重入、不重复、不搁浅),收尾后 store 清空。
+    expect(deliveries.map((d) => d.text)).toEqual([
+      expect.stringContaining("慢投递"),
+      expect.stringContaining("窗口内到期"),
+    ]);
+    expect(store.list()).toEqual([]);
+  });
+
   it("a reminder fires once at its due time, is delivered, and leaves the store", async () => {
     const { clock } = makeClock();
     await clock.start();

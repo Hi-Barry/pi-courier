@@ -25,7 +25,7 @@ import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
-import { projectLabelOf, validateProjectLabel } from "../project-labels.js";
+import { normalizeLabelKey, projectLabelOf, validateProjectLabel } from "../project-labels.js";
 import { buildProjectWelcome, welcomeVersions } from "../project-welcome.js";
 import { applyRoomCustomAvatar, ensureRoomAvatar, poolFilesForProjects } from "../room-branding.js";
 import { pickPoolAvatarFile } from "../space-identity.js";
@@ -43,6 +43,10 @@ export interface PmctlCall {
   senderMxid: string;
   /** Whether this room is the management room. */
   isManagementRoom: boolean;
+  /** 工单 sec-pmctl-admin-gate:发送者是否 admin(auth.isAdminUser 的判定
+   *  结果,由调用方按消息算好传入 —— 控制器不持有 auth 依赖)。必填:
+   *  漏传是类型错误而不是静默放行,与 /login /mcp 同一授权面。 */
+  isAdmin: boolean;
 }
 
 export interface PmctlControllerOptions {
@@ -126,6 +130,14 @@ export class PmctlController {
     // (the first paired DM). Project rooms are for conversation only.
     if (!call.isManagementRoom) {
       await reply(t("pmctl.managementRoomOnly"));
+      return true;
+    }
+    // 工单 sec-pmctl-admin-gate:第四道门 —— 与同房间 /login /mcp 对齐的
+    // admin 授权面。缺了它,space 模式下配对成功的非 admin trusted 用户被
+    // 邀入管理房后即可 /pmctl rm(停进程/删映射/退房)/mv/rename。排在管理
+    // 房门之后:管理房外的请求照旧回房间限制,不向非 admin 泄露授权状态。
+    if (!call.isAdmin) {
+      await reply(t("pmctl.adminOnly"));
       return true;
     }
     const { roomOps } = this.opts;
@@ -354,12 +366,13 @@ export class PmctlController {
   /** Resolve a user-supplied target ("name" or room ID) to a project,
    *  matching against the same labels the log filter uses (projectLabelOf). */
   private findProject(target: string): [string, ProjectEntry] | undefined {
-    // 标签匹配大小写不敏感(与登记校验/日志过滤口径一致 —— 审计工程批 票21)
-    // 与 validateProjectLabel 的唯一性口径对齐(NFKC 归一 + 折叠 —— 审计工程批 票21)
-    const targetLower = target.normalize("NFKC").toLowerCase();
+    // 按名比较两侧同走 normalizeLabelKey(NFKC 归一 + 折叠):此前只有输入侧
+    // 归一,存量标签是全角/组合重音等 NFKC 不稳定形式时永远失配(工单
+    // fix-label-nfkc-two-side-normalization,与登记唯一性/日志过滤同口径)。
+    const targetKey = normalizeLabelKey(target);
     return this.opts.projectManager
       .listProjects()
-      .find(([roomId, p]) => projectLabelOf(p).toLowerCase() === targetLower || roomId === target);
+      .find(([roomId, p]) => normalizeLabelKey(projectLabelOf(p)) === targetKey || roomId === target);
   }
 
   private async show(rest: string, reply: Reply): Promise<void> {

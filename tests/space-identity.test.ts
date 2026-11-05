@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AVATAR_POOL_SIZE,
+  avatarInfo,
   isLegacySpaceName,
   managementAvatarFile,
   nameHash,
@@ -96,5 +97,17 @@ describe("space identity", () => {
       expect(data.readUInt32BE(16)).toBe(expected);
       expect(data.readUInt32BE(20)).toBe(expected);
     }
+  });
+
+  it("declares avatar info dimensions with the spec's w/h names (PNG only)", () => {
+    // PNG bytes: dimensions read from the IHDR header under the Matrix spec's
+    // m.image info names (w/h — the same fields the receive side types in
+    // transports/matrix-events.ts); the legacy width/height names must never
+    // reappear (toEqual pins the exact shape).
+    const data = readAvatarBundled(managementAvatarFile());
+    expect(avatarInfo(data)).toEqual({ mimetype: "image/png", size: data.length, w: 512, h: 512 });
+    // Non-PNG payloads carry only mimetype + size (no dimension fields).
+    const jpeg = Buffer.from("not-a-png");
+    expect(avatarInfo(jpeg, "image/jpeg")).toEqual({ mimetype: "image/jpeg", size: jpeg.length });
   });
 });

@@ -152,15 +152,18 @@ function avatarAssetUrl(file: string): URL {
   return new URL(`../assets/avatars/${file}`, import.meta.url);
 }
 
-/** m.room.avatar `info` sub-block. Width/height come from the PNG IHDR header
+/** m.room.avatar `info` sub-block. Dimensions come from the PNG IHDR header
  *  when the data is a PNG (the bundled art: pool images are 256×256, the
- *  management image 512×512); for any other format the block carries only
- *  mimetype and size — Element scales avatars for display regardless. */
+ *  management image 512×512) and are declared with the spec's `w`/`h` names
+ *  (Matrix spec m.image info — the same fields the receive side reads,
+ *  transports/matrix-events.ts MediaEventContent.info); for any other format
+ *  the block carries only mimetype and size — Element scales avatars for
+ *  display regardless. */
 export function avatarInfo(data: Buffer, mimetype = "image/png"): Record<string, unknown> {
   const info: Record<string, unknown> = { mimetype, size: data.length };
   if (mimetype === "image/png" && data.length >= 24 && data.subarray(0, 8).toString("hex") === "89504e470d0a1a0a") {
-    info.width = data.readUInt32BE(16);
-    info.height = data.readUInt32BE(20);
+    info.w = data.readUInt32BE(16);
+    info.h = data.readUInt32BE(20);
   }
   return info;
 }

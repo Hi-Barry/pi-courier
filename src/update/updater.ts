@@ -419,9 +419,20 @@ export class UpdateOrchestrator {
     try {
       await io.reply(t("cmd.update.installed", { from, to }));
     } catch (err) {
+      // installed 回执失败 ≠ 换血失败:新代码已在磁盘,只是回执通道故障。裸退
+      // 会让闭环两头缺失 —— pending-update.json 没写(手动重启后完成回执无凭据)、
+      // 用户不知已换血。补同族兜底出口(writePendingUpdateBestEffort +
+      // manualRestartHint,与 finishRestartPendingManually / restartNow 写失败
+      // 降级同构,§5.5 失败分支):先同步置位,再尽力写文件,最后补 hint 回执。
       logger.error(`[update] installed notice failed: ${errorMessage(err)}`);
       this.state = "idle";
       this.generation += 1;
+      this.writePendingUpdateBestEffort();
+      try {
+        await io.reply(t("cmd.update.manualRestartHint", { from, to }));
+      } catch (hintErr) {
+        logger.error(`[update] manualRestartHint notice failed: ${errorMessage(hintErr)}`);
+      }
       return;
     }
     // restart-pending(§5.5):换血已完成,只剩第二段空闲确认(npm 窗口
@@ -617,7 +628,7 @@ export class UpdateOrchestrator {
     });
   }
 
-  /** cancel/超时出口的 pending-update 写入:失败仅 warn,不阻断该出口的回执。 */
+  /** cancel/超时/installed 回执失败出口的 pending-update 写入:失败仅 warn,不阻断该出口的回执。 */
   private writePendingUpdateBestEffort(): void {
     if (this.from === undefined || this.to === undefined) return;
     try {

@@ -677,6 +677,59 @@ describe("§10 用例 6 · npm 升级失败(安全失败,桥绝不自杀)", () =
   });
 });
 
+describe("installed 回执失败 → 同族兜底出口(writePendingUpdateBestEffort + manualRestartHint)", () => {
+  it("installed 回执失败 → 文件照写 + manualRestartHint + idle(回执通道故障不丢闭环,不自动重启)", async () => {
+    const h = makeHarness({ fetchRegistry: vi.fn().mockResolvedValue({ version: "1.3.0" }) });
+    try {
+      // 结构假件:installed 回执(📦)恒失败,其余回执照常记账。
+      const io: UpdateCommandIO = {
+        reply: async (text) => {
+          if (text.includes("📦")) throw new Error("transport gone");
+          h.replies.push(text);
+        },
+        adminRoom: true,
+        allRpcs: () => [],
+        audit: (event, detail) => {
+          h.audits.push({ event, detail });
+        },
+      };
+      await h.orch.handleCommand("", io);
+      await until(() => h.replies.some((r) => r.includes("任务未空闲/等待已取消")));
+      expect(h.replies.some((r) => r.includes("📦 新代码已写入磁盘"))).toBe(false); // installed 回执确实未送达
+      expect(h.replies.find((r) => r.includes("任务未空闲/等待已取消"))).toContain("手动执行 pi-courier restart");
+      expect(h.deps.pendingUpdate.read()).toMatchObject({ from: "1.2.0", to: "1.3.0" }); // 手动重启后完成回执有凭据
+      expect(h.orch.currentState).toBe("idle");
+      expect(h.deps.triggerRestart).not.toHaveBeenCalled(); // 回执通道已故障,不再自动重启
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("installed 与 manualRestartHint 回执双双失败 → 文件仍先落盘、状态回 idle(后台循环不外抛)", async () => {
+    const h = makeHarness({ fetchRegistry: vi.fn().mockResolvedValue({ version: "1.3.0" }) });
+    try {
+      // 结构假件:installed 与 hint 同通道故障(文案共享「写入磁盘」),started 照常。
+      const io: UpdateCommandIO = {
+        reply: async (text) => {
+          if (text.includes("写入磁盘")) throw new Error("transport gone");
+          h.replies.push(text);
+        },
+        adminRoom: true,
+        allRpcs: () => [],
+        audit: (event, detail) => {
+          h.audits.push({ event, detail });
+        },
+      };
+      await h.orch.handleCommand("", io);
+      await until(() => h.deps.pendingUpdate.read() !== undefined); // 写文件先于 hint 回执 await
+      expect(h.orch.currentState).toBe("idle");
+      expect(h.deps.triggerRestart).not.toHaveBeenCalled();
+    } finally {
+      h.cleanup();
+    }
+  });
+});
+
 describe("§10 用例 7 · root 拒执行", () => {
   it("getuid=0 → rootDenied,不触网不探测不升级", async () => {
     const h = makeHarness({

@@ -3,13 +3,21 @@
  * 不触碰真实 ~/.pi 路径与网络(缺省生产工厂永不使用)。钉住启动回放隔离
  * (spec #93 票1 语义)、事件接线与成员缓存的传输层语义。
  */
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
+import * as http from "node:http";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AttachmentStore, type MediaSource } from "../src/transports/attachments.js";
+import {
+  AttachmentStore,
+  AttachmentTooLargeError,
+  DOWNLOAD_TIMEOUT_MS,
+  type MediaSource,
+} from "../src/transports/attachments.js";
 import type { EventLedger } from "../src/transports/event-ledger.js";
-import { MatrixProvider } from "../src/transports/matrix.js";
+import { MatrixProvider, mediaDownloadUrl } from "../src/transports/matrix.js";
 import type { MatrixClientPort } from "../src/transports/matrix-client.js";
 import { buildGroupJoinHint } from "../src/management-room.js";
 import type { ExternalMessage } from "../src/types.js";
@@ -37,12 +45,18 @@ interface ProviderOptions {
   /** 依次投入连接队列的客户端;空缺时工厂补一个默认假客户端。 */
   queue?: FakeMatrixClient[];
   attachments?: AttachmentStore;
+  /** 覆盖 homeserverUrl(mediaSource 下载测试指向本地 HTTP 服务器)。 */
+  homeserverUrl?: string;
 }
 
 function makeProvider(opts: ProviderOptions = {}) {
   const clients: FakeMatrixClient[] = [];
   const provider = new MatrixProvider(
-    { ...CFG, ...(opts.encryption === false ? { encryption: false } : {}) },
+    {
+      ...CFG,
+      ...(opts.homeserverUrl ? { homeserverUrl: opts.homeserverUrl } : {}),
+      ...(opts.encryption === false ? { encryption: false } : {}),
+    },
     opts.isRoomEnabled ?? (() => false),
     () => {
       const c = opts.queue?.shift() ?? fakeMatrixClient();
@@ -839,6 +853,59 @@ describe("MatrixProvider 表情 reaction(票01,#268)", () => {
   });
 });
 
+// ─── mediaSource:流式带上限下载(sec 下载 OOM 修复)─────────────────────
+// 经本地 HTTP 服务器验证端点、认证头、流式上限与本地解密 —— 不再经过
+// SDK 的 downloadContent/decryptMedia(它们都先整包进内存,防不了 OOM)。
+
+/** 与 Matrix 规范一致的加密附件加密侧(测试专用):AES-256-CTR,iv 为
+ *  16 字节计数块(随机 8 字节前缀 + 8 字节 0),sha256 对密文。 */
+function specEncrypt(plaintext: Buffer) {
+  const key = randomBytes(32);
+  const iv = Buffer.concat([randomBytes(8), Buffer.alloc(8)]);
+  const cipher = createCipheriv("aes-256-ctr", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return {
+    file: {
+      url: "mxc://s/enc",
+      v: "v2",
+      key: { k: key.toString("base64url") },
+      iv: iv.toString("base64"),
+      hashes: { sha256: createHash("sha256").update(ciphertext).digest("base64") },
+    },
+    ciphertext,
+  };
+}
+
+/** 固定向量:由 @matrix-org/matrix-sdk-crypto-nodejs(Rust Attachment.encrypt)
+ *  产出的密文,与本地解密双向互认后固化(见工单 sec-download-size-cap 交叉验证)。 */
+const RUST_VECTOR = {
+  plaintext: Buffer.from("YXR0YWNobWVudC1jYXAtdmVjdG9yLXBsYWludGV4dA==", "base64"),
+  file: {
+    url: "mxc://s/vec",
+    v: "v2",
+    key: { k: "dQ6jyKm8dGy6tOQpw4TR92mJIzw3kHB7eV7-gXaIHeA" },
+    iv: "ktNOeiUlr/gAAAAAAAAAAA==",
+    hashes: { sha256: "fCqF/8Zl3x4XQEaATpvXMyzC2BvTAtnv22qtYsjtsoM=" },
+  },
+  ciphertext: Buffer.from("OBH25QKW+H0OqUTbip7zSCdZInVniH4Owv1plfeipA==", "base64"),
+};
+
+/** 本地媒体服务器:handler 自定义响应;close 由测试 finally 收尾。
+ *  close 前先 closeAllConnections —— 挂起不响应的连接不掐,close 永不回调。 */
+async function startMediaServer(handler: (req: http.IncomingMessage, res: http.ServerResponse) => void) {
+  const server = http.createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const addr = server.address() as net.AddressInfo;
+  return {
+    url: `http://127.0.0.1:${addr.port}`,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
+
 describe("MatrixProvider.mediaSource", () => {
   beforeEach(() => {
     captureConsole();
@@ -847,32 +914,176 @@ describe("MatrixProvider.mediaSource", () => {
     vi.restoreAllMocks();
   });
 
-  it("明文路径:经端口 downloadContent 取回字节", async () => {
-    const { provider, clients } = makeProvider();
-    await provider.connect();
-
-    const data = await provider.mediaSource.downloadPlaintext("mxc://s/abc");
-    expect(data).toEqual(Buffer.from("BYTES"));
-    expect(clients[0].downloadContent).toHaveBeenCalledWith("mxc://s/abc");
+  it("明文路径:命中认证版 v1 媒体端点,带 Bearer 头,分块响应完整拼接", async () => {
+    const chunk = Buffer.alloc(10, 7);
+    let seenAuth = "";
+    let seenPath = "";
+    const server = await startMediaServer((_req, res) => {
+      seenAuth = String(_req.headers.authorization ?? "");
+      seenPath = _req.url ?? "";
+      res.setHeader("content-type", "application/octet-stream");
+      res.write(chunk);
+      res.write(chunk);
+      res.write(chunk);
+      res.end();
+    });
+    try {
+      const { provider } = makeProvider({ homeserverUrl: server.url });
+      const data = await provider.mediaSource.downloadPlaintext("mxc://s/abc", 100);
+      expect(data).toEqual(Buffer.concat([chunk, chunk, chunk]));
+      expect(seenAuth).toBe("Bearer tok");
+      expect(seenPath).toBe("/_matrix/client/v1/media/download/s/abc?allow_remote=true");
+    } finally {
+      await server.close();
+    }
   });
 
-  it("加密路径:crypto 在场时经 decryptMedia 解密", async () => {
-    const crypto = fakeCrypto();
-    const { provider } = makeProvider({ queue: [fakeMatrixClient({ crypto })] });
-    await provider.connect();
-
-    const file = { url: "mxc://s/enc", key: { k: "k" }, iv: "iv", hashes: { sha256: "h" } };
-    const out = await provider.mediaSource.downloadEncrypted!(file);
-    expect(out).toEqual(Buffer.from("DECRYPTED"));
-    expect(crypto.decryptMedia).toHaveBeenCalledWith(file);
+  it("声明 Content-Length 超上限:不读 body 直接判过大", async () => {
+    let clientClosedEarly = false;
+    const server = await startMediaServer((_req, res) => {
+      res.setHeader("content-length", "500");
+      res.on("close", () => {
+        clientClosedEarly = clientClosedEarly || !res.writableEnded;
+      });
+      // 慢速吐 body:若实现真的开始读,测试会以超上限失败而非早退
+      const timer = setInterval(() => {
+        try {
+          res.write(Buffer.alloc(100, 1));
+        } catch {
+          clearInterval(timer);
+        }
+      }, 10);
+      res.on("close", () => clearInterval(timer));
+    });
+    try {
+      const { provider } = makeProvider({ homeserverUrl: server.url });
+      await expect(provider.mediaSource.downloadPlaintext("mxc://s/big", 100))
+        .rejects.toThrow(AttachmentTooLargeError);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(clientClosedEarly).toBe(true);
+    } finally {
+      await server.close();
+    }
   });
 
-  it("加密路径:crypto 缺失时抛『原生库不可用』", async () => {
-    const { provider } = makeProvider();
-    await provider.connect();
+  it("分块传输谎报(无 Content-Length):累计字节越线即中止,不吞整包", async () => {
+    // 恶意形态:不声明长度,分 40 块×10B 连发 400B,上限 100 —— 若实现
+    // 等下完再判,就会先接满 400B;逐块计数则在 11 块处截断。
+    const server = await startMediaServer((_req, res) => {
+      let sent = 0;
+      const timer = setInterval(() => {
+        if (sent >= 400) {
+          clearInterval(timer);
+          res.end();
+          return;
+        }
+        res.write(Buffer.alloc(10, 1));
+        sent += 10;
+      }, 2);
+      res.on("close", () => clearInterval(timer));
+    });
+    try {
+      const { provider } = makeProvider({ homeserverUrl: server.url });
+      await expect(provider.mediaSource.downloadPlaintext("mxc://s/liar", 100))
+        .rejects.toThrow(AttachmentTooLargeError);
+    } finally {
+      await server.close();
+    }
+  });
 
-    const file = { url: "mxc://s/enc", key: { k: "k" }, iv: "iv", hashes: { sha256: "h" } };
-    await expect(provider.mediaSource.downloadEncrypted!(file)).rejects.toThrow("原生库不可用");
+  it("挂起不响应:DOWNLOAD_TIMEOUT_MS 到点中止,翻成 attach.downloadTimeout 文案", async () => {
+    // 服务器收到请求后故意不回:等客户端 60s 超时掐连接。真实等 60s 不可
+    // 接受,用 fake timers 推进 downloadMediaCapped 自己的 abort 定时器,
+    // 钉住 AbortError → i18n 超时文案的映射分支。
+    const server = await startMediaServer(() => {
+      // 故意不回响应头
+    });
+    vi.useFakeTimers();
+    try {
+      const { provider } = makeProvider({ homeserverUrl: server.url });
+      const pending = provider.mediaSource.downloadPlaintext("mxc://s/hang", 100);
+      const assertion = expect(pending).rejects.toThrow("下载超时(60s)");
+      await vi.advanceTimersByTimeAsync(DOWNLOAD_TIMEOUT_MS);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+      await server.close();
+    }
+  });
+
+  it("加密路径:带上限下载密文后本地解密(node:crypto 规范实现,不依赖原生 crypto)", async () => {
+    const plaintext = Buffer.from("enc-bytes-" + "x".repeat(300));
+    const { file, ciphertext } = specEncrypt(plaintext);
+    const server = await startMediaServer((_req, res) => {
+      res.end(ciphertext);
+    });
+    try {
+      const { provider } = makeProvider({ homeserverUrl: server.url, queue: [fakeMatrixClient()] });
+      const out = await provider.mediaSource.downloadEncrypted!(file, 100_000);
+      expect(out).toEqual(plaintext);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("加密路径:密文与固定向量一致(Rust Attachment 互认向量)可解;被篡改则报完整性失败", async () => {
+    const server = await startMediaServer((_req, res) => {
+      res.end(Buffer.from(RUST_VECTOR.ciphertext));
+    });
+    try {
+      const { provider } = makeProvider({ homeserverUrl: server.url, queue: [fakeMatrixClient()] });
+      const out = await provider.mediaSource.downloadEncrypted!(RUST_VECTOR.file, 100_000);
+      expect(out).toEqual(RUST_VECTOR.plaintext);
+
+      const tampered = Buffer.from(RUST_VECTOR.ciphertext);
+      tampered[0] ^= 0xff;
+      const server2 = await startMediaServer((_req, res) => {
+        res.end(tampered);
+      });
+      try {
+        const { provider: p2 } = makeProvider({ homeserverUrl: server2.url, queue: [fakeMatrixClient()] });
+        await expect(p2.mediaSource.downloadEncrypted!(RUST_VECTOR.file, 100_000))
+          .rejects.toThrow("完整性校验失败");
+      } finally {
+        await server2.close();
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("明文路径:非 2xx 响应翻成带状态的下载错误", async () => {
+    const server = await startMediaServer((_req, res) => {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ errcode: "M_NOT_FOUND", error: "Media not found" }));
+    });
+    try {
+      const { provider } = makeProvider({ homeserverUrl: server.url });
+      await expect(provider.mediaSource.downloadPlaintext("mxc://s/gone", 100))
+        .rejects.toThrow(/HTTP 404/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("mediaDownloadUrl:与 SDK 同一端点与转义规则(尾部文件名段忽略)", () => {
+    expect(mediaDownloadUrl("https://hs.example.org", "mxc://server/mediaId"))
+      .toBe("https://hs.example.org/_matrix/client/v1/media/download/server/mediaId?allow_remote=true");
+    expect(mediaDownloadUrl("https://hs.example.org", "mxc://server/mediaId/filename.png"))
+      .toBe("https://hs.example.org/_matrix/client/v1/media/download/server/mediaId?allow_remote=true");
+    expect(mediaDownloadUrl("https://hs.example.org", "mxc://server:name/me/dia"))
+      .toBe("https://hs.example.org/_matrix/client/v1/media/download/server%3Aname/me?allow_remote=true");
+    expect(() => mediaDownloadUrl("https://hs.example.org", "https://evil.example/x")).toThrow("mxc://");
+  });
+
+  it("mediaDownloadUrl:homeserverUrl 尾斜杠归一(与 SDK 构造函数同一语义),不拼出 //", () => {
+    // 配置带尾斜杠(setup 对用户输入只 trim)时,SDK 腿经构造函数归一化
+    // 照常工作;媒体腿自己拼 URL,不剥会得到 https://hs//_matrix/...,
+    // 收发消息正常而附件下载单独全挂(评审整改)。
+    expect(mediaDownloadUrl("https://hs.example.org/", "mxc://server/mediaId"))
+      .toBe("https://hs.example.org/_matrix/client/v1/media/download/server/mediaId?allow_remote=true");
+    expect(mediaDownloadUrl("https://hs.example.org///", "mxc://server/mediaId"))
+      .toBe("https://hs.example.org/_matrix/client/v1/media/download/server/mediaId?allow_remote=true");
   });
 
   it("encryption:false 不暴露 downloadEncrypted", () => {

@@ -214,11 +214,25 @@ describe("ChallengeAuth strategy engine", () => {
     // Bare entries: exact match only.
     expect(matchesTrustedEntry("legacy-id", "legacy-id")).toBe(true);
     expect(matchesTrustedEntry("id", "legacy-id")).toBe(false);
+    // Bare legacy MXID entries carry their colon INSIDE the ID — no transport
+    // prefix to strip, so only the exact MXID revokes them; the homeserver
+    // segment must not become a revocation credential (sec-trust-entry-revoke).
+    expect(matchesTrustedEntry("@carol:server", "@carol:server")).toBe(true);
+    expect(matchesTrustedEntry("server", "@carol:server")).toBe(false);
+    expect(matchesTrustedEntry("hs.org", "@carol:hs.org")).toBe(false);
     // Engine-level: revoking a homeserver fragment leaves trust intact.
     const { auth } = makeEngine();
     expect(auth.revokeUser("server")).toBe(false);
     expect(auth.isTrustedUser("@barry:server", "matrix")).toBe(true);
     expect(auth.isTrustedUser("@carol:server", "matrix")).toBe(true);
+    // Engine-level: a bare legacy MXID entry survives a homeserver-fragment
+    // revoke and yields only to its exact MXID (sec-trust-entry-revoke).
+    const { auth: bareAuth } = makeEngine();
+    bareAuth.loadFromConfig({ trustedUsers: ["@dave:server"], channels: {} });
+    expect(bareAuth.revokeUser("server")).toBe(false);
+    expect(bareAuth.exportConfig().trustedUsers).toContain("@dave:server");
+    expect(bareAuth.revokeUser("@dave:server")).toBe(true);
+    expect(bareAuth.exportConfig().trustedUsers).not.toContain("@dave:server");
   });
 
   it("admin matching keeps the documented dual-form semantics, cross-transport included (audit batch 1 票3)", () => {

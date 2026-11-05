@@ -203,7 +203,8 @@ export function handleAdminCommand(auth: ChallengeAuth, input: AdminCommandInput
       const revokeId = parts[1];
       // Capture the stored entry the revoke removes so the demotion effect can
       // carry it in its canonical namespaced form — the command argument may be
-      // a bare display id (revokeUser also matches ":<id>" suffixes).
+      // a bare display id (revokeUser also matches the native segment of
+      // transport-prefixed entries; bare entries need the exact MXID).
       const trustedBefore = auth.exportConfig().trustedUsers;
       const revoked = auth.revokeUser(revokeId);
       if (revoked) {

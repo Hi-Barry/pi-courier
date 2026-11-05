@@ -534,7 +534,7 @@ const zh = {
   "label.noBrackets": "项目名不能包含方括号 [ ](会破坏日志格式)",
   "label.noWhitespace": "项目名不能包含空白字符",
   "label.tooLong": "项目名最长 {max} 字符(当前 {length})",
-  "label.caseClash": "项目名「{name}」与现有项目「{clash}」仅大小写不同(日志过滤按名字匹配,会混淆)",
+  "label.caseClash": "项目名「{name}」NFKC 归一并忽略大小写后与现有项目「{clash}」相同(日志过滤按名字匹配,会混淆)",
 
   // ── path(Windows 路径守卫,win32-path.ts,issue #190)────────────────
   "path.win32.reserved": "❌ 该路径在 Windows 上不可用:「{component}」是系统保留名(CON/PRN/AUX/NUL/COM1-9/LPT1-9),请换一个名字",
@@ -546,6 +546,7 @@ const zh = {
   "pmctl.singleProjectMode": "❌ 当前为单工程模式,未启用项目管理。\n如需多工程:发 `/multiproject on` 并重启(pi-courier restart)。",
   "pmctl.managementRoomOnly": "❌ /pmctl 仅可在管理房间(与 bot 的私聊)使用",
   "pmctl.matrixOnly": "❌ /pmctl 不可用(仅 Matrix 部署支持)",
+  "pmctl.adminOnly": "❌ 无权限(/pmctl 仅管理员可用)",
   "pmctl.unknownOp": "❌ 未知操作: {op}\n可用操作: new / list / show / rm / mv / rename",
   "pmctl.new.usage": "用法: /pmctl new <项目名> [路径]\n路径可选:缺省为工程根下同名目录(如 newapp → ~/Projects/newapp);也可用相对路径或绝对路径。",
   "pmctl.noInviteTarget": "❌ 缺少邀请对象(未配置信任用户)",
@@ -603,9 +604,9 @@ const zh = {
   "attach.tooLarge": "附件过大({declared} > 上限 {max}),未保存。请压缩后重发,或让管理员调大 attachments.maxMb 配置。",
   "attach.downloadFailed": "附件下载失败: {detail}",
   "attach.noMediaUrl": "事件中没有可下载的媒体地址",
-  "attach.e2eeRequired": "加密附件需要启用 E2EE(部署未开启加密或 crypto 原生库不可用)",
+  "attach.e2eeRequired": "加密附件需要启用 E2EE(部署未开启加密)",
   "attach.downloadTimeout": "下载超时({seconds}s)",
-  "attach.e2eeNativeMissing": "E2EE crypto 原生库不可用,无法解密加密附件",
+  "attach.hashMismatch": "附件完整性校验失败(SHA-256 不匹配),内容可能被篡改,未保存。",
   "room.notConnected": "Matrix 未连接",
   "workdir.prompt": "未配置工作目录。请输入 pi 工作目录 [默认 {fallback}]: ",
   "logs.unknownLevel": "未知日志级别: {level}(可选: debug / info / warn / error)",
@@ -790,6 +791,8 @@ const zh = {
   "migration.itemFailed": "⚠️ 旧布局迁移失败(已跳过该项,不影响启动):{label} {from} → {to}:{message}",
   "migration.oldCleanupFailed":
     "⚠️ {label} 已复制到新家 {to},但清理旧文件 {from} 失败:{message}(下次启动按新旧并存处理)",
+  "migration.tmpCleanupFailed":
+    "⚠️ {label} 迁移失败后清理临时件 {tmp} 也失败:{message}(残件留存不影响下次启动重试)",
   "migration.summary":
     "✅ 旧布局迁移完成:{moved} 项搬移,{skipped} 项已在新家,{conflicts} 项新旧并存,{failed} 项失败",
 } as const;

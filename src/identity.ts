@@ -23,24 +23,31 @@ export function nativeMxid(namespaced: string): string {
   return namespaced.startsWith("matrix:") ? namespaced.slice("matrix:".length) : namespaced;
 }
 
+/** transport 命名空间前缀识别:配置账本的存储形式只有这两个历史 transport
+ *  (displayIdentity 与 matchesTrustedEntry 共用同一规则);native 段 =
+ *  前缀之后的完整 ID。MXID 内部的冒号不是段边界。 */
+const NAMESPACED_ENTRY = /^(matrix|telegram):(.+)$/;
+
 /** 展示形式:/trusted 输出。已知 transport 前缀 → 完整 native ID(含
  *  homeserver 段;旧实现的截断是文档化怪癖,审计工程批 票21 修正);
  *  非命名空间形式(裸 MXID)原样返回。 */
 export function displayIdentity(namespaced: string): string {
-  const m = /^(matrix|telegram):(.+)$/.exec(namespaced);
+  const m = NAMESPACED_ENTRY.exec(namespaced);
   return m ? `${m[2]} (${m[1]})` : namespaced;
 }
 
 /**
  * 信任账本匹配(/revoke 的统一规则):完整条目精确匹配优先;未命中时,
  * 允许裸 ID(无 transport 前缀的 telegram ID 或 /trusted 展示的 native MXID)
- * 匹配条目的 native 段(transport 前缀之后的完整 ID)。比较按完整段对齐,
- * 不是任意后缀 — 短输入(如裸 homeserver 段)不构成撤销凭据。
+ * 匹配带前缀条目的 native 段(transport 前缀之后的完整 ID)。前缀识别与
+ * displayIdentity 用同一规则,因此裸形式存量条目(裸 MXID 等,无 transport
+ * 前缀)只走精确匹配 — MXID 内部的冒号不是段边界,裸 homeserver 段这样的
+ * 短输入不构成撤销凭据;比较始终按完整段对齐,不是任意后缀。
  */
 export function matchesTrustedEntry(revokeId: string, entry: string): boolean {
   if (entry === revokeId) return true;
-  const sep = entry.indexOf(":");
-  return sep !== -1 && entry.slice(sep + 1) === revokeId;
+  const m = NAMESPACED_ENTRY.exec(entry);
+  return m !== null && m[2] === revokeId;
 }
 
 /**

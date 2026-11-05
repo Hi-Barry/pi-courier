@@ -26,6 +26,89 @@ describe("RecapLedger.startCapture 忙拒绝(审计稳定性批 票17)", () => {
   });
 });
 
+describe("RecapLedger.startCapture 崩溃失效(票 fix-recap-capture-crash-invalidation)", () => {
+  /** 可驱动重启生命周期的 mock rpc:onRestarted 收集 hooks(与
+   *  router-queue-lost.test.ts 同款),restart() 模拟「崩溃 → respawn 成功
+   *  → 生命周期触发」。 */
+  const makeRestartableRpc = () => {
+    const restartHooks: Array<(rpc: PiRpc) => void> = [];
+    const rpc = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      onRestarted: vi.fn((hook: (r: PiRpc) => void) => {
+        restartHooks.push(hook);
+        return () => {
+          const index = restartHooks.indexOf(hook);
+          if (index >= 0) restartHooks.splice(index, 1);
+        };
+      }),
+    } as unknown as PiRpc;
+    const restart = (): void => {
+      for (const hook of [...restartHooks]) hook(rpc);
+    };
+    return { rpc, restart, restartHooks };
+  };
+
+  it("prompt 应答已收后子进程重启:捕获 reject、槽位清空,后续捕获不再永久忙拒", async () => {
+    const ledger = new RecapLedger();
+    const { rpc, restart } = makeRestartableRpc();
+    const capture = ledger.startCapture(rpc);
+    // prompt 应答已收(模型在跑),桥侧在等 turn_end —— 修复前此后的崩溃无人收尾
+    await vi.waitFor(() => expect(rpc.prompt).toHaveBeenCalled());
+    restart();
+    await expect(capture).rejects.toThrow("pi process restarted; the recap capture was aborted");
+    // 槽已清:再次捕获不再撞 RecapBusyError,且能正常结算
+    const again = ledger.startCapture(rpc);
+    ledger.settleCapture(rpc, { text: "新卡的要点", pendingTools: false });
+    await expect(again).resolves.toBe("新卡的要点");
+  });
+
+  it("settle 后重启订阅一并退订:监听器不随捕获次数累积", async () => {
+    const ledger = new RecapLedger();
+    const { rpc, restartHooks } = makeRestartableRpc();
+    const first = ledger.startCapture(rpc);
+    expect(restartHooks).toHaveLength(1);
+    ledger.settleCapture(rpc, { text: "第一张", pendingTools: false });
+    await expect(first).resolves.toBe("第一张");
+    expect(restartHooks).toHaveLength(0); // settle 撤销订阅
+    const second = ledger.startCapture(rpc);
+    expect(restartHooks).toHaveLength(1); // 每次捕获至多挂一个订阅
+    ledger.settleCapture(rpc, { text: "第二张", pendingTools: false });
+    await expect(second).resolves.toBe("第二张");
+    expect(restartHooks).toHaveLength(0);
+  });
+
+  it("重启失效本身也撤销订阅:被崩溃杀掉的捕获不留监听器", async () => {
+    const ledger = new RecapLedger();
+    const { rpc, restart, restartHooks } = makeRestartableRpc();
+    const capture = ledger.startCapture(rpc);
+    await vi.waitFor(() => expect(rpc.prompt).toHaveBeenCalled());
+    restart();
+    await expect(capture).rejects.toThrow("restarted");
+    expect(restartHooks).toHaveLength(0);
+  });
+
+  it("prompt 发送失败:捕获 reject、槽位清空,重启订阅一并退订(收尾不攒监听器)", async () => {
+    const ledger = new RecapLedger();
+    const offRestart = vi.fn();
+    const rpc = {
+      prompt: vi.fn().mockRejectedValue(new Error("send failed")),
+      onRestarted: vi.fn(() => offRestart),
+    } as unknown as PiRpc;
+    await expect(ledger.startCapture(rpc)).rejects.toThrow("send failed");
+    // 槽已清:迟到的 turn_end 不再命中
+    expect(ledger.settleCapture(rpc, { text: "迟到", pendingTools: false })).toBe("none");
+    expect(offRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("无 onRestarted 的旧形态 rpc:可选订阅不炸,结算路径与现状一致", async () => {
+    const ledger = new RecapLedger();
+    const rpc = { prompt: vi.fn().mockResolvedValue(undefined) } as unknown as PiRpc;
+    const capture = ledger.startCapture(rpc);
+    ledger.settleCapture(rpc, { text: "总结", pendingTools: false });
+    await expect(capture).resolves.toBe("总结");
+  });
+});
+
 describe("recap card rendering (issue #122)", () => {
   it("plain card: header, body, optional context line", () => {
     const card = renderRecapCard({ title: "2026-10-10 15:30", body: "- 要点一\n- 要点二", context: "12.3%/200k" });

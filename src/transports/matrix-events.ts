@@ -84,9 +84,14 @@ export function createEventTranslator(ports: EventTranslatorPorts) {
     // envelope 复用(2026-10-27 扫描机械批):七字段信封不再手抄,文本分支
     // 只补 wasMentioned(信封默认 false)与 text payload,字段演进不再两处改。
     const username = extractUsername(event.sender);
-    const messageText = event.content.body;
     const messageId = event.event_id;
     const isGroupChat = await resolveIsGroupChat(roomId);
+    // Rich reply(MSC1470):body 恒以 fallback 引用行开头("> <@user:server> …" 及
+    // "> " 续行)。仅当事件真带 m.in_reply_to 才剥 — 用户手打的引用式文本不受影响。
+    const replyTargetEventId: string | undefined = event.content?.["m.relates_to"]?.["m.in_reply_to"]?.event_id;
+    const messageText = replyTargetEventId
+      ? stripReplyFallback(event.content.body)
+      : event.content.body;
 
     const wasMentioned = isGroupChat ? wasBotMentioned(messageText, botUserId) : false;
     const cleanContent = wasMentioned && botUserId
@@ -102,7 +107,6 @@ export function createEventTranslator(ports: EventTranslatorPorts) {
       username,
       excerpt: toExcerpt(cleanContent ?? ""),
     });
-    const replyTargetEventId: string | undefined = event.content?.["m.relates_to"]?.["m.in_reply_to"]?.event_id;
     const quoted = replyTargetEventId
       ? quoteCache.lookup(roomId, replyTargetEventId)
       : undefined;
@@ -233,6 +237,25 @@ export function stripBotMention(text: string, botUserId: string): string {
     out = out.replace(new RegExp(`@${escapeRegExp(localpart)}\\b`, "gi"), "");
   }
   return out.trim();
+}
+
+/**
+ * 剥离 rich reply(MSC1470)body 开头的 fallback 引用行("> <@user:server> …"),
+ * 引用续行每行以 "> " 前缀,与正文隔一个空行。仅由带 m.in_reply_to 的事件调用,
+ * 用户手打的 "> " 引用式文本不经此函数。算法与 Element stripPlainReply 同法:
+ * 移除开头引用行(含恰为 ">" 的空引用行)→ 移除紧邻的一个空行分隔 → trim 首尾
+ * 空白;正文内部的换行与引用行原样保留。空输入原样返回(防缺 body 的病态事件)。
+ */
+export function stripReplyFallback(body: string): string {
+  if (!body) return body;
+  const lines = body.split("\n");
+  while (lines.length && (lines[0].startsWith("> ") || lines[0] === ">")) {
+    lines.shift();
+  }
+  if (lines.length && lines[0] === "") {
+    lines.shift();
+  }
+  return lines.join("\n").trim();
 }
 
 function escapeRegExp(s: string): string {

@@ -67,14 +67,31 @@ describe("buildLogFilterArgs — project selection", () => {
     expect(r.args).toContain("\\[(INFO|WARN|ERROR)\\] \\[(?i:(ai-api|www))\\]");
   });
 
-  it("label matching folds via inline (?i:) — level tokens stay case-sensitive (audit batch 3 票21)", () => {
+  it("user spelling need not match case — level tokens stay case-sensitive (audit batch 3 票21)", () => {
+    // 大小写/NFKC 变体由 JS 侧解析兜住(用户不必精确拼写),模式里嵌的是
+    // 解析出的存量原始形式 "MyApp" —— 日志行 [label] 就是这个写法,而
+    // PCRE2 (?i:…) 只做大小写折叠不做 NFKC,嵌变体拼写会检测通过却永远
+    // 空匹配(工单 fix-label-nfkc-two-side-normalization,反转旧断言)。
     const r = buildLogFilterArgs(req({ requestedProjects: ["myapp"] }));
     if (!r.ok) throw new Error("unexpected");
     expect(r.args).not.toContain("--case=0"); // 全局折叠已去除:LEVEL 名不再被折叠
-    // The pattern carries the user's spelling (folded by (?i:…)), not the
-    // stored "MyApp" — the user must not need exact case to filter.
-    expect(r.args.join(" ")).toContain("(?i:(myapp))");
-    expect(r.args.join(" ")).not.toContain("MyApp");
+    expect(r.args.join(" ")).toContain("(?i:(MyApp))");
+  });
+
+  it("NFKC 变体拼写解析到存量标签,grep 携带存量原始形式(工单 fix-label-nfkc-two-side-normalization)", () => {
+    // 全角 Ａpp 与 App、组合重音 cafe\u0301 与 café 在统一口径下互为变体
+    const r = buildLogFilterArgs(
+      req({ availableLabels: ["Ａpp", "café"], requestedProjects: ["App", "cafe\u0301"] })
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.args.join(" ")).toContain("(?i:(Ａpp|café))");
+  });
+
+  it("重复请求同一标签的不同变体拼写,grep 去重为一条存量形式", () => {
+    const r = buildLogFilterArgs(req({ requestedProjects: ["myapp", "MYAPP"] }));
+    if (!r.ok) throw new Error("unexpected");
+    expect(r.args.join(" ")).toContain("(?i:(MyApp))");
   });
 
   it("regex metacharacters in a label are escaped, not interpreted", () => {

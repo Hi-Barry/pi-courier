@@ -52,6 +52,8 @@ interface FakeOutcomeConfig {
   remove?: McpOutcome<string>;
   logout?: McpOutcome<string>;
   adminAllowed?: boolean;
+  /** 装配 configuredSecrets 缝(生产由 mcp.json 密钥扫描提供)。 */
+  configuredSecrets?: string[];
 }
 
 function harness(config: FakeOutcomeConfig = {}): Harness {
@@ -100,6 +102,9 @@ function harness(config: FakeOutcomeConfig = {}): Harness {
     mcp: {
       ...orchestration,
       adminAllowed: config.adminAllowed ?? true,
+      ...(config.configuredSecrets
+        ? { configuredSecrets: async () => config.configuredSecrets! }
+        : {}),
     } satisfies McpCommandContext,
   };
   return {
@@ -315,6 +320,130 @@ describe("/mcp add", () => {
     await runOrThrow(h, "/mcp add corp --env K=sk-secret-123 --url https://x");
     expect(h.replies[0]).toContain("MCP 管理不可用");
     expect(h.replies[0]).not.toContain("sk-secret-123");
+    expect(h.replies[0]).toContain("***");
+    expect(h.audits).toHaveLength(0);
+  });
+
+  it("失败回执脱敏补齐:--oauth-client-secret 的值与 --header 冒号形态的值部分也不透传", async () => {
+    const h = harness({
+      // 报错只引用值部分(trim 后形态,无前导空格),不含 --header 整串 ——
+      // 只遮整串会漏(工单 sec-mcp-secret-redaction)。
+      add: {
+        kind: "failed",
+        message: "oauth rejected: client secret sec-456 invalid; refused header value Bearer tok-abc-999",
+      },
+    });
+    await runOrThrow(
+      h,
+      "/mcp add corp --oauth-client-secret sec-456 --header 'Authorization: Bearer tok-abc-999' --url https://x",
+    );
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("sec-456");
+    expect(h.replies[0]).not.toContain("tok-abc-999");
+    expect(h.replies[0]).toContain("***");
+    expect(h.audits).toHaveLength(0);
+  });
+
+  it("unavailable 回执脱敏补齐:--header 冒号后的值部分(带前导空格的原样形态)也不透传", async () => {
+    const h = harness({
+      add: {
+        kind: "unavailable",
+        message: 'pi 不认识这条 mcp 子命令:model echoed " Bearer tok-abc-999"',
+      },
+    });
+    await runOrThrow(h, "/mcp add corp --header 'Authorization: Bearer tok-abc-999' --url https://x");
+    expect(h.replies[0]).toContain("MCP 管理不可用");
+    expect(h.replies[0]).not.toContain("tok-abc-999");
+    expect(h.replies[0]).toContain("***");
+    expect(h.audits).toHaveLength(0);
+  });
+
+  it("失败回执脱敏不回退:--header 的 KEY=VALUE(pi 实际接受形态)值部分照旧遮", async () => {
+    const h = harness({
+      add: { kind: "failed", message: 'invalid header value tok-eq-777 near "Authorization=tok-eq-777"' },
+    });
+    await runOrThrow(h, "/mcp add corp --header 'Authorization=tok-eq-777' --url https://x");
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("tok-eq-777");
+  });
+
+  it("失败回执脱敏补齐:连写形态 --oauth-client-secret=<值> 的整 token 回显也遮(pi Unknown option 路径)", async () => {
+    const h = harness({
+      // pi 1.0.0 parseOptions 不拆连写,整 token 查 known 表失败后
+      // `Unknown option <整 token>.` 写 stderr(exit=1,实测确认)。
+      add: { kind: "failed", message: 'Unknown option --oauth-client-secret=sec-eq-456.\nUse "pi mcp --help" for usage.' },
+    });
+    await runOrThrow(h, "/mcp add corp --oauth-client-secret=sec-eq-456 --url https://x");
+    // 连写只补脱敏:argv 原样透传不动,pi 裁决。
+    expect(h.addCalls[0]).toEqual(["corp", "--oauth-client-secret=sec-eq-456", "--url", "https://x"]);
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("sec-eq-456");
+    expect(h.replies[0]).toContain("***");
+  });
+
+  it("失败回执脱敏补齐:连写形态 --env=<K=V> 的值部分单独回显也遮", async () => {
+    const h = harness({
+      add: { kind: "failed", message: "invalid env value v-eq-555" },
+    });
+    await runOrThrow(h, "/mcp add corp --env=K=v-eq-555 --url https://x");
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("v-eq-555");
+    expect(h.replies[0]).toContain("***");
+  });
+
+  it("失败回执脱敏补齐:连写形态 --header=<K:V> 的冒号值部分单独回显也遮", async () => {
+    const h = harness({
+      add: { kind: "failed", message: "refused header value tok-hv-888" },
+    });
+    // 引号包成单 token:连写 + 值含空格。
+    await runOrThrow(h, "/mcp add corp '--header=X-Api: tok-hv-888' --url https://x");
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("tok-hv-888");
+    expect(h.replies[0]).toContain("***");
+  });
+
+  it("失败回执脱敏补齐:连写 typo flag(--enva=)整 token 回显也遮(pi 对未知连写一律 Unknown option)", async () => {
+    const h = harness({
+      // pi parseOptions 对 -- 开头 token 按整个 arg 查 known 表、连写从不
+      // 拆分(cli.js:89-101):--enva=K=sk-typo-42 不在表内,`Unknown option
+      // --enva=K=sk-typo-42.` 整 token 连值回显(stderr 尾部 → 回执)。
+      add: { kind: "failed", message: 'Unknown option --enva=K=sk-typo-42.\nUse "pi mcp --help" for usage.' },
+    });
+    await runOrThrow(h, "/mcp add corp --enva=K=sk-typo-42 --url https://x");
+    // typo 只补脱敏:argv 原样透传不动,pi 裁决。
+    expect(h.addCalls[0]).toEqual(["corp", "--enva=K=sk-typo-42", "--url", "https://x"]);
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("sk-typo-42");
+    expect(h.replies[0]).toContain("***");
+  });
+
+  it("失败回执脱敏补齐:大小写不符的 --OAuth-Client-Secret= 连写回显也遮", async () => {
+    const h = harness({
+      // known 表查名精确匹配大小写:--OAuth-Client-Secret= 同样 Unknown
+      // option 整 token 回显,值是密钥本体必须遮(工单 sec-mcp-secret-redaction)。
+      add: { kind: "failed", message: "Unknown option --OAuth-Client-Secret=sk-case-99." },
+    });
+    await runOrThrow(h, "/mcp add corp --OAuth-Client-Secret=sk-case-99 --url https://x");
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("sk-case-99");
+    expect(h.replies[0]).toContain("***");
+  });
+
+  it("失败回执脱敏不串扰:多 flag 值互为子串时按长度降序替换,长片段不被先替换的短片段打碎", async () => {
+    const h = harness({
+      // --env 值片段 "Bearer" 是 --header 值 "Bearer <token>" 的子串:名单
+      // 顺序先替换短片段会把整串/长片段打碎、后续匹配不上,token 残段漏遮
+      // (评审 sec-mcp-secret-redaction 实证复现:env K=Bearer 撞
+      // header 'Authorization: Bearer tok-123')。
+      add: { kind: "failed", message: "header Authorization: Bearer tok-123 refused" },
+    });
+    await runOrThrow(
+      h,
+      "/mcp add corp --env K=Bearer --header 'Authorization: Bearer tok-123' --url https://x",
+    );
+    expect(h.replies[0]).toContain("添加 MCP 服务器失败");
+    expect(h.replies[0]).not.toContain("tok-123");
+    expect(h.replies[0]).not.toContain("Bearer");
     expect(h.replies[0]).toContain("***");
     expect(h.audits).toHaveLength(0);
   });
@@ -551,5 +680,76 @@ describe("createMcpOrchestration(真实装配)", () => {
     if (started.kind !== "started") throw new Error("意外被拒:单飞槽应空闲");
     const outcome = await started.done;
     expect(outcome.kind).toBe("failed");
+  });
+});
+
+describe("/mcp 回执脱敏(工单 sec-mcp-secret-redaction 追加:list 家族状态卡与失败回执)", () => {
+  const SECRET = "SUPERSECRET123";
+
+  it("状态卡的传输行与服务器错误详情过配置侧密钥名单遮蔽", async () => {
+    const h = harness({
+      configuredSecrets: [SECRET],
+      list: {
+        kind: "ok",
+        data: {
+          servers: [
+            {
+              name: "e2efail",
+              state: "failed",
+              transport: `sh -c "echo startup-err: ${SECRET} >&2"; exit 7`,
+              error: `write EPIPE startup-err: ${SECRET}`,
+            },
+          ],
+        },
+      },
+    });
+    await runOrThrow(h, "/mcp list");
+    const joined = h.replies.join("\n");
+    expect(joined).not.toContain(SECRET);
+    expect(joined).toContain("***");
+  });
+
+  it("list 失败回执(pi 回显的输出尾部)过名单遮蔽", async () => {
+    const h = harness({
+      configuredSecrets: [SECRET],
+      list: { kind: "failed", message: `list crashed near ${SECRET}` },
+    });
+    await runOrThrow(h, "/mcp list");
+    const joined = h.replies.join("\n");
+    expect(joined).not.toContain(SECRET);
+    expect(joined).toContain("***");
+  });
+
+  it("remove 失败回执同纪律遮蔽", async () => {
+    const h = harness({
+      configuredSecrets: [SECRET],
+      remove: { kind: "failed", message: `remove denied for ${SECRET}` },
+    });
+    await runOrThrow(h, "/mcp remove e2efail");
+    const joined = h.replies.join("\n");
+    expect(joined).not.toContain(SECRET);
+    expect(joined).toContain("***");
+  });
+
+  it("未装配 configuredSecrets 时无名单可遮,回执原样(向后兼容)", async () => {
+    const h = harness({
+      list: {
+        kind: "ok",
+        data: { servers: [{ name: "e2efail", state: "failed", error: `boom ${SECRET}` }] },
+      },
+    });
+    await runOrThrow(h, "/mcp list");
+    expect(h.replies.join("\n")).toContain(SECRET);
+  });
+
+  it("add 失败回执的名单是 配置侧 ∪ argv 侧(并集)", async () => {
+    const h = harness({
+      configuredSecrets: ["CONFIGSECRET01"],
+      add: { kind: "failed", message: "bad CONFIGSECRET01 / bad SUPERSECRET123" },
+    });
+    await runOrThrow(h, `/mcp add e2e --env K=SUPERSECRET123 --url http://127.0.0.1:9/mcp`);
+    const joined = h.replies.join("\n");
+    expect(joined).not.toContain("CONFIGSECRET01");
+    expect(joined).not.toContain("SUPERSECRET123");
   });
 });

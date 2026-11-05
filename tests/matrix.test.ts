@@ -142,6 +142,20 @@ describe("formatForMatrix win32 backslash escaping", () => {
     // HTML 里 `<code>` 内容仅做实体转义,`\` 原样出现。
     expect(result.formattedBody).toContain("C:\\a\\.b");
   });
+
+  it("escapes the tail after an unpaired backtick as outside code", () => {
+    // 反引号不成对时 markdown-it 把孤反引号当字面文本,尾部 `\.` 会被吞,
+    // 预转义须按"代码外"口径双写还原(修复前尾部落在奇数索引被整体跳过)。
+    const result = formatForMatrix("路径 `C:\\Users\\.pi 未闭合", "win32");
+    expect(result.formattedBody).toContain("C:\\Users\\.pi");
+  });
+
+  it("still skips the paired span while escaping the unpaired tail on one line", () => {
+    const result = formatForMatrix("`C:\\a\\.b` 与 `C:\\d\\.e 不闭合", "win32");
+    // 成对 span 内不双写、渲染不吞;不成对尾部按代码外双写、渲染还原。
+    expect(result.formattedBody).toContain("C:\\a\\.b");
+    expect(result.formattedBody).toContain("C:\\d\\.e");
+  });
   it("is a no-op on non-win32 platforms (current behavior pinned)", () => {
     const text = `📎 附件已保存: ${savedPath}(3.2 MB)`;
     const result = formatForMatrix(text, "linux");

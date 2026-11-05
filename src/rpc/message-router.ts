@@ -313,17 +313,29 @@ function attachmentErrorReply(reason: string): string {
 const normalizeDetailLine = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 120);
 
 /**
- * /login 族(/login /logout /auth)审计 detail 的脱敏(spec #211):按
- * 「指令名 provider [方式词] [密钥…]」的结构假定脱敏 —— 指令名与 provider
- * 原样保留,第 3 个 token 仅当是方式词(oauth|api_key,忽略大小写)时保留,
- * 其余 token 连同其后所有内容折叠为单个 `***`。确定性 token 结构判断,不猜
- * 密钥格式:密钥只要不出现在 provider 位(漏输前两段的极端输入,有测试 pin
- * 钉住这一边界),就到不了审计文件。掩码必须发生在截断之前,超长密钥才不会
- * 因截断漏出前半截。
+ * provider 位按内容判定(sec-redact-login-detail):形如 provider id 才
+ * 原样保留 —— 全小写 kebab(字母开头、段内字母数字)、长度 ≤ 32、且不以
+ * `sk-` 开头(密钥生态最常见前缀)。其余一律按潜在密钥折叠为 `***`:
+ * 宁可掩掉一个命名怪异的 provider,也不让密钥落进审计 JSONL。已拦下的
+ * 常见形态:oc_sk_*、sk-* 系、ghp_*、xox*、JWT(eyJ…)、含下划线/大写/
+ * 数字开头的随机串、超长串。
+ */
+const looksLikeProviderId = (token: string): boolean =>
+  token.length <= 32 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(token) && !token.startsWith("sk-");
+
+/**
+ * /login 族(/login /logout /auth)审计 detail 的脱敏(spec #211 / 票
+ * sec-redact-login-detail):按「指令名 provider [方式词] [密钥…]」的结构
+ * 脱敏,且每个保留位都按内容判定 —— 指令名固定保留;provider 位仅当形如
+ * provider id(looksLikeProviderId)才保留,否则视为漏输 provider 段而顶到
+ * 该位的密钥,折叠为 `***`;第 3 个 token 仅当是方式词(oauth|api_key,
+ * 忽略大小写)时保留,其余 token 连同其后所有内容折叠为单个 `***`。
+ * 掩码必须发生在截断之前,超长密钥才不会因截断漏出前半截。
  */
 export function redactLoginDetail(text: string): string {
   const tokens = text.replace(/\s+/g, " ").trim().split(" ");
-  const kept = tokens.slice(0, 2);
+  const kept = tokens.slice(0, 1);
+  if (tokens.length > 1) kept.push(looksLikeProviderId(tokens[1]!) ? tokens[1]! : "***");
   const rest = tokens.slice(2);
   if (rest.length > 0) {
     if (/^(oauth|api_key)$/i.test(rest[0]!)) {
@@ -1257,7 +1269,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         if (/^\/pmctl\s+rm(\s|$)/i.test(ctx.text.trim())) {
           auditTrail(AUDIT_EVENTS.pmctlRemove, ctx.msg, normalizeDetailLine(ctx.text));
         }
-        return await pmctl.handle(ctx.text, { chatId: ctx.msg.chatId, senderMxid: ctx.msg.userId, isManagementRoom: ctx.isManagementRoom }, async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText));
+        // 工单 sec-pmctl-admin-gate:isAdmin 按 /login 同款口径在此计算
+        //(auth.isAdminUser),控制器只收判定结果 —— 门禁决策仍在控制器。
+        return await pmctl.handle(ctx.text, { chatId: ctx.msg.chatId, senderMxid: ctx.msg.userId, isManagementRoom: ctx.isManagementRoom, isAdmin: auth.isAdminUser(ctx.msg.userId, ctx.msg.transport) }, async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText));
       },
     },
     {
@@ -1291,7 +1305,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             await login.listProviders(msg.chatId, msg.transport);
           } else {
             const [providerId, method] = loginArgs.split(/\s+/);
-            await login.startLogin(msg.chatId, msg.transport, providerId!, method);
+            // starterId(sec-login-sender-guard):流程绑定发起者,只有 TA 的
+            // 后续消息能作答/取消 —— 管理房内其他受信成员无权代答。
+            await login.startLogin(msg.chatId, msg.transport, providerId!, msg.userId, method);
           }
           return true;
         }
@@ -1447,9 +1463,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // any pending extension_ui question (ticket requirement); 「取消」 aborts
       // the login at any moment. Messages arriving between prompts (OAuth
       // polling) are NOT consumed — the room stays usable during long waits.
+      // 身份关在 deliver 内(sec-login-sender-guard):非发起者的消息原样
+      // 落穿,isPending 仅作快速预检、不做身份裁决。
       handle: async (ctx) => {
         if (ctx.text.startsWith("/")) return false;
-        return login.isPending(ctx.msg.chatId) && (await login.deliver(ctx.msg.chatId, ctx.text));
+        return (
+          login.isPending(ctx.msg.chatId) &&
+          (await login.deliver(ctx.msg.chatId, ctx.msg.userId, ctx.text))
+        );
       },
     },
     {

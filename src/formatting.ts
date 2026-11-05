@@ -267,9 +267,20 @@ const ESCAPABLE = /[\\!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~]/;
 function escapeBackslashesOutsideInlineCode(line: string): string {
   const parts = line.split("`");
   for (let i = 0; i < parts.length; i += 2) {
-    parts[i] = parts[i]!.replace(/\\(.)/g, (pair, next: string) =>
-      ESCAPABLE.test(next) ? `\\${pair}` : pair
-    );
+    parts[i] = doubleEscapableBackslashes(parts[i]!);
+  }
+  // 反引号个数为奇数(parts.length 为偶数)时,最后一段落在奇数索引,
+  // 是未闭合的尾部:渲染器把孤反引号当字面文本,该段实属代码外,
+  // 须与偶数索引段一并转义,否则其中的 `\`+标点 渲染时被吞。
+  if (parts.length % 2 === 0) {
+    parts[parts.length - 1] = doubleEscapableBackslashes(parts[parts.length - 1]!);
   }
   return parts.join("`");
+}
+
+/** 对一段"代码外"文本把会被 CommonMark 吞的 `\`+可转义标点 双写还原。 */
+function doubleEscapableBackslashes(segment: string): string {
+  return segment.replace(/\\(.)/g, (pair, next: string) =>
+    ESCAPABLE.test(next) ? `\\${pair}` : pair
+  );
 }

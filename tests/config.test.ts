@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { resolveLayout } from '../src/paths';
 import { tmpdir } from 'os';
@@ -192,6 +192,91 @@ describe('config', () => {
     const { loadConfig } = await importConfig();
     const config = loadConfig();
     expect(config.matrix?.accessToken).toBe('syt-env');
+  });
+
+  // ── 原子写与坏配置保全(sec-atomic-config-write)────────────────────
+  it('saveConfig 原子落盘:成功后无 .tmp 残留,内容完整可解析', async () => {
+    const { saveConfig } = await importConfig();
+    saveConfig({ workdir: '/atomic/w' });
+
+    const piDir = expectedConfigDir(tmpDir);
+    // 临时文件只应存在于写窗口内:成功路径上必须已被 rename 消费掉。
+    expect(readdirSync(piDir).filter((e) => e.includes('.tmp-'))).toEqual([]);
+    expect(JSON.parse(readFileSync(join(piDir, 'pi-courier.json'), 'utf-8'))).toEqual({ workdir: '/atomic/w' });
+  });
+
+  // root 绕过 DAC 权限检查:chmod 0o500 挡不住 root 的 openSync,saveConfig
+  // 会照常落盘,toThrow 必假红 —— 与 win32 一样属环境受限,显式跳过
+  // (Docker 默认 root 跑 vitest 是现实场景)。
+  it.skipIf(process.platform === 'win32' || process.geteuid?.() === 0)('saveConfig 写入失败(目录只读)时抛错、原配置字节原样、不留 .tmp 残留', async () => {
+    mkdirSync(expectedConfigDir(tmpDir), { recursive: true });
+    const configPath = join(expectedConfigDir(tmpDir), 'pi-courier.json');
+    const original = '{"matrix":{"accessToken":"syt-keep"}}';
+    writeFileSync(configPath, original, { mode: 0o600 });
+
+    const { saveConfig } = await importConfig();
+    // 只读目录:temp 文件创建必失败(旧实现会在这里直接截断原文件——
+    // writeFileSync 打开目标即清空;原子写下目标在 rename 前不被触碰)。
+    chmodSync(expectedConfigDir(tmpDir), 0o500);
+    try {
+      expect(() => saveConfig({ workdir: '/x' })).toThrow();
+      expect(readFileSync(configPath, 'utf-8')).toBe(original);
+      expect(readdirSync(expectedConfigDir(tmpDir)).filter((e) => e.includes('.tmp-'))).toEqual([]);
+    } finally {
+      chmodSync(expectedConfigDir(tmpDir), 0o700); // 还原,让 afterEach 能清理
+    }
+  });
+
+  it('loadConfig 遇坏 JSON:原文件字节保留为 .broken 备份;后续 update 覆写后仍可找回', async () => {
+    const piDir = expectedConfigDir(tmpDir);
+    mkdirSync(piDir, { recursive: true });
+    const configPath = join(piDir, 'pi-courier.json');
+    // 截断在写窗口内的残缺 JSON(旧原子性缺陷的典型产物)
+    const corrupt = '{"matrix":{"accessToken":"syt-ledger","homeserverUrl":"https://m.example.com"';
+    writeFileSync(configPath, corrupt, 'utf-8');
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { ConfigStore } = await importConfig();
+      const store = new ConfigStore(); // 构造时 loadConfig:解析失败 → 备份 + 空配置
+      store.update({ workdir: '/fresh' }); // 残缺配置覆写 config.json(旧行为:原字节就此丢失)
+
+      // 原始字节完整保留在 .broken
+      expect(readFileSync(join(piDir, 'pi-courier.json.broken'), 'utf-8')).toBe(corrupt);
+      // config.json 已被新配置替换(读-改-写链路不受影响)
+      expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({ workdir: '/fresh' });
+      expect(warnSpy.mock.calls.map(String).join('\n')).toContain('.broken');
+      expect(errSpy).toHaveBeenCalled(); // 原有 "Failed to load config file" 行为不变
+    } finally {
+      errSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('.broken 备份固定名覆盖写,不随启动次数累积', async () => {
+    const piDir = expectedConfigDir(tmpDir);
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(join(piDir, 'pi-courier.json'), 'bad one', 'utf-8');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { loadConfig } = await importConfig();
+      loadConfig();
+      writeFileSync(join(piDir, 'pi-courier.json'), 'bad two', 'utf-8');
+      loadConfig(); // 第二次坏加载 → 覆盖同一备份
+
+      expect(readFileSync(join(piDir, 'pi-courier.json.broken'), 'utf-8')).toBe('bad two');
+      expect(readdirSync(piDir).filter((e) => e.includes('.broken'))).toEqual(['pi-courier.json.broken']);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('合法配置加载不产生 .broken 备份(备份只属坏 JSON 解析路径)', async () => {
+    const { saveConfig, loadConfig } = await importConfig();
+    saveConfig({ workdir: '/ok' });
+    loadConfig();
+    expect(existsSync(join(expectedConfigDir(tmpDir), 'pi-courier.json.broken'))).toBe(false);
   });
 
   it('requires both Matrix home server and access token for matrix config', async () => {

@@ -554,7 +554,7 @@ const en: Record<MessageKey, string> = {
   "label.noWhitespace": "Project name must not contain whitespace",
   "label.tooLong": "Project name is limited to {max} characters (got {length})",
   "label.caseClash":
-    "Project name \"{name}\" differs from existing project \"{clash}\" only by letter case (log filtering matches by name and would be ambiguous)",
+    "Project name \"{name}\" is identical to existing project \"{clash}\" after NFKC normalization and case-insensitive folding (log filtering matches by name and would be ambiguous)",
 
   // ── path (Windows path guards, win32-path.ts, issue #190) ─────────────
   "path.win32.reserved":
@@ -571,6 +571,7 @@ const en: Record<MessageKey, string> = {
     "❌ This is single-project mode; project management is off.\nTo go multi-project: send `/multiproject on` and restart (pi-courier restart).",
   "pmctl.managementRoomOnly": "❌ /pmctl is only available in the management room (a DM with the bot)",
   "pmctl.matrixOnly": "❌ /pmctl unavailable (Matrix deployments only)",
+  "pmctl.adminOnly": "❌ Not allowed (/pmctl is admin-only)",
   "pmctl.unknownOp": "❌ Unknown operation: {op}\nAvailable: new / list / show / rm / mv / rename",
   "pmctl.new.usage":
     "Usage: /pmctl new <project name> [path]\nPath is optional: defaults to a same-named directory under the project root (e.g. newapp → ~/Projects/newapp); relative and absolute paths work too.",
@@ -636,9 +637,9 @@ const en: Record<MessageKey, string> = {
     "Attachment too large ({declared} > limit {max}); not saved. Compress it and resend, or ask the admin to raise the attachments.maxMb setting.",
   "attach.downloadFailed": "Attachment download failed: {detail}",
   "attach.noMediaUrl": "The event carries no downloadable media URL",
-  "attach.e2eeRequired": "Encrypted attachments require E2EE (encryption not enabled for this deployment, or the native crypto library unavailable)",
+  "attach.e2eeRequired": "Encrypted attachments require E2EE (encryption not enabled for this deployment)",
   "attach.downloadTimeout": "Download timed out ({seconds}s)",
-  "attach.e2eeNativeMissing": "The E2EE crypto native library is unavailable; cannot decrypt the encrypted attachment",
+  "attach.hashMismatch": "Attachment integrity check failed (SHA-256 mismatch); content may have been tampered with and was not saved.",
   "room.notConnected": "Matrix not connected",
   "workdir.prompt": "No working directory configured. Enter the pi workdir [default {fallback}]: ",
   "logs.unknownLevel": "Unknown log level: {level} (choose: debug / info / warn / error)",
@@ -838,6 +839,8 @@ Note: pi itself is installed and upgraded independently on the system
   "migration.itemFailed": "⚠️ Legacy layout migration failed (item skipped, startup not affected): {label} {from} → {to}: {message}",
   "migration.oldCleanupFailed":
     "⚠️ {label} was copied to the new home {to}, but removing the old file {from} failed: {message} (next startup treats this as both-exist)",
+  "migration.tmpCleanupFailed":
+    "⚠️ Cleaning up the temporary file {tmp} failed after {label}'s migration failed: {message} (the leftover does not affect the retry on next startup)",
   "migration.summary":
     "✅ Legacy layout migration finished: {moved} moved, {skipped} already in place, {conflicts} both-exist conflicts, {failed} failures",
 };
