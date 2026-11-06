@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatToolCalls,
+  partitionToolCalls,
   splitMessage,
   truncate,
   truncateLine,
@@ -279,5 +280,113 @@ describe('formatToolCalls', () => {
     } as any;
     const result = formatToolCalls(msg);
     expect(result).toBe('🔧 `grep` (pattern=a)\n🔧 `read` (path=/b)');
+  });
+});
+
+describe('参数单行化(spec #297)', () => {
+  it('含换行的参数值压成单行,不再把换行漏进卡片', () => {
+    const msg = {
+      content: [
+        {
+          type: 'toolCall',
+          name: 'write',
+          arguments: { content: '/**\n * 反射层\n *\n * 实测', path: '/src/reflex.ts' },
+        },
+      ],
+    } as any;
+    const result = formatToolCalls(msg);
+    expect(result).toBe('🔧 `write` (content=/** * 反射层 * * 实测, path=/src/reflex.ts)');
+    expect(result).not.toContain('\n');
+  });
+
+  it('尾部换行归一成尾随空格(归一不 trim)', () => {
+    const msg = {
+      content: [{ type: 'toolCall', name: 'write', arguments: { content: 'hello\n' } }],
+    } as any;
+    expect(formatToolCalls(msg)).toBe('🔧 `write` (content=hello )');
+  });
+
+  it('CRLF 同样压平', () => {
+    const msg = {
+      content: [
+        { type: 'toolCall', name: 'bash', arguments: { command: 'cat <<EOF\r\nhello\r\nEOF' } },
+      ],
+    } as any;
+    expect(formatToolCalls(msg)).toBe('🔧 `bash` (command=cat <<EOF hello EOF)');
+  });
+
+  it('含换行的值压平后仍受长度上限约束', () => {
+    const long = `/**\n${' * x'.repeat(50)}`;
+    const msg = {
+      content: [{ type: 'toolCall', name: 'write', arguments: { content: long } }],
+    } as any;
+    const result = formatToolCalls(msg);
+    expect(result).not.toContain('\n');
+    expect(result).toContain('...');
+  });
+
+  it('不含换行的值逐字节不变(连续空格不归一)', () => {
+    const msg = {
+      content: [
+        {
+          type: 'toolCall',
+          name: 'bash',
+          arguments: { command: 'echo a  b   c', timeout: '30' },
+        },
+      ],
+    } as any;
+    expect(formatToolCalls(msg)).toBe('🔧 `bash` (command=echo a  b   c, timeout=30)');
+  });
+});
+
+describe('partitionToolCalls 切段(spec #297)', () => {
+  const call = (name: string, args: Record<string, unknown>) => ({
+    type: 'toolCall',
+    name,
+    arguments: args,
+  });
+  const writeMultiline = () =>
+    call('write', { content: '/**\n * doc', path: '/src/x.ts' });
+  const bashLine = () => call('bash', { cmd: 'ls' });
+
+  it('无工具调用给空段列表', () => {
+    const msg = { content: [{ type: 'text', text: 'hi' }] } as any;
+    expect(partitionToolCalls(msg)).toEqual([]);
+  });
+
+  it('连续普通调用归一段,段文本为逐行拼接', () => {
+    const msg = { content: [bashLine(), bashLine()] } as any;
+    expect(partitionToolCalls(msg)).toEqual([
+      { standalone: false, text: '🔧 `bash` (cmd=ls)\n🔧 `bash` (cmd=ls)' },
+    ]);
+  });
+
+  it('大段参数调用独立成段且恒单行', () => {
+    const msg = { content: [writeMultiline()] } as any;
+    const segments = partitionToolCalls(msg);
+    expect(segments).toHaveLength(1);
+    expect(segments[0]!.standalone).toBe(true);
+    expect(segments[0]!.text).toBe(
+      '🔧 `write` (content=/** * doc, path=/src/x.ts)'
+    );
+  });
+
+  it('混合顺序切段:普通段在独立段两侧断开,段序即调用序', () => {
+    const msg = {
+      content: [bashLine(), writeMultiline(), bashLine(), bashLine(), writeMultiline()],
+    } as any;
+    const segments = partitionToolCalls(msg);
+    expect(segments.map((s) => s.standalone)).toEqual([false, true, false, true]);
+    expect(segments[0]!.text.split('\n')).toHaveLength(1); // 首个 bash:独立段前只有自己
+    expect(segments[2]!.text.split('\n')).toHaveLength(2); // 独立段后的连续 bash 归一段
+  });
+
+  it('切段拼接 == 整段工具文本(拼装口径单一)', () => {
+    const msg = {
+      content: [bashLine(), writeMultiline(), bashLine(), writeMultiline(), writeMultiline()],
+    } as any;
+    expect(
+      partitionToolCalls(msg).map((s) => s.text).join('\n')
+    ).toBe(formatToolCalls(msg));
   });
 });

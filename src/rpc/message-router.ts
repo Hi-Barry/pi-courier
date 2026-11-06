@@ -19,6 +19,7 @@ import {
   extractTextFromMessage,
   formatToolCalls,
   hasToolCalls,
+  partitionToolCalls,
   splitMessage,
   truncate,
   truncateLine,
@@ -1727,15 +1728,21 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 活卡聚合(issue #235 票2;内容契约修订 spec #248):聚合启用的
         // 中间回合交给出站链决策。旁白断链(spec #248):回合带旁白文本时,
         // 在出站链的单一步骤内 —— 先清活卡(旧卡定稿于既有累积,不再被
-        // 编辑)→ 旁白独立直发(普通消息卡,可分片)→ 工具行交活卡决策
-        // (此时必无卡 → 开新卡)。时间线必为「旧卡 → 旁白 → 新卡」:
-        // 普通回复/开卡/编辑在 Matrix transport 走同一条 per-room FIFO,
-        // 且本步骤与前序步骤经出站链串行,顺序由架构保证而非时序运气。
+        // 编辑)→ 旁白独立直发(普通消息卡,可分片)→ 工具段落交活卡决策。
+        // 拆卡口径(spec #297):工具行按段消费 —— 大段参数(原始值含换行)
+        // 的调用是拆卡点,独立段先清活卡再单行直发(不进活卡状态、永不被
+        // 后续编辑);普通段照旧无卡开卡/有卡追加。段序即调用序,时间线
+        // 必为「旧卡 →(旁白)→ 独立卡 → 新卡」:普通回复/开卡/编辑在
+        // Matrix transport 走同一条 per-room FIFO,且本步骤与前序步骤经
+        // 出站链串行,顺序由架构保证而非时序运气。
         // 报错回合绕过聚合:失败行醒目直达,不埋进持续刷新的卡。
         // hideToolCalls、配置关、编辑缝未注入都落到下方现行派发路径。
         if (turn.pendingTools && liveCardAggregation() && !isErrorTurn) {
           const narration: string | null = turn.text;
-          const toolLines: string = turn.toolsText!; // pendingTools+未隐藏 ⇒ 非空
+          const segments = partitionToolCalls(
+            turnMessage as AssistantMessage,
+            toolCallArgLimit(store.get())
+          );
           enqueueLiveCardTurn(rpc, async () => {
             if (narration) {
               // 清卡单一入口含代次递增(spec #242):降级标志随状态一并清除
@@ -1745,7 +1752,16 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
                 await sendReply(target.chatId, target.transport, chunk).catch(() => {});
               }
             }
-            await liveCardTurn(rpc, target, toolLines);
+            for (const segment of segments) {
+              if (!segment.standalone) {
+                await liveCardTurn(rpc, target, segment.text);
+                continue;
+              }
+              clearLiveCard(rpc);
+              for (const chunk of splitMessage(segment.text, 4000)) {
+                await sendReply(target.chatId, target.transport, chunk).catch(() => {});
+              }
+            }
           });
           return;
         }
