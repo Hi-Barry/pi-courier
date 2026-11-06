@@ -1752,6 +1752,16 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
                 await sendReply(target.chatId, target.transport, chunk).catch(() => {});
               }
             }
+            // 降级序列整回合直发(spec #297 评审整改):「每回合一条」覆盖
+            // 混合段回合 —— 段落级结算只在非降级态进行,降级不因独立段中途
+            // 解除(解除只归旁白断链与轮次边界,与旧路径同口径)。
+            if (liveCards.get(rpc)?.degraded) {
+              const toolsText: string = turn.toolsText!; // pendingTools+未隐藏 ⇒ 非空
+              for (const chunk of splitMessage(toolsText, 4000)) {
+                await sendReply(target.chatId, target.transport, chunk).catch(() => {});
+              }
+              return;
+            }
             for (const segment of segments) {
               if (!segment.standalone) {
                 await liveCardTurn(rpc, target, segment.text);

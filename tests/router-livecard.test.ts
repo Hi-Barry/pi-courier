@@ -714,7 +714,7 @@ describe("拆卡口径(spec #297)", () => {
     expect(fx.editReply).not.toHaveBeenCalled();
   });
 
-  it("降级序列遇独立段:断链清降级,后续普通回合重试聚合开新卡", async () => {
+  it("降级序列:整回合一条直发(含混合段),只归旁白断链解除并重试聚合", async () => {
     const fx = await makeLiveCardFixture({}, {
       editReply: async () => {
         throw new Error("boom");
@@ -728,7 +728,7 @@ describe("拆卡口径(spec #297)", () => {
     await flush();
     expect(fx.order).toEqual(["open:$card-1", "edit:$card-1", `reply:${TOOL_LINE.slice(0, 8)}`]);
 
-    // 回合 3:独立段 —— 清卡含降级标志,write 独立直发
+    // 回合 3(独立段):降级整回合一条直发,降级不因独立段中途解除
     fx.router.handleEvent({ type: "turn_end", message: writeTurn() }, fx.rpc);
     await flush();
     expect(fx.order).toEqual([
@@ -738,13 +738,41 @@ describe("拆卡口径(spec #297)", () => {
       `reply:${WRITE_LINE.slice(0, 8)}`,
     ]);
 
-    // 回合 4:降级已随断链解除 → 普通回合重试聚合开新卡
+    // 回合 4(混合段):同样整回合一条(不会因切段多发数条)
+    fx.router.handleEvent({ type: "turn_end", message: mixedTurn("bash", "write") }, fx.rpc);
+    await flush();
+    expect(fx.order).toEqual([
+      "open:$card-1",
+      "edit:$card-1",
+      `reply:${TOOL_LINE.slice(0, 8)}`,
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+      `reply:${`${TOOL_LINE}\n${WRITE_LINE}`.slice(0, 8)}`,
+    ]);
+    expect(fx.replies).toHaveLength(3);
+
+    // 回合 5(旁白+独立段):旁白断链清降级 → 旁白直发 → 独立卡直发
+    fx.router.handleEvent({ type: "turn_end", message: narratedWriteTurn("我来写文件") }, fx.rpc);
+    await flush();
+    expect(fx.order).toEqual([
+      "open:$card-1",
+      "edit:$card-1",
+      `reply:${TOOL_LINE.slice(0, 8)}`,
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+      `reply:${`${TOOL_LINE}\n${WRITE_LINE}`.slice(0, 8)}`,
+      `reply:${"我来写文件".slice(0, 8)}`,
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+    ]);
+
+    // 回合 6:降级已随旁白断链解除 → 普通回合重试聚合开新卡
     fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
     await flush();
     expect(fx.order).toEqual([
       "open:$card-1",
       "edit:$card-1",
       `reply:${TOOL_LINE.slice(0, 8)}`,
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+      `reply:${`${TOOL_LINE}\n${WRITE_LINE}`.slice(0, 8)}`,
+      `reply:${"我来写文件".slice(0, 8)}`,
       `reply:${WRITE_LINE.slice(0, 8)}`,
       "open:$card-2",
     ]);
