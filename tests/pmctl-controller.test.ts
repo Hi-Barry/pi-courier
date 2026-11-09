@@ -45,6 +45,10 @@ describe("PmctlController", () => {
       updateProjectWorkdir: vi.fn(),
       renameProject: vi.fn(),
       stopAll: vi.fn(),
+      sessionDirFor: vi.fn().mockImplementation((roomId: string) => {
+        const e = projects.get(roomId);
+        return e ? `${e.workdir}/.pi-session` : ".pi-session";
+      }),
     } as unknown as typeof pm;
     // Seed one project (registerProject is stubbed, so write the map directly).
     (pm.registerProject as ReturnType<typeof vi.fn>).mockImplementation(

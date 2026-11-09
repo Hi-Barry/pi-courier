@@ -9,6 +9,7 @@
  * always go back to the right chat even with concurrent turns.
  */
 
+import * as crypto from "node:crypto";
 import * as path from "node:path";
 import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
 import { type ConfigStore, projectFallbackChain } from "../config.js";
@@ -42,8 +43,49 @@ export interface ProjectManagerOptions {
   notifyRoom?: (roomId: string, text: string) => void;
 }
 
-/** 项目会话目录名(单一持有:pmctl 展示与 i18n 文案从这里取 —— 审计工程批 票19)。 */
+/** 项目会话目录的固定缺省名(单一持有:派生名与回退路径都从它拼 —— 审计工程批 票19)。 */
 export const PROJECT_SESSION_DIR = ".pi-session";
+
+/** 按 roomId 稳定派生的会话目录名(sha1 前 8 位,重启/重排后不变)。 */
+function deriveSessionDirName(roomId: string): string {
+  const hash = crypto.createHash("sha1").update(roomId).digest("hex").slice(0, 8);
+  return `${PROJECT_SESSION_DIR}-room-${hash}`;
+}
+
+/**
+ * 绑定事件时的会话目录解析(spec #299 票01):目标 workdir 已被其他房间
+ * 占用时,本房(新搬入者)用按 roomId 派生的兄弟目录,在住者不受干扰;
+ * 独占则用固定路径。由 registerProject / updateProjectWorkdir 在事件当下
+ * 调用并把结果持久化进条目 —— 判定看"绑入事件",不看配置键序。
+ */
+export function resolveProjectSessionDir(
+  roomId: string,
+  workdir: string,
+  projects: Record<string, ProjectEntry>
+): string {
+  const occupied = Object.entries(projects).some(([room, e]) => room !== roomId && e.workdir === workdir);
+  return path.join(workdir, occupied ? deriveSessionDirName(roomId) : PROJECT_SESSION_DIR);
+}
+
+/**
+ * 键序启发式回退(spec #299 票01):仅用于没有持久化 sessionDir 的旧条目
+ * 与手工配置 —— 同 workdir 存在更早登记的兄弟房间时按 roomId 派生,否则
+ * 固定路径。绑定事件路径请用 resolveProjectSessionDir。
+ */
+export function projectSessionDirFor(
+  roomId: string,
+  entry: ProjectEntry,
+  projects: Record<string, ProjectEntry>
+): string {
+  const keys = Object.keys(projects);
+  const myIndex = keys.indexOf(roomId);
+  const hasEarlierSibling =
+    myIndex > 0 && keys.slice(0, myIndex).some((k) => projects[k]?.workdir === entry.workdir);
+  if (!hasEarlierSibling) {
+    return path.join(entry.workdir, PROJECT_SESSION_DIR);
+  }
+  return path.join(entry.workdir, deriveSessionDirName(roomId));
+}
 
 export class ProjectManager {
   private defaultRpc: PiRpc;
@@ -156,8 +198,9 @@ export class ProjectManager {
 
     // Per-project session dir: each project's conversation state lives in
     // its own workdir/.pi-session — isolated and resumable (--continue).
+    // 票01(spec #299):持久化的绑定事件决策优先;旧条目回退键序启发式。
     const args = [...(this.baseOptions.args ?? [])];
-    const projectSessionDir = path.join(entry.workdir, PROJECT_SESSION_DIR);
+    const projectSessionDir = entry.sessionDir ?? projectSessionDirFor(roomId, entry, this.projectMap());
     args.push("--session-dir", projectSessionDir);
 
     const label = projectLabelOf(entry);
@@ -233,8 +276,22 @@ export class ProjectManager {
   /** Register a new project room at runtime (used by /pmctl new). */
   registerProject(roomId: string, workdir: string, name?: string): void {
     this.updateProjects((projects) => {
-      projects[roomId] = { name: name ?? roomId, workdir };
+      // 绑定事件当下解析会话目录并持久化(spec #299 票01):此时映射尚无
+      // 本房,"已被占用"即指其他在住房间 —— 新搬入者派生,在住者不动。
+      projects[roomId] = {
+        name: name ?? roomId,
+        workdir,
+        sessionDir: resolveProjectSessionDir(roomId, workdir, projects),
+      };
     });
+  }
+
+  /** 本房间的会话目录:持久化决策优先,缺省(旧/手工条目)回退键序启发式。
+   *  spawn 与 /pmctl show、mv 共用此单点(spec #299 票01)。 */
+  sessionDirFor(roomId: string): string {
+    const entry = this.projectMap()[roomId];
+    if (!entry) return path.join("", PROJECT_SESSION_DIR);
+    return entry.sessionDir ?? projectSessionDirFor(roomId, entry, this.projectMap());
   }
 
   /** Update a project's workdir (used by /pmctl mv). */
@@ -242,7 +299,13 @@ export class ProjectManager {
     const entry = this.projectMap()[roomId];
     if (!entry) return;
     this.updateProjects((projects) => {
-      projects[roomId] = { ...entry, workdir };
+      // 换目录 = 重新绑定(spec #299 票01):搬入已被占用的 workdir 时,
+      // 搬入者(本房)派生,在住者保持原路径、历史不受扰。
+      projects[roomId] = {
+        ...entry,
+        workdir,
+        sessionDir: resolveProjectSessionDir(roomId, workdir, projects),
+      };
     });
     // Stop and drop the running process so the next message starts fresh in
     // the new dir (prevents an orphaned pi process from a stale cwd). The

@@ -34,7 +34,6 @@ import type { RoomOps } from "../transports/interface.js";
 import { win32PathProblem, win32SamePath } from "../win32-path.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
-import { PROJECT_SESSION_DIR } from "./project-manager.js";
 
 export interface PmctlCall {
   /** Room the command came from (also the pending-rm confirmation key). */
@@ -401,7 +400,7 @@ export class PmctlController {
         room: roomId,
         workdir: entry.workdir,
         status: pm.isRunning(roomId) ? t("pmctl.statusRunning") : t("pmctl.statusLazy"),
-        session: `${entry.workdir}/${PROJECT_SESSION_DIR}`,
+        session: pm.sessionDirFor(roomId),
         presets: presets.join(" · ") || t("pmctl.show.noPresets"),
       })
     );
@@ -495,7 +494,9 @@ export class PmctlController {
       return;
     }
     await this.opts.projectManager.updateProjectWorkdir(roomId, resolvedWorkdir);
-    await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir, sessionDir: PROJECT_SESSION_DIR }));
+    // 会话目录跟随绑定事件决策(spec #299 票01),与 spawn 同一解析源。
+    const sessionDirName = path.basename(this.opts.projectManager.sessionDirFor(roomId));
+    await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir, sessionDir: sessionDirName }));
   }
 
   private async rename(rest: string, reply: Reply, roomOps: RoomOps): Promise<void> {
