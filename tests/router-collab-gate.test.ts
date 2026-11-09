@@ -386,3 +386,39 @@ describe("roomToolsToggle × typing 续期 (spec #299 票06)", () => {
     }
   });
 });
+
+describe("restart gap declaration (spec #299 票08)", () => {
+  function makeGuestFixture3(opts: Parameters<typeof makeCollabFixture>[0] = {}) {
+    const fx = makeCollabFixture(opts);
+    (fx.projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => roomId === "!room:server"
+    );
+    (fx.projectManager as unknown as Record<string, ReturnType<typeof vi.fn>>).modeForRoom = vi
+      .fn()
+      .mockImplementation((roomId: string) => (roomId === "!room:server" ? "guest" : undefined));
+    return fx;
+  }
+
+  it("guest room first trigger after boot declares the restart gap once, honestly", async () => {
+    const fx = makeGuestFixture3(ENABLED);
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "@bot:server 第一次", wasMentioned: true }));
+    const first = (fx.rpc.prompt as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(first).toContain("重启");
+    expect(first).toContain("第一次");
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "@bot:server 第二次", wasMentioned: true }));
+    const second = (fx.rpc.prompt as ReturnType<typeof vi.fn>).mock.calls[1][0] as string;
+    expect(second).not.toContain("重启");
+  });
+
+  it("non-guest rooms never get the gap note", async () => {
+    const fx = makeCollabFixture(ENABLED);
+    (fx.projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => roomId === "!room:server"
+    );
+    (fx.projectManager as unknown as Record<string, ReturnType<typeof vi.fn>>).modeForRoom = vi
+      .fn()
+      .mockImplementation((roomId: string) => (roomId === "!room:server" ? "owner" : undefined));
+    await fx.router.handleIncoming(makeMsg(GROUP));
+    expect((fx.rpc.prompt as ReturnType<typeof vi.fn>).mock.calls[0][0]).not.toContain("重启");
+  });
+});

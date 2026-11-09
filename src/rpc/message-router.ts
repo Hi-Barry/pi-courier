@@ -1013,6 +1013,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const sendTypingSafe = (chatId: string, transport: string, active = true): void => {
     void Promise.resolve(sendTyping(chatId, transport, active)).catch(() => {});
   };
+  // 票08(spec #299):重启缺口声明簿记 —— 每房每进程生命周期声明一次。
+  const bootedAt = new Date();
+  const restartGapDeclared = new Set<string>();
 
   const stages: Array<PipelineStageView & { handle: (ctx: StageContext) => Promise<boolean> }> = [
     {
@@ -1692,6 +1695,16 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 并入本次 prompt;信箱空 = 原文逐字节(单 bot 房零变化)。drain 无失败
         // 路径,置于 try 之外;prompt 失败在 catch 里 refund(失败不消耗)。
         const mail = mailbox.drain(ctx.msg.chatId);
+        // 票08(spec #299):诚实声明 —— guest 房本进程首次触发注明重启缺口
+        // (重启期间的房间消息可能未进信箱;不编造条数,不装知道)。每房一次。
+        let gapNote = "";
+        if (
+          !restartGapDeclared.has(ctx.msg.chatId) &&
+          ctx.multiProject &&
+          projectManager.modeForRoom?.(ctx.msg.chatId) === "guest"
+        ) {
+          gapNote = `${t("collab.mailbox.restartGap", { at: bootedAt.toLocaleString() })}\n`;
+        }
         try {
           // 两段式消费(AttachmentLedger 契约):peek 不动账,prompt 成功才
           // release —— 失败不消耗,重试仍带上(消费即清空是成功语义)。
@@ -1713,7 +1726,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
                   text: basePrompt,
                 })
               : basePrompt;
-          await rpc.prompt(promptText);
+          await rpc.prompt(gapNote + promptText);
+          // 声明在 prompt 成功后烧掉(评审整改):首次触发失败(refund)时,
+          // 下次触发仍会补声明 —— 不因一次失败永久哑火。
+          if (gapNote) restartGapDeclared.add(ctx.msg.chatId);
           attachmentLedger.release(ctx.msg.chatId, ctx.msg.userId);
         } catch (err) {
           // rpc 已在此前 roomRpc() 解析,本段不可能产生 RPC_ABORT(审计工程批 票20)。
