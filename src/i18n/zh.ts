@@ -405,6 +405,7 @@ const zh = {
   "collab.claim.onboarded": "🤝 本 bot 已以协作模式(guest)绑定本房间,项目「{name}」→ {dir}。@我 即可派活。",
   "collab.claim.onboardFailed": "\n⚠️ 上岗通报发送失败(绑定不受影响): {message}",
   "collab.claim.cloneFailed": "❌ clone 失败(邀请保留,可换目录或修网后重试): {message}",
+  "collab.claim.failed": "❌ 认领失败(邀请保留,可重试): {message}",
   "router.enable.allAdminOnly": "❌ all 模式仅管理员可用(可采用 trusted-only 或 mentions)",
   "router.enable.ok": "✅ 本房间已启用 (mode: {mode})",
   "router.multiproject.forbidden": "❌ 无权限(仅信任用户可切换多工程模式)",

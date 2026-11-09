@@ -26,6 +26,7 @@ import {
   activeSpaceRoomId,
   type ConfigStore,
   effectiveInstanceName,
+  effectiveWorkdir,
   projectAvatarPath,
   projectFallbackChain,
 } from "../config.js";
@@ -577,7 +578,8 @@ export class PmctlController {
         return;
       }
       const lines = claims.map((c, i) => {
-        const dir = path.join(this.opts.store.get().workdir ?? "~", repoNameFromUrl(c.url));
+        // 清单目录与落地同源:effectiveWorkdir = resolveProjectPath 的根。
+        const dir = path.join(effectiveWorkdir(this.opts.store.get()), repoNameFromUrl(c.url));
         return t("collab.claim.listItem", { index: i + 1, room: c.roomId, name: c.projectName, url: c.url, dir });
       });
       await reply(t("collab.claim.listHeader", { count: claims.length }) + "\n" + lines.join("\n"));
@@ -589,8 +591,10 @@ export class PmctlController {
         await reply(t("collab.claim.indexOOB", { max: claims.length }));
         return;
       }
-      const gone = claims.splice(n - 1, 1)[0]!;
-      this.updatePendingClaims(() => claims);
+      const gone = claims[n - 1]!;
+      // 按对象身份过滤(票04 评审整改):不整写入口快照 —— 读写窗内并发
+      // 新增的邀请保留,只移除被拒绝的这一条。
+      this.updatePendingClaims((list) => list.filter((c) => c !== gone));
       await reply(t("collab.claim.rejected", { room: gone.roomId }));
       return;
     }
@@ -619,7 +623,14 @@ export class PmctlController {
           return;
         }
       } else {
-        await cloneRepo(pending.url, resolvedWorkdir);
+        // clone 失败:邀请保留在簿记里,可换目录或修网后重试(错误归因到
+        // clone,评审整改 —— probe/绑定错误不再误标为 clone 失败)。
+        try {
+          await cloneRepo(pending.url, resolvedWorkdir);
+        } catch (err) {
+          await reply(t("collab.claim.cloneFailed", { message: errorMessage(err) }));
+          return;
+        }
       }
       // guest 绑定:mode=guest 持久化(spec #299 决定2);会话目录按绑定事件解析(票01)。
       this.opts.projectManager.registerProject(pending.roomId, resolvedWorkdir, pending.projectName, "guest");
@@ -653,8 +664,8 @@ export class PmctlController {
         }) + onboardNote
       );
     } catch (err) {
-      // clone 失败:邀请保留在簿记里,可换目录或修网后重试。
-      await reply(t("collab.claim.cloneFailed", { message: errorMessage(err) }));
+      // probe/绑定等非 clone 环节失败:邀请保留,可重试(与 clone 失败分开归因)。
+      await reply(t("collab.claim.failed", { message: errorMessage(err) }));
     }
   }
 

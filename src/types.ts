@@ -354,8 +354,6 @@ export interface PendingClaim {
   roomId: string;
   /** 房间元数据里的仓库地址(卡片展示 + clone 依据;必有值)。 */
   url: string;
-  /** 元数据里的默认分支(可空缺)。 */
-  branch?: string;
   /** 元数据里的项目名。 */
   projectName: string;
   /** 邀请落簿时间(ms)。 */

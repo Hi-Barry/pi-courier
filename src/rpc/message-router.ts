@@ -6,6 +6,7 @@
  *   agent events ────────────────> router ──> reply back to the messenger
  */
 
+import * as path from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AUDIT_EVENTS, type AuditLog } from "../audit/audit-log.js";
 import { handleAdminCommand } from "../auth/admin-commands.js";
@@ -14,7 +15,7 @@ import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
 import { repoNameFromUrl } from "../collab/git-info.js";
 import { commandPolicy } from "../command-registry.js";
-import { aggregateToolTurns, bashOutputLimit, type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew, toolCallArgLimit, WORKFLOW_CARD_DEGRADED_RETRY_MS_DEFAULT, workflowCardThrottleMs, workflowProgressCard } from "../config.js";
+import { aggregateToolTurns, bashOutputLimit, type ConfigStore, effectiveWorkdir, managementRoomId, modelFallbackChain, recapOnNew, toolCallArgLimit, WORKFLOW_CARD_DEGRADED_RETRY_MS_DEFAULT, workflowCardThrottleMs, workflowProgressCard } from "../config.js";
 import { errorMessage } from "../errors.js";
 import {
   extractTextFromMessage,
@@ -1045,40 +1046,40 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           if (mgRoom) {
             // 票04(spec #299):房间带项目元数据(含仓库地址)→ 发认领确认卡
             // 并落簿待认领(collab.pendingClaims,重启不丢);无元数据 → 普通
-            // 提示。两条路都标记已提示(同房不重复刷)。落盘前重读防并发丢更新。
+            // 提示。两条路都标记已提示(同房不重复刷)。
             const meta = (await roomOps?.getProjectMeta?.(msg.chatId)) ?? null;
-            const fresh = store.get().collab;
-            const noticedRooms = fresh?.unknownNotifiedRooms ?? [];
             if (meta?.gitUrl) {
-              const dir = `${store.get().workdir ?? "~"}/${repoNameFromUrl(meta.gitUrl)}`;
-              const claims = fresh?.pendingClaims ?? [];
-              const index = claims.length + 1;
+              // 目录展示与 /pmctl claim 的落地口径同源(effectiveWorkdir =
+              // resolveProjectPath 的根;评审整改:不再 workdir??"~" 手拼)。
+              const dir = path.join(effectiveWorkdir(store.get()), repoNameFromUrl(meta.gitUrl));
+              const index = (store.get().collab?.pendingClaims ?? []).length + 1;
               await sendReply(
                 mgRoom,
                 msg.transport,
                 t("collab.claim.card", { room: msg.chatId, name: meta.name, url: meta.gitUrl, dir, index })
               );
+              // 落盘前重读(spec #299 票04 评审整改):sendReply 是 await 点,
+              // handleIncoming 可并发 —— 读写窗贴紧,写回以当下 store 值为基,
+              // 两陌生房同时发卡互不丢簿记(卡面序号并发下可能重复,以
+              // /pmctl claim 现读清单为准)。
+              const fresh = store.get().collab;
               store.update({
                 collab: {
                   ...fresh,
-                  unknownNotifiedRooms: [...noticedRooms, msg.chatId],
+                  unknownNotifiedRooms: [...(fresh?.unknownNotifiedRooms ?? []), msg.chatId],
                   pendingClaims: [
-                    ...claims,
-                    {
-                      roomId: msg.chatId,
-                      url: meta.gitUrl,
-                      branch: meta.defaultBranch,
-                      projectName: meta.name,
-                      at: Date.now(),
-                    },
+                    ...(fresh?.pendingClaims ?? []),
+                    { roomId: msg.chatId, url: meta.gitUrl, projectName: meta.name, at: Date.now() },
                   ],
                 },
               });
               ctx.log.info(`🚪 陌生房 ${msg.chatId} 带项目元数据,已向管理房发认领卡(#${index})`);
             } else {
               await sendReply(mgRoom, msg.transport, t("router.unknownRoom.notice", { room: msg.chatId }));
+              // 落盘前重读(票02 评审整改口径):await 之后的写回以当下值为基。
+              const fresh = store.get().collab;
               store.update({
-                collab: { ...fresh, unknownNotifiedRooms: [...noticedRooms, msg.chatId] },
+                collab: { ...fresh, unknownNotifiedRooms: [...(fresh?.unknownNotifiedRooms ?? []), msg.chatId] },
               });
               ctx.log.info(`🚪 陌生房 ${msg.chatId} 不接活,已向管理房发认领提示`);
             }

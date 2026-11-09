@@ -415,6 +415,7 @@ const en: Record<MessageKey, string> = {
   "collab.claim.onboarded": "🤝 This bot is now bound to this room as a guest, project \"{name}\" → {dir}. @me to delegate work.",
   "collab.claim.onboardFailed": "\n⚠️ Failed to send the onboarding note (binding unaffected): {message}",
   "collab.claim.cloneFailed": "❌ Clone failed (invite kept — retry with another dir or after fixing the network): {message}",
+  "collab.claim.failed": "❌ Claim failed (invite kept — retry): {message}",
   "router.enable.allAdminOnly": "❌ The all mode is admin-only (use trusted-only or mentions instead)",
   "router.enable.ok": "✅ Room enabled (mode: {mode})",
   "router.multiproject.forbidden": "❌ Not allowed (only trusted users can toggle multi-project mode)",
