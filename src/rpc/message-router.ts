@@ -45,7 +45,6 @@ import type { PersistedAttachmentEntry } from "./attachment-ledger.js";
 import { AttachmentLedger } from "./attachment-ledger.js";
 import { BacklogInbox } from "./backlog-inbox.js";
 import { BotRegistry } from "./bot-registry.js";
-import { RoomMailbox } from "./mailbox.js";
 import {
   type BashTracker,
   bashTimeoutText,
@@ -59,6 +58,7 @@ import {
   resolveSessionDir,
 } from "./command-map.js";
 import { ExtensionQuestions, type ExtensionUIRequestView, extensionUiTimeoutMs } from "./extension-questions.js";
+import { RoomMailbox } from "./mailbox.js";
 import { FallbackStreak, MODEL_FALLBACK_THRESHOLD, nextFallbackTarget } from "./model-switch.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
@@ -1001,8 +1001,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       handle: async (ctx) => {
         const bots = await botRegistry.botsOf(ctx.msg.chatId);
         if (!bots.has(ctx.msg.userId)) return false;
-        if (ctx.msg.payload.kind === "text" && ctx.text) {
-          mailbox.push(ctx.msg.chatId, `${ctx.msg.username}: ${ctx.text}`);
+        // 斜杠命令类文本不进信箱(与 guestTrigger 同规则,票05 评审整改)。
+        // 顺序耦合:botFilter 必须先于 guestTrigger —— 否则登记 bot 的消息
+        // 会经 guestTrigger 二次入信箱(阶段表测试钉住该顺序)。
+        if (ctx.msg.payload.kind === "text" && ctx.text && !ctx.text.startsWith("/")) {
+          mailbox.pushVisible(ctx.msg.chatId, ctx.msg.username, ctx.text);
         }
         ctx.log.info(`🤖 对端 bot 消息进增量信箱(不触发): ${ctx.msg.userId} in ${ctx.msg.chatId}`);
         return true;
@@ -1292,7 +1295,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         if (projectManager.modeForRoom?.(ctx.msg.chatId) !== "guest") return false;
         if (ctx.msg.wasMentioned === true) return false;
         if (ctx.msg.payload.kind === "text" && ctx.text && !ctx.text.startsWith("/")) {
-          mailbox.push(ctx.msg.chatId, `${ctx.msg.username}: ${ctx.text}`);
+          mailbox.pushVisible(ctx.msg.chatId, ctx.msg.username, ctx.text);
         }
         return true;
       },
@@ -1632,6 +1635,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         } catch {
           // 接力检查的任何意外不得挡住 prompt 本身。
         }
+        // 票05(spec #299):触发点清仓增量信箱 —— 未触发的房间可见文本以摘要
+        // 并入本次 prompt;信箱空 = 原文逐字节(单 bot 房零变化)。drain 无失败
+        // 路径,置于 try 之外;prompt 失败在 catch 里 refund(失败不消耗)。
+        const mail = mailbox.drain(ctx.msg.chatId);
         try {
           // 两段式消费(AttachmentLedger 契约):peek 不动账,prompt 成功才
           // release —— 失败不消耗,重试仍带上(消费即清空是成功语义)。
@@ -1643,9 +1650,6 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             user: ctx.msg.userId,
             room: ctx.msg.chatId,
           });
-          // 票05(spec #299):触发点清仓增量信箱 —— 未触发的房间可见文本以
-          // 摘要并入本次 prompt;信箱空 = 原文逐字节(单 bot 房零变化)。
-          const mail = mailbox.drain(ctx.msg.chatId);
           const promptText =
             mail.lines.length > 0
               ? t("collab.mailbox.digest", {
@@ -1659,7 +1663,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           await rpc.prompt(promptText);
           attachmentLedger.release(ctx.msg.chatId, ctx.msg.userId);
         } catch (err) {
-          // rpc 已在此前 roomRpc() 解析,本段不可能产生 RPC_ABORT(审计工程批 票20)
+          // rpc 已在此前 roomRpc() 解析,本段不可能产生 RPC_ABORT(审计工程批 票20)。
+          // 信箱退款(票05 评审整改):失败不消耗,重试仍带上 —— 与附件同款语义。
+          mailbox.refund(ctx.msg.chatId, mail);
           await sendReply(ctx.msg.chatId, ctx.msg.transport, t("router.prompt.failed", { message: errorMessage(err) }));
         }
         return true;

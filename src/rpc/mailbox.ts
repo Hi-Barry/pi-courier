@@ -36,11 +36,27 @@ export class RoomMailbox {
     this.queues.set(roomId, queue);
   }
 
+  /** 收一条可见文本并自带行格式(用户名: 文本)—— 格式所有权内聚在本模块,
+   *  botFilter / guestTrigger 两个调用方不再各自拼串(票05 评审整改)。 */
+  pushVisible(roomId: string, username: string, text: string): void {
+    this.push(roomId, `${username}: ${text}`);
+  }
+
   /** 清仓:取走全部增量;信箱空 = 无副作用(单 bot 房零变化)。 */
   drain(roomId: string): MailboxDrain {
     const queue = this.queues.get(roomId);
     if (!queue || queue.items.length === 0) return { lines: [], dropped: 0 };
     this.queues.delete(roomId);
     return { lines: queue.items, dropped: queue.dropped };
+  }
+
+  /** 退款:prompt 失败时把清仓的增量放回队首(保持到达序,dropped 计数并回)
+   *  —— 与附件台账"失败不消耗,重试仍带上"同一消费语义(票05 评审整改)。 */
+  refund(roomId: string, drain: MailboxDrain): void {
+    if (drain.lines.length === 0) return;
+    const queue = this.queues.get(roomId) ?? { items: [], dropped: 0 };
+    queue.items.unshift(...drain.lines);
+    queue.dropped += drain.dropped;
+    this.queues.set(roomId, queue);
   }
 }

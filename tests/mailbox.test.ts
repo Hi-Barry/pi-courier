@@ -39,4 +39,29 @@ describe("RoomMailbox (spec #299 票05)", () => {
     expect(box.drain("!a")).toEqual({ lines: ["a1"], dropped: 0 });
     expect(box.drain("!b")).toEqual({ lines: ["b1"], dropped: 0 });
   });
+
+  it("refund puts drained items back at the front (arrival order kept, dropped merged) — prompt 失败不消耗", () => {
+    const box = new RoomMailbox();
+    box.push("!r", "old1");
+    box.push("!r", "old2");
+    const drained = box.drain("!r");
+    // prompt 期间又来了新消息
+    box.push("!r", "new");
+    box.refund("!r", drained);
+    const out = box.drain("!r");
+    expect(out.lines).toEqual(["old1", "old2", "new"]);
+    expect(out.dropped).toBe(0);
+  });
+
+  it("refund with empty drain is a no-op", () => {
+    const box = new RoomMailbox();
+    box.refund("!r", { lines: [], dropped: 0 });
+    expect(box.drain("!r")).toEqual({ lines: [], dropped: 0 });
+  });
+
+  it("pushVisible formats the line internally (格式所有权内聚)", () => {
+    const box = new RoomMailbox();
+    box.pushVisible("!r", "carol", "你好");
+    expect(box.drain("!r")).toEqual({ lines: ["carol: 你好"], dropped: 0 });
+  });
 });

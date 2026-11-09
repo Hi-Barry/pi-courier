@@ -215,6 +215,31 @@ describe("guestTrigger × 增量信箱 (spec #299 票05)", () => {
     expect((fx.rpc.prompt as ReturnType<typeof vi.fn>).mock.calls[0][0]).not.toContain("/pmctl");
   });
 
+  it("bot slash text also skips the mailbox (botFilter 与 guestTrigger 同规则)", async () => {
+    const fx = makeGuestFixture({ ...ENABLED, roomBots: ["@peerbot:server"] });
+    await fx.router.handleIncoming(
+      makeMsg({ ...GROUP, userId: "@peerbot:server", username: "peerbot", text: "/pmctl list" })
+    );
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "@bot:server ok", wasMentioned: true }));
+    expect((fx.rpc.prompt as ReturnType<typeof vi.fn>).mock.calls[0][0]).not.toContain("/pmctl");
+  });
+
+  it("a FAILED prompt refunds the mailbox — the retry carries the digest again (失败不消耗)", async () => {
+    const fx = makeGuestFixture(ENABLED);
+    (fx.rpc.prompt as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValue(undefined);
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "未点名一", wasMentioned: false }));
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "@bot:server 触发", wasMentioned: true }));
+    expect(fx.rpc.prompt).toHaveBeenCalledTimes(1);
+    expect(fx.sendReply).toHaveBeenCalledWith("!room:server", "matrix", expect.stringContaining("boom"));
+    // 重试:信箱退款,增量仍在
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "@bot:server 再来", wasMentioned: true }));
+    const retryPrompt = (fx.rpc.prompt as ReturnType<typeof vi.fn>).mock.calls[1][0] as string;
+    expect(retryPrompt).toContain("增量消息");
+    expect(retryPrompt).toContain("未点名一");
+  });
+
   it("owner rooms keep the 1.6.x behaviour: unmentioned text triggers with no digest", async () => {
     const fx = makeCollabFixture({ ...ENABLED, roomBots: ["@peerbot:server"] });
     (fx.projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockImplementation(
