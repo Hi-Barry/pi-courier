@@ -273,8 +273,9 @@ export class ProjectManager {
     this.store.update({ projects });
   }
 
-  /** Register a new project room at runtime (used by /pmctl new). */
-  registerProject(roomId: string, workdir: string, name?: string): void {
+  /** Register a new project room at runtime (used by /pmctl new and the
+   *  ticket-04 claim flow; mode="guest" marks a claimed collaboration room). */
+  registerProject(roomId: string, workdir: string, name?: string, mode?: "owner" | "guest"): void {
     this.updateProjects((projects) => {
       // 绑定事件当下解析会话目录并持久化(spec #299 票01):此时映射尚无
       // 本房,"已被占用"即指其他在住房间 —— 新搬入者派生,在住者不动。
@@ -282,6 +283,7 @@ export class ProjectManager {
         name: name ?? roomId,
         workdir,
         sessionDir: resolveProjectSessionDir(roomId, workdir, projects),
+        ...(mode ? { mode } : {}),
       };
     });
   }

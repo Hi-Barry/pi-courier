@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir as osHomedir, tmpdir } from "node:os";
+import { promisify } from "node:util";
 import { ConfigStore } from "../src/config";
 import { PmctlController } from "../src/rpc/pmctl-controller";
 import { readAvatarBundled } from "../src/space-identity";
@@ -910,5 +912,100 @@ describe("PmctlController", () => {
       gitUrl: "https://github.com/x/y.git",
       defaultBranch: "main",
     });
+  });
+
+  // ---- 票04(spec #299):客座认领流 /pmctl claim ---------------------------
+
+  // 工厂而非共享常量:reject 路径的 splice 会原地改数组,共享常量会跨用例污染。
+  const pendingSeed = () => ({
+    collab: {
+      pendingClaims: [{ roomId: "!g:server", url: "https://github.com/x/y.git", projectName: "y", at: 1 }],
+    },
+  });
+  const execFileP = promisify(execFile);
+
+  it("/pmctl claim with no pending invites answers empty", async () => {
+    const { handle, replies } = await isolatedController();
+    await handle("/pmctl claim");
+    expect(replies.at(-1)).toContain("没有待认领");
+  });
+
+  it("/pmctl claim <n> clones, binds as guest, self-registers the bot, notifies the room, clears the invite", async () => {
+    const cloneRepo = vi.fn().mockResolvedValue(undefined);
+    const notifyRoom = vi.fn().mockResolvedValue(undefined);
+    const { handle, ops, pmMock, store, replies } = await isolatedController(
+      pendingSeed(),
+      { getBotUserId: vi.fn().mockReturnValue("@bot:server"), registerRoomBot: vi.fn().mockResolvedValue(undefined) },
+      { cloneRepo, notifyRoom }
+    );
+    await handle("/pmctl claim 1");
+    const dest = resolve("/home/you/Projects", "y");
+    expect(cloneRepo).toHaveBeenCalledWith("https://github.com/x/y.git", dest);
+    expect(pmMock.registerProject).toHaveBeenCalledWith("!g:server", dest, "y", "guest");
+    expect(store.get().collab?.pendingClaims ?? []).toEqual([]);
+    expect(ops["registerRoomBot"]).toHaveBeenCalledWith("!g:server", "@bot:server");
+    expect(notifyRoom).toHaveBeenCalledWith("!g:server", expect.stringContaining("协作模式"));
+    expect(replies.at(-1)).toContain("已认领");
+  });
+
+  it("/pmctl claim into an occupied non-repo dir asks for another dir and keeps the invite", async () => {
+    mkdirSync(join(tmpDir, "occ"), { recursive: true });
+    const cloneRepo = vi.fn();
+    const { handle, store, replies } = await isolatedController(
+      pendingSeed(),
+      { getBotUserId: vi.fn().mockReturnValue("@bot:server") },
+      { cloneRepo }
+    );
+    await handle("/pmctl claim 1 ~/occ");
+    expect(replies.at(-1)).toContain("已存在且不是该仓库的克隆");
+    expect(cloneRepo).not.toHaveBeenCalled();
+    expect(store.get().collab?.pendingClaims).toHaveLength(1);
+  });
+
+  it("/pmctl claim binds an existing clone when the remote matches (no re-clone)", async () => {
+    const occ = join(tmpDir, "occ2");
+    mkdirSync(occ, { recursive: true });
+    await execFileP("git", ["-C", occ, "init"]);
+    await execFileP("git", ["-C", occ, "remote", "add", "origin", "https://github.com/x/y.git"]);
+    const cloneRepo = vi.fn();
+    const { handle, pmMock, replies } = await isolatedController(
+      pendingSeed(),
+      { getBotUserId: vi.fn().mockReturnValue("@bot:server") },
+      { cloneRepo }
+    );
+    await handle("/pmctl claim 1 ~/occ2");
+    expect(cloneRepo).not.toHaveBeenCalled();
+    expect(pmMock.registerProject).toHaveBeenCalledWith("!g:server", occ, "y", "guest");
+    expect(replies.at(-1)).toContain("已有克隆");
+  });
+
+  it("/pmctl claim reject removes the invite without binding", async () => {
+    const cloneRepo = vi.fn();
+    const { handle, store, replies } = await isolatedController(
+      pendingSeed(),
+      { getBotUserId: vi.fn().mockReturnValue("@bot:server") },
+      { cloneRepo }
+    );
+    await handle("/pmctl claim reject 1");
+    expect(replies.at(-1)).toContain("已拒绝");
+    expect(store.get().collab?.pendingClaims ?? []).toEqual([]);
+  });
+
+  it("/pmctl claim rejects out-of-range indexes", async () => {
+    const { handle, replies } = await isolatedController(pendingSeed());
+    await handle("/pmctl claim 5");
+    expect(replies.at(-1)).toContain("序号无效");
+  });
+
+  it("/pmctl claim keeps the invite when clone fails (retryable)", async () => {
+    const cloneRepo = vi.fn().mockRejectedValue(new Error("网络不通"));
+    const { handle, store, replies } = await isolatedController(
+      pendingSeed(),
+      { getBotUserId: vi.fn().mockReturnValue("@bot:server") },
+      { cloneRepo }
+    );
+    await handle("/pmctl claim 1");
+    expect(replies.at(-1)).toContain("clone 失败");
+    expect(store.get().collab?.pendingClaims).toHaveLength(1);
   });
 });

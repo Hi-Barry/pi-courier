@@ -21,6 +21,7 @@ function makeCollabFixture(opts: {
   collab?: { allowUnknownRoomFallback?: boolean; unknownNotifiedRooms?: string[] };
   roomBots?: string[];
   withRegistryCapability?: boolean;
+  projectMeta?: { name: string; gitUrl?: string; defaultBranch?: string } | null;
 } = {}) {
   const rpc = makeFakeRpc();
   const projectManager = {
@@ -56,6 +57,9 @@ function makeCollabFixture(opts: {
           getRoomBots: vi.fn().mockResolvedValue(opts.roomBots ?? []),
           registerRoomBot: vi.fn().mockResolvedValue(undefined),
         }),
+    ...(opts.projectMeta !== undefined
+      ? { getProjectMeta: vi.fn().mockResolvedValue(opts.projectMeta) }
+      : {}),
   };
   const fx = makeRouterFixture({ rpc, projectManager, store, auth, roomOps: roomOps as unknown as RoomOps });
   return { ...fx, roomOps };
@@ -123,6 +127,34 @@ describe("unknownRoomGate (spec #299 票02)", () => {
     await fx.router.handleIncoming(makeMsg({ chatId: "!mg:server", isGroupChat: true, text: "hello" }));
     expect(fx.rpc.prompt).toHaveBeenCalled();
     expect(fx.sendReply).not.toHaveBeenCalled();
+  });
+});
+
+describe("unknownRoomGate × claim card (spec #299 票04)", () => {
+  it("unmapped group WITH project meta: claim card to the management room, pending claim booked, noticed marked", async () => {
+    const fx = makeCollabFixture({
+      ...ENABLED,
+      projectMeta: { name: "y", gitUrl: "https://github.com/x/y.git", defaultBranch: "main" },
+    });
+    await fx.router.handleIncoming(makeMsg(GROUP));
+    // 卡面强制展示完整仓库地址与目标目录 + 认领指令(spec Story 31)
+    const card = fx.sendReply.mock.calls[0][2] as string;
+    expect(card).toContain("https://github.com/x/y.git");
+    expect(card).toContain("/pmctl claim 1");
+    // 待认领落盘(重启不丢)+ 已提示标记
+    expect(fx.store.get().collab?.pendingClaims).toEqual([
+      expect.objectContaining({ roomId: "!room:server", url: "https://github.com/x/y.git", projectName: "y" }),
+    ]);
+    expect(fx.store.get().collab?.unknownNotifiedRooms).toEqual(["!room:server"]);
+    expect(fx.rpc.prompt).not.toHaveBeenCalled();
+  });
+
+  it("meta without a gitUrl → plain notice, no pending claim booked", async () => {
+    const fx = makeCollabFixture({ ...ENABLED, projectMeta: { name: "y" } });
+    await fx.router.handleIncoming(makeMsg(GROUP));
+    expect(fx.sendReply.mock.calls[0][2]).toContain("保持静默");
+    expect(fx.store.get().collab?.pendingClaims ?? []).toEqual([]);
+    expect(fx.store.get().collab?.unknownNotifiedRooms).toEqual(["!room:server"]);
   });
 });
 

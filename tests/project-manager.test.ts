@@ -321,4 +321,15 @@ describe("ProjectManager binding-event session dirs (spec #299 票01 评审整�
     pm.registerProject("!a:s", "/w/solo", "solo");
     expect(store.get().projects!["!a:s"].sessionDir).toBe(`/w/solo/${PROJECT_SESSION_DIR}`);
   });
+
+  it("registerProject persists guest mode alongside the session dir (票04 认领绑定)", async () => {
+    const { pm, store } = makePM({});
+    pm.registerProject("!g:s", "/w/g", "collab", "guest");
+    const entry = store.get().projects!["!g:s"];
+    expect(entry.mode).toBe("guest");
+    expect(entry.sessionDir).toBe(`/w/g/${PROJECT_SESSION_DIR}`);
+    // 不带 mode 的注册(普通 /pmctl new)不落 mode 键 —— 缺省 owner 语义
+    pm.registerProject("!o:s", "/w/o", "own");
+    expect(store.get().projects!["!o:s"].mode).toBeUndefined();
+  });
 });
