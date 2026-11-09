@@ -338,6 +338,9 @@ export interface ProjectConfig {
   /** 房间绑定模式(spec #299 票04):guest = 经认领流绑定(客座,仅 @触发
    *  —— 触发面在票05 落地);缺省 = owner(自建,行为与 1.6.x 一致)。 */
   mode?: "owner" | "guest";
+  /** 房间级工具流三态(spec #299 票06):auto=按房间类型(owner 开、guest
+   *  关)/ on|off=强制覆盖;缺省 auto。/toggletools <auto|on|off> 在项目房内切换。 */
+  showToolCalls?: "auto" | "on" | "off";
   /** 预设模型,`provider/id`(与 /model 参数同语法;裸 id 按可用模型列表解析) */
   model?: string;
   /** 预设思考级别:off|minimal|low|medium|high|xhigh|max(缺省回落全局现状) */

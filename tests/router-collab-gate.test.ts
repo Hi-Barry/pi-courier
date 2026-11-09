@@ -33,6 +33,8 @@ function makeCollabFixture(opts: {
     listProjects: vi.fn().mockReturnValue([]),
     renameProject: vi.fn(),
     stopAll: vi.fn(),
+    setRoomShowToolCalls: vi.fn(),
+    sessionDirFor: vi.fn().mockReturnValue("/w/.pi-session"),
   } as unknown as ProjectManager;
   const store = new ConfigStore(
     {
@@ -317,5 +319,70 @@ describe("bot registry state-event primitives (spec #299 票02)", () => {
     expect(port.sendStateEvent).toHaveBeenCalledTimes(2);
     expect(port.sendStateEvent.mock.calls[1].slice(0, 3)).toEqual(port.sendStateEvent.mock.calls[0].slice(0, 3));
     expect(await ops.getRoomBots("!r:server")).toEqual(["@a:server", "@b:server"]);
+  });
+});
+
+describe("roomToolsToggle × typing 续期 (spec #299 票06)", () => {
+  function mapRoom(fx: ReturnType<typeof makeCollabFixture>, mode: "owner" | "guest" = "owner") {
+    (fx.projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => roomId === "!room:server"
+    );
+    (fx.projectManager as unknown as Record<string, ReturnType<typeof vi.fn>>).modeForRoom = vi
+      .fn()
+      .mockImplementation((roomId: string) => (roomId === "!room:server" ? mode : undefined));
+    fx.store.update({ projects: { "!room:server": { workdir: "/w", mode } } });
+  }
+
+  it("/toggletools on|off|auto in a project room persists the room-level override", async () => {
+    const fx = makeCollabFixture(ENABLED);
+    mapRoom(fx, "guest");
+    const setToolCalls = (fx.projectManager as unknown as Record<string, ReturnType<typeof vi.fn>>)
+      .setRoomShowToolCalls as ReturnType<typeof vi.fn>;
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "/toggletools on" }));
+    expect(setToolCalls).toHaveBeenLastCalledWith("!room:server", "on");
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "/toggletools off" }));
+    expect(setToolCalls).toHaveBeenLastCalledWith("!room:server", "off");
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "/toggletools auto" }));
+    expect(setToolCalls).toHaveBeenLastCalledWith("!room:server", "auto");
+    expect((fx.sendReply as ReturnType<typeof vi.fn>).mock.calls.at(-1)![2]).toContain("auto");
+  });
+
+  it("/toggletools in a project room is admin-only; bad args get usage", async () => {
+    const fx = makeCollabFixture(ENABLED);
+    mapRoom(fx, "guest");
+    await fx.router.handleIncoming(
+      makeMsg({ ...GROUP, userId: "@peerbot:server", username: "peerbot", text: "/toggletools on" })
+    );
+    expect((fx.sendReply as ReturnType<typeof vi.fn>).mock.calls.at(-1)![2]).toContain("仅管理员");
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "/toggletools wat" }));
+    expect((fx.sendReply as ReturnType<typeof vi.fn>).mock.calls.at(-1)![2]).toContain("用法");
+  });
+
+  it("toolflow-off rooms renew typing during the turn (5s throttle) and stop at turn_end", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    try {
+      const fx = makeCollabFixture(ENABLED);
+      mapRoom(fx, "owner");
+      const typing = fx.deps.sendTyping as ReturnType<typeof vi.fn>;
+      await fx.router.handleIncoming(makeMsg(GROUP)); // 绑定回复目标
+      const T0 = 1_000_000;
+      fx.router.handleEvent({ type: "turn_start" }, fx.rpc);
+      expect(typing).toHaveBeenCalledWith("!room:server", "matrix", true);
+      vi.setSystemTime(T0 + 6_000);
+      fx.router.handleEvent({ type: "agent_start" }, fx.rpc);
+      expect(typing).toHaveBeenCalledTimes(2);
+      vi.setSystemTime(T0 + 8_000);
+      fx.router.handleEvent({ type: "agent_start" }, fx.rpc);
+      expect(typing).toHaveBeenCalledTimes(2); // 节流:5s 内不续
+      vi.setSystemTime(T0 + 12_000);
+      fx.router.handleEvent(
+        { type: "turn_end", message: { content: [{ type: "text", text: "done" }] } } as never,
+        fx.rpc
+      );
+      expect(typing).toHaveBeenCalledWith("!room:server", "matrix", false); // 回合结束即停
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

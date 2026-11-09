@@ -33,6 +33,8 @@ describe("pipeline stage table (spec #72 票3/C1)", () => {
       "attachments",
       "adminCommands",
       "groupEnable",
+      // 票06(spec #299):项目房内 /toggletools 房间级覆盖(全局开关仍在 adminCommands)。
+      "roomToolsToggle",
       "authorizationGate",
       "backlogAnswer",
       "backlogInbox",
@@ -57,6 +59,8 @@ describe("pipeline stage table (spec #72 票3/C1)", () => {
       "botFilter",
       "adminCommands",
       "groupEnable",
+      // 票06(spec #299):项目房内的房间级工具流开关,自带门禁(admin+项目房)。
+      "roomToolsToggle",
     ]);
   });
 

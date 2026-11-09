@@ -76,7 +76,7 @@ export interface MessageRouterDeps {
   /** Send a text reply to a chat via a transport (errors swallowed by caller) */
   sendReply: (chatId: string, transport: string, text: string) => Promise<void>;
   /** Best-effort typing indicator (silent no-op when unavailable) */
-  sendTyping: (chatId: string, transport: string) => Promise<void>;
+  sendTyping: (chatId: string, transport: string, active?: boolean) => Promise<void>;
   /** Injected config store — the single runtime read/write path. */
   store: ConfigStore;
   /** Room-management capability (Matrix). Optional: absent in single-project
@@ -502,6 +502,26 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     && !store.get().hideToolCalls
     && deps.editReply !== undefined
     && deps.sendLiveCard !== undefined;
+
+  // 票06(spec #299):房间级工具流三态(auto/on/off)解析单点。显式 on/off
+  // 覆盖一切 —— 但 "on" 仍需活卡缝齐备且全局 hideToolCalls 未开(全局开关
+  // 保留为 kill-switch,评审整改:不再绕过),否则降级 off 防工具行无声丢失。
+  // auto:协作房关(本房绑定为 guest,或登记簿已见对端 bot —— 决定11
+  // "含客座的协作房=关"对 owner 侧同样成立);owner 单 bot 房跟随全局现状。
+  // 活卡与 typing 互补不同时开:工具流开的房活卡表活,关的房 typing 表活
+  // (活卡房 turn_start 不再发 typing,系本票有意变化,替代 1.6.x 的无条件首拍)。
+  const roomToolCallsMode = (roomId: string): "on" | "off" => {
+    const entry = projectManager.projectMap?.()[roomId];
+    const setting = entry?.showToolCalls ?? "auto";
+    if (setting === "off") return "off";
+    if (setting === "on") {
+      return deps.sendLiveCard !== undefined && deps.editReply !== undefined && !store.get().hideToolCalls
+        ? "on"
+        : "off";
+    }
+    const collabRoom = entry?.mode === "guest" || (botRegistry.cached(roomId)?.size ?? 0) > 0;
+    return collabRoom ? "off" : liveCardAggregation() ? "on" : "off";
+  };
 
   // 活卡出站链(per-rpc FIFO,与 transport 的 enqueueSend 同构):中间回合的
   // 「开卡/编辑」严格按 turn_end 到达顺序结算 —— 后一回合的决策(有无活卡)
@@ -986,6 +1006,13 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const unknownNoManagementWarned = new Set<string>();
   // 票05(spec #299):房间增量信箱 —— 未触发的可见文本在此攒,触发时并入 prompt。
   const mailbox = new RoomMailbox();
+  // 票06(spec #299):工具流关闭房间的 typing 续期节流(5s)与回合停止簿记。
+  // sendTyping 缝兼容旧假件(可能不返回 Promise):统一 Promise.resolve 包裹。
+  const TYPING_RENEW_INTERVAL_MS = 5_000;
+  const lastTypingRenewalAt = new Map<string, number>();
+  const sendTypingSafe = (chatId: string, transport: string, active = true): void => {
+    void Promise.resolve(sendTyping(chatId, transport, active)).catch(() => {});
+  };
 
   const stages: Array<PipelineStageView & { handle: (ctx: StageContext) => Promise<boolean> }> = [
     {
@@ -1231,6 +1258,32 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         store.update({ auth: auth.exportConfig() });
         await sendReply(msg.chatId, msg.transport, t("router.enable.ok", { mode }));
         logger.info(`[auth] room ${msg.chatId} enabled by ${msg.username} (${mode})`);
+        return true;
+      },
+    },
+    {
+      name: "roomToolsToggle",
+      preAuth: true,
+      consumesLedger: false,
+      needsRpc: false,
+      // 票06(spec #299):项目房内 /toggletools <auto|on|off> —— 房间级
+      // 工具流覆盖(缺省 auto=owner 开/guest 关)。管理房与 DM 的全局开关
+      // 走既有 adminCommands 路径;本阶段只认多项目下的项目房,admin 门内判。
+      handle: async (ctx) => {
+        const { msg, text } = ctx;
+        if (!/^\/toggletools(\s|$)/i.test(text)) return false;
+        if (!ctx.multiProject || !msg.isGroupChat || !projectManager.isProjectRoom(msg.chatId)) return false;
+        if (!auth.isAdminUser(msg.userId, msg.transport)) {
+          await sendReply(msg.chatId, msg.transport, t("pmctl.adminOnly"));
+          return true;
+        }
+        const arg = text.split(/\s+/)[1]?.toLowerCase() ?? "";
+        if (arg !== "auto" && arg !== "on" && arg !== "off") {
+          await sendReply(msg.chatId, msg.transport, t("collab.tools.usage"));
+          return true;
+        }
+        projectManager.setRoomShowToolCalls(msg.chatId, arg);
+        await sendReply(msg.chatId, msg.transport, t("collab.tools.ok", { mode: arg }));
         return true;
       },
     },
@@ -1786,6 +1839,22 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       logAgentEvent(event, log);
 
+      // 票06(spec #299):工具流关闭的房间,回合期间以原生 typing 续期表活
+      // (5s 节流;turn_start 已发首拍);turn_end 主动停,不等 10s TTL 尾巴。
+      if (target && event.type !== "turn_start") {
+        if (event.type === "turn_end") {
+          if (lastTypingRenewalAt.delete(target.chatId)) {
+            sendTypingSafe(target.chatId, target.transport, false);
+          }
+        } else if (roomToolCallsMode(target.chatId) === "off") {
+          const last = lastTypingRenewalAt.get(target.chatId) ?? 0;
+          if (Date.now() - last >= TYPING_RENEW_INTERVAL_MS) {
+            lastTypingRenewalAt.set(target.chatId, Date.now());
+            sendTypingSafe(target.chatId, target.transport);
+          }
+        }
+      }
+
       // Refresh the queue mirror before any routing decisions — /queue and the
       // stop/interrupt queue warning read this snapshot.
       if (event.type === "queue_update") {
@@ -1814,7 +1883,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       if (event.type === "turn_start") {
         if (target) {
-          sendTyping(target.chatId, target.transport).catch(() => {});
+          // 票06(spec #299):活卡与 typing 互补不同时开 —— 工具流开的房
+          // 活卡表活(不加 typing,与 1.6.x 一致);关的房 typing 表活。
+          if (roomToolCallsMode(target.chatId) === "off") {
+            sendTypingSafe(target.chatId, target.transport);
+            lastTypingRenewalAt.set(target.chatId, Date.now());
+          } else {
+            lastTypingRenewalAt.delete(target.chatId);
+          }
         }
         return;
       }
@@ -1874,7 +1950,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 出站链串行,顺序由架构保证而非时序运气。
         // 报错回合绕过聚合:失败行醒目直达,不埋进持续刷新的卡。
         // hideToolCalls、配置关、编辑缝未注入都落到下方现行派发路径。
-        if (turn.pendingTools && liveCardAggregation() && !isErrorTurn) {
+        if (turn.pendingTools && roomToolCallsMode(target.chatId) === "on" && !isErrorTurn) {
           const narration: string | null = turn.text;
           const segments = partitionToolCalls(
             turnMessage as AssistantMessage,

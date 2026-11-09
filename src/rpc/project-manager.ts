@@ -303,6 +303,21 @@ export class ProjectManager {
     return this.projectMap()[roomId]?.mode;
   }
 
+  /** 房间级工具流三态(spec #299 票06):auto 落盘为删键(回落缺省语义)。 */
+  setRoomShowToolCalls(roomId: string, value: "auto" | "on" | "off"): void {
+    const entry = this.projectMap()[roomId];
+    if (!entry) return;
+    this.updateProjects((projects) => {
+      const next = { ...projects[roomId]! };
+      if (value === "auto") {
+        delete next.showToolCalls;
+      } else {
+        next.showToolCalls = value;
+      }
+      projects[roomId] = next;
+    });
+  }
+
   /** Update a project's workdir (used by /pmctl mv). */
   async updateProjectWorkdir(roomId: string, workdir: string): Promise<void> {
     const entry = this.projectMap()[roomId];

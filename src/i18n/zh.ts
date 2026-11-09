@@ -409,6 +409,8 @@ const zh = {
   "collab.mailbox.digest":
     "📬 你上一轮之后房间里的增量消息({count} 条{droppedSuffix}):\n{lines}\n\n—— 以下为本次消息 ——\n{text}",
   "collab.mailbox.droppedSuffix": ",另有更早的 {count} 条因超限未保留",
+  "collab.tools.usage": "用法: /toggletools <auto|on|off>(仅项目房内;auto=按房间类型,on/off=强制覆盖)",
+  "collab.tools.ok": "✅ 本房间工具流显示: {mode}",
   "router.enable.allAdminOnly": "❌ all 模式仅管理员可用(可采用 trusted-only 或 mentions)",
   "router.enable.ok": "✅ 本房间已启用 (mode: {mode})",
   "router.multiproject.forbidden": "❌ 无权限(仅信任用户可切换多工程模式)",

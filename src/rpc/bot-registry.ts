@@ -39,4 +39,12 @@ export class BotRegistry {
       return new Set();
     }
   }
+
+  /** 已缓存(未过期)的登记簿快照:同步读,供活卡/typing 的模式解析用
+   *  (spec #299 票06 —— "含客座的协作房默认关工具流"需同步判定;缓存由
+   *  botFilter 对每条消息的读自然保温)。未缓存/过期 → undefined。 */
+  cached(roomId: string): Set<string> | undefined {
+    const hit = this.cache.get(roomId);
+    return hit && Date.now() - hit.at < CACHE_TTL_MS ? hit.bots : undefined;
+  }
 }
