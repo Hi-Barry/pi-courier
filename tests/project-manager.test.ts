@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigStore } from "../src/config";
 import { logger } from "../src/logger";
 import { PiRpc } from "../src/rpc/pi-rpc";
-import { ProjectManager } from "../src/rpc/project-manager";
+import { ProjectManager, PROJECT_SESSION_DIR, projectSessionDirFor } from "../src/rpc/project-manager";
 import type { ProjectConfig } from "../src/types";
 import { captureConsole } from "./helpers";
 
@@ -37,6 +37,7 @@ function makePM(
   presetFace?: { setModel: ReturnType<typeof vi.fn>; setThinkingLevel: ReturnType<typeof vi.fn>; models: Array<{ provider: string; id: string }> }
 ) {
   const rpcs: ReturnType<typeof fakeRpc>[] = [];
+  const spawnOpts: Array<{ cwd?: string; args?: string[]; label?: string }> = [];
   const defaultRpc = fakeRpc() as unknown as PiRpc;
   const store = new ConfigStore({ projects, managementRooms: [], workdir: "/home/u/Projects", ...(multiProject ? { multiProject: true } : {}) }, () => {});
   const notices: Array<{ roomId: string; text: string }> = [];
@@ -50,11 +51,12 @@ function makePM(
       const r = presetFace ? fakePresetRpc(presetFace) : fakeRpc();
       r.label = opts.label;
       rpcs.push(r);
+      spawnOpts.push(opts);
       return r as unknown as PiRpc;
     }) as unknown as NonNullable<ConstructorParameters<typeof ProjectManager>[0]["rpcFactory"]>,
     notifyRoom: (roomId, text) => notices.push({ roomId, text }),
   });
-  return { pm, rpcs, defaultRpc, store, notices };
+  return { pm, rpcs, defaultRpc, store, notices, spawnOpts };
 }
 
 describe("ProjectManager.labelForRoom", () => {
@@ -227,5 +229,52 @@ describe("ProjectManager project presets (issue #119)", () => {
     expect(pm.projectFallbacks("!a:s")).toEqual(["zai/glm-5.3", "deepseek/d1"]);
     expect(pm.projectFallbacks("!b:s")).toBeUndefined();
     expect(pm.projectFallbacks("!unmapped:s")).toBeUndefined();
+  });
+});
+
+describe("ProjectManager per-room session dirs (spec #299 票01)", () => {
+  it("single room on a workdir keeps the fixed .pi-session path (zero migration)", async () => {
+    const { pm, spawnOpts } = makePM({ "!a:s": { name: "ai", workdir: "/w/ai" } });
+    await pm.getRpcForRoom("!a:s");
+    expect(spawnOpts[0].args).toEqual(expect.arrayContaining(["--session-dir", `/w/ai/${PROJECT_SESSION_DIR}`]));
+  });
+
+  it("second room on the SAME workdir spawns with a per-room derived dir; the first keeps the fixed path", async () => {
+    const { pm, spawnOpts } = makePM({
+      "!a:s": { name: "one", workdir: "/w/shared" },
+      "!b:s": { name: "two", workdir: "/w/shared" },
+    });
+    await pm.getRpcForRoom("!a:s");
+    await pm.getRpcForRoom("!b:s");
+    expect(spawnOpts[0].args).toEqual(expect.arrayContaining(["--session-dir", `/w/shared/${PROJECT_SESSION_DIR}`]));
+    const argsB = spawnOpts[1].args ?? [];
+    const dirB = argsB[argsB.indexOf("--session-dir") + 1];
+    expect(dirB).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
+  });
+
+  it("derived dir depends only on the roomId — stable across repeated resolution and map reshuffles", () => {
+    const entry: ProjectConfig = { name: "p", workdir: "/w/shared" };
+    const derived = projectSessionDirFor("!b:s", entry, { "!a:s": entry, "!b:s": entry });
+    expect(derived).toBe(projectSessionDirFor("!b:s", entry, { "!a:s": entry, "!b:s": entry }));
+    expect(derived).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
+    // 不同房间 → 不同派生目录
+    const other = projectSessionDirFor("!c:s", entry, { "!a:s": entry, "!b:s": entry, "!c:s": entry });
+    expect(other).not.toBe(derived);
+    // 更早兄弟换了 workdir(不同目录)→ 不再触发派生,回固定路径
+    const reshuffled = projectSessionDirFor("!b:s", entry, { "!a:s": { name: "z", workdir: "/w/other" }, "!b:s": entry });
+    expect(reshuffled).toBe(`/w/shared/${PROJECT_SESSION_DIR}`);
+  });
+
+  it("insertion order decides who derives: reversing registration swaps the derived room", () => {
+    const entry: ProjectConfig = { name: "p", workdir: "/w/shared" };
+    const first = projectSessionDirFor("!a:s", entry, { "!a:s": entry, "!b:s": entry });
+    const second = projectSessionDirFor("!b:s", entry, { "!a:s": entry, "!b:s": entry });
+    expect(first).toBe(`/w/shared/${PROJECT_SESSION_DIR}`);
+    expect(second).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
+    // 反转登记顺序:原先派生的房间回固定路径,原先固定的改派生
+    const flippedFixed = projectSessionDirFor("!b:s", entry, { "!b:s": entry, "!a:s": entry });
+    const flippedDerived = projectSessionDirFor("!a:s", entry, { "!b:s": entry, "!a:s": entry });
+    expect(flippedFixed).toBe(`/w/shared/${PROJECT_SESSION_DIR}`);
+    expect(flippedDerived).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
   });
 });

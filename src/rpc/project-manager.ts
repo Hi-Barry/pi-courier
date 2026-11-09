@@ -9,6 +9,7 @@
  * always go back to the right chat even with concurrent turns.
  */
 
+import * as crypto from "node:crypto";
 import * as path from "node:path";
 import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
 import { type ConfigStore, projectFallbackChain } from "../config.js";
@@ -44,6 +45,34 @@ export interface ProjectManagerOptions {
 
 /** 项目会话目录名(单一持有:pmctl 展示与 i18n 文案从这里取 —— 审计工程批 票19)。 */
 export const PROJECT_SESSION_DIR = ".pi-session";
+
+/**
+ * 每房会话目录(spec #299 票01):同一 workdir 只有唯一房间时沿用固定路径
+ * (<workdir>/.pi-session,现有部署零迁移);出现第二个房间绑同一 workdir 时,
+ * 登记顺序更晚的房间改用按 roomId 稳定派生的兄弟目录
+ * (<workdir>/.pi-session-room-<sha1 前 8 位>),两个房间的 --continue 各自
+ * 续各自的最近会话,不再互抢同一份会话历史。
+ *
+ * 派生只依赖 roomId 哈希:重启、配置重排后同一房间仍解析到同一目录;
+ * 登记最早的房间永远保持固定路径。win32 上 /pmctl 已在 new/mv 时拒绝
+ * 双房同 workdir(issue #190),能走到派生分支的只有 POSIX 手工配置映射,
+ * 故同 workdir 判定用严格相等即可。
+ */
+export function projectSessionDirFor(
+  roomId: string,
+  entry: ProjectEntry,
+  projects: Record<string, ProjectEntry>
+): string {
+  const keys = Object.keys(projects);
+  const myIndex = keys.indexOf(roomId);
+  const hasEarlierSibling =
+    myIndex > 0 && keys.slice(0, myIndex).some((k) => projects[k]?.workdir === entry.workdir);
+  if (!hasEarlierSibling) {
+    return path.join(entry.workdir, PROJECT_SESSION_DIR);
+  }
+  const hash = crypto.createHash("sha1").update(roomId).digest("hex").slice(0, 8);
+  return path.join(entry.workdir, `${PROJECT_SESSION_DIR}-room-${hash}`);
+}
 
 export class ProjectManager {
   private defaultRpc: PiRpc;
@@ -156,8 +185,9 @@ export class ProjectManager {
 
     // Per-project session dir: each project's conversation state lives in
     // its own workdir/.pi-session — isolated and resumable (--continue).
+    // 票01(spec #299):同 workdir 多房间时,后登记的房间改用按房派生目录。
     const args = [...(this.baseOptions.args ?? [])];
-    const projectSessionDir = path.join(entry.workdir, PROJECT_SESSION_DIR);
+    const projectSessionDir = projectSessionDirFor(roomId, entry, this.projectMap());
     args.push("--session-dir", projectSessionDir);
 
     const label = projectLabelOf(entry);
