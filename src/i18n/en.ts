@@ -419,6 +419,8 @@ const en: Record<MessageKey, string> = {
   "collab.mailbox.digest":
     "📬 Room updates since your last turn ({count}{droppedSuffix}):\n{lines}\n\n—— Current message below ——\n{text}",
   "collab.mailbox.droppedSuffix": ", plus {count} older dropped (cap)",
+  "collab.tools.usage": "Usage: /toggletools <auto|on|off> (project rooms only; auto=by room kind, on/off=override)",
+  "collab.tools.ok": "✅ Tool-call display for this room: {mode}",
   "router.enable.allAdminOnly": "❌ The all mode is admin-only (use trusted-only or mentions instead)",
   "router.enable.ok": "✅ Room enabled (mode: {mode})",
   "router.multiproject.forbidden": "❌ Not allowed (only trusted users can toggle multi-project mode)",

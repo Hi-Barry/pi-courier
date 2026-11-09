@@ -371,10 +371,12 @@ export class MatrixProvider {
     return run;
   }
 
-  async sendTyping(chatId: string): Promise<void> {
+  /** 票06(spec #299):active=false 主动停 typing(回合结束即停,不等
+   *  10s TTL 尾巴);缺省 true 维持旧调用形态。 */
+  async sendTyping(chatId: string, active = true): Promise<void> {
     if (!this.client) return;
     try {
-      await this.client.setTyping(chatId, true, 10000);
+      await this.client.setTyping(chatId, active, 10000);
     } catch {
       // Ignore typing indicator errors
     }

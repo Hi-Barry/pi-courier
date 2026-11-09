@@ -391,7 +391,7 @@ describe("message-router multi-project routing", () => {
     await router.handleIncoming(makeMsg({ text: "hi" }));
     router.handleEvent({ type: "turn_start" }, rpc);
     await new Promise((r) => setTimeout(r, 0));
-    expect(sendTyping).toHaveBeenCalledWith("!dm:server", "matrix");
+    expect(sendTyping).toHaveBeenCalledWith("!dm:server", "matrix", true);
   });
 
   it("a project-room prompt cannot misroute a DM reply (per-process bindings)", async () => {

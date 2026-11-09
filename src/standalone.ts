@@ -425,8 +425,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
   };
   // Silent no-op when the transport is missing/disconnected (typing is best-effort).
-  const sendTyping = async (chatId: string, _transport: string): Promise<void> => {
-    if (matrix?.isConnected) await matrix.sendTyping(chatId);
+  // 票06(spec #299):active=false 供工具流关闭的房间回合结束即停 typing。
+  const sendTyping = async (chatId: string, _transport: string, active = true): Promise<void> => {
+    if (matrix?.isConnected) await matrix.sendTyping(chatId, active);
   };
   const disconnectAll = (): Promise<unknown> => (matrix ? matrix.disconnect() : Promise.resolve());
 
