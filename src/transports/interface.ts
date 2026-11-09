@@ -75,8 +75,24 @@ export interface RoomOps {
   /** 票02(spec #299):登记一个 bot 身份进房间(内容带写入方署名;
    *  同 MXID 重复登记幂等覆盖,不产生重复条目)。 */
   registerRoomBot?(roomId: string, botUserId: string): Promise<void>;
+  /** 票03(spec #299):读项目房元数据;无(404/M_NOT_FOUND)按 null,
+   *  与 getRoomName 同一 query-member 契约。可选能力,仅 Matrix 适配器实现。 */
+  getProjectMeta?(roomId: string): Promise<ProjectRoomMeta | null>;
+  /** 票03(spec #299):写项目房元数据(state_key="" 单例,整写覆盖)。 */
+  setProjectMeta?(roomId: string, meta: ProjectRoomMeta): Promise<void>;
 }
 
 /** 房间 bot 登记簿的状态事件类型(spec #299 票02)。命名空间前缀
  *  `dev.pi-courier.*`,版本后缀留演进余地:改内容形状时升 v2 并双读。 */
 export const BOT_REGISTRY_EVENT_TYPE = "dev.pi-courier.bot.v1";
+
+/** 项目房元数据(spec #299 票03):项目名 + git 仓库地址(+ 默认分支),
+ *  认领方(clone 落地)以此为准;URL 可空缺后补。 */
+export interface ProjectRoomMeta {
+  name: string;
+  gitUrl?: string;
+  defaultBranch?: string;
+}
+
+/** 项目房元数据的状态事件类型(spec #299 票03),state_key = ""(单例)。 */
+export const PROJECT_META_EVENT_TYPE = "dev.pi-courier.project.v1";

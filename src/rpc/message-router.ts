@@ -1043,8 +1043,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           const mgRoom = managementRoomId(store.get());
           if (mgRoom) {
             await sendReply(mgRoom, msg.transport, t("router.unknownRoom.notice", { room: msg.chatId }));
+            // 落盘前重读(spec #299 票02 评审整改):不基于本轮捕获的旧 config
+            // 展开 —— 多陌生房并发提示时丢更新;写入以当下 store 值为基。
+            const fresh = store.get().collab;
             store.update({
-              collab: { ...config.collab, unknownNotifiedRooms: [...noticed, msg.chatId] },
+              collab: { ...fresh, unknownNotifiedRooms: [...(fresh?.unknownNotifiedRooms ?? []), msg.chatId] },
             });
             ctx.log.info(`🚪 陌生房 ${msg.chatId} 不接活,已向管理房发认领提示`);
           } else if (!unknownNoManagementWarned.has(msg.chatId)) {

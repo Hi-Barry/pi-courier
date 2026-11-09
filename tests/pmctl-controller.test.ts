@@ -738,10 +738,18 @@ describe("PmctlController", () => {
       // 票 #209 急启动:成功路径的桩(缺了它,急启动会在这些用例里假性失败,
       // 回执混进"启动失败"附注 —— 评审修正)。
       getRpcForRoom: vi.fn().mockResolvedValue(undefined),
+      renameProject: vi.fn(),
+      updateProjectWorkdir: vi.fn(),
+      stopAll: vi.fn(),
+      // 票01(spec #299):mv 回执的会话目录名走本单点(假件按固定路径回)。
+      sessionDirFor: vi.fn().mockImplementation((roomId: string) => {
+        const e = projects.get(roomId);
+        return e ? `${e.workdir}/.pi-session` : ".pi-session";
+      }),
     };
   }
 
-  function makeIsolatedRoomOps(overrides: Record<string, unknown> = {}) {
+  function makeIsolatedRoomOps(overrides: Record<string, unknown> = {}): Record<string, ReturnType<typeof vi.fn>> {
     return {
       createProjectRoom: vi.fn().mockResolvedValue("!newroom:server"),
       setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
@@ -754,7 +762,11 @@ describe("PmctlController", () => {
     };
   }
 
-  async function isolatedController(configOverrides: Record<string, unknown> = {}, roomOpsOverrides: Record<string, unknown> = {}) {
+  async function isolatedController(
+    configOverrides: Record<string, unknown> = {},
+    roomOpsOverrides: Record<string, unknown> = {},
+    controllerOverrides: Record<string, unknown> = {}
+  ) {
     vi.resetModules();
     const homedirMock = async () => {
       const actual = await vi.importActual<typeof import("os")>("os");
@@ -783,6 +795,7 @@ describe("PmctlController", () => {
       projectManager: pmMock as unknown as ProjectManager,
       roomOps: ops as unknown as RoomOps,
       store,
+      ...controllerOverrides,
     });
     const handleIsolated = (text: string) =>
       ctl.handle(text, { chatId: "!mgmt:server", senderMxid: "@barry:server", isManagementRoom: true, isAdmin: true }, isolatedReply);
@@ -812,5 +825,90 @@ describe("PmctlController", () => {
     expect(pmMock.registerProject).toHaveBeenCalledWith("!newroom:server", resolve("/home/you/Projects", "myapp"), "myapp");
     expect(replies.some((r) => r.includes("信任用户补权失败"))).toBe(true);
     expect(replies.at(-1)).toContain("创建完成");
+  });
+
+  // ---- 票03(spec #299):项目房元数据 --------------------------------------
+
+  it("/pmctl new writes project-room metadata (name + git facts) from the probe seam", async () => {
+    const { handle, ops, replies } = await isolatedController(
+      {},
+      { setProjectMeta: vi.fn().mockResolvedValue(undefined) },
+      { probeGit: async () => ({ gitUrl: "https://github.com/x/y.git", defaultBranch: "main" }) }
+    );
+    await handle("/pmctl new myapp");
+    expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("!newroom:server", {
+      name: "myapp",
+      gitUrl: "https://github.com/x/y.git",
+      defaultBranch: "main",
+    });
+    expect(replies.at(-1)).toContain("创建完成");
+  });
+
+  it("/pmctl new without a git repo still writes name-only metadata (URL 可后补)", async () => {
+    const { handle, ops } = await isolatedController(
+      {},
+      { setProjectMeta: vi.fn().mockResolvedValue(undefined) },
+      { probeGit: async () => undefined }
+    );
+    await handle("/pmctl new myapp");
+    expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("!newroom:server", { name: "myapp" });
+  });
+
+  it("/pmctl new metadata write failure only appends a note — the project is still created", async () => {
+    const { handle, pmMock, replies } = await isolatedController(
+      {},
+      { setProjectMeta: vi.fn().mockRejectedValue(new Error("权限不足")) }
+    );
+    await handle("/pmctl new myapp");
+    expect(pmMock.registerProject).toHaveBeenCalled();
+    expect(replies.some((r) => r.includes("元数据写入失败"))).toBe(true);
+    expect(replies.at(-1)).toContain("创建完成");
+  });
+
+  it("/pmctl rename syncs the metadata name (best-effort)", async () => {
+    const { handle, ops, pmMock } = await isolatedController(
+      {},
+      {
+        getProjectMeta: vi.fn().mockResolvedValue({ name: "old", gitUrl: "https://x/y.git" }),
+        setProjectMeta: vi.fn().mockResolvedValue(undefined),
+      }
+    );
+    pmMock.registerProject("!a:server", "/w", "old");
+    await handle("/pmctl rename old newname");
+    expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("!a:server", {
+      name: "newname",
+      gitUrl: "https://x/y.git",
+    });
+  });
+
+  it("/pmctl rename keeps metadata untouched when the name is unchanged (no redundant write)", async () => {
+    const { handle, ops, pmMock } = await isolatedController(
+      {},
+      {
+        getProjectMeta: vi.fn().mockResolvedValue({ name: "same", gitUrl: "https://x/y.git" }),
+        setProjectMeta: vi.fn().mockResolvedValue(undefined),
+      }
+    );
+    pmMock.registerProject("!a:server", "/w", "same");
+    await handle("/pmctl rename same same");
+    expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+  });
+
+  it("/pmctl mv re-probes git facts and rewrites metadata (URL 后补/防陈旧,评审整改)", async () => {
+    const { handle, ops, pmMock } = await isolatedController(
+      {},
+      {
+        getProjectMeta: vi.fn().mockResolvedValue({ name: "old", gitUrl: "https://old.git" }),
+        setProjectMeta: vi.fn().mockResolvedValue(undefined),
+      },
+      { probeGit: async () => ({ gitUrl: "https://github.com/x/y.git", defaultBranch: "main" }) }
+    );
+    pmMock.registerProject("!a:server", "/w/old", "old");
+    await handle("/pmctl mv old newdir");
+    expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("!a:server", {
+      name: "old",
+      gitUrl: "https://github.com/x/y.git",
+      defaultBranch: "main",
+    });
   });
 });

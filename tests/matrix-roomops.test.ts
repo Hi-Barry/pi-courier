@@ -9,6 +9,7 @@ import type { MatrixClientPort } from "../src/transports/matrix-client.js";
 import { MatrixRoomOps } from "../src/transports/matrix-rooms.js";
 import { logger } from "../src/logger.js";
 import { fakeMatrixClient, type FakeMatrixClient } from "./matrix-fakes.js";
+import { BOT_REGISTRY_EVENT_TYPE, PROJECT_META_EVENT_TYPE } from "../src/transports/interface.js";
 import { captureConsole } from "./helpers.js";
 
 function makeOps(opts: { botUserId?: string | null; connected?: boolean } = {}) {
@@ -323,5 +324,38 @@ describe("MatrixRoomOps 预期 miss 静默(适配器边界,spec #99 #105)", () =
 
     await expect(ops.getRoomName("!r:s")).rejects.toThrow(MatrixError);
     expect(lines.join("\n")).toContain("M_FORBIDDEN");
+  });
+});
+
+describe("bot 登记簿与项目房元数据(spec #299 票02/票03)", () => {
+  it("getRoomBots 全量状态过滤登记簿类型;registerRoomBot state_key=MXID 且带写入方署名", async () => {
+    const { ops, client } = makeOps();
+    (client as unknown as Record<string, ReturnType<typeof vi.fn>>).getRoomState = vi.fn().mockResolvedValue([
+      { type: BOT_REGISTRY_EVENT_TYPE, state_key: "@a:server", content: {} },
+      { type: "m.room.name", state_key: "", content: {} },
+      { type: BOT_REGISTRY_EVENT_TYPE, state_key: "@b:server", content: {} },
+    ]);
+    await ops.registerRoomBot!("!r:server", "@peer:server");
+    expect(client.sendStateEvent).toHaveBeenCalledWith("!r:server", BOT_REGISTRY_EVENT_TYPE, "@peer:server", {
+      registeredBy: "@bot:server",
+      registeredAt: expect.any(Number),
+    });
+    expect(await ops.getRoomBots!("!r:server")).toEqual(["@a:server", "@b:server"]);
+  });
+
+  it("setProjectMeta/getProjectMeta:state_key 单例整写;404 按 null(query-member 契约)", async () => {
+    const { ops, client } = makeOps();
+    client.getRoomStateEvent.mockResolvedValue({ name: "myapp", gitUrl: "https://x/y.git" });
+    expect(await ops.getProjectMeta!("!r:server")).toEqual({ name: "myapp", gitUrl: "https://x/y.git" });
+    expect(client.getRoomStateEvent).toHaveBeenCalledWith("!r:server", PROJECT_META_EVENT_TYPE, "");
+    client.getRoomStateEvent.mockRejectedValue(notFound());
+    expect(await ops.getProjectMeta!("!r:server")).toBeNull();
+    await ops.setProjectMeta!("!r:server", { name: "n2" });
+    expect(client.sendStateEvent).toHaveBeenCalledWith("!r:server", PROJECT_META_EVENT_TYPE, "", { name: "n2" });
+    // 幂等重写(票03 验收④):同房重复整写 = 同 (type, state_key) 覆盖,无第二条
+    await ops.setProjectMeta!("!r:server", { name: "n3" });
+    const metaWrites = client.sendStateEvent.mock.calls.filter((c: unknown[]) => c[1] === PROJECT_META_EVENT_TYPE);
+    expect(metaWrites).toHaveLength(2);
+    expect(metaWrites[0].slice(0, 3)).toEqual(metaWrites[1].slice(0, 3));
   });
 });

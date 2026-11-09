@@ -2,7 +2,7 @@ import { MatrixError } from "matrix-bot-sdk";
 import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { logger, suppressLogLines } from "../logger.js";
-import { BOT_REGISTRY_EVENT_TYPE, type RoomOps } from "./interface.js";
+import { BOT_REGISTRY_EVENT_TYPE, type ProjectRoomMeta, type RoomOps, PROJECT_META_EVENT_TYPE } from "./interface.js";
 import type { MatrixClientPort } from "./matrix-client.js";
 
 /** A missing (or not-visible) state event is a query answer, not a failure —
@@ -236,6 +236,19 @@ export class MatrixRoomOps implements RoomOps {
     return events
       .filter((e) => e.type === BOT_REGISTRY_EVENT_TYPE && typeof e.state_key === "string")
       .map((e) => e.state_key);
+  }
+
+  /** 票03(spec #299):写项目房元数据(state_key="" 单例,整写覆盖)。 */
+  async setProjectMeta(roomId: string, meta: ProjectRoomMeta): Promise<void> {
+    await this.client.sendStateEvent(roomId, PROJECT_META_EVENT_TYPE, "", meta);
+  }
+
+  /** 票03(spec #299):读项目房元数据;404/M_NOT_FOUND → null(query-member
+   *  契约,与 getRoomName 同款)。 */
+  async getProjectMeta(roomId: string): Promise<ProjectRoomMeta | null> {
+    return queryExpectedMiss(
+      () => this.client.getRoomStateEvent(roomId, PROJECT_META_EVENT_TYPE, "") as Promise<ProjectRoomMeta>,
+    );
   }
 
   /** The bot's own Matrix user ID (null if not connected). */
