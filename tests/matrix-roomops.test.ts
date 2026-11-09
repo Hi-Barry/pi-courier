@@ -352,5 +352,10 @@ describe("bot 登记簿与项目房元数据(spec #299 票02/票03)", () => {
     expect(await ops.getProjectMeta!("!r:server")).toBeNull();
     await ops.setProjectMeta!("!r:server", { name: "n2" });
     expect(client.sendStateEvent).toHaveBeenCalledWith("!r:server", PROJECT_META_EVENT_TYPE, "", { name: "n2" });
+    // 幂等重写(票03 验收④):同房重复整写 = 同 (type, state_key) 覆盖,无第二条
+    await ops.setProjectMeta!("!r:server", { name: "n3" });
+    const metaWrites = client.sendStateEvent.mock.calls.filter((c: unknown[]) => c[1] === PROJECT_META_EVENT_TYPE);
+    expect(metaWrites).toHaveLength(2);
+    expect(metaWrites[0].slice(0, 3)).toEqual(metaWrites[1].slice(0, 3));
   });
 });

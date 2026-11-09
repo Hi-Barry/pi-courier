@@ -22,7 +22,7 @@ import {
   projectFallbackChain,
 } from "../config.js";
 import { errorMessage } from "../errors.js";
-import { probeProjectGit } from "../collab/git-info.js";
+import { probeProjectGit, type ProjectGitInfo } from "../collab/git-info.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
@@ -65,7 +65,7 @@ export interface PmctlControllerOptions {
   /** 票03(spec #299):项目工作目录的 git 事实探测缝(origin 地址 + 默认
    *  分支),供项目房元数据落盘。生产缺省 = 真实 git 探测(collab/git-info);
    *  测试注入假件,绝不 spawn 真 git。 */
-  probeGit?: (workdir: string) => Promise<{ gitUrl?: string; defaultBranch?: string } | undefined>;
+  probeGit?: (workdir: string) => Promise<ProjectGitInfo | undefined>;
 }
 
 /** Pending /pmctl rm confirmation, keyed by the chat that issued it. A first
@@ -515,6 +515,17 @@ export class PmctlController {
     await this.opts.projectManager.updateProjectWorkdir(roomId, resolvedWorkdir);
     // 会话目录跟随绑定事件决策(spec #299 票01),与 spawn 同一解析源。
     const sessionDirName = path.basename(this.opts.projectManager.sessionDirFor(roomId));
+    // 票03(spec #299 评审整改):换目录 = git 事实可能变化,元数据重新探测
+    // 落盘,避免 gitUrl 陈旧误导认领方。best-effort:失败不影响 mv 本身。
+    if (this.opts.roomOps?.setProjectMeta) {
+      try {
+        const git = (await (this.opts.probeGit ?? probeProjectGit)(resolvedWorkdir)) ?? {};
+        const existing = (await this.opts.roomOps.getProjectMeta?.(roomId)) ?? null;
+        await this.opts.roomOps.setProjectMeta(roomId, { name: existing?.name ?? projectLabelOf(entry), ...git });
+      } catch (err) {
+        logger.warn(`[pmctl] 项目房元数据刷新失败(${roomId}): ${errorMessage(err)}`);
+      }
+    }
     await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir, sessionDir: sessionDirName }));
   }
 

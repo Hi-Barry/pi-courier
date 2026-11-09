@@ -39,9 +39,4 @@ export class BotRegistry {
       return new Set();
     }
   }
-
-  /** 本部署自己写登记簿后调用:立即失效缓存,下次读取拿新名单。 */
-  invalidate(roomId: string): void {
-    this.cache.delete(roomId);
-  }
 }

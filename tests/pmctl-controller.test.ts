@@ -741,6 +741,11 @@ describe("PmctlController", () => {
       renameProject: vi.fn(),
       updateProjectWorkdir: vi.fn(),
       stopAll: vi.fn(),
+      // 票01(spec #299):mv 回执的会话目录名走本单点(假件按固定路径回)。
+      sessionDirFor: vi.fn().mockImplementation((roomId: string) => {
+        const e = projects.get(roomId);
+        return e ? `${e.workdir}/.pi-session` : ".pi-session";
+      }),
     };
   }
 
@@ -873,6 +878,37 @@ describe("PmctlController", () => {
     expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("!a:server", {
       name: "newname",
       gitUrl: "https://x/y.git",
+    });
+  });
+
+  it("/pmctl rename keeps metadata untouched when the name is unchanged (no redundant write)", async () => {
+    const { handle, ops, pmMock } = await isolatedController(
+      {},
+      {
+        getProjectMeta: vi.fn().mockResolvedValue({ name: "same", gitUrl: "https://x/y.git" }),
+        setProjectMeta: vi.fn().mockResolvedValue(undefined),
+      }
+    );
+    pmMock.registerProject("!a:server", "/w", "same");
+    await handle("/pmctl rename same same");
+    expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+  });
+
+  it("/pmctl mv re-probes git facts and rewrites metadata (URL 后补/防陈旧,评审整改)", async () => {
+    const { handle, ops, pmMock } = await isolatedController(
+      {},
+      {
+        getProjectMeta: vi.fn().mockResolvedValue({ name: "old", gitUrl: "https://old.git" }),
+        setProjectMeta: vi.fn().mockResolvedValue(undefined),
+      },
+      { probeGit: async () => ({ gitUrl: "https://github.com/x/y.git", defaultBranch: "main" }) }
+    );
+    pmMock.registerProject("!a:server", "/w/old", "old");
+    await handle("/pmctl mv old newdir");
+    expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("!a:server", {
+      name: "old",
+      gitUrl: "https://github.com/x/y.git",
+      defaultBranch: "main",
     });
   });
 });
