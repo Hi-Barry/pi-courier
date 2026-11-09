@@ -391,6 +391,7 @@ const zh = {
   "router.payload.unsupported": "🤷 暂不支持的消息类型({msgtype}),已忽略。文字、图片和文件都可以直接发给我。",
   "router.enable.usage": "用法: /enable <all|mentions|trusted-only>(本房间)",
   "router.unknownRoom.notice": "🤝 本 bot 被拉进未绑定项目的群聊 {room},按安全默认保持静默不接活。确认要协作后,把它绑定为项目房即自动上岗(协作认领流开发中,spec #299)。",
+  "pmctl.new.metaFailed": "\n⚠️ 项目房元数据写入失败(不影响项目创建): {message}",
   "router.enable.allAdminOnly": "❌ all 模式仅管理员可用(可采用 trusted-only 或 mentions)",
   "router.enable.ok": "✅ 本房间已启用 (mode: {mode})",
   "router.multiproject.forbidden": "❌ 无权限(仅信任用户可切换多工程模式)",

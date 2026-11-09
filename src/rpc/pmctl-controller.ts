@@ -22,6 +22,7 @@ import {
   projectFallbackChain,
 } from "../config.js";
 import { errorMessage } from "../errors.js";
+import { probeProjectGit } from "../collab/git-info.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
@@ -61,6 +62,10 @@ export interface PmctlControllerOptions {
   /** Testing seam for the win32 path guards (issue #190); production default
    *  is the real process platform. */
   platform?: NodeJS.Platform;
+  /** 票03(spec #299):项目工作目录的 git 事实探测缝(origin 地址 + 默认
+   *  分支),供项目房元数据落盘。生产缺省 = 真实 git 探测(collab/git-info);
+   *  测试注入假件,绝不 spawn 真 git。 */
+  probeGit?: (workdir: string) => Promise<{ gitUrl?: string; defaultBranch?: string } | undefined>;
 }
 
 /** Pending /pmctl rm confirmation, keyed by the chat that issued it. A first
@@ -302,6 +307,20 @@ export class PmctlController {
       if (provision.elevationError) {
         await reply(t("pmctl.new.elevationFailed", { message: provision.elevationError.message }));
       }
+      // 票03(spec #299):项目房元数据(项目名 + git origin + 默认分支)落盘
+      // 到房间状态事件 —— 客座认领(clone)与任何读房者据此识别"这是哪个
+      // 仓库"。best-effort:失败只附注,不影响已创建的项目(与挂链/品牌
+      // 失败同款机制);URL 空缺(非 git 仓库)也照写,可后补。
+      let metaNote = "";
+      if (roomOps?.setProjectMeta) {
+        try {
+          const git = await (this.opts.probeGit ?? probeProjectGit)(resolvedWorkdir);
+          await roomOps.setProjectMeta(provision.roomId, { name: pname, ...git });
+        } catch (err) {
+          logger.warn(`[pmctl] 项目房元数据写入失败(${provision.roomId}): ${errorMessage(err)}`);
+          metaNote = t("pmctl.new.metaFailed", { message: errorMessage(err) });
+        }
+      }
       // 票 #209:new 出来的项目就是要开发的项目,进程即刻拉起(急启动),
       // 不等首条消息;预设应用照旧走 getRpcForRoom 内部路径。失败不回滚:
       // 房间与登记保留,首条消息的既有启动路径自然重试,原因以附注进回执
@@ -334,7 +353,7 @@ export class PmctlController {
         }
       }
       // 挂链/品牌失败:单点文案附注拼进成功回执(展示层 — 不影响项目)。
-      const notes = provision.notes.map((note) => `\n⚠️ ${note}`).join("") + startNote + welcomeNote;
+      const notes = provision.notes.map((note) => `\n⚠️ ${note}`).join("") + startNote + welcomeNote + metaNote;
       await reply(
         t("pmctl.new.ok", { name: pname, room: provision.roomId, workdir: resolvedWorkdir, notes })
       );
@@ -544,6 +563,18 @@ export class PmctlController {
     } catch (err) {
       avatarNote = t("pmctl.rename.avatarFailed", { message: errorMessage(err) });
       logger.warn(`[identity] /pmctl rename 头像重选失败(${roomId}): ${errorMessage(err)}`);
+    }
+    // 票03(spec #299):元数据里的项目名跟随改名(best-effort —— 读不到旧
+    // 元数据或写失败都不致命,元数据本就可后补)。
+    if (roomOps.getProjectMeta && roomOps.setProjectMeta) {
+      try {
+        const meta = await roomOps.getProjectMeta(roomId);
+        if (meta && meta.name !== newName) {
+          await roomOps.setProjectMeta(roomId, { ...meta, name: newName });
+        }
+      } catch (err) {
+        logger.warn(`[pmctl] 项目房元数据改名同步失败(${roomId}): ${errorMessage(err)}`);
+      }
     }
     // The project mapping is already renamed; surface room-rename failures
     // instead of swallowing them.
