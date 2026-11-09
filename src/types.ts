@@ -150,6 +150,19 @@ export interface MsgBridgeConfig {
    */
   managementRooms?: string[];
   /**
+   * 协作模式配置(spec #299):多 bot 跨部署协作的安全默认与簿记。
+   */
+  collab?: {
+    /**
+     * 兼容开关:多项目模式下未映射群聊回落默认项目(1.6.x 旧行为)。
+     * 默认 false = 陌生群不接活,并向管理房发一次认领提示(票02)。
+     * 升级说明须写明此项(1.6.x 依赖"拉 bot 进任意群即接活"的部署打开它)。
+     */
+    allowUnknownRoomFallback?: boolean;
+    /** 已发过认领提示的陌生房间(同房不重复刷,spec #299 票02)。 */
+    unknownNotifiedRooms?: string[];
+  };
+  /**
    * 空间套(风景)版本簿记(spec #84 分套记账):落后于 space-identity.ts 的
    * AVATAR_SET_VERSION.space 时,启动自愈把空间套管辖的房间一次性无条件
    * 刷成新图(此后恢复"只补缺不覆盖")。缺省视为未迁移——含只带旧

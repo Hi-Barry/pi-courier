@@ -2,7 +2,7 @@ import { MatrixError } from "matrix-bot-sdk";
 import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { logger, suppressLogLines } from "../logger.js";
-import type { RoomOps } from "./interface.js";
+import { BOT_REGISTRY_EVENT_TYPE, type RoomOps } from "./interface.js";
 import type { MatrixClientPort } from "./matrix-client.js";
 
 /** A missing (or not-visible) state event is a query answer, not a failure —
@@ -218,6 +218,24 @@ export class MatrixRoomOps implements RoomOps {
   async leaveRoom(roomId: string, reason?: string): Promise<void> {
     await this.client.leaveRoom(roomId, reason);
     this.deps.onLeftRoom(roomId);
+  }
+
+  /** 票02(spec #299):登记一个 bot 身份进房间 —— 每 bot 一条状态事件,
+   *  state_key = 其 MXID,内容带写入方署名;同 MXID 幂等覆盖,无写冲突。 */
+  async registerRoomBot(roomId: string, botUserId: string): Promise<void> {
+    await this.client.sendStateEvent(roomId, BOT_REGISTRY_EVENT_TYPE, botUserId, {
+      registeredBy: this.deps.getBotUserId() ?? null,
+      registeredAt: Date.now(),
+    });
+  }
+
+  /** 票02(spec #299):读房间内已登记的 bot 身份清单。全量房间状态里按
+   *  登记簿类型过滤 state_key —— 不逐 key 探测,一次调用拿全名单。 */
+  async getRoomBots(roomId: string): Promise<string[]> {
+    const events = await this.client.getRoomState(roomId);
+    return events
+      .filter((e) => e.type === BOT_REGISTRY_EVENT_TYPE && typeof e.state_key === "string")
+      .map((e) => e.state_key);
   }
 
   /** The bot's own Matrix user ID (null if not connected). */

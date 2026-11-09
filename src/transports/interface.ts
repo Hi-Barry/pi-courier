@@ -68,4 +68,15 @@ export interface RoomOps {
   getPowerLevels(roomId: string): Promise<Record<string, unknown> | null>;
   /** Have the bot actively leave a room. */
   leaveRoom(roomId: string, reason?: string): Promise<void>;
+  /** 票02(spec #299):读房间内已登记的 bot 身份清单(自定义状态事件,
+   *  state_key = bot MXID)。全量房间状态过滤而非逐 key 探测。
+   *  可选能力:仅 Matrix 适配器实现;消费方(BotRegistry)对缺失防御。 */
+  getRoomBots?(roomId: string): Promise<string[]>;
+  /** 票02(spec #299):登记一个 bot 身份进房间(内容带写入方署名;
+   *  同 MXID 重复登记幂等覆盖,不产生重复条目)。 */
+  registerRoomBot?(roomId: string, botUserId: string): Promise<void>;
 }
+
+/** 房间 bot 登记簿的状态事件类型(spec #299 票02)。命名空间前缀
+ *  `dev.pi-courier.*`,版本后缀留演进余地:改内容形状时升 v2 并双读。 */
+export const BOT_REGISTRY_EVENT_TYPE = "dev.pi-courier.bot.v1";
