@@ -230,11 +230,21 @@ export class MatrixRoomOps implements RoomOps {
   }
 
   /** 票02(spec #299):读房间内已登记的 bot 身份清单。全量房间状态里按
-   *  登记簿类型过滤 state_key —— 不逐 key 探测,一次调用拿全名单。 */
+   *  登记簿类型过滤 state_key —— 不逐 key 探测,一次调用拿全名单。
+   *  来源校验(任务2 审计整改):状态事件自带的 sender 不可伪造,条目仅当
+   *  content.registeredBy === sender 才采信 —— 房内任何人都可写自定义状态
+   *  事件,没有这条校验,恶意成员可把真人(如 admin)登记成 bot,令
+   *  botFilter 永久静默吞掉其消息。 */
   async getRoomBots(roomId: string): Promise<string[]> {
     const events = await this.client.getRoomState(roomId);
     return events
-      .filter((e) => e.type === BOT_REGISTRY_EVENT_TYPE && typeof e.state_key === "string")
+      .filter(
+        (e) =>
+          e.type === BOT_REGISTRY_EVENT_TYPE &&
+          typeof e.state_key === "string" &&
+          typeof e.content?.registeredBy === "string" &&
+          e.content.registeredBy === e.sender
+      )
       .map((e) => e.state_key);
   }
 
@@ -244,11 +254,17 @@ export class MatrixRoomOps implements RoomOps {
   }
 
   /** 票03(spec #299):读项目房元数据;404/M_NOT_FOUND → null(query-member
-   *  契约,与 getRoomName 同款)。 */
+   *  契约,与 getRoomName 同款)。形状校验(任务2 审计整改):元数据是房间
+   *  成员可写事件,烂形状直接当 null,防垃圾数据流入认领链。 */
   async getProjectMeta(roomId: string): Promise<ProjectRoomMeta | null> {
-    return queryExpectedMiss(
+    const meta = await queryExpectedMiss(
       () => this.client.getRoomStateEvent(roomId, PROJECT_META_EVENT_TYPE, "") as Promise<ProjectRoomMeta>,
     );
+    if (!meta || typeof meta !== "object") return null;
+    if (typeof meta.name !== "string" || !meta.name.trim()) return null;
+    if (meta.gitUrl !== undefined && typeof meta.gitUrl !== "string") return null;
+    if (meta.defaultBranch !== undefined && typeof meta.defaultBranch !== "string") return null;
+    return meta;
   }
 
   /** The bot's own Matrix user ID (null if not connected). */

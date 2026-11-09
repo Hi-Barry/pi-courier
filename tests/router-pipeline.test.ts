@@ -29,6 +29,9 @@ describe("pipeline stage table (spec #72 票3/C1)", () => {
       // 在附件分流之前)。
       "botFilter",
       "authorization",
+      // 任务2 审计整改:guestTrigger 前移到授权之后、授权门之前 —— 群聊频道
+      // 未 enable 时授权门会把未点名文本整条截停,信箱将永远收不到。
+      "guestTrigger",
       "unknownRoomGate",
       "attachments",
       "adminCommands",
@@ -38,8 +41,6 @@ describe("pipeline stage table (spec #72 票3/C1)", () => {
       "authorizationGate",
       "backlogAnswer",
       "backlogInbox",
-      // 票05(spec #299):guest 房仅 @触发 + 增量信箱(积压征询之后、其余管线之前)。
-      "guestTrigger",
       "multiproject",
       "managementAdoption",
       "roomBinding",

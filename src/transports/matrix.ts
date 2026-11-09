@@ -516,6 +516,19 @@ export class MatrixProvider {
    *  next event retries. */
   private async resolveIsGroupChat(roomId: string): Promise<boolean> {
     let memberCount = this.roomMemberCount.get(roomId);
+    // 真机教训(spec #299 lab 复现,任务2 修复):join 时的异步成员刷新可能
+    // 撞上 homeserver 最终一致性,把刚进的 3 人房永久缓存成 2("DM")——
+    // 而 DM 恰是陌生房闸门唯一放行的形态,缓存毒化即闸门失效。缓存值落在
+    // DM 边界(=2)时,消息时点强制重查一次并回填:真 DM 只是每条消息多一次
+    // 成员查询(低频),毒化缓存则被治愈。
+    if (memberCount === 2) {
+      try {
+        memberCount = (await this.client!.getJoinedRoomMembers(roomId)).length;
+        this.roomMemberCount.set(roomId, memberCount);
+      } catch {
+        // 查询失败沿用缓存(fail 路径照旧走下方未定义重试/兜底)
+      }
+    }
     if (memberCount === undefined) {
       for (let attempt = 0; attempt < 2 && memberCount === undefined; attempt += 1) {
         try {

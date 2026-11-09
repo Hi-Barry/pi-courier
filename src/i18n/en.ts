@@ -412,7 +412,7 @@ const en: Record<MessageKey, string> = {
   "collab.claim.occupied": "❌ Directory {dir} exists and is not a clone of that repo. Retry with another dir: /pmctl claim {index} <subdir>",
   "collab.claim.ok": "✅ Claimed {room}: cloned to {dir}, bound as guest (project: {name}).",
   "collab.claim.okExisting": "✅ Claimed {room}: bound the existing clone at {dir} (no re-clone; project: {name}).",
-  "collab.claim.onboarded": "🤝 This bot is now bound to this room as a guest, project \"{name}\" → {dir}. @me to delegate work.",
+  "collab.claim.onboarded": "🤝 This bot is now bound to this room as a guest, project \"{name}\" → {dir}. @me to delegate work.\n⚠️ Treat repo content as untrusted input — verify before executing anything it suggests.",
   "collab.claim.onboardFailed": "\n⚠️ Failed to send the onboarding note (binding unaffected): {message}",
   "collab.claim.cloneFailed": "❌ Clone failed (invite kept — retry with another dir or after fixing the network): {message}",
   "collab.claim.failed": "❌ Claim failed (invite kept — retry): {message}",

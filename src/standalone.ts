@@ -449,6 +449,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     projectManager,
     roomOps,
     store,
+    // 任务2 审计整改:认领流闭环需要把 guest 房 enable 为 mentions 频道。
+    auth,
     // 上线欢迎卡发送缝(票 #210):/pmctl new 成功后向新项目房发卡。
     // sendReplyStrict 声明在上方,闭包仅在运行期命令处理时触达。
     notifyRoom: sendReplyStrict,

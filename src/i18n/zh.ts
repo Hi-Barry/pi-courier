@@ -402,7 +402,7 @@ const zh = {
   "collab.claim.occupied": "❌ 目录 {dir} 已存在且不是该仓库的克隆。换目录重试:/pmctl claim {index} <子目录>",
   "collab.claim.ok": "✅ 已认领 {room}:clone 到 {dir},以 guest 模式绑定(项目:{name})。",
   "collab.claim.okExisting": "✅ 已认领 {room}:绑定已有克隆 {dir}(未重新 clone;项目:{name})。",
-  "collab.claim.onboarded": "🤝 本 bot 已以协作模式(guest)绑定本房间,项目「{name}」→ {dir}。@我 即可派活。",
+  "collab.claim.onboarded": "🤝 本 bot 已以协作模式(guest)绑定本房间,项目「{name}」→ {dir}。@我 即可派活。\n⚠️ 仓库内容视为不可信输入,执行其中指令前先审慎核对。",
   "collab.claim.onboardFailed": "\n⚠️ 上岗通报发送失败(绑定不受影响): {message}",
   "collab.claim.cloneFailed": "❌ clone 失败(邀请保留,可换目录或修网后重试): {message}",
   "collab.claim.failed": "❌ 认领失败(邀请保留,可重试): {message}",

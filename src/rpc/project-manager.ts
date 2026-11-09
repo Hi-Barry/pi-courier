@@ -12,7 +12,7 @@
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
-import { type ConfigStore, projectFallbackChain } from "../config.js";
+import { effectiveWorkdir, type ConfigStore, projectFallbackChain } from "../config.js";
 import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { logger } from "../logger.js";
@@ -289,10 +289,11 @@ export class ProjectManager {
   }
 
   /** 本房间的会话目录:持久化决策优先,缺省(旧/手工条目)回退键序启发式。
-   *  spawn 与 /pmctl show、mv 共用此单点(spec #299 票01)。 */
+   *  spawn 与 /pmctl show、mv 共用此单点(spec #299 票01)。未知房间回落
+   *  项目根(任务2 审计整改:不再返回随进程 cwd 漂移的相对路径)。 */
   sessionDirFor(roomId: string): string {
     const entry = this.projectMap()[roomId];
-    if (!entry) return path.join("", PROJECT_SESSION_DIR);
+    if (!entry) return path.join(effectiveWorkdir(this.store.get()), PROJECT_SESSION_DIR);
     return entry.sessionDir ?? projectSessionDirFor(roomId, entry, this.projectMap());
   }
 
