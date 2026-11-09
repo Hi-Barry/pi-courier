@@ -158,6 +158,49 @@ describe("unknownRoomGate × claim card (spec #299 票04)", () => {
     expect(fx.store.get().collab?.pendingClaims ?? []).toEqual([]);
     expect(fx.store.get().collab?.unknownNotifiedRooms).toEqual(["!room:server"]);
   });
+
+  it("URL 后补(mv 重探)后,已提示过的房升级发认领卡(任务3 场景修复)", async () => {
+    const fx = makeCollabFixture({ ...ENABLED, projectMeta: { name: "y" } }); // 先无 URL
+    await fx.router.handleIncoming(makeMsg(GROUP));
+    expect(fx.store.get().collab?.pendingClaims ?? []).toEqual([]); // 无 URL:无卡无挂单
+    // 元数据后补 URL(同一房间的状态事件更新)
+    (fx.roomOps.getProjectMeta as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: "y", gitUrl: "https://github.com/x/y.git",
+    });
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "第二条" }));
+    const cards = (fx.sendReply as ReturnType<typeof vi.fn>).mock.calls.filter((c) =>
+      String(c[2]).includes("/pmctl claim")
+    );
+    expect(cards).toHaveLength(1);
+    expect(fx.store.get().collab?.pendingClaims).toHaveLength(1);
+    // 卡挂着期间不重发
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "第三条" }));
+    expect((fx.sendReply as ReturnType<typeof vi.fn>).mock.calls.filter((c) => String(c[2]).includes("/pmctl claim"))).toHaveLength(1);
+  });
+
+  it("拒绝后同房同 URL 不再发卡;URL 变更后允许重新发卡(任务3 场景修复)", async () => {
+    const fx = makeCollabFixture({ ...ENABLED, projectMeta: { name: "y", gitUrl: "https://github.com/x/y.git" } });
+    await fx.router.handleIncoming(makeMsg(GROUP)); // 发卡
+    expect(fx.store.get().collab?.pendingClaims).toHaveLength(1);
+    // 模拟拒绝:pending 清空 + 拒绝簿记
+    fx.store.update({
+      collab: {
+        ...(fx.store.get().collab ?? {}),
+        pendingClaims: [],
+        claimRejectedKeys: ["!room:server|https://github.com/x/y.git"],
+      },
+    });
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "拒绝后再来" }));
+    expect((fx.sendReply as ReturnType<typeof vi.fn>).mock.calls.filter((c) => String(c[2]).includes("/pmctl claim"))).toHaveLength(1); // 不重发
+    // URL 变更(mv 重探后补)→ 允许新卡
+    (fx.roomOps.getProjectMeta as ReturnType<typeof vi.fn>).mockResolvedValue({
+      name: "y", gitUrl: "https://github.com/x/y2.git",
+    });
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "URL 变了" }));
+    const cards = (fx.sendReply as ReturnType<typeof vi.fn>).mock.calls.filter((c) => String(c[2]).includes("/pmctl claim"));
+    expect(cards).toHaveLength(2);
+    expect(fx.store.get().collab?.pendingClaims).toHaveLength(1);
+  });
 });
 
 describe("guestTrigger × 增量信箱 (spec #299 票05)", () => {
