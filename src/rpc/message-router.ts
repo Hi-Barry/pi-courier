@@ -1340,15 +1340,23 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       needsRpc: false,
       // 票05(spec #299):guest 房仅 @提及触发 —— 触发权分开,上下文共享。
       // 未点名的可见文本(非斜杠命令)进房间增量信箱,prompt 触发时并入并
-      // 清空;斜杠命令类文本既不进信箱(防两端重复执行)也不触发。owner 房
-      // 与单项目模式不走本阶段,行为与 1.6.x 一致。积压征询(上面两阶段)
-      // 优先:回放波走既有征询/结算路径,不进信箱。
+      // 清空;斜杠命令类文本既不进信箱(防两端重复执行)也不触发。
+      // 例外(票07):房间级命令(/compact)放行 —— 每个部署各自拦截各自
+      // 执行(spec "各端各自拦截"模式),本端命令解析/压缩照常发生。
+      // 边界:对端 bot 发的 /compact 在更早的 botFilter 已被拦截( bot 不该
+      // 发命令),广播只覆盖人类发送者 —— spec 未定义 bot 回显压缩,从静默。
+      // owner 房与单项目模式不走本阶段,行为与 1.6.x 一致。积压征询(上面
+      // 两阶段)优先:回放波走既有征询/结算路径,不进信箱。
       handle: async (ctx) => {
         if (!ctx.multiProject || !ctx.msg.isGroupChat) return false;
         if (projectManager.modeForRoom?.(ctx.msg.chatId) !== "guest") return false;
         if (ctx.msg.wasMentioned === true) return false;
-        if (ctx.msg.payload.kind === "text" && ctx.text && !ctx.text.startsWith("/")) {
-          mailbox.pushVisible(ctx.msg.chatId, ctx.msg.username, ctx.text);
+        if (ctx.msg.payload.kind === "text" && ctx.text) {
+          // 房间级命令:放行到本端命令解析(各部署同收此消息、各自执行)。
+          if (/^\/compact(\s|$)/i.test(ctx.text)) return false;
+          if (!ctx.text.startsWith("/")) {
+            mailbox.pushVisible(ctx.msg.chatId, ctx.msg.username, ctx.text);
+          }
         }
         return true;
       },
