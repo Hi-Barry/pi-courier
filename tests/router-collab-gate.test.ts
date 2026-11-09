@@ -158,6 +158,77 @@ describe("unknownRoomGate × claim card (spec #299 票04)", () => {
   });
 });
 
+describe("guestTrigger × 增量信箱 (spec #299 票05)", () => {
+  /** guest 项目房夹具:已映射(过陌生房闸)+ modeForRoom=guest。 */
+  function makeGuestFixture(opts: Parameters<typeof makeCollabFixture>[0] = {}) {
+    const fx = makeCollabFixture(opts);
+    (fx.projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => roomId === "!room:server"
+    );
+    (fx.projectManager as unknown as Record<string, ReturnType<typeof vi.fn>>).modeForRoom = vi
+      .fn()
+      .mockImplementation((roomId: string) => (roomId === "!room:server" ? "guest" : undefined));
+    return fx;
+  }
+
+  it("guest room: unmentioned text does not trigger but lands in the mailbox; the next mention drains it into the prompt", async () => {
+    const fx = makeGuestFixture({ ...ENABLED, roomBots: ["@peerbot:server"] });
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, userId: "@carol:server", username: "carol", text: "先看下登录接口" }));
+    expect(fx.rpc.prompt).not.toHaveBeenCalled();
+    await fx.router.handleIncoming(
+      makeMsg({ ...GROUP, text: "@bot:server 开始吧", wasMentioned: true })
+    );
+    expect(fx.rpc.prompt).toHaveBeenCalledTimes(1);
+    const promptText = (fx.rpc.prompt as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(promptText).toContain("增量消息");
+    expect(promptText).toContain("carol: 先看下登录接口");
+    expect(promptText).toContain("开始吧");
+  });
+
+  it("after a drain the mailbox is empty — the next mention carries no digest", async () => {
+    const fx = makeGuestFixture(ENABLED);
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "未点名", wasMentioned: false }));
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "@bot:server 一", wasMentioned: true }));
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "@bot:server 二", wasMentioned: true }));
+    const calls = (fx.rpc.prompt as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0][0]).toContain("增量消息");
+    expect(calls[1][0]).not.toContain("增量消息");
+    expect(calls[1][0]).toContain("二");
+  });
+
+  it("registered bot messages go to the mailbox instead of being dropped (botFilter 票05 升级)", async () => {
+    const fx = makeGuestFixture({ ...ENABLED, roomBots: ["@peerbot:server"] });
+    await fx.router.handleIncoming(
+      makeMsg({ ...GROUP, userId: "@peerbot:server", username: "peerbot", text: "我修好了登录接口" })
+    );
+    expect(fx.rpc.prompt).not.toHaveBeenCalled();
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "@bot:server 收到", wasMentioned: true }));
+    const promptText = (fx.rpc.prompt as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(promptText).toContain("peerbot: 我修好了登录接口");
+  });
+
+  it("slash-command-like text in a guest room neither triggers nor enters the mailbox", async () => {
+    const fx = makeGuestFixture(ENABLED);
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "/pmctl list", wasMentioned: false }));
+    expect(fx.rpc.prompt).not.toHaveBeenCalled();
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "@bot:server ok", wasMentioned: true }));
+    expect((fx.rpc.prompt as ReturnType<typeof vi.fn>).mock.calls[0][0]).not.toContain("/pmctl");
+  });
+
+  it("owner rooms keep the 1.6.x behaviour: unmentioned text triggers with no digest", async () => {
+    const fx = makeCollabFixture({ ...ENABLED, roomBots: ["@peerbot:server"] });
+    (fx.projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => roomId === "!room:server"
+    );
+    (fx.projectManager as unknown as Record<string, ReturnType<typeof vi.fn>>).modeForRoom = vi
+      .fn()
+      .mockImplementation((roomId: string) => (roomId === "!room:server" ? "owner" : undefined));
+    await fx.router.handleIncoming(makeMsg(GROUP));
+    expect(fx.rpc.prompt).toHaveBeenCalledTimes(1);
+    expect((fx.rpc.prompt as ReturnType<typeof vi.fn>).mock.calls[0][0]).not.toContain("增量消息");
+  });
+});
+
 describe("botFilter (spec #299 票02)", () => {
   /** 房间标记为已映射项目房:排除 unknownRoomGate 干扰,让 botFilter 成为
    *  唯一变量 —— 项目房里 trusted 人类照常到 pi,登记 bot 被拦。 */

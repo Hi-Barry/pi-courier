@@ -296,6 +296,13 @@ export class ProjectManager {
     return entry.sessionDir ?? projectSessionDirFor(roomId, entry, this.projectMap());
   }
 
+  /** 房间绑定模式(spec #299 票05):guest = 认领绑定的协作房(仅 @触发);
+   *  undefined/owner = 自建房,行为与 1.6.x 一致。单项目模式恒 undefined。 */
+  modeForRoom(roomId: string): "owner" | "guest" | undefined {
+    if (!this.multiProject) return undefined;
+    return this.projectMap()[roomId]?.mode;
+  }
+
   /** Update a project's workdir (used by /pmctl mv). */
   async updateProjectWorkdir(roomId: string, workdir: string): Promise<void> {
     const entry = this.projectMap()[roomId];

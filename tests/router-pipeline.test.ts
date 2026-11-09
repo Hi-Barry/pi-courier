@@ -36,6 +36,8 @@ describe("pipeline stage table (spec #72 票3/C1)", () => {
       "authorizationGate",
       "backlogAnswer",
       "backlogInbox",
+      // 票05(spec #299):guest 房仅 @触发 + 增量信箱(积压征询之后、其余管线之前)。
+      "guestTrigger",
       "multiproject",
       "managementAdoption",
       "roomBinding",
