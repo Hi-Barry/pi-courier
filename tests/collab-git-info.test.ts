@@ -53,13 +53,17 @@ describe("collab/git-info (spec #299 票03/票04)", () => {
     await execFileP("git", ["init", "--bare", "-b", "main", bare]);
     await execFileP("git", ["init", "-b", "main", src]);
     await execFileP("git", ["-C", src, "remote", "add", "origin", bare]);
+    await execFileP("git", ["-C", src, "remote", "set-url", "origin", `file://${bare}`]);
     const dest = join(tmp, "dest");
-    await cloneRepository(src, dest);
+    await cloneRepository(`file://${src}`, dest); // 走白名单形态
     expect(existsSync(join(dest, ".git"))).toBe(true);
     // 本地路径源:clone 后 origin 记的是源路径(测试断言以实际语义为准)
-    expect((await probeProjectGit(dest))?.gitUrl).toBe(src);
+    expect((await probeProjectGit(dest))?.gitUrl).toBe(`file://${src}`);
     // 已存在的目标目录:git clone 语义报错(调用方 claim 流程已有存在性分支)
     await expect(cloneRepository(src, dest)).rejects.toThrow();
+    // URL 白名单(任务2 审计整改):ext::/选项注入/裸路径全部拒绝,不落 git
+    await expect(cloneRepository("ext::sh -c touch /tmp/pwned", join(tmp, "d3"))).rejects.toThrow(/不支持的仓库地址/);
+    await expect(cloneRepository("-u$(touch /tmp/pwned)", join(tmp, "d4"))).rejects.toThrow(/不支持的仓库地址/);
     await expect(cloneRepository("/nonexistent/repo.git", join(tmp, "d2"))).rejects.toThrow();
   });
 });

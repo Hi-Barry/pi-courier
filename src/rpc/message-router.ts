@@ -1034,8 +1034,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 斜杠命令类文本不进信箱(与 guestTrigger 同规则,票05 评审整改)。
         // 顺序耦合:botFilter 必须先于 guestTrigger —— 否则登记 bot 的消息
         // 会经 guestTrigger 二次入信箱(阶段表测试钉住该顺序)。
+        // senderLabel 用 MXID(任务2 审计整改,防 displayname 冒充)。
         if (ctx.msg.payload.kind === "text" && ctx.text && !ctx.text.startsWith("/")) {
-          mailbox.pushVisible(ctx.msg.chatId, ctx.msg.username, ctx.text);
+          mailbox.pushVisible(ctx.msg.chatId, ctx.msg.userId, ctx.text);
         }
         ctx.log.info(`🤖 对端 bot 消息进增量信箱(不触发): ${ctx.msg.userId} in ${ctx.msg.chatId}`);
         return true;
@@ -1060,6 +1061,35 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           ctx.msg.transport
         );
         return false;
+      },
+    },
+    {
+      name: "guestTrigger",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // 票05(spec #299):guest 房仅 @提及触发 —— 触发权分开,上下文共享。
+      // 票审计整改(任务2):本阶段从积压后**前移到 authorization 之后** ——
+      // 群聊频道未 enable 时 authorizationGate 会把未授权消息整条截停,
+      // guest 房的未点名文本永远到不了信箱(真机 lab 复现)。现在的口径:
+      //   @点名        → 照常走管线(授权门裁决,门后 prompt)
+      //   房间级命令   → 受信者放行本端解析(各端各自执行,票07 模式)
+      //   受信未点名   → 增量信箱(可见文本共享;斜杠不进信箱)—— 频道模式
+      //                  只裁"触发",不裁被动共享,故按 isTrustedUser 判定
+      //   未受信       → 静默吞(陌生人不可投毒信箱,spec 授权模型优先)
+      // owner 房与单项目模式不走本阶段,行为与 1.6.x 一致。
+      handle: async (ctx) => {
+        if (!ctx.multiProject || !ctx.msg.isGroupChat) return false;
+        if (projectManager.modeForRoom?.(ctx.msg.chatId) !== "guest") return false;
+        if (ctx.msg.wasMentioned === true) return false;
+        if (!auth.isTrustedUser(ctx.msg.userId, ctx.msg.transport)) return true; // 未受信静默
+        if (ctx.msg.payload.kind === "text" && ctx.text && /^\/compact(\s|$)/i.test(ctx.text)) {
+          return false; // 房间级命令:受信者放行本端执行
+        }
+        if (ctx.msg.payload.kind === "text" && ctx.text && !ctx.text.startsWith("/")) {
+          mailbox.pushVisible(ctx.msg.chatId, ctx.msg.userId, ctx.text);
+        }
+        return true;
       },
     },
     {
@@ -1106,7 +1136,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
               store.update({
                 collab: {
                   ...fresh,
-                  unknownNotifiedRooms: [...(fresh?.unknownNotifiedRooms ?? []), msg.chatId],
+                  unknownNotifiedRooms: [...(fresh?.unknownNotifiedRooms ?? []), msg.chatId].slice(-200),
                   pendingClaims: [
                     ...(fresh?.pendingClaims ?? []),
                     { roomId: msg.chatId, url: meta.gitUrl, projectName: meta.name, at: Date.now() },
@@ -1119,7 +1149,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
               // 落盘前重读(票02 评审整改口径):await 之后的写回以当下值为基。
               const fresh = store.get().collab;
               store.update({
-                collab: { ...fresh, unknownNotifiedRooms: [...(fresh?.unknownNotifiedRooms ?? []), msg.chatId] },
+                collab: { ...fresh, unknownNotifiedRooms: [...(fresh?.unknownNotifiedRooms ?? []), msg.chatId].slice(-200) },
               });
               ctx.log.info(`🚪 陌生房 ${msg.chatId} 不接活,已向管理房发认领提示`);
             }
@@ -1335,34 +1365,6 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // 首条积压后 5s(等回放波灌完)或本房间首条实时消息到达时结算。
       // off 模式 transport 根本不转发积压;这里再挡一道(手喂消息的兜底)。
       handle: async (ctx) => inbox.accept(ctx.msg),
-    },
-    {
-      name: "guestTrigger",
-      preAuth: false,
-      consumesLedger: false,
-      needsRpc: false,
-      // 票05(spec #299):guest 房仅 @提及触发 —— 触发权分开,上下文共享。
-      // 未点名的可见文本(非斜杠命令)进房间增量信箱,prompt 触发时并入并
-      // 清空;斜杠命令类文本既不进信箱(防两端重复执行)也不触发。
-      // 例外(票07):房间级命令(/compact)放行 —— 每个部署各自拦截各自
-      // 执行(spec "各端各自拦截"模式),本端命令解析/压缩照常发生。
-      // 边界:对端 bot 发的 /compact 在更早的 botFilter 已被拦截( bot 不该
-      // 发命令),广播只覆盖人类发送者 —— spec 未定义 bot 回显压缩,从静默。
-      // owner 房与单项目模式不走本阶段,行为与 1.6.x 一致。积压征询(上面
-      // 两阶段)优先:回放波走既有征询/结算路径,不进信箱。
-      handle: async (ctx) => {
-        if (!ctx.multiProject || !ctx.msg.isGroupChat) return false;
-        if (projectManager.modeForRoom?.(ctx.msg.chatId) !== "guest") return false;
-        if (ctx.msg.wasMentioned === true) return false;
-        if (ctx.msg.payload.kind === "text" && ctx.text) {
-          // 房间级命令:放行到本端命令解析(各部署同收此消息、各自执行)。
-          if (/^\/compact(\s|$)/i.test(ctx.text)) return false;
-          if (!ctx.text.startsWith("/")) {
-            mailbox.pushVisible(ctx.msg.chatId, ctx.msg.username, ctx.text);
-          }
-        }
-        return true;
-      },
     },
     {
       name: "multiproject",

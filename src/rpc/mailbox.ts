@@ -36,10 +36,12 @@ export class RoomMailbox {
     this.queues.set(roomId, queue);
   }
 
-  /** 收一条可见文本并自带行格式(用户名: 文本)—— 格式所有权内聚在本模块,
-   *  botFilter / guestTrigger 两个调用方不再各自拼串(票05 评审整改)。 */
-  pushVisible(roomId: string, username: string, text: string): void {
-    this.push(roomId, `${username}: ${text}`);
+  /** 收一条可见文本并自带行格式(发送者: 文本)—— 格式所有权内聚在本模块,
+   *  botFilter / guestTrigger 两个调用方不再各自拼串(票05 评审整改)。
+   *  senderLabel 用 MXID(任务2 审计整改):displayname 任意可设会冒充他人;
+   *  文本内换行转义为 ⏎,防单条消息伪造多行"别人说的"。 */
+  pushVisible(roomId: string, senderLabel: string, text: string): void {
+    this.push(roomId, `${senderLabel}: ${text.replace(/\r?\n/g, " ⏎ ")}`);
   }
 
   /** 清仓:取走全部增量;信箱空 = 无副作用(单 bot 房零变化)。 */
@@ -51,12 +53,18 @@ export class RoomMailbox {
   }
 
   /** 退款:prompt 失败时把清仓的增量放回队首(保持到达序,dropped 计数并回)
-   *  —— 与附件台账"失败不消耗,重试仍带上"同一消费语义(票05 评审整改)。 */
+   *  —— 与附件台账"失败不消耗,重试仍带上"同一消费语义(票05 评审整改)。
+   *  放回后跑与 push 相同的封顶收敛(任务2 审计整改):drain 与 refund 之间
+   *  的并发 push 可致超限,溢出丢弃计入 dropped。 */
   refund(roomId: string, drain: MailboxDrain): void {
     if (drain.lines.length === 0) return;
     const queue = this.queues.get(roomId) ?? { items: [], dropped: 0 };
     queue.items.unshift(...drain.lines);
     queue.dropped += drain.dropped;
+    while (queue.items.length > MAILBOX_MAX_ITEMS) {
+      queue.items.shift();
+      queue.dropped += 1;
+    }
     this.queues.set(roomId, queue);
   }
 }

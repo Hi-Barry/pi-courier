@@ -61,10 +61,17 @@ export function sameRemoteUrl(a: string, b: string): boolean {
 }
 
 /** clone 仓库到目标目录(spec #299 票04):目录必须不存在(git clone 语义)。
- *  失败原样抛出 —— 调用方(pmctl claim)负责回执与簿记,这里不留痕。 */
+ *  失败原样抛出 —— 调用方(pmctl claim)负责回执与簿记,这里不留痕。
+ *  URL 白名单(任务2 审计整改):url 来自房间成员可写的元数据事件,不加
+ *  白名单时 `ext::sh -c …` 传输或 `-u` 选项注入可执行本地任意命令 —— 只放行
+ *  https/ssh/git@/file:// 形态,并拒绝 `-` 开头,再以 `--` 隔离选项区
+ *  (file:// 供本地实验室;危险的 ext:: 与选项注入被拒)。 */
 export async function cloneRepository(url: string, destDir: string): Promise<void> {
+  if (!/^(https:\/\/|ssh:\/\/|git@|file:\/\/)/.test(url) || url.startsWith("-")) {
+    throw new Error(`不支持的仓库地址(仅 https/ssh/git@/file://): ${url.slice(0, 80)}`);
+  }
   // 10 分钟上限:大仓库慢网下也要有底;超时 = 失败,认领可重试。
-  await execFileP("git", ["clone", url, destDir], { timeout: 600_000 });
+  await execFileP("git", ["clone", "--", url, destDir], { timeout: 600_000 });
 }
 
 /** 从已有项目仓库开 git worktree(spec #299 票09):分支级隔离并行会话的

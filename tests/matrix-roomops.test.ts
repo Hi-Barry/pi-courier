@@ -331,16 +331,18 @@ describe("bot 登记簿与项目房元数据(spec #299 票02/票03)", () => {
   it("getRoomBots 全量状态过滤登记簿类型;registerRoomBot state_key=MXID 且带写入方署名", async () => {
     const { ops, client } = makeOps();
     (client as unknown as Record<string, ReturnType<typeof vi.fn>>).getRoomState = vi.fn().mockResolvedValue([
-      { type: BOT_REGISTRY_EVENT_TYPE, state_key: "@a:server", content: {} },
-      { type: "m.room.name", state_key: "", content: {} },
-      { type: BOT_REGISTRY_EVENT_TYPE, state_key: "@b:server", content: {} },
+      { type: BOT_REGISTRY_EVENT_TYPE, state_key: "@a:server", sender: "@a:server", content: { registeredBy: "@a:server" } },
+      { type: "m.room.name", state_key: "", sender: "@a:server", content: {} },
+      { type: BOT_REGISTRY_EVENT_TYPE, state_key: "@b:server", sender: "@b:server", content: { registeredBy: "@b:server" } },
+      // 伪造条目(任务2 整改):sender 与署名不符 → 读侧丢弃
+      { type: BOT_REGISTRY_EVENT_TYPE, state_key: "@admin:server", sender: "@evil:server", content: { registeredBy: "@admin:server" } },
     ]);
     await ops.registerRoomBot!("!r:server", "@peer:server");
     expect(client.sendStateEvent).toHaveBeenCalledWith("!r:server", BOT_REGISTRY_EVENT_TYPE, "@peer:server", {
       registeredBy: "@bot:server",
       registeredAt: expect.any(Number),
     });
-    expect(await ops.getRoomBots!("!r:server")).toEqual(["@a:server", "@b:server"]);
+    expect(await ops.getRoomBots!("!r:server")).toEqual(["@a:server", "@b:server"]); // 伪造条目被滤
   });
 
   it("setProjectMeta/getProjectMeta:state_key 单例整写;404 按 null(query-member 契约)", async () => {

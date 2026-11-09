@@ -40,6 +40,7 @@ import { buildProjectWelcome, welcomeVersions } from "../project-welcome.js";
 import { applyRoomCustomAvatar, ensureRoomAvatar, poolFilesForProjects } from "../room-branding.js";
 import { pickPoolAvatarFile } from "../space-identity.js";
 import { provisionManagedRoom } from "../space-topology.js";
+import type { ChallengeAuth } from "../auth/challenge-auth.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { PendingClaim } from "../types.js";
 import { win32PathProblem, win32SamePath } from "../win32-path.js";
@@ -80,6 +81,10 @@ export interface PmctlControllerOptions {
   cloneRepo?: (url: string, destDir: string) => Promise<void>;
   /** 票09(spec #299):worktree 缝(生产 = 真实 git worktree add;测试注入假件)。 */
   worktreeAdd?: (sourceDir: string, destDir: string, branch: string) => Promise<void>;
+  /** 任务2 审计整改(认领流闭环):认领成功后把 guest 房 enable 为 mentions
+   *  频道 —— 否则群聊频道未 enable,连 @点名都过不了授权门。缺省(测试/旧
+   *  装配)= 不启用,行为与本整改前一致。 */
+  auth?: Pick<ChallengeAuth, "enableChannel" | "exportConfig">;
 }
 
 /** Pending /pmctl rm confirmation, keyed by the chat that issued it. A first
@@ -568,7 +573,8 @@ export class PmctlController {
   private updatePendingClaims(mutate: (claims: PendingClaim[]) => PendingClaim[]): void {
     const fresh = this.opts.store.get().collab;
     this.opts.store.update({
-      collab: { ...fresh, pendingClaims: mutate(fresh?.pendingClaims ?? []) },
+      // 上限 50(任务2 审计整改):恶意批量拉房不再无限膨胀配置文件。
+      collab: { ...fresh, pendingClaims: mutate(fresh?.pendingClaims ?? []).slice(-50) },
     });
   }
 
@@ -641,8 +647,25 @@ export class PmctlController {
           return;
         }
       }
+      // 标签校验回落(任务2 审计整改):meta.name 不合格(超长/撞名/坏字符)
+      // 时回落仓库名,不放弃认领。
+      const labelError = validateProjectLabel(pending.projectName, this.currentLabels());
+      const bindName = labelError ? repoNameFromUrl(pending.url) : pending.projectName;
+      // win32 守卫(任务2 审计整改):与 new/mv 同口径 —— NTFS 大小写撞名
+      // 会让两个项目共用同一真实目录,会话互踩。
+      const pathError = this.win32WorkdirError(resolvedWorkdir);
+      if (pathError) {
+        await reply(pathError);
+        return;
+      }
       // guest 绑定:mode=guest 持久化(spec #299 决定2);会话目录按绑定事件解析(票01)。
-      this.opts.projectManager.registerProject(pending.roomId, resolvedWorkdir, pending.projectName, "guest");
+      this.opts.projectManager.registerProject(pending.roomId, resolvedWorkdir, bindName, "guest");
+      // 认领流闭环(任务2 审计整改):guest 房默认 mentions 频道 —— 不 enable
+      // 则群聊消息过不了授权门,@点名也是哑的(真机 lab 复现)。
+      if (this.opts.auth) {
+        this.opts.auth.enableChannel(pending.roomId, "mentions");
+        this.opts.store.update({ auth: this.opts.auth.exportConfig() });
+      }
       // 从待认领簿记移除(以函数式过滤走单点写路径)。
       this.updatePendingClaims((list) => list.filter((c) => c.roomId !== pending.roomId));
       // 双向 bot 登记:guest 写自己的 MXID 进房间登记簿 —— owner 侧的
@@ -659,7 +682,7 @@ export class PmctlController {
         try {
           await this.opts.notifyRoom(
             pending.roomId,
-            t("collab.claim.onboarded", { dir: resolvedWorkdir, name: pending.projectName })
+            t("collab.claim.onboarded", { dir: resolvedWorkdir, name: bindName })
           );
         } catch (err) {
           onboardNote = t("collab.claim.onboardFailed", { message: errorMessage(err) });
@@ -669,7 +692,7 @@ export class PmctlController {
         t(existed ? "collab.claim.okExisting" : "collab.claim.ok", {
           room: pending.roomId,
           dir: resolvedWorkdir,
-          name: pending.projectName,
+          name: bindName,
         }) + onboardNote
       );
     } catch (err) {
