@@ -595,3 +595,198 @@ describe("聚合旁路(缺省 = 现状逐字节一致)", () => {
     expect(cardText).not.toContain("q".repeat(28));
   });
 });
+
+// ── 拆卡口径(spec #297)────────────────────────────────────────────
+// 大段参数(原始值含换行)的工具调用是拆卡点:旧活卡定稿 → 该调用独立
+// 单行直发(不进活卡状态、永不被编辑)→ 后续普通段开新卡继续聚合。
+// 只断言出站时序(order:open:/edit:/reply:),不断言内部状态。
+
+/** write 大段参数回合:content 原始值含换行(单行化后卡片行恒单行)。 */
+const WRITE_LINE = "🔧 `write` (content=/** * doc, path=/src/x.ts)";
+function writeTurn(): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", name: "write", arguments: { content: "/**\n * doc", path: "/src/x.ts" } }],
+    stopReason: "stop",
+  } as unknown as AssistantMessage;
+}
+
+/** 混合回合:单条消息内按 kinds 顺序装 bash(普通)/ write(大段参数)。 */
+function mixedTurn(...kinds: Array<"bash" | "write">): AssistantMessage {
+  const content: Array<Record<string, unknown>> = kinds.map((kind) =>
+    kind === "bash"
+      ? { type: "toolCall", name: "bash", arguments: { cmd: "ls" } }
+      : { type: "toolCall", name: "write", arguments: { content: "/**\n * doc", path: "/src/x.ts" } }
+  );
+  return { role: "assistant", content, stopReason: "stop" } as unknown as AssistantMessage;
+}
+
+/** 旁白 + 大段参数回合:旁白断链与拆卡口径同回合叠加。 */
+function narratedWriteTurn(text: string): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [
+      { type: "text", text },
+      { type: "toolCall", name: "write", arguments: { content: "/**\n * doc", path: "/src/x.ts" } },
+    ],
+    stopReason: "stop",
+  } as unknown as AssistantMessage;
+}
+
+describe("拆卡口径(spec #297)", () => {
+  it("普通活卡后遇大段参数回合:旧卡定稿,write 独立单行直发,不开新卡不被编辑", async () => {
+    const fx = await makeLiveCardFixture();
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    expect(fx.order).toEqual(["open:$card-1"]);
+
+    fx.router.handleEvent({ type: "turn_end", message: writeTurn() }, fx.rpc);
+    await flush();
+    // 时间线:旧卡开卡后,独立段只普通直发 —— 无第二次开卡、无编辑
+    expect(fx.order).toEqual(["open:$card-1", `reply:${WRITE_LINE.slice(0, 8)}`]);
+    expect(fx.replies).toEqual([WRITE_LINE]);
+    expect(fx.replies[0]).not.toContain("\n"); // 单行化:独立卡恒单行
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+    expect(fx.editReply).not.toHaveBeenCalled();
+  });
+
+  it("独立卡之后普通回合开新活卡继续聚合:旧卡 event_id 永不再被编辑", async () => {
+    const fx = await makeLiveCardFixture();
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    fx.router.handleEvent({ type: "turn_end", message: writeTurn() }, fx.rpc);
+    await flush();
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+
+    // 时间线:开卡1 → 独立直发 → 开卡2 → 卡2 编辑追加
+    expect(fx.order).toEqual([
+      "open:$card-1",
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+      "open:$card-2",
+      "edit:$card-2",
+    ]);
+    expect(fx.editReply.mock.calls[0]).toEqual([
+      "!dm:server",
+      "matrix",
+      "$card-2",
+      `${TOOL_LINE}\n\n${TOOL_LINE}`,
+    ]);
+  });
+
+  it("同回合混合段按序结算:普通段开卡 → 独立段直发断链 → 普通段开新卡", async () => {
+    const fx = await makeLiveCardFixture();
+
+    // 回合 A:[bash, write] —— 普通段开卡,独立段直发
+    fx.router.handleEvent({ type: "turn_end", message: mixedTurn("bash", "write") }, fx.rpc);
+    await flush();
+    expect(fx.order).toEqual(["open:$card-1", `reply:${WRITE_LINE.slice(0, 8)}`]);
+
+    // 回合 B:[write, bash] —— 独立段直发(无卡可清),普通段开新卡
+    fx.router.handleEvent({ type: "turn_end", message: mixedTurn("write", "bash") }, fx.rpc);
+    await flush();
+    expect(fx.order).toEqual([
+      "open:$card-1",
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+      "open:$card-2",
+    ]);
+  });
+
+  it("旁白 + 大段参数同回合:旁白先直发、独立卡随后,时间线「旧卡→旁白→独立卡」", async () => {
+    const fx = await makeLiveCardFixture();
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    fx.router.handleEvent({ type: "turn_end", message: narratedWriteTurn("我来写文件") }, fx.rpc);
+    await flush();
+
+    expect(fx.order).toEqual([
+      "open:$card-1",
+      `reply:${"我来写文件".slice(0, 8)}`,
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+    ]);
+    expect(fx.sendLiveCard).toHaveBeenCalledTimes(1);
+    expect(fx.editReply).not.toHaveBeenCalled();
+  });
+
+  it("降级序列:整回合一条直发(含混合段),只归旁白断链解除并重试聚合", async () => {
+    const fx = await makeLiveCardFixture({}, {
+      editReply: async () => {
+        throw new Error("boom");
+      },
+    });
+
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    // 回合 2:编辑失败 → 降级,本回合文本逐条直发补上
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    expect(fx.order).toEqual(["open:$card-1", "edit:$card-1", `reply:${TOOL_LINE.slice(0, 8)}`]);
+
+    // 回合 3(独立段):降级整回合一条直发,降级不因独立段中途解除
+    fx.router.handleEvent({ type: "turn_end", message: writeTurn() }, fx.rpc);
+    await flush();
+    expect(fx.order).toEqual([
+      "open:$card-1",
+      "edit:$card-1",
+      `reply:${TOOL_LINE.slice(0, 8)}`,
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+    ]);
+
+    // 回合 4(混合段):同样整回合一条(不会因切段多发数条)
+    fx.router.handleEvent({ type: "turn_end", message: mixedTurn("bash", "write") }, fx.rpc);
+    await flush();
+    expect(fx.order).toEqual([
+      "open:$card-1",
+      "edit:$card-1",
+      `reply:${TOOL_LINE.slice(0, 8)}`,
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+      `reply:${`${TOOL_LINE}\n${WRITE_LINE}`.slice(0, 8)}`,
+    ]);
+    expect(fx.replies).toHaveLength(3);
+
+    // 回合 5(旁白+独立段):旁白断链清降级 → 旁白直发 → 独立卡直发
+    fx.router.handleEvent({ type: "turn_end", message: narratedWriteTurn("我来写文件") }, fx.rpc);
+    await flush();
+    expect(fx.order).toEqual([
+      "open:$card-1",
+      "edit:$card-1",
+      `reply:${TOOL_LINE.slice(0, 8)}`,
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+      `reply:${`${TOOL_LINE}\n${WRITE_LINE}`.slice(0, 8)}`,
+      `reply:${"我来写文件".slice(0, 8)}`,
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+    ]);
+
+    // 回合 6:降级已随旁白断链解除 → 普通回合重试聚合开新卡
+    fx.router.handleEvent({ type: "turn_end", message: toolTurn() }, fx.rpc);
+    await flush();
+    expect(fx.order).toEqual([
+      "open:$card-1",
+      "edit:$card-1",
+      `reply:${TOOL_LINE.slice(0, 8)}`,
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+      `reply:${`${TOOL_LINE}\n${WRITE_LINE}`.slice(0, 8)}`,
+      `reply:${"我来写文件".slice(0, 8)}`,
+      `reply:${WRITE_LINE.slice(0, 8)}`,
+      "open:$card-2",
+    ]);
+    expect(fx.editReply).toHaveBeenCalledTimes(1); // 失败的那次之后没有再编辑旧卡
+  });
+
+  it("聚合禁用路径仅吃单行化:write 回合逐条直发单行工具文本", async () => {
+    const fx = await makeLiveCardFixture({ aggregateToolTurns: false });
+
+    fx.router.handleEvent({ type: "turn_end", message: writeTurn() }, fx.rpc);
+    await flush();
+    expect(fx.sendLiveCard).not.toHaveBeenCalled();
+    expect(fx.replies).toHaveLength(1);
+    expect(fx.replies[0]).toBe(WRITE_LINE);
+    expect(fx.replies[0]).not.toContain("\n");
+  });
+});

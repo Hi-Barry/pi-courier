@@ -16,6 +16,82 @@ export function hasToolCalls(message: AssistantMessage): boolean {
   return message.content.some((part) => part.type === "toolCall");
 }
 
+/** 值是否含换行(spec #297):大段参数的判据与单行化的触发共用这一口径。 */
+const hasLineBreak = (value: string): boolean => /[\r\n]/.test(value);
+
+/**
+ * 参数单行化(spec #297):仅对含换行的值做空白归一(连续空白并成单个空格)
+ * —— write 的 content、bash heredoc 的 command 不再把换行漏进卡片被渲染成
+ * 正文;不含换行的值原样返回,普通工具行的输出逐字节不变。
+ */
+const oneLineArgValue = (value: string): string =>
+  hasLineBreak(value) ? value.replace(/\s+/g, " ") : value;
+
+/**
+ * 单个工具调用的卡片行(「一行」口径的唯一住处,spec #297):整段格式化与
+ * 切段函数共用,避免双写漂移。`argLimit` 约束每个参数值(非整行)。
+ */
+function formatToolCallLine(tc: any, argLimit: number): string {
+  const name = tc.name || "tool";
+  const args = tc.arguments || {};
+
+  const argPairs = Object.entries(args)
+    .map(([k, v]) => {
+      const valStr = typeof v === 'string' ? oneLineArgValue(v) : JSON.stringify(v);
+      return `${k}=${truncate(valStr, argLimit)}`;
+    })
+    .join(", ");
+
+  // Wrap the tool name in backticks so messengers render it as inline
+  // code — preserves snake_case readability across Telegram (which would
+  // otherwise have to backslash-escape underscores), Discord, Slack,
+  // Matrix, and WhatsApp uniformly.
+  return argPairs ? `🔧 \`${name}\` (${argPairs})` : `🔧 \`${name}\``;
+}
+
+/**
+ * 大段参数判定(spec #297):任一字符串参数的原始值含换行即成立 —— 判定
+ * 先于单行化与截断,以原始值为准。非字符串值经 JSON 序列化不含裸换行,
+ * 不会触发。这类调用(write 整份文件、bash heredoc)在活卡聚合链上是
+ * 拆卡点,独立成卡。
+ */
+function hasMultilineArg(tc: any): boolean {
+  return Object.values(tc.arguments ?? {}).some(
+    (v) => typeof v === "string" && hasLineBreak(v)
+  );
+}
+
+/** 活卡切段形态(spec #297):standalone = 大段参数调用(拆卡点,恒单行);
+ *  普通段可能多行 —— 连续普通调用逐行归一段。段序即回合内调用序。 */
+export interface ToolCallSegment {
+  standalone: boolean;
+  text: string;
+}
+
+/**
+ * 把一回合的工具调用切成有序段(spec #297):连续普通调用归一段,大段参数
+ * 调用各自独立段。整段工具文本(formatToolCalls)等于各段 text 按序以
+ * 换行拼接 —— 拼装口径单一,聚合链按段消费时不会与整段输出漂移。
+ */
+export function partitionToolCalls(
+  message: AssistantMessage,
+  argLimit = TOOL_CALL_ARG_LIMIT_DEFAULT
+): ToolCallSegment[] {
+  const toolCalls = message.content.filter((part) => part.type === "toolCall");
+  const segments: ToolCallSegment[] = [];
+  for (const tc of toolCalls) {
+    const line = formatToolCallLine(tc, argLimit);
+    const standalone = hasMultilineArg(tc);
+    const last = segments[segments.length - 1];
+    if (!standalone && last && !last.standalone) {
+      last.text = `${last.text}\n${line}`;
+    } else {
+      segments.push({ standalone, text: line });
+    }
+  }
+  return segments;
+}
+
 /**
  * Format tool call summaries for the remote user. `argLimit` bounds each
  * argument value independently (not the whole line); the production caller
@@ -25,26 +101,8 @@ export function formatToolCalls(
   message: AssistantMessage,
   argLimit = TOOL_CALL_ARG_LIMIT_DEFAULT
 ): string {
-  const toolCalls = message.content.filter((part) => part.type === "toolCall");
-  if (toolCalls.length === 0) return "";
-  return toolCalls
-    .map((tc: any) => {
-      const name = tc.name || "tool";
-      const args = tc.arguments || {};
-
-      const argPairs = Object.entries(args)
-        .map(([k, v]) => {
-          const valStr = typeof v === 'string' ? v : JSON.stringify(v);
-          return `${k}=${truncate(valStr, argLimit)}`;
-        })
-        .join(", ");
-
-      // Wrap the tool name in backticks so messengers render it as inline
-      // code — preserves snake_case readability across Telegram (which would
-      // otherwise have to backslash-escape underscores), Discord, Slack,
-      // Matrix, and WhatsApp uniformly.
-      return argPairs ? `🔧 \`${name}\` (${argPairs})` : `🔧 \`${name}\``;
-    })
+  return partitionToolCalls(message, argLimit)
+    .map((segment) => segment.text)
     .join("\n");
 }
 
