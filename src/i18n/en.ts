@@ -421,6 +421,7 @@ const en: Record<MessageKey, string> = {
   "collab.mailbox.droppedSuffix": ", plus {count} older dropped (cap)",
   "collab.tools.usage": "Usage: /toggletools <auto|on|off> (project rooms only; auto=by room kind, on/off=override)",
   "collab.tools.ok": "✅ Tool-call display for this room: {mode}",
+  "collab.mailbox.restartGap": "⚠️ This process restarted at {at}; room messages during the gap may be missing from the incremental mailbox.",
   "router.enable.allAdminOnly": "❌ The all mode is admin-only (use trusted-only or mentions instead)",
   "router.enable.ok": "✅ Room enabled (mode: {mode})",
   "router.multiproject.forbidden": "❌ Not allowed (only trusted users can toggle multi-project mode)",

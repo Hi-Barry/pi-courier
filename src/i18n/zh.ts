@@ -411,6 +411,7 @@ const zh = {
   "collab.mailbox.droppedSuffix": ",另有更早的 {count} 条因超限未保留",
   "collab.tools.usage": "用法: /toggletools <auto|on|off>(仅项目房内;auto=按房间类型,on/off=强制覆盖)",
   "collab.tools.ok": "✅ 本房间工具流显示: {mode}",
+  "collab.mailbox.restartGap": "⚠️ 本进程自 {at} 重启,期间的房间消息可能未完整进入增量信箱。",
   "router.enable.allAdminOnly": "❌ all 模式仅管理员可用(可采用 trusted-only 或 mentions)",
   "router.enable.ok": "✅ 本房间已启用 (mode: {mode})",
   "router.multiproject.forbidden": "❌ 无权限(仅信任用户可切换多工程模式)",
