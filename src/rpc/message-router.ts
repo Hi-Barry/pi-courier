@@ -503,15 +503,24 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     && deps.editReply !== undefined
     && deps.sendLiveCard !== undefined;
 
-  // 票06(spec #299):房间级工具流三态(auto/on/off)解析单点。auto =
-  // owner 房跟随全局现状(1.6.x 行为)、guest 协作房关;显式 on/off 覆盖
-  // 一切。活卡与 typing 互补不同时开 —— 工具流开的房活卡表活,关的房 typing 表活。
+  // 票06(spec #299):房间级工具流三态(auto/on/off)解析单点。显式 on/off
+  // 覆盖一切 —— 但 "on" 仍需活卡缝齐备且全局 hideToolCalls 未开(全局开关
+  // 保留为 kill-switch,评审整改:不再绕过),否则降级 off 防工具行无声丢失。
+  // auto:协作房关(本房绑定为 guest,或登记簿已见对端 bot —— 决定11
+  // "含客座的协作房=关"对 owner 侧同样成立);owner 单 bot 房跟随全局现状。
+  // 活卡与 typing 互补不同时开:工具流开的房活卡表活,关的房 typing 表活
+  // (活卡房 turn_start 不再发 typing,系本票有意变化,替代 1.6.x 的无条件首拍)。
   const roomToolCallsMode = (roomId: string): "on" | "off" => {
     const entry = projectManager.projectMap?.()[roomId];
     const setting = entry?.showToolCalls ?? "auto";
-    if (setting === "on") return "on";
     if (setting === "off") return "off";
-    return entry?.mode === "guest" ? "off" : liveCardAggregation() ? "on" : "off";
+    if (setting === "on") {
+      return deps.sendLiveCard !== undefined && deps.editReply !== undefined && !store.get().hideToolCalls
+        ? "on"
+        : "off";
+    }
+    const collabRoom = entry?.mode === "guest" || (botRegistry.cached(roomId)?.size ?? 0) > 0;
+    return collabRoom ? "off" : liveCardAggregation() ? "on" : "off";
   };
 
   // 活卡出站链(per-rpc FIFO,与 transport 的 enqueueSend 同构):中间回合的

@@ -263,7 +263,7 @@ You are now a trusted user (the first trusted user also becomes admin). In multi
 | `/reload` | Restart pi (after installing extensions/config); `/reload all` restarts every idle pi process of the instance |
 | `/help` | Full help |
 
-**Bridge admin commands**: `/trusted`, `/revoke <userId>`, `/channels`, `/enable [chatId] <mode>`, `/disable <chatId>`, `/toggletools`
+**Bridge admin commands**: `/trusted`, `/revoke <userId>`, `/channels`, `/enable [chatId] <mode>`, `/disable <chatId>`, `/toggletools` (project rooms: `/toggletools <auto|on|off>` overrides tool-call display per room — `auto` keeps owner rooms on and guest collaboration rooms off; spec #299)
 
 **Anything else** starting with `/` passes through to pi directly — extension commands, `/skill:name`, prompt templates. Plain text is a normal conversation turn.
 
