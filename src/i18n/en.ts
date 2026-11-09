@@ -399,6 +399,8 @@ const en: Record<MessageKey, string> = {
   "router.payload.unsupported":
     "🤷 Unsupported message type ({msgtype}) — ignored. You can send text, images and files directly.",
   "router.enable.usage": "Usage: /enable <all|mentions|trusted-only> (in this room)",
+  "router.unknownRoom.notice":
+    "🤝 This bot was invited to group {room}, which is not bound to any project — per the safe default it stays silent. Bind it as a project room to activate it (claim flow in progress, spec #299).",
   "router.enable.allAdminOnly": "❌ The all mode is admin-only (use trusted-only or mentions instead)",
   "router.enable.ok": "✅ Room enabled (mode: {mode})",
   "router.multiproject.forbidden": "❌ Not allowed (only trusted users can toggle multi-project mode)",

@@ -24,7 +24,12 @@ describe("pipeline stage table (spec #72 票3/C1)", () => {
   it("declares the stages in execution order with their invariants", () => {
     const { router } = makeFixtures();
     expect(router.pipeline().map((s) => s.name)).toEqual([
+      // 票02(spec #299):botFilter 置顶(对端 bot 不触发、不进命令解析,
+      // 在挑战流之前),unknownRoomGate 紧随 authorization(陌生群不接活,
+      // 在附件分流之前)。
+      "botFilter",
       "authorization",
+      "unknownRoomGate",
       "attachments",
       "adminCommands",
       "groupEnable",
@@ -44,9 +49,10 @@ describe("pipeline stage table (spec #72 票3/C1)", () => {
     ]);
   });
 
-  it("preAuth stages are exactly the self-gated command families", () => {
+  it("preAuth stages are exactly the self-gated stages (command families + bot filter)", () => {
     const { router } = makeFixtures();
     expect(router.pipeline().filter((s) => s.preAuth).map((s) => s.name)).toEqual([
+      "botFilter",
       "adminCommands",
       "groupEnable",
     ]);

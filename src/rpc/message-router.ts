@@ -42,6 +42,7 @@ import { isTerminal, type WorkflowProgressIR, type WorkflowRunStatus } from "../
 import type { PersistedAttachmentEntry } from "./attachment-ledger.js";
 import { AttachmentLedger } from "./attachment-ledger.js";
 import { BacklogInbox } from "./backlog-inbox.js";
+import { BotRegistry } from "./bot-registry.js";
 import {
   type BashTracker,
   bashTimeoutText,
@@ -977,7 +978,27 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 唯一消耗点);preAuth=true 的阶段自带门禁,在授权门之前运行。
   const RPC_ABORT = Symbol("rpc-abort");
 
+  // 票02(spec #299):房间 bot 登记簿读缓存 + 陌生房"无管理房"告警簿记。
+  const botRegistry = new BotRegistry(roomOps);
+  const unknownNoManagementWarned = new Set<string>();
+
   const stages: Array<PipelineStageView & { handle: (ctx: StageContext) => Promise<boolean> }> = [
+    {
+      name: "botFilter",
+      preAuth: true,
+      consumesLedger: false,
+      needsRpc: false,
+      // 票02(spec #299):已登记的对端 bot 消息不触发、不进命令解析 ——
+      // 防互聊回环的第一道闸(自家消息在 transport 层已滤,botFilter 补上
+      // "别人家的 bot")。票05 会把这里的丢弃升级为"进增量信箱"。
+      // 排在授权之前:bot 不是人类用户,不进挑战流,也不该消耗授权副作用。
+      handle: async (ctx) => {
+        const bots = await botRegistry.botsOf(ctx.msg.chatId);
+        if (!bots.has(ctx.msg.userId)) return false;
+        ctx.log.info(`🤖 对端 bot 消息不触发: ${ctx.msg.userId} in ${ctx.msg.chatId}`);
+        return true;
+      },
+    },
     {
       name: "authorization",
       preAuth: false,
@@ -997,6 +1018,41 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           ctx.msg.transport
         );
         return false;
+      },
+    },
+    {
+      name: "unknownRoomGate",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // 票02(spec #299):多项目模式下,未映射的群聊房间一律不路由、绝不
+      // 落默认项目 —— 安全默认(Q13 决议:陌生房接活是事故源)。进房后向
+      // 本部署管理房发一次认领提示(落盘簿记,同房不重复刷);管理房缺位
+      // 则 warn 一次(进程内存簿记,提示送达前不标记)。排在附件之前:
+      // 陌生房连附件清单都不该进。collab.allowUnknownRoomFallback=true
+      // 恢复 1.6.x 旧行为(回落默认项目)。
+      handle: async (ctx) => {
+        const { msg } = ctx;
+        if (!ctx.multiProject || !msg.isGroupChat) return false;
+        if (projectManager.isProjectRoom(msg.chatId)) return false;
+        const config = store.get();
+        if (config.collab?.allowUnknownRoomFallback === true) return false;
+        if (managementRoomId(config) === msg.chatId) return false;
+        const noticed = config.collab?.unknownNotifiedRooms ?? [];
+        if (!noticed.includes(msg.chatId)) {
+          const mgRoom = managementRoomId(store.get());
+          if (mgRoom) {
+            await sendReply(mgRoom, msg.transport, t("router.unknownRoom.notice", { room: msg.chatId }));
+            store.update({
+              collab: { ...config.collab, unknownNotifiedRooms: [...noticed, msg.chatId] },
+            });
+            ctx.log.info(`🚪 陌生房 ${msg.chatId} 不接活,已向管理房发认领提示`);
+          } else if (!unknownNoManagementWarned.has(msg.chatId)) {
+            unknownNoManagementWarned.add(msg.chatId);
+            logger.warn(`🚪 陌生房 ${msg.chatId} 不接活,但本部署尚无管理房,认领提示无法送达`);
+          }
+        }
+        return true;
       },
     },
     {
