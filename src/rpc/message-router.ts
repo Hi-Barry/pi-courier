@@ -12,6 +12,7 @@ import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
+import { repoNameFromUrl } from "../collab/git-info.js";
 import { commandPolicy } from "../command-registry.js";
 import { aggregateToolTurns, bashOutputLimit, type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew, toolCallArgLimit, WORKFLOW_CARD_DEGRADED_RETRY_MS_DEFAULT, workflowCardThrottleMs, workflowProgressCard } from "../config.js";
 import { errorMessage } from "../errors.js";
@@ -1042,14 +1043,45 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         if (!noticed.includes(msg.chatId)) {
           const mgRoom = managementRoomId(store.get());
           if (mgRoom) {
-            await sendReply(mgRoom, msg.transport, t("router.unknownRoom.notice", { room: msg.chatId }));
-            // 落盘前重读(spec #299 票02 评审整改):不基于本轮捕获的旧 config
-            // 展开 —— 多陌生房并发提示时丢更新;写入以当下 store 值为基。
+            // 票04(spec #299):房间带项目元数据(含仓库地址)→ 发认领确认卡
+            // 并落簿待认领(collab.pendingClaims,重启不丢);无元数据 → 普通
+            // 提示。两条路都标记已提示(同房不重复刷)。落盘前重读防并发丢更新。
+            const meta = (await roomOps?.getProjectMeta?.(msg.chatId)) ?? null;
             const fresh = store.get().collab;
-            store.update({
-              collab: { ...fresh, unknownNotifiedRooms: [...(fresh?.unknownNotifiedRooms ?? []), msg.chatId] },
-            });
-            ctx.log.info(`🚪 陌生房 ${msg.chatId} 不接活,已向管理房发认领提示`);
+            const noticedRooms = fresh?.unknownNotifiedRooms ?? [];
+            if (meta?.gitUrl) {
+              const dir = `${store.get().workdir ?? "~"}/${repoNameFromUrl(meta.gitUrl)}`;
+              const claims = fresh?.pendingClaims ?? [];
+              const index = claims.length + 1;
+              await sendReply(
+                mgRoom,
+                msg.transport,
+                t("collab.claim.card", { room: msg.chatId, name: meta.name, url: meta.gitUrl, dir, index })
+              );
+              store.update({
+                collab: {
+                  ...fresh,
+                  unknownNotifiedRooms: [...noticedRooms, msg.chatId],
+                  pendingClaims: [
+                    ...claims,
+                    {
+                      roomId: msg.chatId,
+                      url: meta.gitUrl,
+                      branch: meta.defaultBranch,
+                      projectName: meta.name,
+                      at: Date.now(),
+                    },
+                  ],
+                },
+              });
+              ctx.log.info(`🚪 陌生房 ${msg.chatId} 带项目元数据,已向管理房发认领卡(#${index})`);
+            } else {
+              await sendReply(mgRoom, msg.transport, t("router.unknownRoom.notice", { room: msg.chatId }));
+              store.update({
+                collab: { ...fresh, unknownNotifiedRooms: [...noticedRooms, msg.chatId] },
+              });
+              ctx.log.info(`🚪 陌生房 ${msg.chatId} 不接活,已向管理房发认领提示`);
+            }
           } else if (!unknownNoManagementWarned.has(msg.chatId)) {
             unknownNoManagementWarned.add(msg.chatId);
             logger.warn(`🚪 陌生房 ${msg.chatId} 不接活,但本部署尚无管理房,认领提示无法送达`);

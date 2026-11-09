@@ -2,7 +2,7 @@ import { MatrixError } from "matrix-bot-sdk";
 import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { logger, suppressLogLines } from "../logger.js";
-import { BOT_REGISTRY_EVENT_TYPE, type ProjectRoomMeta, type RoomOps, PROJECT_META_EVENT_TYPE } from "./interface.js";
+import { BOT_REGISTRY_EVENT_TYPE, PROJECT_META_EVENT_TYPE, type ProjectRoomMeta, type RoomOps } from "./interface.js";
 import type { MatrixClientPort } from "./matrix-client.js";
 
 /** A missing (or not-visible) state event is a query answer, not a failure —

@@ -46,3 +46,23 @@ export async function probeProjectGit(workdir: string): Promise<ProjectGitInfo |
   }
   return { gitUrl, defaultBranch };
 }
+
+/** 从仓库 URL 取仓库名(clone 落地目录名):去尾斜杠、取末段、去 .git 后缀。 */
+export function repoNameFromUrl(url: string): string {
+  const last = url.replace(/\/+$/, "").split("/").pop() ?? "repo";
+  return last.replace(/\.git$/, "") || "repo";
+}
+
+/** 归一化比较两个仓库地址是否同源:忽略尾斜杠与 .git 后缀(https/ssh 形态
+ *  的主机差异不在此处理 —— 认领场景两边都来自同一元数据或同一 origin)。 */
+export function sameRemoteUrl(a: string, b: string): boolean {
+  const norm = (u: string) => u.replace(/\/+$/, "").replace(/\.git$/, "");
+  return norm(a) === norm(b);
+}
+
+/** clone 仓库到目标目录(spec #299 票04):目录必须不存在(git clone 语义)。
+ *  失败原样抛出 —— 调用方(pmctl claim)负责回执与簿记,这里不留痕。 */
+export async function cloneRepository(url: string, destDir: string): Promise<void> {
+  // 10 分钟上限:大仓库慢网下也要有底;超时 = 失败,认领可重试。
+  await execFileP("git", ["clone", url, destDir], { timeout: 600_000 });
+}

@@ -12,8 +12,16 @@
  * boundary).
  */
 
+import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import {
+  cloneRepository,
+  type ProjectGitInfo,
+  probeProjectGit,
+  repoNameFromUrl,
+  sameRemoteUrl,
+} from "../collab/git-info.js";
 import {
   activeSpaceRoomId,
   type ConfigStore,
@@ -22,7 +30,6 @@ import {
   projectFallbackChain,
 } from "../config.js";
 import { errorMessage } from "../errors.js";
-import { probeProjectGit, type ProjectGitInfo } from "../collab/git-info.js";
 import { t } from "../i18n/index.js";
 import { isCancelInput } from "../i18n/parse.js";
 import { logger } from "../logger.js";
@@ -32,6 +39,7 @@ import { applyRoomCustomAvatar, ensureRoomAvatar, poolFilesForProjects } from ".
 import { pickPoolAvatarFile } from "../space-identity.js";
 import { provisionManagedRoom } from "../space-topology.js";
 import type { RoomOps } from "../transports/interface.js";
+import type { PendingClaim } from "../types.js";
 import { win32PathProblem, win32SamePath } from "../win32-path.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
@@ -66,6 +74,8 @@ export interface PmctlControllerOptions {
    *  分支),供项目房元数据落盘。生产缺省 = 真实 git 探测(collab/git-info);
    *  测试注入假件,绝不 spawn 真 git。 */
   probeGit?: (workdir: string) => Promise<ProjectGitInfo | undefined>;
+  /** 票04(spec #299):clone 缝(生产 = 真实 git clone;测试注入假件)。 */
+  cloneRepo?: (url: string, destDir: string) => Promise<void>;
 }
 
 /** Pending /pmctl rm confirmation, keyed by the chat that issued it. A first
@@ -184,6 +194,9 @@ export class PmctlController {
         return true;
       case "rename":
         await this.rename(rest, reply, roomOps);
+        return true;
+      case "claim":
+        await this.claim(rest, reply, roomOps);
         return true;
       default:
         await reply(t("pmctl.unknownOp", { op }));
@@ -320,6 +333,15 @@ export class PmctlController {
           logger.warn(`[pmctl] 项目房元数据写入失败(${provision.roomId}): ${errorMessage(err)}`);
           metaNote = t("pmctl.new.metaFailed", { message: errorMessage(err) });
         }
+      }
+      // 票04(spec #299):owner 侧把自己的 MXID 写进房间 bot 登记簿 ——
+      // 客座认领后,其 botFilter/增量信箱靠登记簿识别"谁是 bot"(对称握手:
+      // 客座认领时也会写自己)。best-effort。
+      try {
+        const me = roomOps.getBotUserId();
+        if (me) await roomOps.registerRoomBot?.(provision.roomId, me);
+      } catch (err) {
+        logger.warn(`[pmctl] owner bot 自登记失败(${provision.roomId}): ${errorMessage(err)}`);
       }
       // 票 #209:new 出来的项目就是要开发的项目,进程即刻拉起(急启动),
       // 不等首条消息;预设应用照旧走 getRpcForRoom 内部路径。失败不回滚:
@@ -527,6 +549,113 @@ export class PmctlController {
       }
     }
     await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir, sessionDir: sessionDirName }));
+  }
+
+  // ---- 票04(spec #299):客座认领流 -----------------------------------------
+
+  /** 待认领邀请(collab.pendingClaims)的单一写路径:落盘前重读,
+   *  防多房间并发发卡时丢更新(与票02 陌生房簿记同一口径)。 */
+  private updatePendingClaims(mutate: (claims: PendingClaim[]) => PendingClaim[]): void {
+    const fresh = this.opts.store.get().collab;
+    this.opts.store.update({
+      collab: { ...fresh, pendingClaims: mutate(fresh?.pendingClaims ?? []) },
+    });
+  }
+
+  private pendingClaims(): PendingClaim[] {
+    return this.opts.store.get().collab?.pendingClaims ?? [];
+  }
+
+  /** /pmctl claim — 认领确认卡的指令面:空参列清单,`reject <n>` 拒绝,
+   *  `<n> [子目录]` 确认(clone 落地 → guest 绑定 → 双向 bot 登记 → 上岗通报)。 */
+  private async claim(rest: string, reply: Reply, roomOps: RoomOps): Promise<void> {
+    const claims = this.pendingClaims();
+    const [first, second] = splitFirst(rest);
+    if (!first) {
+      if (claims.length === 0) {
+        await reply(t("collab.claim.none"));
+        return;
+      }
+      const lines = claims.map((c, i) => {
+        const dir = path.join(this.opts.store.get().workdir ?? "~", repoNameFromUrl(c.url));
+        return t("collab.claim.listItem", { index: i + 1, room: c.roomId, name: c.projectName, url: c.url, dir });
+      });
+      await reply(t("collab.claim.listHeader", { count: claims.length }) + "\n" + lines.join("\n"));
+      return;
+    }
+    if (first.toLowerCase() === "reject") {
+      const n = Number.parseInt(second, 10);
+      if (!Number.isInteger(n) || n < 1 || n > claims.length) {
+        await reply(t("collab.claim.indexOOB", { max: claims.length }));
+        return;
+      }
+      const gone = claims.splice(n - 1, 1)[0]!;
+      this.updatePendingClaims(() => claims);
+      await reply(t("collab.claim.rejected", { room: gone.roomId }));
+      return;
+    }
+    const n = Number.parseInt(first, 10);
+    if (!Number.isInteger(n) || n < 1 || n > claims.length) {
+      await reply(t("collab.claim.indexOOB", { max: claims.length }));
+      return;
+    }
+    const pending = claims[n - 1]!;
+    const dirName = second.trim() || repoNameFromUrl(pending.url);
+    const resolvedWorkdir = this.resolveProjectPath(dirName);
+    if (resolvedWorkdir === null) {
+      await reply(t("pmctl.pathEscape", { path: dirName }));
+      return;
+    }
+    const cloneRepo = this.opts.cloneRepo ?? cloneRepository;
+    try {
+      // 目录已存在:remote 吻合 → 直接绑已有克隆(不重复 clone);否则追问换目录。
+      let existed = false;
+      if (existsSync(resolvedWorkdir)) {
+        const remote = (await probeProjectGit(resolvedWorkdir))?.gitUrl;
+        if (remote && sameRemoteUrl(remote, pending.url)) {
+          existed = true;
+        } else {
+          await reply(t("collab.claim.occupied", { dir: resolvedWorkdir, index: n }));
+          return;
+        }
+      } else {
+        await cloneRepo(pending.url, resolvedWorkdir);
+      }
+      // guest 绑定:mode=guest 持久化(spec #299 决定2);会话目录按绑定事件解析(票01)。
+      this.opts.projectManager.registerProject(pending.roomId, resolvedWorkdir, pending.projectName, "guest");
+      // 从待认领簿记移除(以函数式过滤走单点写路径)。
+      this.updatePendingClaims((list) => list.filter((c) => c.roomId !== pending.roomId));
+      // 双向 bot 登记:guest 写自己的 MXID 进房间登记簿 —— owner 侧的
+      // botFilter/信箱由此识别"谁是 bot"。失败不致命:只影响对端识别,本侧无碍。
+      try {
+        const me = roomOps.getBotUserId();
+        if (me) await roomOps.registerRoomBot?.(pending.roomId, me);
+      } catch (err) {
+        logger.warn(`[pmctl] 客座 bot 自登记失败(${pending.roomId}): ${errorMessage(err)}`);
+      }
+      // 上岗通报:发进项目房,让房主可感知客座就绪。失败仅附注,不回滚绑定。
+      let onboardNote = "";
+      if (this.opts.notifyRoom) {
+        try {
+          await this.opts.notifyRoom(
+            pending.roomId,
+            t("collab.claim.onboarded", { dir: resolvedWorkdir, name: pending.projectName })
+          );
+        } catch (err) {
+          onboardNote = t("collab.claim.onboardFailed", { message: errorMessage(err) });
+        }
+      }
+      await reply(
+        t(existed ? "collab.claim.okExisting" : "collab.claim.ok", {
+          room: pending.roomId,
+          dir: resolvedWorkdir,
+          name: pending.projectName,
+        }) + onboardNote
+      );
+    } catch (err) {
+      // clone 失败:邀请保留在簿记里,可换目录或修网后重试。
+      await reply(t("collab.claim.cloneFailed", { message: errorMessage(err) }));
+    }
   }
 
   private async rename(rest: string, reply: Reply, roomOps: RoomOps): Promise<void> {
