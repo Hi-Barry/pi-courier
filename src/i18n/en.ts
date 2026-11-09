@@ -416,6 +416,9 @@ const en: Record<MessageKey, string> = {
   "collab.claim.onboardFailed": "\n⚠️ Failed to send the onboarding note (binding unaffected): {message}",
   "collab.claim.cloneFailed": "❌ Clone failed (invite kept — retry with another dir or after fixing the network): {message}",
   "collab.claim.failed": "❌ Claim failed (invite kept — retry): {message}",
+  "collab.mailbox.digest":
+    "📬 Room updates since your last turn ({count}{droppedSuffix}):\n{lines}\n\n—— Current message below ——\n{text}",
+  "collab.mailbox.droppedSuffix": ", plus {count} older dropped (cap)",
   "router.enable.allAdminOnly": "❌ The all mode is admin-only (use trusted-only or mentions instead)",
   "router.enable.ok": "✅ Room enabled (mode: {mode})",
   "router.multiproject.forbidden": "❌ Not allowed (only trusted users can toggle multi-project mode)",

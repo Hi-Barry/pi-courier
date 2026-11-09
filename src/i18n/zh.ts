@@ -406,6 +406,9 @@ const zh = {
   "collab.claim.onboardFailed": "\n⚠️ 上岗通报发送失败(绑定不受影响): {message}",
   "collab.claim.cloneFailed": "❌ clone 失败(邀请保留,可换目录或修网后重试): {message}",
   "collab.claim.failed": "❌ 认领失败(邀请保留,可重试): {message}",
+  "collab.mailbox.digest":
+    "📬 你上一轮之后房间里的增量消息({count} 条{droppedSuffix}):\n{lines}\n\n—— 以下为本次消息 ——\n{text}",
+  "collab.mailbox.droppedSuffix": ",另有更早的 {count} 条因超限未保留",
   "router.enable.allAdminOnly": "❌ all 模式仅管理员可用(可采用 trusted-only 或 mentions)",
   "router.enable.ok": "✅ 本房间已启用 (mode: {mode})",
   "router.multiproject.forbidden": "❌ 无权限(仅信任用户可切换多工程模式)",

@@ -58,6 +58,7 @@ import {
   resolveSessionDir,
 } from "./command-map.js";
 import { ExtensionQuestions, type ExtensionUIRequestView, extensionUiTimeoutMs } from "./extension-questions.js";
+import { RoomMailbox } from "./mailbox.js";
 import { FallbackStreak, MODEL_FALLBACK_THRESHOLD, nextFallbackTarget } from "./model-switch.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
@@ -983,6 +984,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 票02(spec #299):房间 bot 登记簿读缓存 + 陌生房"无管理房"告警簿记。
   const botRegistry = new BotRegistry(roomOps);
   const unknownNoManagementWarned = new Set<string>();
+  // 票05(spec #299):房间增量信箱 —— 未触发的可见文本在此攒,触发时并入 prompt。
+  const mailbox = new RoomMailbox();
 
   const stages: Array<PipelineStageView & { handle: (ctx: StageContext) => Promise<boolean> }> = [
     {
@@ -992,12 +995,19 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       needsRpc: false,
       // 票02(spec #299):已登记的对端 bot 消息不触发、不进命令解析 ——
       // 防互聊回环的第一道闸(自家消息在 transport 层已滤,botFilter 补上
-      // "别人家的 bot")。票05 会把这里的丢弃升级为"进增量信箱"。
+      // "别人家的 bot")。票05 升级:不再丢弃,改为进房间增量信箱(可见文本
+      // 共享 —— 它们的最终回复是上下文的一部分)。
       // 排在授权之前:bot 不是人类用户,不进挑战流,也不该消耗授权副作用。
       handle: async (ctx) => {
         const bots = await botRegistry.botsOf(ctx.msg.chatId);
         if (!bots.has(ctx.msg.userId)) return false;
-        ctx.log.info(`🤖 对端 bot 消息不触发: ${ctx.msg.userId} in ${ctx.msg.chatId}`);
+        // 斜杠命令类文本不进信箱(与 guestTrigger 同规则,票05 评审整改)。
+        // 顺序耦合:botFilter 必须先于 guestTrigger —— 否则登记 bot 的消息
+        // 会经 guestTrigger 二次入信箱(阶段表测试钉住该顺序)。
+        if (ctx.msg.payload.kind === "text" && ctx.text && !ctx.text.startsWith("/")) {
+          mailbox.pushVisible(ctx.msg.chatId, ctx.msg.username, ctx.text);
+        }
+        ctx.log.info(`🤖 对端 bot 消息进增量信箱(不触发): ${ctx.msg.userId} in ${ctx.msg.chatId}`);
         return true;
       },
     },
@@ -1269,6 +1279,26 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // 首条积压后 5s(等回放波灌完)或本房间首条实时消息到达时结算。
       // off 模式 transport 根本不转发积压;这里再挡一道(手喂消息的兜底)。
       handle: async (ctx) => inbox.accept(ctx.msg),
+    },
+    {
+      name: "guestTrigger",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // 票05(spec #299):guest 房仅 @提及触发 —— 触发权分开,上下文共享。
+      // 未点名的可见文本(非斜杠命令)进房间增量信箱,prompt 触发时并入并
+      // 清空;斜杠命令类文本既不进信箱(防两端重复执行)也不触发。owner 房
+      // 与单项目模式不走本阶段,行为与 1.6.x 一致。积压征询(上面两阶段)
+      // 优先:回放波走既有征询/结算路径,不进信箱。
+      handle: async (ctx) => {
+        if (!ctx.multiProject || !ctx.msg.isGroupChat) return false;
+        if (projectManager.modeForRoom?.(ctx.msg.chatId) !== "guest") return false;
+        if (ctx.msg.wasMentioned === true) return false;
+        if (ctx.msg.payload.kind === "text" && ctx.text && !ctx.text.startsWith("/")) {
+          mailbox.pushVisible(ctx.msg.chatId, ctx.msg.username, ctx.text);
+        }
+        return true;
+      },
     },
     {
       name: "multiproject",
@@ -1605,6 +1635,10 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         } catch {
           // 接力检查的任何意外不得挡住 prompt 本身。
         }
+        // 票05(spec #299):触发点清仓增量信箱 —— 未触发的房间可见文本以摘要
+        // 并入本次 prompt;信箱空 = 原文逐字节(单 bot 房零变化)。drain 无失败
+        // 路径,置于 try 之外;prompt 失败在 catch 里 refund(失败不消耗)。
+        const mail = mailbox.drain(ctx.msg.chatId);
         try {
           // 两段式消费(AttachmentLedger 契约):peek 不动账,prompt 成功才
           // release —— 失败不消耗,重试仍带上(消费即清空是成功语义)。
@@ -1612,15 +1646,26 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           const quoted = ctx.msg.payload.kind === "text" ? ctx.msg.payload.quoted : undefined;
           // 来源标注(issue #124):附件与引用进 prompt 时带「谁发的」——
           // 第三方内容以数据身份入上下文,不冒充指令。
-          await rpc.prompt(
-            withAttachmentPrefix(withQuotePrefix(ctx.text, quoted), pending, {
-              user: ctx.msg.userId,
-              room: ctx.msg.chatId,
-            })
-          );
+          const basePrompt = withAttachmentPrefix(withQuotePrefix(ctx.text, quoted), pending, {
+            user: ctx.msg.userId,
+            room: ctx.msg.chatId,
+          });
+          const promptText =
+            mail.lines.length > 0
+              ? t("collab.mailbox.digest", {
+                  count: mail.lines.length,
+                  droppedSuffix:
+                    mail.dropped > 0 ? t("collab.mailbox.droppedSuffix", { count: mail.dropped }) : "",
+                  lines: mail.lines.join("\n"),
+                  text: basePrompt,
+                })
+              : basePrompt;
+          await rpc.prompt(promptText);
           attachmentLedger.release(ctx.msg.chatId, ctx.msg.userId);
         } catch (err) {
-          // rpc 已在此前 roomRpc() 解析,本段不可能产生 RPC_ABORT(审计工程批 票20)
+          // rpc 已在此前 roomRpc() 解析,本段不可能产生 RPC_ABORT(审计工程批 票20)。
+          // 信箱退款(票05 评审整改):失败不消耗,重试仍带上 —— 与附件同款语义。
+          mailbox.refund(ctx.msg.chatId, mail);
           await sendReply(ctx.msg.chatId, ctx.msg.transport, t("router.prompt.failed", { message: errorMessage(err) }));
         }
         return true;
