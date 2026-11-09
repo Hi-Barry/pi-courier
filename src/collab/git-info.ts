@@ -66,3 +66,9 @@ export async function cloneRepository(url: string, destDir: string): Promise<voi
   // 10 分钟上限:大仓库慢网下也要有底;超时 = 失败,认领可重试。
   await execFileP("git", ["clone", url, destDir], { timeout: 600_000 });
 }
+
+/** 从已有项目仓库开 git worktree(spec #299 票09):分支级隔离并行会话的
+ *  工作区 —— destDir 必须不存在,branch 由 git 校验。失败原样抛出。 */
+export async function gitWorktreeAdd(sourceDir: string, destDir: string, branch: string): Promise<void> {
+  await execFileP("git", ["-C", sourceDir, "worktree", "add", "-b", branch, destDir], { timeout: 120_000 });
+}
