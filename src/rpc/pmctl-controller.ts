@@ -17,6 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   cloneRepository,
+  gitWorktreeAdd,
   type ProjectGitInfo,
   probeProjectGit,
   repoNameFromUrl,
@@ -77,6 +78,8 @@ export interface PmctlControllerOptions {
   probeGit?: (workdir: string) => Promise<ProjectGitInfo | undefined>;
   /** 票04(spec #299):clone 缝(生产 = 真实 git clone;测试注入假件)。 */
   cloneRepo?: (url: string, destDir: string) => Promise<void>;
+  /** 票09(spec #299):worktree 缝(生产 = 真实 git worktree add;测试注入假件)。 */
+  worktreeAdd?: (sourceDir: string, destDir: string, branch: string) => Promise<void>;
 }
 
 /** Pending /pmctl rm confirmation, keyed by the chat that issued it. A first
@@ -198,6 +201,12 @@ export class PmctlController {
         return true;
       case "claim":
         await this.claim(rest, reply, roomOps);
+        return true;
+      case "share":
+        await this.share(rest, reply, roomOps);
+        return true;
+      case "wt":
+        await this.wt(rest, call, reply, roomOps);
         return true;
       default:
         await reply(t("pmctl.unknownOp", { op }));
@@ -667,6 +676,80 @@ export class PmctlController {
       // probe/绑定等非 clone 环节失败:邀请保留,可重试(与 clone 失败分开归因)。
       await reply(t("collab.claim.failed", { message: errorMessage(err) }));
     }
+  }
+
+  // ---- 票09(spec #299):拉客 + worktree 建房 -------------------------------
+
+  /** /pmctl share <project> <botMxid> — 把对端 bot 拉进指定项目房;对端
+   *  接受邀请后走它自己部署的认领流上岗(确认卡在它的管理房)。 */
+  private async share(rest: string, reply: Reply, roomOps: RoomOps): Promise<void> {
+    const [target, mxid] = splitFirst(rest);
+    // mxid 形状校验(票09 评审整改):@前缀 + 恰一个冒号,防把真人或语法
+    // 垃圾当 bot 邀进房;真正的存在性仍由 homeserver 回执兜底。
+    if (!target || !mxid || !/^@[^:\s]+:[^:\s]+$/.test(mxid)) {
+      await reply(t("pmctl.share.usage"));
+      return;
+    }
+    const found = this.findProject(target);
+    if (!found) {
+      await reply(t("pmctl.notFound", { target }));
+      return;
+    }
+    const [roomId] = found;
+    try {
+      await roomOps.inviteUser(roomId, mxid);
+    } catch (err) {
+      await reply(t("pmctl.share.failed", { mxid, message: errorMessage(err) }));
+      return;
+    }
+    await reply(t("pmctl.share.ok", { mxid, room: roomId }));
+  }
+
+  /** /pmctl wt <project> <branch> — 从项目仓库现开 git worktree(分支级
+   *  隔离并行会话的工作区),落地项目根 `<名>-<分支>` 后走 /pmctl new 的
+   *  既有建房全流程(建房→元数据→登记→急启动→欢迎卡)。 */
+  private async wt(rest: string, call: PmctlCall, reply: Reply, roomOps: RoomOps): Promise<void> {
+    const [target, branch] = splitFirst(rest);
+    if (!target || !branch || branch.startsWith("-")) {
+      await reply(t("pmctl.wt.usage"));
+      return;
+    }
+    const found = this.findProject(target);
+    if (!found) {
+      await reply(t("pmctl.notFound", { target }));
+      return;
+    }
+    const [, source] = found;
+    const name = `${projectLabelOf(source)}-${branch}`;
+    const dest = this.resolveProjectPath(name);
+    if (dest === null) {
+      await reply(t("pmctl.pathEscape", { path: name }));
+      return;
+    }
+    if (existsSync(dest)) {
+      await reply(t("pmctl.wt.exists", { dir: dest }));
+      return;
+    }
+    // 前置校验(票09 评审整改):标签与 win32 宿主性在 worktree 落盘**之前**
+    // 判定 —— 否则 newProject 后段拒绝时留下无主 worktree 目录(半途状态)。
+    const labelError = validateProjectLabel(name, this.currentLabels());
+    if (labelError) {
+      await reply(`❌ ${labelError}`);
+      return;
+    }
+    const pathError = this.win32WorkdirError(dest);
+    if (pathError) {
+      await reply(pathError);
+      return;
+    }
+    try {
+      await (this.opts.worktreeAdd ?? gitWorktreeAdd)(source.workdir, dest, branch);
+    } catch (err) {
+      await reply(t("pmctl.wt.fail", { message: errorMessage(err) }));
+      return;
+    }
+    // 复用 newProject 的建房全流程:显式路径落榜,分支名作项目名的一部分。
+    await this.newProject(`${name} ${dest}`, call, reply, roomOps);
   }
 
   private async rename(rest: string, reply: Reply, roomOps: RoomOps): Promise<void> {

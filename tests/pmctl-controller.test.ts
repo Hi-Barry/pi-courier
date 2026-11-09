@@ -1008,4 +1008,89 @@ describe("PmctlController", () => {
     expect(replies.at(-1)).toContain("clone 失败");
     expect(store.get().collab?.pendingClaims).toHaveLength(1);
   });
+
+
+  // ---- 票09(spec #299):拉客 + worktree 建房 --------------------------------
+describe("PmctlController share & wt (spec #299 票09)", () => {
+  it("/pmctl share invites the peer bot into the project room", async () => {
+    const { handle, ops, pmMock, replies } = await isolatedController(
+      {},
+      { inviteUser: vi.fn().mockResolvedValue(undefined) }
+    );
+    pmMock.registerProject("!proj:server", "/w/p", "proj");
+    await handle("/pmctl share proj @peerbot:server");
+    expect(ops["inviteUser"]).toHaveBeenCalledWith("!proj:server", "@peerbot:server");
+    expect(replies.at(-1)).toContain("已邀请");
+  });
+
+  it("/pmctl share usage on missing/invalid mxid; invite failure surfaces the error", async () => {
+    const { handle, replies } = await isolatedController(
+      {},
+      { inviteUser: vi.fn().mockRejectedValue(new Error("没有权限")) }
+    );
+    await handle("/pmctl share");
+    expect(replies.at(-1)).toContain("用法");
+    const { handle: h2, replies: r2, pmMock: pm2 } = await isolatedController(
+      {},
+      { inviteUser: vi.fn().mockRejectedValue(new Error("没有权限")) }
+    );
+    pm2.registerProject("!p:server", "/w/p", "p");
+    await h2("/pmctl share p @peerbot:server");
+    expect(r2.at(-1)).toContain("邀请失败");
+  });
+
+  it("/pmctl wt creates a worktree via the seam and runs the full new-project flow", async () => {
+    const worktreeAdd = vi.fn().mockResolvedValue(undefined);
+    const { handle, pmMock, replies } = await isolatedController(
+      {},
+      {},
+      { worktreeAdd }
+    );
+    pmMock.registerProject("!p:server", "/w/src", "proj");
+    await handle("/pmctl wt proj feature-x");
+    expect(worktreeAdd).toHaveBeenCalledWith("/w/src", resolve("/home/you/Projects", "proj-feature-x"), "feature-x");
+    // 复用 newProject 全流程:登记落榜(项目名 proj-feature-x)
+    expect(pmMock.registerProject).toHaveBeenCalledWith("!newroom:server", resolve("/home/you/Projects", "proj-feature-x"), "proj-feature-x");
+    expect(replies.at(-1)).toContain("创建完成");
+  });
+
+  it("/pmctl wt pre-validates the derived label BEFORE touching git (no orphan worktree)", async () => {
+    const worktreeAdd = vi.fn();
+    const { handle, pmMock, replies } = await isolatedController(
+      {},
+      {},
+      { worktreeAdd }
+    );
+    pmMock.registerProject("!p:server", "/w/src", "proj");
+    pmMock.registerProject("!q:server", "/w/q", "proj-feature-x");
+    await handle("/pmctl wt proj feature-x"); // 派生标签与存量撞名 → git 不落地
+    expect(worktreeAdd).not.toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("❌");
+  });
+
+  it("/pmctl wt refuses an existing dir and surfaces worktree failures", async () => {
+    // 目录撞名:派生目标 <项目根>/proj-feat 已存在 → 拒绝,不碰 worktree
+    // (isolated 夹具 homedir 指向 tmpDir,workdir 也指过去,避免越出沙箱建目录)
+    mkdirSync(join(tmpDir, "proj-feat"), { recursive: true });
+    const worktreeAdd = vi.fn();
+    const { handle, replies, pmMock } = await isolatedController(
+      { workdir: tmpDir },
+      {},
+      { worktreeAdd }
+    );
+    pmMock.registerProject("!p:server", "/w/src", "proj");
+    await handle("/pmctl wt proj feat");
+    expect(replies.at(-1)).toContain("已存在");
+    expect(worktreeAdd).not.toHaveBeenCalled();
+    const { handle: h2, replies: r2, pmMock: pm3 } = await isolatedController(
+      {},
+      {},
+      { worktreeAdd: vi.fn().mockRejectedValue(new Error("分支冲突")) }
+    );
+    pm3.registerProject("!p:server", "/w/src", "proj");
+    await h2("/pmctl wt proj feature-y");
+    expect(r2.at(-1)).toContain("worktree 创建失败");
+  });
+});
+
 });
