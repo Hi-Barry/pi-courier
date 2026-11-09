@@ -387,6 +387,34 @@ describe("roomToolsToggle × typing 续期 (spec #299 票06)", () => {
   });
 });
 
+describe("room-level command broadcast (spec #299 票07)", () => {
+  function makeGuestFixture2(opts: Parameters<typeof makeCollabFixture>[0] = {}) {
+    const fx = makeCollabFixture(opts);
+    (fx.projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => roomId === "!room:server"
+    );
+    (fx.projectManager as unknown as Record<string, ReturnType<typeof vi.fn>>).modeForRoom = vi
+      .fn()
+      .mockImplementation((roomId: string) => (roomId === "!room:server" ? "guest" : undefined));
+    return fx;
+  }
+
+  it("unmentioned /compact in a guest room passes through — THIS deployment intercepts and compacts its own session", async () => {
+    const fx = makeGuestFixture2(ENABLED);
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "/compact", wasMentioned: false }));
+    // 各端各自拦截:本端命令解析执行压缩,不触发 prompt,不进信箱
+    expect((fx.rpc as unknown as Record<string, ReturnType<typeof vi.fn>>).compact).toHaveBeenCalled();
+    expect(fx.rpc.prompt).not.toHaveBeenCalled();
+  });
+
+  it("other slash commands in a guest room stay dropped (no trigger, no execution)", async () => {
+    const fx = makeGuestFixture2(ENABLED);
+    await fx.router.handleIncoming(makeMsg({ ...GROUP, text: "/model zai/glm-5.3", wasMentioned: false }));
+    expect((fx.rpc as unknown as Record<string, ReturnType<typeof vi.fn>>).compact).not.toHaveBeenCalled();
+    expect(fx.rpc.prompt).not.toHaveBeenCalled();
+  });
+});
+
 describe("restart gap declaration (spec #299 票08)", () => {
   function makeGuestFixture3(opts: Parameters<typeof makeCollabFixture>[0] = {}) {
     const fx = makeCollabFixture(opts);
