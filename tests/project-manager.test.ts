@@ -278,3 +278,47 @@ describe("ProjectManager per-room session dirs (spec #299 票01)", () => {
     expect(flippedDerived).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
   });
 });
+
+describe("ProjectManager binding-event session dirs (spec #299 票01 评审整改)", () => {
+  it("registerProject into an OCCUPIED workdir persists a derived dir for the newcomer; the resident keeps its fixed path", async () => {
+    const { pm, spawnOpts, store } = makePM({ "!b:s": { name: "resident", workdir: "/w/shared" } });
+    pm.registerProject("!a:s", "/w/shared", "newcomer");
+    const entries = store.get().projects!;
+    expect(entries["!b:s"].sessionDir).toBeUndefined(); // 在住者不被改写
+    expect(entries["!a:s"].sessionDir).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
+    await pm.getRpcForRoom("!a:s");
+    expect(spawnOpts[0].args).toEqual(expect.arrayContaining(["--session-dir", entries["!a:s"].sessionDir!]));
+  });
+
+  it("mv into an OCCUPIED workdir derives the MOVER — the resident's history is never touched", async () => {
+    const { pm, store } = makePM({
+      "!b:s": { name: "resident", workdir: "/w/shared" },
+      "!a:s": { name: "mover", workdir: "/w/other" },
+    });
+    await pm.updateProjectWorkdir("!a:s", "/w/shared");
+    const entries = store.get().projects!;
+    expect(entries["!b:s"].workdir).toBe("/w/shared");
+    expect(entries["!b:s"].sessionDir).toBeUndefined(); // 在住者原路径不变
+    expect(entries["!a:s"].sessionDir).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
+    // 会话目录单点访问:搬入者派生、在住者固定 —— /pmctl show 与 spawn 同源
+    expect(pm.sessionDirFor("!a:s")).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
+    expect(pm.sessionDirFor("!b:s")).toBe(`/w/shared/${PROJECT_SESSION_DIR}`);
+  });
+
+  it("spawn prefers the persisted sessionDir; legacy entries fall back to the fixed path", async () => {
+    const { pm, spawnOpts } = makePM({
+      "!a:s": { name: "persisted", workdir: "/w/ai", sessionDir: "/w/ai/.pi-session-room-deadbeef" },
+      "!b:s": { name: "legacy", workdir: "/w/legacy" },
+    });
+    await pm.getRpcForRoom("!a:s");
+    await pm.getRpcForRoom("!b:s");
+    expect(spawnOpts[0].args).toEqual(expect.arrayContaining(["--session-dir", "/w/ai/.pi-session-room-deadbeef"]));
+    expect(spawnOpts[1].args).toEqual(expect.arrayContaining(["--session-dir", `/w/legacy/${PROJECT_SESSION_DIR}`]));
+  });
+
+  it("registerProject into an unoccupied workdir persists the fixed path (zero migration for fresh binds)", async () => {
+    const { pm, store } = makePM({});
+    pm.registerProject("!a:s", "/w/solo", "solo");
+    expect(store.get().projects!["!a:s"].sessionDir).toBe(`/w/solo/${PROJECT_SESSION_DIR}`);
+  });
+});

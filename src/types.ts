@@ -316,6 +316,9 @@ export interface AvatarCustomRef {
 export interface ProjectConfig {
   name?: string;
   workdir: string;
+  /** 每房会话目录(spec #299 票01):绑定事件(/pmctl new、mv)时解析并
+   *  持久化的绝对路径;缺省 = 旧条目,spawn 走键序启发式回退。 */
+  sessionDir?: string;
   /** 预设模型,`provider/id`(与 /model 参数同语法;裸 id 按可用模型列表解析) */
   model?: string;
   /** 预设思考级别:off|minimal|low|medium|high|xhigh|max(缺省回落全局现状) */

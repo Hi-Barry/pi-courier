@@ -34,13 +34,6 @@ import type { RoomOps } from "../transports/interface.js";
 import { win32PathProblem, win32SamePath } from "../win32-path.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
-import { projectSessionDirFor } from "./project-manager.js";
-
-/** 票01(spec #299):从既有 listProjects 重建 roomId→项目映射,供每房
- *  会话目录解析 —— 复用依赖面里已有的方法,不给 ProjectManager 加新要求。 */
-function projectsRecordOf(pm: ProjectManager): Record<string, ProjectEntry> {
-  return Object.fromEntries(pm.listProjects());
-}
 
 export interface PmctlCall {
   /** Room the command came from (also the pending-rm confirmation key). */
@@ -407,7 +400,7 @@ export class PmctlController {
         room: roomId,
         workdir: entry.workdir,
         status: pm.isRunning(roomId) ? t("pmctl.statusRunning") : t("pmctl.statusLazy"),
-        session: projectSessionDirFor(roomId, entry, projectsRecordOf(pm)),
+        session: pm.sessionDirFor(roomId),
         presets: presets.join(" · ") || t("pmctl.show.noPresets"),
       })
     );
@@ -501,10 +494,8 @@ export class PmctlController {
       return;
     }
     await this.opts.projectManager.updateProjectWorkdir(roomId, resolvedWorkdir);
-    // 会话目录跟随每房派生规则(spec #299 票01),与 spawn 同一解析源。
-    const sessionDirName = path.basename(
-      projectSessionDirFor(roomId, { ...entry, workdir: resolvedWorkdir }, projectsRecordOf(this.opts.projectManager))
-    );
+    // 会话目录跟随绑定事件决策(spec #299 票01),与 spawn 同一解析源。
+    const sessionDirName = path.basename(this.opts.projectManager.sessionDirFor(roomId));
     await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir, sessionDir: sessionDirName }));
   }
 
