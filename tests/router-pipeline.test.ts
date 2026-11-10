@@ -24,10 +24,20 @@ describe("pipeline stage table (spec #72 票3/C1)", () => {
   it("declares the stages in execution order with their invariants", () => {
     const { router } = makeFixtures();
     expect(router.pipeline().map((s) => s.name)).toEqual([
+      // 票02(spec #299):botFilter 置顶(对端 bot 不触发、不进命令解析,
+      // 在挑战流之前),unknownRoomGate 紧随 authorization(陌生群不接活,
+      // 在附件分流之前)。
+      "botFilter",
       "authorization",
+      // 任务2 审计整改:guestTrigger 前移到授权之后、授权门之前 —— 群聊频道
+      // 未 enable 时授权门会把未点名文本整条截停,信箱将永远收不到。
+      "guestTrigger",
+      "unknownRoomGate",
       "attachments",
       "adminCommands",
       "groupEnable",
+      // 票06(spec #299):项目房内 /toggletools 房间级覆盖(全局开关仍在 adminCommands)。
+      "roomToolsToggle",
       "authorizationGate",
       "backlogAnswer",
       "backlogInbox",
@@ -44,11 +54,14 @@ describe("pipeline stage table (spec #72 票3/C1)", () => {
     ]);
   });
 
-  it("preAuth stages are exactly the self-gated command families", () => {
+  it("preAuth stages are exactly the self-gated stages (command families + bot filter)", () => {
     const { router } = makeFixtures();
     expect(router.pipeline().filter((s) => s.preAuth).map((s) => s.name)).toEqual([
+      "botFilter",
       "adminCommands",
       "groupEnable",
+      // 票06(spec #299):项目房内的房间级工具流开关,自带门禁(admin+项目房)。
+      "roomToolsToggle",
     ]);
   });
 

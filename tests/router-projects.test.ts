@@ -289,6 +289,10 @@ describe("message-router multi-project routing", () => {
 
   it("rejects /pmctl from a project room", async () => {
     enableRoom("!projroom:server");
+    // 票02(spec #299)陌生房闸门:该项目房必须被标记为已映射,否则按陌生群拦截。
+    (projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => roomId === "!projroom:server"
+    );
     const router = makeRouter();
     await router.handleIncoming(
       makeMsg({ chatId: "!projroom:server", isGroupChat: true, text: "/pmctl list" })
@@ -387,7 +391,7 @@ describe("message-router multi-project routing", () => {
     await router.handleIncoming(makeMsg({ text: "hi" }));
     router.handleEvent({ type: "turn_start" }, rpc);
     await new Promise((r) => setTimeout(r, 0));
-    expect(sendTyping).toHaveBeenCalledWith("!dm:server", "matrix");
+    expect(sendTyping).toHaveBeenCalledWith("!dm:server", "matrix", true);
   });
 
   it("a project-room prompt cannot misroute a DM reply (per-process bindings)", async () => {
@@ -861,6 +865,10 @@ describe("multi-project log tagging (spec #34 票3)", () => {
   it("auth lines stay untagged even inside a project room", async () => {
     (fx.projectManager.labelForRoom as ReturnType<typeof vi.fn>).mockImplementation(
       (roomId: string) => (roomId === "!proj:server" ? "ai-api" : undefined)
+    );
+    // 票02(spec #299)陌生房闸门:该项目房必须被标记为已映射,否则按陌生群拦截。
+    (fx.projectManager.isProjectRoom as ReturnType<typeof vi.fn>).mockImplementation(
+      (roomId: string) => roomId === "!proj:server"
     );
     fx.auth.loadFromConfig({ trustedUsers: ["matrix:@barry:server"], adminUserId: "matrix:@barry:server", channels: {} });
     const router = fx.makeRouter();

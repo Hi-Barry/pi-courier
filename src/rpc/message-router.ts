@@ -6,14 +6,16 @@
  *   agent events ────────────────> router ──> reply back to the messenger
  */
 
+import * as path from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AUDIT_EVENTS, type AuditLog } from "../audit/audit-log.js";
 import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
+import { repoNameFromUrl } from "../collab/git-info.js";
 import { commandPolicy } from "../command-registry.js";
-import { aggregateToolTurns, bashOutputLimit, type ConfigStore, managementRoomId, modelFallbackChain, recapOnNew, toolCallArgLimit, WORKFLOW_CARD_DEGRADED_RETRY_MS_DEFAULT, workflowCardThrottleMs, workflowProgressCard } from "../config.js";
+import { aggregateToolTurns, bashOutputLimit, type ConfigStore, effectiveWorkdir, managementRoomId, modelFallbackChain, recapOnNew, toolCallArgLimit, WORKFLOW_CARD_DEGRADED_RETRY_MS_DEFAULT, workflowCardThrottleMs, workflowProgressCard } from "../config.js";
 import { errorMessage } from "../errors.js";
 import {
   extractTextFromMessage,
@@ -42,6 +44,7 @@ import { isTerminal, type WorkflowProgressIR, type WorkflowRunStatus } from "../
 import type { PersistedAttachmentEntry } from "./attachment-ledger.js";
 import { AttachmentLedger } from "./attachment-ledger.js";
 import { BacklogInbox } from "./backlog-inbox.js";
+import { BotRegistry } from "./bot-registry.js";
 import {
   type BashTracker,
   bashTimeoutText,
@@ -55,6 +58,7 @@ import {
   resolveSessionDir,
 } from "./command-map.js";
 import { ExtensionQuestions, type ExtensionUIRequestView, extensionUiTimeoutMs } from "./extension-questions.js";
+import { RoomMailbox } from "./mailbox.js";
 import { FallbackStreak, MODEL_FALLBACK_THRESHOLD, nextFallbackTarget } from "./model-switch.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
@@ -72,7 +76,7 @@ export interface MessageRouterDeps {
   /** Send a text reply to a chat via a transport (errors swallowed by caller) */
   sendReply: (chatId: string, transport: string, text: string) => Promise<void>;
   /** Best-effort typing indicator (silent no-op when unavailable) */
-  sendTyping: (chatId: string, transport: string) => Promise<void>;
+  sendTyping: (chatId: string, transport: string, active?: boolean) => Promise<void>;
   /** Injected config store — the single runtime read/write path. */
   store: ConfigStore;
   /** Room-management capability (Matrix). Optional: absent in single-project
@@ -498,6 +502,26 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
     && !store.get().hideToolCalls
     && deps.editReply !== undefined
     && deps.sendLiveCard !== undefined;
+
+  // 票06(spec #299):房间级工具流三态(auto/on/off)解析单点。显式 on/off
+  // 覆盖一切 —— 但 "on" 仍需活卡缝齐备且全局 hideToolCalls 未开(全局开关
+  // 保留为 kill-switch,评审整改:不再绕过),否则降级 off 防工具行无声丢失。
+  // auto:协作房关(本房绑定为 guest,或登记簿已见对端 bot —— 决定11
+  // "含客座的协作房=关"对 owner 侧同样成立);owner 单 bot 房跟随全局现状。
+  // 活卡与 typing 互补不同时开:工具流开的房活卡表活,关的房 typing 表活
+  // (活卡房 turn_start 不再发 typing,系本票有意变化,替代 1.6.x 的无条件首拍)。
+  const roomToolCallsMode = (roomId: string): "on" | "off" => {
+    const entry = projectManager.projectMap?.()[roomId];
+    const setting = entry?.showToolCalls ?? "auto";
+    if (setting === "off") return "off";
+    if (setting === "on") {
+      return deps.sendLiveCard !== undefined && deps.editReply !== undefined && !store.get().hideToolCalls
+        ? "on"
+        : "off";
+    }
+    const collabRoom = entry?.mode === "guest" || (botRegistry.cached(roomId)?.size ?? 0) > 0;
+    return collabRoom ? "off" : liveCardAggregation() ? "on" : "off";
+  };
 
   // 活卡出站链(per-rpc FIFO,与 transport 的 enqueueSend 同构):中间回合的
   // 「开卡/编辑」严格按 turn_end 到达顺序结算 —— 后一回合的决策(有无活卡)
@@ -977,7 +1001,47 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 唯一消耗点);preAuth=true 的阶段自带门禁,在授权门之前运行。
   const RPC_ABORT = Symbol("rpc-abort");
 
+  // 票02(spec #299):房间 bot 登记簿读缓存 + 陌生房"无管理房"告警簿记。
+  const botRegistry = new BotRegistry(roomOps);
+  const unknownNoManagementWarned = new Set<string>();
+  // 票05(spec #299):房间增量信箱 —— 未触发的可见文本在此攒,触发时并入 prompt。
+  const mailbox = new RoomMailbox();
+  // 票06(spec #299):工具流关闭房间的 typing 续期节流(5s)与回合停止簿记。
+  // sendTyping 缝兼容旧假件(可能不返回 Promise):统一 Promise.resolve 包裹。
+  const TYPING_RENEW_INTERVAL_MS = 5_000;
+  const lastTypingRenewalAt = new Map<string, number>();
+  const sendTypingSafe = (chatId: string, transport: string, active = true): void => {
+    void Promise.resolve(sendTyping(chatId, transport, active)).catch(() => {});
+  };
+  // 票08(spec #299):重启缺口声明簿记 —— 每房每进程生命周期声明一次。
+  const bootedAt = new Date();
+  const restartGapDeclared = new Set<string>();
+
   const stages: Array<PipelineStageView & { handle: (ctx: StageContext) => Promise<boolean> }> = [
+    {
+      name: "botFilter",
+      preAuth: true,
+      consumesLedger: false,
+      needsRpc: false,
+      // 票02(spec #299):已登记的对端 bot 消息不触发、不进命令解析 ——
+      // 防互聊回环的第一道闸(自家消息在 transport 层已滤,botFilter 补上
+      // "别人家的 bot")。票05 升级:不再丢弃,改为进房间增量信箱(可见文本
+      // 共享 —— 它们的最终回复是上下文的一部分)。
+      // 排在授权之前:bot 不是人类用户,不进挑战流,也不该消耗授权副作用。
+      handle: async (ctx) => {
+        const bots = await botRegistry.botsOf(ctx.msg.chatId);
+        if (!bots.has(ctx.msg.userId)) return false;
+        // 斜杠命令类文本不进信箱(与 guestTrigger 同规则,票05 评审整改)。
+        // 顺序耦合:botFilter 必须先于 guestTrigger —— 否则登记 bot 的消息
+        // 会经 guestTrigger 二次入信箱(阶段表测试钉住该顺序)。
+        // senderLabel 用 MXID(任务2 审计整改,防 displayname 冒充)。
+        if (ctx.msg.payload.kind === "text" && ctx.text && !ctx.text.startsWith("/")) {
+          mailbox.pushVisible(ctx.msg.chatId, ctx.msg.userId, ctx.text);
+        }
+        ctx.log.info(`🤖 对端 bot 消息进增量信箱(不触发): ${ctx.msg.userId} in ${ctx.msg.chatId}`);
+        return true;
+      },
+    },
     {
       name: "authorization",
       preAuth: false,
@@ -997,6 +1061,109 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           ctx.msg.transport
         );
         return false;
+      },
+    },
+    {
+      name: "guestTrigger",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // 票05(spec #299):guest 房仅 @提及触发 —— 触发权分开,上下文共享。
+      // 票审计整改(任务2):本阶段从积压后**前移到 authorization 之后** ——
+      // 群聊频道未 enable 时 authorizationGate 会把未授权消息整条截停,
+      // guest 房的未点名文本永远到不了信箱(真机 lab 复现)。现在的口径:
+      //   @点名        → 照常走管线(授权门裁决,门后 prompt)
+      //   房间级命令   → 受信者放行本端解析(各端各自执行,票07 模式)
+      //   受信未点名   → 增量信箱(可见文本共享;斜杠不进信箱)—— 频道模式
+      //                  只裁"触发",不裁被动共享,故按 isTrustedUser 判定
+      //   未受信       → 静默吞(陌生人不可投毒信箱,spec 授权模型优先)
+      // owner 房与单项目模式不走本阶段,行为与 1.6.x 一致。
+      handle: async (ctx) => {
+        if (!ctx.multiProject || !ctx.msg.isGroupChat) return false;
+        if (projectManager.modeForRoom?.(ctx.msg.chatId) !== "guest") return false;
+        if (ctx.msg.wasMentioned === true) return false;
+        if (!auth.isTrustedUser(ctx.msg.userId, ctx.msg.transport)) return true; // 未受信静默
+        if (ctx.msg.payload.kind === "text" && ctx.text && /^\/compact(\s|$)/i.test(ctx.text)) {
+          return false; // 房间级命令:受信者放行本端执行
+        }
+        if (ctx.msg.payload.kind === "text" && ctx.text && !ctx.text.startsWith("/")) {
+          mailbox.pushVisible(ctx.msg.chatId, ctx.msg.userId, ctx.text);
+        }
+        return true;
+      },
+    },
+    {
+      name: "unknownRoomGate",
+      preAuth: false,
+      consumesLedger: false,
+      needsRpc: false,
+      // 票02(spec #299):多项目模式下,未映射的群聊房间一律不路由、绝不
+      // 落默认项目 —— 安全默认(Q13 决议:陌生房接活是事故源)。进房后向
+      // 本部署管理房发一次认领提示(落盘簿记,同房不重复刷);管理房缺位
+      // 则 warn 一次(进程内存簿记,提示送达前不标记)。排在附件之前:
+      // 陌生房连附件清单都不该进。collab.allowUnknownRoomFallback=true
+      // 恢复 1.6.x 旧行为(回落默认项目)。
+      handle: async (ctx) => {
+        const { msg } = ctx;
+        if (!ctx.multiProject || !msg.isGroupChat) return false;
+        if (projectManager.isProjectRoom(msg.chatId)) return false;
+        const config = store.get();
+        if (config.collab?.allowUnknownRoomFallback === true) return false;
+        if (managementRoomId(config) === msg.chatId) return false;
+        // 票04:带项目元数据(含仓库地址)→ 发认领确认卡并落簿待认领;
+        // 无元数据 → 普通提示(每房一次)。任务3 场景测试修复:两簿记分离 ——
+        // 普通提示过的房在 URL 后补(mv 重探)后仍可升级发卡,后补通道不再死锁;
+        // 认领卡自己的去重 = pendingClaims 挂单或 claimCardRooms 已发过。
+        const mgRoom = managementRoomId(store.get());
+        if (!mgRoom) {
+          // 管理房缺位:提示无处送达 —— 每房 warn 一次(内存簿记,不标记落盘,
+          // 提示送达前不算数)。
+          if (!unknownNoManagementWarned.has(msg.chatId)) {
+            unknownNoManagementWarned.add(msg.chatId);
+            logger.warn(`🚪 陌生房 ${msg.chatId} 不接活,但本部署尚无管理房,认领提示无法送达`);
+          }
+          return true;
+        }
+        const meta = (await roomOps?.getProjectMeta?.(msg.chatId)) ?? null;
+        const fresh = store.get().collab;
+        const hasPendingClaim = (fresh?.pendingClaims ?? []).some((c) => c.roomId === msg.chatId);
+        const rejectedKey = `${msg.chatId}|${meta?.gitUrl ?? ""}`;
+        const rejectedForThisUrl = (fresh?.claimRejectedKeys ?? []).includes(rejectedKey);
+        const noticed = fresh?.unknownNotifiedRooms ?? [];
+        if (meta?.gitUrl && !hasPendingClaim && !rejectedForThisUrl) {
+          // 目录展示与 /pmctl claim 的落地口径同源(effectiveWorkdir =
+          // resolveProjectPath 的根;评审整改:不再 workdir??"~" 手拼)。
+          const dir = path.join(effectiveWorkdir(store.get()), repoNameFromUrl(meta.gitUrl));
+          const index = (fresh?.pendingClaims ?? []).length + 1;
+          await sendReply(
+            mgRoom,
+            msg.transport,
+            t("collab.claim.card", { room: msg.chatId, name: meta.name, url: meta.gitUrl, dir, index })
+          );
+          // 落盘前重读(spec #299 票04 评审整改):sendReply 是 await 点,
+          // handleIncoming 可并发 —— 写回以当下 store 值为基。
+          const freshNow = store.get().collab;
+          store.update({
+            collab: {
+              ...freshNow,
+              unknownNotifiedRooms: [...(freshNow?.unknownNotifiedRooms ?? []), msg.chatId].slice(-200),
+              pendingClaims: [
+                ...(freshNow?.pendingClaims ?? []),
+                { roomId: msg.chatId, url: meta.gitUrl, projectName: meta.name, at: Date.now() },
+              ],
+            },
+          });
+          ctx.log.info(`🚪 陌生房 ${msg.chatId} 带项目元数据,已向管理房发认领卡(#${index})`);
+        } else if (!noticed.includes(msg.chatId) && !hasPendingClaim) {
+          await sendReply(mgRoom, msg.transport, t("router.unknownRoom.notice", { room: msg.chatId }));
+          // 落盘前重读(票02 评审整改口径):await 之后的写回以当下值为基。
+          const freshNow = store.get().collab;
+          store.update({
+            collab: { ...freshNow, unknownNotifiedRooms: [...(freshNow?.unknownNotifiedRooms ?? []), msg.chatId].slice(-200) },
+          });
+          ctx.log.info(`🚪 陌生房 ${msg.chatId} 不接活,已向管理房发认领提示`);
+        }
+        return true;
       },
     },
     {
@@ -1129,6 +1296,32 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         store.update({ auth: auth.exportConfig() });
         await sendReply(msg.chatId, msg.transport, t("router.enable.ok", { mode }));
         logger.info(`[auth] room ${msg.chatId} enabled by ${msg.username} (${mode})`);
+        return true;
+      },
+    },
+    {
+      name: "roomToolsToggle",
+      preAuth: true,
+      consumesLedger: false,
+      needsRpc: false,
+      // 票06(spec #299):项目房内 /toggletools <auto|on|off> —— 房间级
+      // 工具流覆盖(缺省 auto=owner 开/guest 关)。管理房与 DM 的全局开关
+      // 走既有 adminCommands 路径;本阶段只认多项目下的项目房,admin 门内判。
+      handle: async (ctx) => {
+        const { msg, text } = ctx;
+        if (!/^\/toggletools(\s|$)/i.test(text)) return false;
+        if (!ctx.multiProject || !msg.isGroupChat || !projectManager.isProjectRoom(msg.chatId)) return false;
+        if (!auth.isAdminUser(msg.userId, msg.transport)) {
+          await sendReply(msg.chatId, msg.transport, t("pmctl.adminOnly"));
+          return true;
+        }
+        const arg = text.split(/\s+/)[1]?.toLowerCase() ?? "";
+        if (arg !== "auto" && arg !== "on" && arg !== "off") {
+          await sendReply(msg.chatId, msg.transport, t("collab.tools.usage"));
+          return true;
+        }
+        projectManager.setRoomShowToolCalls(msg.chatId, arg);
+        await sendReply(msg.chatId, msg.transport, t("collab.tools.ok", { mode: arg }));
         return true;
       },
     },
@@ -1513,6 +1706,20 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         } catch {
           // 接力检查的任何意外不得挡住 prompt 本身。
         }
+        // 票05(spec #299):触发点清仓增量信箱 —— 未触发的房间可见文本以摘要
+        // 并入本次 prompt;信箱空 = 原文逐字节(单 bot 房零变化)。drain 无失败
+        // 路径,置于 try 之外;prompt 失败在 catch 里 refund(失败不消耗)。
+        const mail = mailbox.drain(ctx.msg.chatId);
+        // 票08(spec #299):诚实声明 —— guest 房本进程首次触发注明重启缺口
+        // (重启期间的房间消息可能未进信箱;不编造条数,不装知道)。每房一次。
+        let gapNote = "";
+        if (
+          !restartGapDeclared.has(ctx.msg.chatId) &&
+          ctx.multiProject &&
+          projectManager.modeForRoom?.(ctx.msg.chatId) === "guest"
+        ) {
+          gapNote = `${t("collab.mailbox.restartGap", { at: bootedAt.toLocaleString() })}\n`;
+        }
         try {
           // 两段式消费(AttachmentLedger 契约):peek 不动账,prompt 成功才
           // release —— 失败不消耗,重试仍带上(消费即清空是成功语义)。
@@ -1520,15 +1727,29 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           const quoted = ctx.msg.payload.kind === "text" ? ctx.msg.payload.quoted : undefined;
           // 来源标注(issue #124):附件与引用进 prompt 时带「谁发的」——
           // 第三方内容以数据身份入上下文,不冒充指令。
-          await rpc.prompt(
-            withAttachmentPrefix(withQuotePrefix(ctx.text, quoted), pending, {
-              user: ctx.msg.userId,
-              room: ctx.msg.chatId,
-            })
-          );
+          const basePrompt = withAttachmentPrefix(withQuotePrefix(ctx.text, quoted), pending, {
+            user: ctx.msg.userId,
+            room: ctx.msg.chatId,
+          });
+          const promptText =
+            mail.lines.length > 0
+              ? t("collab.mailbox.digest", {
+                  count: mail.lines.length,
+                  droppedSuffix:
+                    mail.dropped > 0 ? t("collab.mailbox.droppedSuffix", { count: mail.dropped }) : "",
+                  lines: mail.lines.join("\n"),
+                  text: basePrompt,
+                })
+              : basePrompt;
+          await rpc.prompt(gapNote + promptText);
+          // 声明在 prompt 成功后烧掉(评审整改):首次触发失败(refund)时,
+          // 下次触发仍会补声明 —— 不因一次失败永久哑火。
+          if (gapNote) restartGapDeclared.add(ctx.msg.chatId);
           attachmentLedger.release(ctx.msg.chatId, ctx.msg.userId);
         } catch (err) {
-          // rpc 已在此前 roomRpc() 解析,本段不可能产生 RPC_ABORT(审计工程批 票20)
+          // rpc 已在此前 roomRpc() 解析,本段不可能产生 RPC_ABORT(审计工程批 票20)。
+          // 信箱退款(票05 评审整改):失败不消耗,重试仍带上 —— 与附件同款语义。
+          mailbox.refund(ctx.msg.chatId, mail);
           await sendReply(ctx.msg.chatId, ctx.msg.transport, t("router.prompt.failed", { message: errorMessage(err) }));
         }
         return true;
@@ -1649,6 +1870,22 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       logAgentEvent(event, log);
 
+      // 票06(spec #299):工具流关闭的房间,回合期间以原生 typing 续期表活
+      // (5s 节流;turn_start 已发首拍);turn_end 主动停,不等 10s TTL 尾巴。
+      if (target && event.type !== "turn_start") {
+        if (event.type === "turn_end") {
+          if (lastTypingRenewalAt.delete(target.chatId)) {
+            sendTypingSafe(target.chatId, target.transport, false);
+          }
+        } else if (roomToolCallsMode(target.chatId) === "off") {
+          const last = lastTypingRenewalAt.get(target.chatId) ?? 0;
+          if (Date.now() - last >= TYPING_RENEW_INTERVAL_MS) {
+            lastTypingRenewalAt.set(target.chatId, Date.now());
+            sendTypingSafe(target.chatId, target.transport);
+          }
+        }
+      }
+
       // Refresh the queue mirror before any routing decisions — /queue and the
       // stop/interrupt queue warning read this snapshot.
       if (event.type === "queue_update") {
@@ -1677,7 +1914,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       if (event.type === "turn_start") {
         if (target) {
-          sendTyping(target.chatId, target.transport).catch(() => {});
+          // 票06(spec #299):活卡与 typing 互补不同时开 —— 工具流开的房
+          // 活卡表活(不加 typing,与 1.6.x 一致);关的房 typing 表活。
+          if (roomToolCallsMode(target.chatId) === "off") {
+            sendTypingSafe(target.chatId, target.transport);
+            lastTypingRenewalAt.set(target.chatId, Date.now());
+          } else {
+            lastTypingRenewalAt.delete(target.chatId);
+          }
         }
         return;
       }
@@ -1737,7 +1981,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 出站链串行,顺序由架构保证而非时序运气。
         // 报错回合绕过聚合:失败行醒目直达,不埋进持续刷新的卡。
         // hideToolCalls、配置关、编辑缝未注入都落到下方现行派发路径。
-        if (turn.pendingTools && liveCardAggregation() && !isErrorTurn) {
+        if (turn.pendingTools && roomToolCallsMode(target.chatId) === "on" && !isErrorTurn) {
           const narration: string | null = turn.text;
           const segments = partitionToolCalls(
             turnMessage as AssistantMessage,

@@ -70,6 +70,10 @@ export interface MatrixClientPort {
   // ── 读取 ──
   getJoinedRooms(): Promise<string[]>;
   getJoinedRoomMembers(roomId: string): Promise<string[]>;
+  /** 全量房间状态(原始事件数组,type/state_key/sender/content)——bot 登记簿
+   *  (spec #299 票02)按自定义类型过滤 state_key 用,不做逐 key 探测;
+   *  sender 用于登记簿读侧来源校验(任务2 审计整改)。 */
+  getRoomState(roomId: string): Promise<Array<{ type: string; state_key: string; sender?: string; content: any }>>;
 
   // ── 出站 ──
   sendMessage(roomId: string, content: MatrixMessageContent): Promise<string>;

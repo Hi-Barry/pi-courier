@@ -12,12 +12,23 @@
  * boundary).
  */
 
+import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ChallengeAuth } from "../auth/challenge-auth.js";
+import {
+  cloneRepository,
+  gitWorktreeAdd,
+  type ProjectGitInfo,
+  probeProjectGit,
+  repoNameFromUrl,
+  sameRemoteUrl,
+} from "../collab/git-info.js";
 import {
   activeSpaceRoomId,
   type ConfigStore,
   effectiveInstanceName,
+  effectiveWorkdir,
   projectAvatarPath,
   projectFallbackChain,
 } from "../config.js";
@@ -31,10 +42,10 @@ import { applyRoomCustomAvatar, ensureRoomAvatar, poolFilesForProjects } from ".
 import { pickPoolAvatarFile } from "../space-identity.js";
 import { provisionManagedRoom } from "../space-topology.js";
 import type { RoomOps } from "../transports/interface.js";
+import type { PendingClaim } from "../types.js";
 import { win32PathProblem, win32SamePath } from "../win32-path.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
-import { PROJECT_SESSION_DIR } from "./project-manager.js";
 
 export interface PmctlCall {
   /** Room the command came from (also the pending-rm confirmation key). */
@@ -62,6 +73,18 @@ export interface PmctlControllerOptions {
   /** Testing seam for the win32 path guards (issue #190); production default
    *  is the real process platform. */
   platform?: NodeJS.Platform;
+  /** 票03(spec #299):项目工作目录的 git 事实探测缝(origin 地址 + 默认
+   *  分支),供项目房元数据落盘。生产缺省 = 真实 git 探测(collab/git-info);
+   *  测试注入假件,绝不 spawn 真 git。 */
+  probeGit?: (workdir: string) => Promise<ProjectGitInfo | undefined>;
+  /** 票04(spec #299):clone 缝(生产 = 真实 git clone;测试注入假件)。 */
+  cloneRepo?: (url: string, destDir: string) => Promise<void>;
+  /** 票09(spec #299):worktree 缝(生产 = 真实 git worktree add;测试注入假件)。 */
+  worktreeAdd?: (sourceDir: string, destDir: string, branch: string) => Promise<void>;
+  /** 任务2 审计整改(认领流闭环):认领成功后把 guest 房 enable 为 mentions
+   *  频道 —— 否则群聊频道未 enable,连 @点名都过不了授权门。缺省(测试/旧
+   *  装配)= 不启用,行为与本整改前一致。 */
+  auth?: Pick<ChallengeAuth, "enableChannel" | "exportConfig">;
 }
 
 /** Pending /pmctl rm confirmation, keyed by the chat that issued it. A first
@@ -180,6 +203,15 @@ export class PmctlController {
         return true;
       case "rename":
         await this.rename(rest, reply, roomOps);
+        return true;
+      case "claim":
+        await this.claim(rest, reply, roomOps);
+        return true;
+      case "share":
+        await this.share(rest, reply, roomOps);
+        return true;
+      case "wt":
+        await this.wt(rest, call, reply, roomOps);
         return true;
       default:
         await reply(t("pmctl.unknownOp", { op }));
@@ -303,6 +335,29 @@ export class PmctlController {
       if (provision.elevationError) {
         await reply(t("pmctl.new.elevationFailed", { message: provision.elevationError.message }));
       }
+      // 票03(spec #299):项目房元数据(项目名 + git origin + 默认分支)落盘
+      // 到房间状态事件 —— 客座认领(clone)与任何读房者据此识别"这是哪个
+      // 仓库"。best-effort:失败只附注,不影响已创建的项目(与挂链/品牌
+      // 失败同款机制);URL 空缺(非 git 仓库)也照写,可后补。
+      let metaNote = "";
+      if (roomOps?.setProjectMeta) {
+        try {
+          const git = await (this.opts.probeGit ?? probeProjectGit)(resolvedWorkdir);
+          await roomOps.setProjectMeta(provision.roomId, { name: pname, ...git });
+        } catch (err) {
+          logger.warn(`[pmctl] 项目房元数据写入失败(${provision.roomId}): ${errorMessage(err)}`);
+          metaNote = t("pmctl.new.metaFailed", { message: errorMessage(err) });
+        }
+      }
+      // 票04(spec #299):owner 侧把自己的 MXID 写进房间 bot 登记簿 ——
+      // 客座认领后,其 botFilter/增量信箱靠登记簿识别"谁是 bot"(对称握手:
+      // 客座认领时也会写自己)。best-effort。
+      try {
+        const me = roomOps.getBotUserId();
+        if (me) await roomOps.registerRoomBot?.(provision.roomId, me);
+      } catch (err) {
+        logger.warn(`[pmctl] owner bot 自登记失败(${provision.roomId}): ${errorMessage(err)}`);
+      }
       // 票 #209:new 出来的项目就是要开发的项目,进程即刻拉起(急启动),
       // 不等首条消息;预设应用照旧走 getRpcForRoom 内部路径。失败不回滚:
       // 房间与登记保留,首条消息的既有启动路径自然重试,原因以附注进回执
@@ -335,7 +390,7 @@ export class PmctlController {
         }
       }
       // 挂链/品牌失败:单点文案附注拼进成功回执(展示层 — 不影响项目)。
-      const notes = provision.notes.map((note) => `\n⚠️ ${note}`).join("") + startNote + welcomeNote;
+      const notes = provision.notes.map((note) => `\n⚠️ ${note}`).join("") + startNote + welcomeNote + metaNote;
       await reply(
         t("pmctl.new.ok", { name: pname, room: provision.roomId, workdir: resolvedWorkdir, notes })
       );
@@ -401,7 +456,7 @@ export class PmctlController {
         room: roomId,
         workdir: entry.workdir,
         status: pm.isRunning(roomId) ? t("pmctl.statusRunning") : t("pmctl.statusLazy"),
-        session: `${entry.workdir}/${PROJECT_SESSION_DIR}`,
+        session: pm.sessionDirFor(roomId),
         presets: presets.join(" · ") || t("pmctl.show.noPresets"),
       })
     );
@@ -495,7 +550,237 @@ export class PmctlController {
       return;
     }
     await this.opts.projectManager.updateProjectWorkdir(roomId, resolvedWorkdir);
-    await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir, sessionDir: PROJECT_SESSION_DIR }));
+    // 会话目录跟随绑定事件决策(spec #299 票01),与 spawn 同一解析源。
+    const sessionDirName = path.basename(this.opts.projectManager.sessionDirFor(roomId));
+    // 票03(spec #299 评审整改):换目录 = git 事实可能变化,元数据重新探测
+    // 落盘,避免 gitUrl 陈旧误导认领方。best-effort:失败不影响 mv 本身。
+    if (this.opts.roomOps?.setProjectMeta) {
+      try {
+        const git = (await (this.opts.probeGit ?? probeProjectGit)(resolvedWorkdir)) ?? {};
+        const existing = (await this.opts.roomOps.getProjectMeta?.(roomId)) ?? null;
+        await this.opts.roomOps.setProjectMeta(roomId, { name: existing?.name ?? projectLabelOf(entry), ...git });
+      } catch (err) {
+        logger.warn(`[pmctl] 项目房元数据刷新失败(${roomId}): ${errorMessage(err)}`);
+      }
+    }
+    await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir, sessionDir: sessionDirName }));
+  }
+
+  // ---- 票04(spec #299):客座认领流 -----------------------------------------
+
+  /** 待认领邀请(collab.pendingClaims)的单一写路径:落盘前重读,
+   *  防多房间并发发卡时丢更新(与票02 陌生房簿记同一口径)。 */
+  private updatePendingClaims(mutate: (claims: PendingClaim[]) => PendingClaim[]): void {
+    const fresh = this.opts.store.get().collab;
+    this.opts.store.update({
+      // 上限 50(任务2 审计整改):恶意批量拉房不再无限膨胀配置文件。
+      collab: { ...fresh, pendingClaims: mutate(fresh?.pendingClaims ?? []).slice(-50) },
+    });
+  }
+
+  private pendingClaims(): PendingClaim[] {
+    return this.opts.store.get().collab?.pendingClaims ?? [];
+  }
+
+  /** /pmctl claim — 认领确认卡的指令面:空参列清单,`reject <n>` 拒绝,
+   *  `<n> [子目录]` 确认(clone 落地 → guest 绑定 → 双向 bot 登记 → 上岗通报)。 */
+  private async claim(rest: string, reply: Reply, roomOps: RoomOps): Promise<void> {
+    const claims = this.pendingClaims();
+    const [first, second] = splitFirst(rest);
+    if (!first) {
+      if (claims.length === 0) {
+        await reply(t("collab.claim.none"));
+        return;
+      }
+      const lines = claims.map((c, i) => {
+        // 清单目录与落地同源:effectiveWorkdir = resolveProjectPath 的根。
+        const dir = path.join(effectiveWorkdir(this.opts.store.get()), repoNameFromUrl(c.url));
+        return t("collab.claim.listItem", { index: i + 1, room: c.roomId, name: c.projectName, url: c.url, dir });
+      });
+      await reply(t("collab.claim.listHeader", { count: claims.length }) + "\n" + lines.join("\n"));
+      return;
+    }
+    if (first.toLowerCase() === "reject") {
+      const n = Number.parseInt(second, 10);
+      if (!Number.isInteger(n) || n < 1 || n > claims.length) {
+        await reply(t("collab.claim.indexOOB", { max: claims.length }));
+        return;
+      }
+      const gone = claims[n - 1]!;
+      // 按对象身份过滤(票04 评审整改):不整写入口快照 —— 读写窗内并发
+      // 新增的邀请保留,只移除被拒绝的这一条。拒绝簿记带 URL(任务3 场景
+      // 测试):同房同 URL 不再发卡,URL 后补/变更后允许重新发卡。
+      this.updatePendingClaims((list) => list.filter((c) => c !== gone));
+      const fresh = this.opts.store.get().collab;
+      this.opts.store.update({
+        collab: {
+          ...fresh,
+          claimRejectedKeys: [...(fresh?.claimRejectedKeys ?? []), `${gone.roomId}|${gone.url}`].slice(-200),
+        },
+      });
+      await reply(t("collab.claim.rejected", { room: gone.roomId }));
+      return;
+    }
+    const n = Number.parseInt(first, 10);
+    if (!Number.isInteger(n) || n < 1 || n > claims.length) {
+      await reply(t("collab.claim.indexOOB", { max: claims.length }));
+      return;
+    }
+    const pending = claims[n - 1]!;
+    const dirName = second.trim() || repoNameFromUrl(pending.url);
+    const resolvedWorkdir = this.resolveProjectPath(dirName);
+    if (resolvedWorkdir === null) {
+      await reply(t("pmctl.pathEscape", { path: dirName }));
+      return;
+    }
+    const cloneRepo = this.opts.cloneRepo ?? cloneRepository;
+    try {
+      // 目录已存在:remote 吻合 → 直接绑已有克隆(不重复 clone);否则追问换目录。
+      let existed = false;
+      if (existsSync(resolvedWorkdir)) {
+        const remote = (await probeProjectGit(resolvedWorkdir))?.gitUrl;
+        if (remote && sameRemoteUrl(remote, pending.url)) {
+          existed = true;
+        } else {
+          await reply(t("collab.claim.occupied", { dir: resolvedWorkdir, index: n }));
+          return;
+        }
+      } else {
+        // clone 失败:邀请保留在簿记里,可换目录或修网后重试(错误归因到
+        // clone,评审整改 —— probe/绑定错误不再误标为 clone 失败)。
+        try {
+          await cloneRepo(pending.url, resolvedWorkdir);
+        } catch (err) {
+          await reply(t("collab.claim.cloneFailed", { message: errorMessage(err) }));
+          return;
+        }
+      }
+      // 标签校验回落(任务2 审计整改):meta.name 不合格(超长/撞名/坏字符)
+      // 时回落仓库名,不放弃认领。
+      const labelError = validateProjectLabel(pending.projectName, this.currentLabels());
+      const bindName = labelError ? repoNameFromUrl(pending.url) : pending.projectName;
+      // win32 守卫(任务2 审计整改):与 new/mv 同口径 —— NTFS 大小写撞名
+      // 会让两个项目共用同一真实目录,会话互踩。
+      const pathError = this.win32WorkdirError(resolvedWorkdir);
+      if (pathError) {
+        await reply(pathError);
+        return;
+      }
+      // guest 绑定:mode=guest 持久化(spec #299 决定2);会话目录按绑定事件解析(票01)。
+      this.opts.projectManager.registerProject(pending.roomId, resolvedWorkdir, bindName, "guest");
+      // 认领流闭环(任务2 审计整改):guest 房默认 mentions 频道 —— 不 enable
+      // 则群聊消息过不了授权门,@点名也是哑的(真机 lab 复现)。
+      if (this.opts.auth) {
+        this.opts.auth.enableChannel(pending.roomId, "mentions");
+        this.opts.store.update({ auth: this.opts.auth.exportConfig() });
+      }
+      // 从待认领簿记移除(以函数式过滤走单点写路径)。
+      this.updatePendingClaims((list) => list.filter((c) => c.roomId !== pending.roomId));
+      // 双向 bot 登记:guest 写自己的 MXID 进房间登记簿 —— owner 侧的
+      // botFilter/信箱由此识别"谁是 bot"。失败不致命:只影响对端识别,本侧无碍。
+      try {
+        const me = roomOps.getBotUserId();
+        if (me) await roomOps.registerRoomBot?.(pending.roomId, me);
+      } catch (err) {
+        logger.warn(`[pmctl] 客座 bot 自登记失败(${pending.roomId}): ${errorMessage(err)}`);
+      }
+      // 上岗通报:发进项目房,让房主可感知客座就绪。失败仅附注,不回滚绑定。
+      let onboardNote = "";
+      if (this.opts.notifyRoom) {
+        try {
+          await this.opts.notifyRoom(
+            pending.roomId,
+            t("collab.claim.onboarded", { dir: resolvedWorkdir, name: bindName })
+          );
+        } catch (err) {
+          onboardNote = t("collab.claim.onboardFailed", { message: errorMessage(err) });
+        }
+      }
+      await reply(
+        t(existed ? "collab.claim.okExisting" : "collab.claim.ok", {
+          room: pending.roomId,
+          dir: resolvedWorkdir,
+          name: bindName,
+        }) + onboardNote
+      );
+    } catch (err) {
+      // probe/绑定等非 clone 环节失败:邀请保留,可重试(与 clone 失败分开归因)。
+      await reply(t("collab.claim.failed", { message: errorMessage(err) }));
+    }
+  }
+
+  // ---- 票09(spec #299):拉客 + worktree 建房 -------------------------------
+
+  /** /pmctl share <project> <botMxid> — 把对端 bot 拉进指定项目房;对端
+   *  接受邀请后走它自己部署的认领流上岗(确认卡在它的管理房)。 */
+  private async share(rest: string, reply: Reply, roomOps: RoomOps): Promise<void> {
+    const [target, mxid] = splitFirst(rest);
+    // mxid 形状校验(票09 评审整改):@前缀 + 恰一个冒号,防把真人或语法
+    // 垃圾当 bot 邀进房;真正的存在性仍由 homeserver 回执兜底。
+    if (!target || !mxid || !/^@[^:\s]+:[^:\s]+$/.test(mxid)) {
+      await reply(t("pmctl.share.usage"));
+      return;
+    }
+    const found = this.findProject(target);
+    if (!found) {
+      await reply(t("pmctl.notFound", { target }));
+      return;
+    }
+    const [roomId] = found;
+    try {
+      await roomOps.inviteUser(roomId, mxid);
+    } catch (err) {
+      await reply(t("pmctl.share.failed", { mxid, message: errorMessage(err) }));
+      return;
+    }
+    await reply(t("pmctl.share.ok", { mxid, room: roomId }));
+  }
+
+  /** /pmctl wt <project> <branch> — 从项目仓库现开 git worktree(分支级
+   *  隔离并行会话的工作区),落地项目根 `<名>-<分支>` 后走 /pmctl new 的
+   *  既有建房全流程(建房→元数据→登记→急启动→欢迎卡)。 */
+  private async wt(rest: string, call: PmctlCall, reply: Reply, roomOps: RoomOps): Promise<void> {
+    const [target, branch] = splitFirst(rest);
+    if (!target || !branch || branch.startsWith("-")) {
+      await reply(t("pmctl.wt.usage"));
+      return;
+    }
+    const found = this.findProject(target);
+    if (!found) {
+      await reply(t("pmctl.notFound", { target }));
+      return;
+    }
+    const [, source] = found;
+    const name = `${projectLabelOf(source)}-${branch}`;
+    const dest = this.resolveProjectPath(name);
+    if (dest === null) {
+      await reply(t("pmctl.pathEscape", { path: name }));
+      return;
+    }
+    if (existsSync(dest)) {
+      await reply(t("pmctl.wt.exists", { dir: dest }));
+      return;
+    }
+    // 前置校验(票09 评审整改):标签与 win32 宿主性在 worktree 落盘**之前**
+    // 判定 —— 否则 newProject 后段拒绝时留下无主 worktree 目录(半途状态)。
+    const labelError = validateProjectLabel(name, this.currentLabels());
+    if (labelError) {
+      await reply(`❌ ${labelError}`);
+      return;
+    }
+    const pathError = this.win32WorkdirError(dest);
+    if (pathError) {
+      await reply(pathError);
+      return;
+    }
+    try {
+      await (this.opts.worktreeAdd ?? gitWorktreeAdd)(source.workdir, dest, branch);
+    } catch (err) {
+      await reply(t("pmctl.wt.fail", { message: errorMessage(err) }));
+      return;
+    }
+    // 复用 newProject 的建房全流程:显式路径落榜,分支名作项目名的一部分。
+    await this.newProject(`${name} ${dest}`, call, reply, roomOps);
   }
 
   private async rename(rest: string, reply: Reply, roomOps: RoomOps): Promise<void> {
@@ -543,6 +828,18 @@ export class PmctlController {
     } catch (err) {
       avatarNote = t("pmctl.rename.avatarFailed", { message: errorMessage(err) });
       logger.warn(`[identity] /pmctl rename 头像重选失败(${roomId}): ${errorMessage(err)}`);
+    }
+    // 票03(spec #299):元数据里的项目名跟随改名(best-effort —— 读不到旧
+    // 元数据或写失败都不致命,元数据本就可后补)。
+    if (roomOps.getProjectMeta && roomOps.setProjectMeta) {
+      try {
+        const meta = await roomOps.getProjectMeta(roomId);
+        if (meta && meta.name !== newName) {
+          await roomOps.setProjectMeta(roomId, { ...meta, name: newName });
+        }
+      } catch (err) {
+        logger.warn(`[pmctl] 项目房元数据改名同步失败(${roomId}): ${errorMessage(err)}`);
+      }
     }
     // The project mapping is already renamed; surface room-rename failures
     // instead of swallowing them.

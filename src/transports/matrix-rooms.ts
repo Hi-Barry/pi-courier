@@ -2,7 +2,7 @@ import { MatrixError } from "matrix-bot-sdk";
 import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { logger, suppressLogLines } from "../logger.js";
-import type { RoomOps } from "./interface.js";
+import { BOT_REGISTRY_EVENT_TYPE, PROJECT_META_EVENT_TYPE, type ProjectRoomMeta, type RoomOps } from "./interface.js";
 import type { MatrixClientPort } from "./matrix-client.js";
 
 /** A missing (or not-visible) state event is a query answer, not a failure —
@@ -218,6 +218,53 @@ export class MatrixRoomOps implements RoomOps {
   async leaveRoom(roomId: string, reason?: string): Promise<void> {
     await this.client.leaveRoom(roomId, reason);
     this.deps.onLeftRoom(roomId);
+  }
+
+  /** 票02(spec #299):登记一个 bot 身份进房间 —— 每 bot 一条状态事件,
+   *  state_key = 其 MXID,内容带写入方署名;同 MXID 幂等覆盖,无写冲突。 */
+  async registerRoomBot(roomId: string, botUserId: string): Promise<void> {
+    await this.client.sendStateEvent(roomId, BOT_REGISTRY_EVENT_TYPE, botUserId, {
+      registeredBy: this.deps.getBotUserId() ?? null,
+      registeredAt: Date.now(),
+    });
+  }
+
+  /** 票02(spec #299):读房间内已登记的 bot 身份清单。全量房间状态里按
+   *  登记簿类型过滤 state_key —— 不逐 key 探测,一次调用拿全名单。
+   *  来源校验(任务2 审计整改):状态事件自带的 sender 不可伪造,条目仅当
+   *  content.registeredBy === sender 才采信 —— 房内任何人都可写自定义状态
+   *  事件,没有这条校验,恶意成员可把真人(如 admin)登记成 bot,令
+   *  botFilter 永久静默吞掉其消息。 */
+  async getRoomBots(roomId: string): Promise<string[]> {
+    const events = await this.client.getRoomState(roomId);
+    return events
+      .filter(
+        (e) =>
+          e.type === BOT_REGISTRY_EVENT_TYPE &&
+          typeof e.state_key === "string" &&
+          typeof e.content?.registeredBy === "string" &&
+          e.content.registeredBy === e.sender
+      )
+      .map((e) => e.state_key);
+  }
+
+  /** 票03(spec #299):写项目房元数据(state_key="" 单例,整写覆盖)。 */
+  async setProjectMeta(roomId: string, meta: ProjectRoomMeta): Promise<void> {
+    await this.client.sendStateEvent(roomId, PROJECT_META_EVENT_TYPE, "", meta);
+  }
+
+  /** 票03(spec #299):读项目房元数据;404/M_NOT_FOUND → null(query-member
+   *  契约,与 getRoomName 同款)。形状校验(任务2 审计整改):元数据是房间
+   *  成员可写事件,烂形状直接当 null,防垃圾数据流入认领链。 */
+  async getProjectMeta(roomId: string): Promise<ProjectRoomMeta | null> {
+    const meta = await queryExpectedMiss(
+      () => this.client.getRoomStateEvent(roomId, PROJECT_META_EVENT_TYPE, "") as Promise<ProjectRoomMeta>,
+    );
+    if (!meta || typeof meta !== "object") return null;
+    if (typeof meta.name !== "string" || !meta.name.trim()) return null;
+    if (meta.gitUrl !== undefined && typeof meta.gitUrl !== "string") return null;
+    if (meta.defaultBranch !== undefined && typeof meta.defaultBranch !== "string") return null;
+    return meta;
   }
 
   /** The bot's own Matrix user ID (null if not connected). */

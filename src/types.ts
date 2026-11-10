@@ -150,6 +150,25 @@ export interface MsgBridgeConfig {
    */
   managementRooms?: string[];
   /**
+   * 协作模式配置(spec #299):多 bot 跨部署协作的安全默认与簿记。
+   */
+  collab?: {
+    /**
+     * 兼容开关:多项目模式下未映射群聊回落默认项目(1.6.x 旧行为)。
+     * 默认 false = 陌生群不接活,并向管理房发一次认领提示(票02)。
+     * 升级说明须写明此项(1.6.x 依赖"拉 bot 进任意群即接活"的部署打开它)。
+     */
+    allowUnknownRoomFallback?: boolean;
+    /** 已发过认领提示的陌生房间(同房不重复刷,spec #299 票02)。 */
+    unknownNotifiedRooms?: string[];
+    /** 已拒绝认领的「房间|仓库地址」键(任务3 场景测试:拒绝后同房同 URL
+     *  不再发卡;URL 后补/变更(mv 重探)则允许重新发卡)。 */
+    claimRejectedKeys?: string[];
+    /** 待认领的协作邀请(spec #299 票04):管理房确认卡背后的持久簿记,
+     *  重启不丢 —— /pmctl claim 按 index 确认/拒绝。 */
+    pendingClaims?: PendingClaim[];
+  };
+  /**
    * 空间套(风景)版本簿记(spec #84 分套记账):落后于 space-identity.ts 的
    * AVATAR_SET_VERSION.space 时,启动自愈把空间套管辖的房间一次性无条件
    * 刷成新图(此后恢复"只补缺不覆盖")。缺省视为未迁移——含只带旧
@@ -316,6 +335,15 @@ export interface AvatarCustomRef {
 export interface ProjectConfig {
   name?: string;
   workdir: string;
+  /** 每房会话目录(spec #299 票01):绑定事件(/pmctl new、mv)时解析并
+   *  持久化的绝对路径;缺省 = 旧条目,spawn 走键序启发式回退。 */
+  sessionDir?: string;
+  /** 房间绑定模式(spec #299 票04):guest = 经认领流绑定(客座,仅 @触发
+   *  —— 触发面在票05 落地);缺省 = owner(自建,行为与 1.6.x 一致)。 */
+  mode?: "owner" | "guest";
+  /** 房间级工具流三态(spec #299 票06):auto=按房间类型(owner 开、guest
+   *  关)/ on|off=强制覆盖;缺省 auto。/toggletools <auto|on|off> 在项目房内切换。 */
+  showToolCalls?: "auto" | "on" | "off";
   /** 预设模型,`provider/id`(与 /model 参数同语法;裸 id 按可用模型列表解析) */
   model?: string;
   /** 预设思考级别:off|minimal|low|medium|high|xhigh|max(缺省回落全局现状) */
@@ -324,6 +352,18 @@ export interface ProjectConfig {
   fallbacks?: string[];
   /** 自定义项目房间头像的图片路径(语义同 spaceAvatar,仅本房间生效)。 */
   avatar?: string;
+}
+
+/** 待认领的协作邀请条目(spec #299 票04):一张管理房确认卡对应一条。 */
+export interface PendingClaim {
+  /** 发出邀请的 Matrix 房间(认领成功后即绑定为 guest 项目房)。 */
+  roomId: string;
+  /** 房间元数据里的仓库地址(卡片展示 + clone 依据;必有值)。 */
+  url: string;
+  /** 元数据里的项目名。 */
+  projectName: string;
+  /** 邀请落簿时间(ms)。 */
+  at: number;
 }
 
 /** @see MsgBridgeConfig.space */

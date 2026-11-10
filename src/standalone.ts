@@ -425,8 +425,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
   };
   // Silent no-op when the transport is missing/disconnected (typing is best-effort).
-  const sendTyping = async (chatId: string, _transport: string): Promise<void> => {
-    if (matrix?.isConnected) await matrix.sendTyping(chatId);
+  // 票06(spec #299):active=false 供工具流关闭的房间回合结束即停 typing。
+  const sendTyping = async (chatId: string, _transport: string, active = true): Promise<void> => {
+    if (matrix?.isConnected) await matrix.sendTyping(chatId, active);
   };
   const disconnectAll = (): Promise<unknown> => (matrix ? matrix.disconnect() : Promise.resolve());
 
@@ -448,6 +449,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     projectManager,
     roomOps,
     store,
+    // 任务2 审计整改:认领流闭环需要把 guest 房 enable 为 mentions 频道。
+    auth,
     // 上线欢迎卡发送缝(票 #210):/pmctl new 成功后向新项目房发卡。
     // sendReplyStrict 声明在上方,闭包仅在运行期命令处理时触达。
     notifyRoom: sendReplyStrict,

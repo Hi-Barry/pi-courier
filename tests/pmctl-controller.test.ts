@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir as osHomedir, tmpdir } from "node:os";
+import { promisify } from "node:util";
 import { ConfigStore } from "../src/config";
 import { PmctlController } from "../src/rpc/pmctl-controller";
 import { readAvatarBundled } from "../src/space-identity";
@@ -45,6 +47,10 @@ describe("PmctlController", () => {
       updateProjectWorkdir: vi.fn(),
       renameProject: vi.fn(),
       stopAll: vi.fn(),
+      sessionDirFor: vi.fn().mockImplementation((roomId: string) => {
+        const e = projects.get(roomId);
+        return e ? `${e.workdir}/.pi-session` : ".pi-session";
+      }),
     } as unknown as typeof pm;
     // Seed one project (registerProject is stubbed, so write the map directly).
     (pm.registerProject as ReturnType<typeof vi.fn>).mockImplementation(
@@ -734,10 +740,18 @@ describe("PmctlController", () => {
       // 票 #209 急启动:成功路径的桩(缺了它,急启动会在这些用例里假性失败,
       // 回执混进"启动失败"附注 —— 评审修正)。
       getRpcForRoom: vi.fn().mockResolvedValue(undefined),
+      renameProject: vi.fn(),
+      updateProjectWorkdir: vi.fn(),
+      stopAll: vi.fn(),
+      // 票01(spec #299):mv 回执的会话目录名走本单点(假件按固定路径回)。
+      sessionDirFor: vi.fn().mockImplementation((roomId: string) => {
+        const e = projects.get(roomId);
+        return e ? `${e.workdir}/.pi-session` : ".pi-session";
+      }),
     };
   }
 
-  function makeIsolatedRoomOps(overrides: Record<string, unknown> = {}) {
+  function makeIsolatedRoomOps(overrides: Record<string, unknown> = {}): Record<string, ReturnType<typeof vi.fn>> {
     return {
       createProjectRoom: vi.fn().mockResolvedValue("!newroom:server"),
       setUserPowerLevel: vi.fn().mockResolvedValue(undefined),
@@ -750,7 +764,11 @@ describe("PmctlController", () => {
     };
   }
 
-  async function isolatedController(configOverrides: Record<string, unknown> = {}, roomOpsOverrides: Record<string, unknown> = {}) {
+  async function isolatedController(
+    configOverrides: Record<string, unknown> = {},
+    roomOpsOverrides: Record<string, unknown> = {},
+    controllerOverrides: Record<string, unknown> = {}
+  ) {
     vi.resetModules();
     const homedirMock = async () => {
       const actual = await vi.importActual<typeof import("os")>("os");
@@ -779,6 +797,7 @@ describe("PmctlController", () => {
       projectManager: pmMock as unknown as ProjectManager,
       roomOps: ops as unknown as RoomOps,
       store,
+      ...controllerOverrides,
     });
     const handleIsolated = (text: string) =>
       ctl.handle(text, { chatId: "!mgmt:server", senderMxid: "@barry:server", isManagementRoom: true, isAdmin: true }, isolatedReply);
@@ -809,4 +828,269 @@ describe("PmctlController", () => {
     expect(replies.some((r) => r.includes("信任用户补权失败"))).toBe(true);
     expect(replies.at(-1)).toContain("创建完成");
   });
+
+  // ---- 票03(spec #299):项目房元数据 --------------------------------------
+
+  it("/pmctl new writes project-room metadata (name + git facts) from the probe seam", async () => {
+    const { handle, ops, replies } = await isolatedController(
+      {},
+      { setProjectMeta: vi.fn().mockResolvedValue(undefined) },
+      { probeGit: async () => ({ gitUrl: "https://github.com/x/y.git", defaultBranch: "main" }) }
+    );
+    await handle("/pmctl new myapp");
+    expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("!newroom:server", {
+      name: "myapp",
+      gitUrl: "https://github.com/x/y.git",
+      defaultBranch: "main",
+    });
+    expect(replies.at(-1)).toContain("创建完成");
+  });
+
+  it("/pmctl new without a git repo still writes name-only metadata (URL 可后补)", async () => {
+    const { handle, ops } = await isolatedController(
+      {},
+      { setProjectMeta: vi.fn().mockResolvedValue(undefined) },
+      { probeGit: async () => undefined }
+    );
+    await handle("/pmctl new myapp");
+    expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("!newroom:server", { name: "myapp" });
+  });
+
+  it("/pmctl new metadata write failure only appends a note — the project is still created", async () => {
+    const { handle, pmMock, replies } = await isolatedController(
+      {},
+      { setProjectMeta: vi.fn().mockRejectedValue(new Error("权限不足")) }
+    );
+    await handle("/pmctl new myapp");
+    expect(pmMock.registerProject).toHaveBeenCalled();
+    expect(replies.some((r) => r.includes("元数据写入失败"))).toBe(true);
+    expect(replies.at(-1)).toContain("创建完成");
+  });
+
+  it("/pmctl rename syncs the metadata name (best-effort)", async () => {
+    const { handle, ops, pmMock } = await isolatedController(
+      {},
+      {
+        getProjectMeta: vi.fn().mockResolvedValue({ name: "old", gitUrl: "https://x/y.git" }),
+        setProjectMeta: vi.fn().mockResolvedValue(undefined),
+      }
+    );
+    pmMock.registerProject("!a:server", "/w", "old");
+    await handle("/pmctl rename old newname");
+    expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("!a:server", {
+      name: "newname",
+      gitUrl: "https://x/y.git",
+    });
+  });
+
+  it("/pmctl rename keeps metadata untouched when the name is unchanged (no redundant write)", async () => {
+    const { handle, ops, pmMock } = await isolatedController(
+      {},
+      {
+        getProjectMeta: vi.fn().mockResolvedValue({ name: "same", gitUrl: "https://x/y.git" }),
+        setProjectMeta: vi.fn().mockResolvedValue(undefined),
+      }
+    );
+    pmMock.registerProject("!a:server", "/w", "same");
+    await handle("/pmctl rename same same");
+    expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+  });
+
+  it("/pmctl mv re-probes git facts and rewrites metadata (URL 后补/防陈旧,评审整改)", async () => {
+    const { handle, ops, pmMock } = await isolatedController(
+      {},
+      {
+        getProjectMeta: vi.fn().mockResolvedValue({ name: "old", gitUrl: "https://old.git" }),
+        setProjectMeta: vi.fn().mockResolvedValue(undefined),
+      },
+      { probeGit: async () => ({ gitUrl: "https://github.com/x/y.git", defaultBranch: "main" }) }
+    );
+    pmMock.registerProject("!a:server", "/w/old", "old");
+    await handle("/pmctl mv old newdir");
+    expect((ops["setProjectMeta"] as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("!a:server", {
+      name: "old",
+      gitUrl: "https://github.com/x/y.git",
+      defaultBranch: "main",
+    });
+  });
+
+  // ---- 票04(spec #299):客座认领流 /pmctl claim ---------------------------
+
+  // 工厂而非共享常量:reject 路径的 splice 会原地改数组,共享常量会跨用例污染。
+  const pendingSeed = () => ({
+    collab: {
+      pendingClaims: [{ roomId: "!g:server", url: "https://github.com/x/y.git", projectName: "y", at: 1 }],
+    },
+  });
+  const execFileP = promisify(execFile);
+
+  it("/pmctl claim with no pending invites answers empty", async () => {
+    const { handle, replies } = await isolatedController();
+    await handle("/pmctl claim");
+    expect(replies.at(-1)).toContain("没有待认领");
+  });
+
+  it("/pmctl claim <n> clones, binds as guest, self-registers the bot, notifies the room, clears the invite", async () => {
+    const cloneRepo = vi.fn().mockResolvedValue(undefined);
+    const notifyRoom = vi.fn().mockResolvedValue(undefined);
+    const { handle, ops, pmMock, store, replies } = await isolatedController(
+      pendingSeed(),
+      { getBotUserId: vi.fn().mockReturnValue("@bot:server"), registerRoomBot: vi.fn().mockResolvedValue(undefined) },
+      { cloneRepo, notifyRoom }
+    );
+    await handle("/pmctl claim 1");
+    const dest = resolve("/home/you/Projects", "y");
+    expect(cloneRepo).toHaveBeenCalledWith("https://github.com/x/y.git", dest);
+    expect(pmMock.registerProject).toHaveBeenCalledWith("!g:server", dest, "y", "guest");
+    expect(store.get().collab?.pendingClaims ?? []).toEqual([]);
+    expect(ops["registerRoomBot"]).toHaveBeenCalledWith("!g:server", "@bot:server");
+    expect(notifyRoom).toHaveBeenCalledWith("!g:server", expect.stringContaining("协作模式"));
+    expect(replies.at(-1)).toContain("已认领");
+  });
+
+  it("/pmctl claim into an occupied non-repo dir asks for another dir and keeps the invite", async () => {
+    mkdirSync(join(tmpDir, "occ"), { recursive: true });
+    const cloneRepo = vi.fn();
+    const { handle, store, replies } = await isolatedController(
+      pendingSeed(),
+      { getBotUserId: vi.fn().mockReturnValue("@bot:server") },
+      { cloneRepo }
+    );
+    await handle("/pmctl claim 1 ~/occ");
+    expect(replies.at(-1)).toContain("已存在且不是该仓库的克隆");
+    expect(cloneRepo).not.toHaveBeenCalled();
+    expect(store.get().collab?.pendingClaims).toHaveLength(1);
+  });
+
+  it("/pmctl claim binds an existing clone when the remote matches (no re-clone)", async () => {
+    const occ = join(tmpDir, "occ2");
+    mkdirSync(occ, { recursive: true });
+    await execFileP("git", ["-C", occ, "init"]);
+    await execFileP("git", ["-C", occ, "remote", "add", "origin", "https://github.com/x/y.git"]);
+    const cloneRepo = vi.fn();
+    const { handle, pmMock, replies } = await isolatedController(
+      pendingSeed(),
+      { getBotUserId: vi.fn().mockReturnValue("@bot:server") },
+      { cloneRepo }
+    );
+    await handle("/pmctl claim 1 ~/occ2");
+    expect(cloneRepo).not.toHaveBeenCalled();
+    expect(pmMock.registerProject).toHaveBeenCalledWith("!g:server", occ, "y", "guest");
+    expect(replies.at(-1)).toContain("已有克隆");
+  });
+
+  it("/pmctl claim reject removes the invite without binding", async () => {
+    const cloneRepo = vi.fn();
+    const { handle, store, replies } = await isolatedController(
+      pendingSeed(),
+      { getBotUserId: vi.fn().mockReturnValue("@bot:server") },
+      { cloneRepo }
+    );
+    await handle("/pmctl claim reject 1");
+    expect(replies.at(-1)).toContain("已拒绝");
+    expect(store.get().collab?.pendingClaims ?? []).toEqual([]);
+  });
+
+  it("/pmctl claim rejects out-of-range indexes", async () => {
+    const { handle, replies } = await isolatedController(pendingSeed());
+    await handle("/pmctl claim 5");
+    expect(replies.at(-1)).toContain("序号无效");
+  });
+
+  it("/pmctl claim keeps the invite when clone fails (retryable)", async () => {
+    const cloneRepo = vi.fn().mockRejectedValue(new Error("网络不通"));
+    const { handle, store, replies } = await isolatedController(
+      pendingSeed(),
+      { getBotUserId: vi.fn().mockReturnValue("@bot:server") },
+      { cloneRepo }
+    );
+    await handle("/pmctl claim 1");
+    expect(replies.at(-1)).toContain("clone 失败");
+    expect(store.get().collab?.pendingClaims).toHaveLength(1);
+  });
+
+
+  // ---- 票09(spec #299):拉客 + worktree 建房 --------------------------------
+describe("PmctlController share & wt (spec #299 票09)", () => {
+  it("/pmctl share invites the peer bot into the project room", async () => {
+    const { handle, ops, pmMock, replies } = await isolatedController(
+      {},
+      { inviteUser: vi.fn().mockResolvedValue(undefined) }
+    );
+    pmMock.registerProject("!proj:server", "/w/p", "proj");
+    await handle("/pmctl share proj @peerbot:server");
+    expect(ops["inviteUser"]).toHaveBeenCalledWith("!proj:server", "@peerbot:server");
+    expect(replies.at(-1)).toContain("已邀请");
+  });
+
+  it("/pmctl share usage on missing/invalid mxid; invite failure surfaces the error", async () => {
+    const { handle, replies } = await isolatedController(
+      {},
+      { inviteUser: vi.fn().mockRejectedValue(new Error("没有权限")) }
+    );
+    await handle("/pmctl share");
+    expect(replies.at(-1)).toContain("用法");
+    const { handle: h2, replies: r2, pmMock: pm2 } = await isolatedController(
+      {},
+      { inviteUser: vi.fn().mockRejectedValue(new Error("没有权限")) }
+    );
+    pm2.registerProject("!p:server", "/w/p", "p");
+    await h2("/pmctl share p @peerbot:server");
+    expect(r2.at(-1)).toContain("邀请失败");
+  });
+
+  it("/pmctl wt creates a worktree via the seam and runs the full new-project flow", async () => {
+    const worktreeAdd = vi.fn().mockResolvedValue(undefined);
+    const { handle, pmMock, replies } = await isolatedController(
+      {},
+      {},
+      { worktreeAdd }
+    );
+    pmMock.registerProject("!p:server", "/w/src", "proj");
+    await handle("/pmctl wt proj feature-x");
+    expect(worktreeAdd).toHaveBeenCalledWith("/w/src", resolve("/home/you/Projects", "proj-feature-x"), "feature-x");
+    // 复用 newProject 全流程:登记落榜(项目名 proj-feature-x)
+    expect(pmMock.registerProject).toHaveBeenCalledWith("!newroom:server", resolve("/home/you/Projects", "proj-feature-x"), "proj-feature-x");
+    expect(replies.at(-1)).toContain("创建完成");
+  });
+
+  it("/pmctl wt pre-validates the derived label BEFORE touching git (no orphan worktree)", async () => {
+    const worktreeAdd = vi.fn();
+    const { handle, pmMock, replies } = await isolatedController(
+      {},
+      {},
+      { worktreeAdd }
+    );
+    pmMock.registerProject("!p:server", "/w/src", "proj");
+    pmMock.registerProject("!q:server", "/w/q", "proj-feature-x");
+    await handle("/pmctl wt proj feature-x"); // 派生标签与存量撞名 → git 不落地
+    expect(worktreeAdd).not.toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("❌");
+  });
+
+  it("/pmctl wt refuses an existing dir and surfaces worktree failures", async () => {
+    // 目录撞名:派生目标 <项目根>/proj-feat 已存在 → 拒绝,不碰 worktree
+    // (isolated 夹具 homedir 指向 tmpDir,workdir 也指过去,避免越出沙箱建目录)
+    mkdirSync(join(tmpDir, "proj-feat"), { recursive: true });
+    const worktreeAdd = vi.fn();
+    const { handle, replies, pmMock } = await isolatedController(
+      { workdir: tmpDir },
+      {},
+      { worktreeAdd }
+    );
+    pmMock.registerProject("!p:server", "/w/src", "proj");
+    await handle("/pmctl wt proj feat");
+    expect(replies.at(-1)).toContain("已存在");
+    expect(worktreeAdd).not.toHaveBeenCalled();
+    const { handle: h2, replies: r2, pmMock: pm3 } = await isolatedController(
+      {},
+      {},
+      { worktreeAdd: vi.fn().mockRejectedValue(new Error("分支冲突")) }
+    );
+    pm3.registerProject("!p:server", "/w/src", "proj");
+    await h2("/pmctl wt proj feature-y");
+    expect(r2.at(-1)).toContain("worktree 创建失败");
+  });
+});
+
 });
