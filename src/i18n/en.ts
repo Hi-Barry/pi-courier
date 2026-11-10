@@ -796,10 +796,9 @@ Note: pi itself is installed and upgraded independently on the system
   "cli.disable.ok": "✅ Service stopped and uninstalled. To restore later: `pi-courier enable` (your config is untouched).",
   "cli.update.stopping": "🛑 Stopping the service…",
   "cli.update.npmUpgrade": "🔄 Upgrading pi-courier via npm …",
-  "cli.update.nativeSkipped": "   (the E2EE native library already exists; skipping the 21MB download)",
-  "cli.update.npmFailed": "❌ npm upgrade failed (exit code {status})",
   "cli.update.gitUpgrade": "🔄 Updating pi-courier (git) …",
-  "cli.update.cmdFailed": "❌ {cmd} failed (exit code {status})",
+  "cli.update.cmdFailed": "❌ {cmd} failed: {status}",
+  "cli.update.nativeMissing": "❌ The E2EE native library (.node) is missing after the upgrade. Do not start the service; check the network/proxy and retry, or run node scripts/ensure-crypto-native.mjs manually.",
   "cli.update.serviceSkipped":
     "ℹ️ Not Linux: skipping the systemd service checks (no systemctl on this platform) and updating directly.",
   "cli.update.restarting": "🔄 Restarting the service…",

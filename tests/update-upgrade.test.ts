@@ -3,7 +3,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildUpgradePlan,
   defaultProjectDir,
+  ENSURE_TIMEOUT_MS,
   runUpgrade,
   UPGRADE_TIMEOUT_MS,
   type UpgradeDeps,
@@ -330,6 +332,70 @@ describe("runUpgrade · 失败分支(旧版继续,桥不自杀)", () => {
 
   it("默认超时上限 30 分钟(与忙闲等待同量级)", () => {
     expect(UPGRADE_TIMEOUT_MS).toBe(30 * 60_000);
+  });
+});
+
+describe("buildUpgradePlan · 桥与 CLI 共用的顺序", () => {
+  it("npm: install --ignore-scripts → ensure(包根)", () => {
+    expect(
+      buildUpgradePlan({
+        projectDir: "/proj",
+        nodeExecPath: "/node/bin/node",
+        npmCli: "/npm-cli.js",
+        installedViaNpm: true,
+      }),
+    ).toEqual([
+      {
+        cmd: "/node/bin/node",
+        args: ["/npm-cli.js", "install", "-g", "pi-courier@latest", "--ignore-scripts"],
+      },
+      {
+        cmd: "/node/bin/node",
+        args: ["/proj/scripts/ensure-crypto-native.mjs"],
+        cwd: "/proj",
+        timeoutMs: ENSURE_TIMEOUT_MS,
+      },
+    ]);
+  });
+
+  it("git: pull → install --ignore-scripts → build → ensure(包根)", () => {
+    expect(
+      buildUpgradePlan({
+        projectDir: "/proj",
+        nodeExecPath: "/node/bin/node",
+        npmCli: "/npm-cli.js",
+        installedViaNpm: false,
+        ensureTimeoutMs: 1_234,
+      }),
+    ).toEqual([
+      { cmd: "git", args: ["pull"], cwd: "/proj" },
+      {
+        cmd: "/node/bin/node",
+        args: ["/npm-cli.js", "install", "--ignore-scripts"],
+        cwd: "/proj",
+      },
+      { cmd: "/node/bin/node", args: ["/npm-cli.js", "run", "build"], cwd: "/proj" },
+      {
+        cmd: "/node/bin/node",
+        args: ["/proj/scripts/ensure-crypto-native.mjs"],
+        cwd: "/proj",
+        timeoutMs: 1_234,
+      },
+    ]);
+  });
+
+  it("npm-cli 解析失败回落裸 npm", () => {
+    expect(
+      buildUpgradePlan({
+        projectDir: "/proj",
+        nodeExecPath: "/node/bin/node",
+        npmCli: undefined,
+        installedViaNpm: true,
+      })[0],
+    ).toEqual({
+      cmd: "npm",
+      args: ["install", "-g", "pi-courier@latest", "--ignore-scripts"],
+    });
   });
 });
 

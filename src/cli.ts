@@ -33,10 +33,12 @@ import { errorMessage } from "./errors.js";
 import { setLocale, t } from "./i18n/index.js";
 import { buildLegacyMigrationPlan, runLegacyMigration } from "./legacy-migration.js";
 import { buildLogFilterArgs } from "./log-filter.js";
-import { globalNodeModulesDir, resolveNpmCli } from "./npm-runtime.js";
+import { nativeBindingExists, resolveNpmCli } from "./npm-runtime.js";
 import { projectLabelOf } from "./project-labels.js";
+import { proxyChildEnv, resolveProxySettings } from "./proxy.js";
 import { beginManualStopIntent, type ManualStopIntent } from "./resilience/manual-stop.js";
 import { busFailureHint, dirOwnerUid, serviceManagementSupported } from "./systemd-hint.js";
+import { buildUpgradePlan, UPGRADE_TIMEOUT_MS } from "./update/upgrade.js";
 import { readBridgeVersion } from "./version.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
@@ -57,28 +59,6 @@ function packageVersion(): string {
 /** Project root (parent of the dist/ directory this file is compiled into). */
 function projectDir(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-}
-
-/**
- * Whether the E2EE native binary (matrix-sdk-crypto *.node) is already
- * installed in the global node_modules. Used to skip the 21MB re-download
- * during `pi-courier update` (the upstream postinstall always re-downloads
- * with override:true).
- */
-function e2eNativeBinaryExists(): boolean {
-  const globalNodeModules = globalNodeModulesDir({
-    platform: process.platform,
-    execPath: process.execPath,
-    appData: process.env.APPDATA,
-    homeDir: os.homedir(),
-  });
-  const cryptoPkgDir = path.join(globalNodeModules, "@matrix-org", "matrix-sdk-crypto-nodejs");
-  if (!fs.existsSync(cryptoPkgDir)) return false;
-  try {
-    return fs.readdirSync(cryptoPkgDir).some((f) => f.endsWith(".node"));
-  } catch {
-    return false;
-  }
 }
 
 function usage(): void {
@@ -368,22 +348,17 @@ function cmdDisable(): void {
 // update
 // ===========================================================================
 
-/**
- * Spawn plan for an npm invocation: run npm's JS entry (npm-cli.js) with the
- * current node when it can be located, because a bare `spawnSync("npm", ...)`
- * fails on Windows with ENOENT — libuv's PATH search only tries .com/.exe and
- * never resolves npm.cmd. Falls back to the historical bare command when the
- * JS entry can't be found, so exotic layouts keep the old behavior.
- */
-function npmCommand(args: readonly string[]): { cmd: string; args: string[] } {
-  const npmCli = resolveNpmCli(process.execPath);
-  if (npmCli) return { cmd: process.execPath, args: [npmCli, ...args] };
-  return { cmd: "npm", args: [...args] };
-}
-
 function cmdUpdate(): void {
   const projDir = projectDir();
   const installedViaNpm = !fs.existsSync(path.join(projDir, ".git"));
+
+  // 代理配置先解析/校验,再停服务(spec #320):配置非法(socks5 等)时
+  // 直接报双语错误退出,不把正在跑的服务停在半路。
+  const proxySettings = resolveProxySettings(loadConfig());
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...(proxyChildEnv(proxySettings) ?? {}),
+  };
 
   // 1. Stop the service first (if running) so the upgrade happens on a clean
   //    state — the old process never touches partially-replaced files.
@@ -405,46 +380,36 @@ function cmdUpdate(): void {
     console.log(t("cli.update.serviceSkipped"));
   }
 
-  // 2. Upgrade the code.
-  if (installedViaNpm) {
-    // Installed with `npm install -g pi-courier` → upgrade via npm.
-    // --foreground-scripts: postinstall output (e.g. the E2EE native lib
-    // download progress from matrix-sdk-crypto-nodejs) streams to the
-    // terminal in real time instead of being buffered by npm until the end.
-    console.log(t("cli.update.npmUpgrade"));
-    const npmArgs = ["install", "-g", "pi-courier@latest", "--foreground-scripts"];
-    // The E2EE native lib (21MB from GitHub Releases) is re-downloaded on
-    // every npm install because the upstream postinstall uses override:true.
-    // When the binary already exists, skip lifecycle scripts — the lib is
-    // kept as-is and the update finishes in seconds instead of minutes.
-    if (e2eNativeBinaryExists()) {
-      console.log(t("cli.update.nativeSkipped"));
-      npmArgs.push("--ignore-scripts");
-    }
-    const { cmd, args } = npmCommand(npmArgs);
-    const res = spawnSync(cmd, args, {
+  // 2. Upgrade the code(spec #320):与桥内 /update 共用同一套步骤 ——
+  // 固定 install --ignore-scripts → ensure → 校验 .node。CLI 是同步执行,
+  // 不涉及 stdout 管道死锁;超时/进程树杀是尽力而为(用户在场可 Ctrl+C)。
+  if (installedViaNpm) console.log(t("cli.update.npmUpgrade"));
+  else console.log(t("cli.update.gitUpgrade"));
+
+  const steps = buildUpgradePlan({
+    projectDir: projDir,
+    nodeExecPath: process.execPath,
+    npmCli: resolveNpmCli(process.execPath),
+    installedViaNpm,
+  });
+  for (const step of steps) {
+    console.log(`\n$ ${step.cmd} ${step.args.join(" ")}`);
+    const res = spawnSync(step.cmd, step.args, {
+      cwd: step.cwd,
       stdio: "inherit",
+      env: childEnv,
+      timeout: step.timeoutMs ?? UPGRADE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     });
-    if (res.status !== 0) {
-      console.error(t("cli.update.npmFailed", { status: res.status }));
+    if (res.error || res.status !== 0) {
+      const status = res.status ?? res.error?.message ?? "unknown";
+      console.error(t("cli.update.cmdFailed", { cmd: step.cmd, status }));
       process.exit(res.status ?? 1);
     }
-  } else {
-    // Installed from a git clone → pull + install + build.
-    console.log(t("cli.update.gitUpgrade"));
-    const steps: Array<{ cmd: string; args: string[] }> = [
-      { cmd: "git", args: ["pull"] },
-      npmCommand(["install"]),
-      npmCommand(["run", "build"]),
-    ];
-    for (const { cmd, args } of steps) {
-      console.log(`\n$ ${cmd} ${args.join(" ")}`);
-      const res = spawnSync(cmd, args, { cwd: projDir, stdio: "inherit" });
-      if (res.status !== 0) {
-        console.error(t("cli.update.cmdFailed", { cmd, status: res.status }));
-        process.exit(res.status ?? 1);
-      }
-    }
+  }
+  if (!nativeBindingExists(projDir)) {
+    console.error(t("cli.update.nativeMissing"));
+    process.exit(1);
   }
 
   // 3. Start the service again if it was running, so the update takes effect.

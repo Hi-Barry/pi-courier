@@ -185,7 +185,7 @@ function defaultKillTree(child: UpgradeChild): void {
   }
 }
 
-/** npm 全局布局解析(cli.ts npmCommand 同款):node <npm-cli.js> 优先,
+/** npm 全局布局解析(cli.ts 同款):node <npm-cli.js> 优先,
  *  解析失败回落裸 npm —— exotic 布局保持历史行为。 */
 function npmStep(
   npmCli: string | undefined,
@@ -194,6 +194,55 @@ function npmStep(
 ): { cmd: string; args: string[] } {
   if (npmCli) return { cmd: nodeExecPath, args: [npmCli, ...args] };
   return { cmd: "npm", args: [...args] };
+}
+
+/** 一条升级命令;cwd 缺省 = 继承调用方,timeoutMs 缺省 = 安装/构建上限。 */
+export interface UpgradeStep {
+  cmd: string;
+  args: string[];
+  cwd?: string;
+  timeoutMs?: number;
+}
+
+export interface UpgradePlanOptions {
+  projectDir: string;
+  nodeExecPath: string;
+  npmCli: string | undefined;
+  installedViaNpm: boolean;
+  ensureTimeoutMs?: number;
+}
+
+/**
+ * 升级步骤的唯一构造点(spec #320):桥内 runUpgrade 与 CLI cmdUpdate 共用,
+ * 两边不会再各写一份顺序。固定不变量:
+ *  - npm: install --ignore-scripts → ensure(包根) → 由调用方校验 .node
+ *  - git: pull → install --ignore-scripts → build → ensure(包根)
+ */
+export function buildUpgradePlan(opts: UpgradePlanOptions): UpgradeStep[] {
+  const ensureScript = path.join(opts.projectDir, "scripts", "ensure-crypto-native.mjs");
+  const ensureStep: UpgradeStep = {
+    cmd: opts.nodeExecPath,
+    args: [ensureScript],
+    cwd: opts.projectDir,
+    timeoutMs: opts.ensureTimeoutMs ?? ENSURE_TIMEOUT_MS,
+  };
+  if (opts.installedViaNpm) {
+    return [
+      npmStep(opts.npmCli, opts.nodeExecPath, [
+        "install",
+        "-g",
+        "pi-courier@latest",
+        "--ignore-scripts",
+      ]),
+      ensureStep,
+    ];
+  }
+  return [
+    { cmd: "git", args: ["pull"], cwd: opts.projectDir },
+    { ...npmStep(opts.npmCli, opts.nodeExecPath, ["install", "--ignore-scripts"]), cwd: opts.projectDir },
+    { ...npmStep(opts.npmCli, opts.nodeExecPath, ["run", "build"]), cwd: opts.projectDir },
+    ensureStep,
+  ];
 }
 
 /**
@@ -245,28 +294,13 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
   // 安装方式检测(cli.ts 同款):项目根有无 .git。
   const installedViaNpm = !exists(path.join(projDir, ".git"));
 
-  const steps: Array<{ cmd: string; args: string[]; cwd?: string; timeoutMs?: number }> = [];
-  if (installedViaNpm) {
-    // npm 路径:#320 固定 --ignore-scripts,装完再显式补原生库。
-    steps.push(npmStep(npmCli, nodeExecPath, ["install", "-g", "pi-courier@latest", "--ignore-scripts"]));
-    steps.push({
-      cmd: nodeExecPath,
-      args: [ensureScript],
-      cwd: projDir,
-      timeoutMs: ensureTimeoutMs,
-    });
-  } else {
-    // git 路径:git pull → npm install(--ignore-scripts)→ npm run build → ensure。
-    steps.push({ cmd: "git", args: ["pull"], cwd: projDir });
-    steps.push({ ...npmStep(npmCli, nodeExecPath, ["install", "--ignore-scripts"]), cwd: projDir });
-    steps.push({ ...npmStep(npmCli, nodeExecPath, ["run", "build"]), cwd: projDir });
-    steps.push({
-      cmd: nodeExecPath,
-      args: [ensureScript],
-      cwd: projDir,
-      timeoutMs: ensureTimeoutMs,
-    });
-  }
+  const steps = buildUpgradePlan({
+    projectDir: projDir,
+    nodeExecPath,
+    npmCli,
+    installedViaNpm,
+    ensureTimeoutMs,
+  });
 
   for (const step of steps) {
     logger.info(`[update] $ ${step.cmd} ${step.args.join(" ")}`);

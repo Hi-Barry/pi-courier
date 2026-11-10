@@ -7,6 +7,10 @@
  * `node <npm-cli.js>` instead works on every platform, and resolving the
  * same npm that ships with the running node keeps POSIX behavior identical.
  *
+ * Also resolves the crypto native-binding package from a package root (#320):
+ * `createRequire` follows npm 11's shallow global layout (deps nested under
+ * the package) and hoisted layouts, instead of guessing a global prefix.
+ *
  * Kept free of cli.ts imports (cli.ts runs main() at module load) so these
  * helpers stay unit-testable in isolation.
  */
@@ -35,32 +39,6 @@ export function resolveNpmCli(nodeExecPath: string): string | undefined {
     if (fs.existsSync(candidate)) return candidate;
   }
   return undefined;
-}
-
-/** Environment inputs for {@link globalNodeModulesDir} (injectable for tests). */
-export interface GlobalNodeModulesEnv {
-  platform: NodeJS.Platform;
-  /** process.execPath of the running node binary */
-  execPath: string;
-  /** %APPDATA% (Windows only; falls back to <home>/AppData/Roaming when unset) */
-  appData?: string;
-  /** os.homedir() */
-  homeDir: string;
-}
-
-/**
- * npm's global node_modules directory:
- *  - win32: `%APPDATA%\npm\node_modules` (npm's default prefix on Windows;
- *    historically this code hard-coded the POSIX prefix and never matched)
- *  - POSIX: `<nodeDir>/../lib/node_modules` — the long-standing Unix global
- *    layout, unchanged.
- */
-export function globalNodeModulesDir(env: GlobalNodeModulesEnv): string {
-  if (env.platform === "win32") {
-    const appData = env.appData ?? path.join(env.homeDir, "AppData", "Roaming");
-    return path.join(appData, "npm", "node_modules");
-  }
-  return path.join(path.dirname(env.execPath), "..", "lib", "node_modules");
 }
 
 /**

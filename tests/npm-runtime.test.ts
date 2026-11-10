@@ -1,16 +1,14 @@
 /**
- * npm global-layout resolution (Windows adaptation for `pi-courier update`,
+ * npm CLI resolution (Windows adaptation for `pi-courier update`,
  * evaluation 2026-10-13): resolveNpmCli finds npm-cli.js beside the running
- * node — two install layouts — and globalNodeModulesDir picks npm's
- * per-platform global prefix: %APPDATA%\npm on win32 (with a home-relative
- * fallback when APPDATA is unset), the historical lib/ layout on POSIX.
+ * node — two install layouts. The crypto-binding tests pin package-relative
+ * resolution for npm 11's shallow global layout (#320).
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  globalNodeModulesDir,
   nativeBindingExists,
   resolveCryptoPackageDirFrom,
   resolveNpmCli,
@@ -61,40 +59,6 @@ describe("resolveNpmCli", () => {
 
   it("returns undefined when neither layout exists", () => {
     expect(resolveNpmCli(path.join(tmpDir, "bin", "node"))).toBeUndefined();
-  });
-});
-
-describe("globalNodeModulesDir", () => {
-  const homeDir = path.join("/home", "alice");
-  const execPath = path.join("/usr", "local", "bin", "node");
-
-  it("uses %APPDATA%\\npm\\node_modules on win32", () => {
-    expect(
-      globalNodeModulesDir({
-        platform: "win32",
-        execPath: "C:\\Program Files\\nodejs\\node.exe",
-        appData: "C:\\Users\\alice\\AppData\\Roaming",
-        homeDir: "C:\\Users\\alice",
-      }),
-    ).toBe(path.join("C:\\Users\\alice\\AppData\\Roaming", "npm", "node_modules"));
-  });
-
-  it("falls back to <home>\\AppData\\Roaming on win32 when APPDATA is unset", () => {
-    expect(
-      globalNodeModulesDir({
-        platform: "win32",
-        execPath: "C:\\Program Files\\nodejs\\node.exe",
-        homeDir: "C:\\Users\\alice",
-      }),
-    ).toBe(
-      path.join("C:\\Users\\alice", "AppData", "Roaming", "npm", "node_modules"),
-    );
-  });
-
-  it("keeps the POSIX prefix unchanged (<nodeDir>/../lib/node_modules)", () => {
-    expect(globalNodeModulesDir({ platform: "linux", execPath, homeDir })).toBe(
-      path.join(path.dirname(execPath), "..", "lib", "node_modules"),
-    );
   });
 });
 
