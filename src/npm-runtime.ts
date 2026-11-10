@@ -64,8 +64,18 @@ export function resolveCryptoPackageDirFrom(packageRoot: string): string | undef
   }
 }
 
-/** True when the crypto package's native binding (.node) exists for this install. */
-export function nativeBindingExists(packageRoot: string): boolean {
+/** Platforms where matrix-sdk-crypto-nodejs publishes a native binding.
+ *  Other platforms legitimately run without E2EE; the ensure script treats
+ *  them as "fine", so verification must not fail the upgrade there. */
+const NATIVE_BINDING_PLATFORMS = new Set<NodeJS.Platform>(["win32", "darwin", "linux"]);
+
+/** True when the crypto package's native binding (.node) exists for this install.
+ *  Unsupported platforms return true (no binding is expected there). */
+export function nativeBindingExists(
+  packageRoot: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (!NATIVE_BINDING_PLATFORMS.has(platform)) return true;
   const cryptoDir = resolveCryptoPackageDirFrom(packageRoot);
   if (cryptoDir === undefined) return false;
   try {

@@ -112,16 +112,16 @@ export function resolveProxySettings(
 
 // ── 启动接线(spec #201 票 #203)──────────────────────────────────────────
 // 把生效三元组落到进程上:覆写标准环境变量(request 腿自动认)+ 装配
-// undici 全局调度器(桥自己的 fetch 腿必须代码级装配)。pi 子进程注入
-// (票 #204)与向导默认值(票 #205)各自消费 resolveProxySettings,不走
-// 本函数。
+// undici 全局调度器(桥自己的 fetch 腿必须代码级装配)。子进程注入统一经
+// proxyChildEnv(pi / npm / ensure 共用,spec #201 票 #204 + #320);
+// 向导默认值(票 #205)只消费 resolveProxySettings,不走本函数。
 
 /** 出网代理的标准环境变量名,大小写两套全部写齐 —— request 的
  *  getProxyFromURI 与 undici 都小写优先,只写大写会被 shell 遗留小写变量
  *  抢跑,只写小写则 Windows 等大写惯例的消费方认不到。桥侧进程覆写
- *  (#203 applyProxySettings)与 pi 子进程注入(#204 proxySpawnEnv)共用
- *  此键集;两处的第三态语义有意不同(删键 / 空串压制 / 不写),共享的
- *  只是键集与拼串,不是语义分支。 */
+ *  (#203 applyProxySettings)与子进程注入(proxyChildEnv,pi/npm/ensure
+ *  共用)共享此键集;进程覆写走删键,子进程用空串压制/不写,第三态语义
+ *  有意不同,共享的只是键集与拼串。 */
 export const PROXY_ENV_NAMES = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"] as const;
 
 /** NO_PROXY 的标准键名,大小写两套(理由同 PROXY_ENV_NAMES)。 */

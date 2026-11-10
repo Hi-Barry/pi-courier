@@ -136,6 +136,22 @@ describe("§10 用例 1 · /update check(只读,不占位不 CAS)", () => {
     }
   });
 
+  it("磁盘已新但进程仍旧 → check 报发现新版本,不谎报已是最新", async () => {
+    const h = makeHarness({
+      runningVersion: "1.5.0",
+      readVersion: () => "1.7.0", // 半升级后的磁盘
+      fetchRegistry: vi.fn().mockResolvedValue({ version: "1.7.0" }),
+    });
+    try {
+      await h.orch.handleCommand("check", h.io());
+      expect(h.replies[0]).toContain("发现新版本");
+      expect(h.replies[0]).toContain("v1.5.0");
+      expect(h.replies[0]).toContain("v1.7.0");
+    } finally {
+      h.cleanup();
+    }
+  });
+
   it("有新版 → check.hasNew(from/to 均过格式校验后才拼入文案)", async () => {
     const h = makeHarness({ fetchRegistry: vi.fn().mockResolvedValue({ version: "1.3.0" }) });
     try {

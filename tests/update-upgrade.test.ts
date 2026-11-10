@@ -1,4 +1,3 @@
-import type { PathLike } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +6,7 @@ import {
   defaultProjectDir,
   ENSURE_TIMEOUT_MS,
   runUpgrade,
+  taskkillArgs,
   UPGRADE_TIMEOUT_MS,
   type UpgradeDeps,
 } from "../src/update/upgrade.js";
@@ -78,12 +78,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const ENSURE_SUFFIX = path.join("scripts", "ensure-crypto-native.mjs");
-const isEnsureScript = (p: PathLike): boolean => String(p).endsWith(ENSURE_SUFFIX);
-
-/** npm 路径的共用输入:无 .git(→ npm),ensure 脚本存在,校验通过。 */
+/** npm 路径的共用输入:无 .git(→ npm),校验通过。 */
 const npmDeps: Partial<UpgradeDeps> = {
-  existsSync: isEnsureScript,
+  existsSync: () => false,
   projectDir: "/proj",
   nodeExecPath: "/node/bin/node",
   npmCliResolver: () => "/npm-cli.js",
@@ -146,12 +143,30 @@ describe("runUpgrade · npm 安装路径", () => {
     await h.closeCurrent(0);
     await expect(promise).resolves.toEqual({ ok: true });
   });
+
+  it("env 合并保留 process.env 继承键", async () => {
+    process.env.PI_COURIER_UPDATE_TEST = "inherited";
+    try {
+      const h = harness({ ...npmDeps, envOverrides: { HTTPS_PROXY: "http://proxy:1" } });
+      const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+      await Promise.resolve();
+
+      expect(h.calls[0]!.opts.env?.PI_COURIER_UPDATE_TEST).toBe("inherited");
+      expect(h.calls[0]!.opts.env?.HTTPS_PROXY).toBe("http://proxy:1");
+
+      await h.closeCurrent(0);
+      await h.closeCurrent(0);
+      await expect(promise).resolves.toEqual({ ok: true });
+    } finally {
+      delete process.env.PI_COURIER_UPDATE_TEST;
+    }
+  });
 });
 
 describe("runUpgrade · git 安装路径", () => {
   it("项目根有 .git → pull / install --ignore-scripts / build / ensure", async () => {
     const h = harness({
-      existsSync: (p) => String(p).endsWith(".git") || isEnsureScript(p),
+      existsSync: (p) => String(p).endsWith(".git"),
       projectDir: "/proj",
       nodeExecPath: "/node/bin/node",
       npmCliResolver: () => "/npm-cli.js",
@@ -177,15 +192,6 @@ describe("runUpgrade · git 安装路径", () => {
 });
 
 describe("runUpgrade · 失败分支(旧版继续,桥不自杀)", () => {
-  it("ensure 脚本缺失 → 失败且不 spawn", async () => {
-    const h = harness({ ...npmDeps, existsSync: () => false });
-    const outcome = await runUpgrade({ ...h.deps, spawn: h.spawn });
-
-    expect(outcome).toMatchObject({ ok: false });
-    if (!outcome.ok) expect(outcome.message).toContain("ensure-crypto-native.mjs");
-    expect(h.calls).toHaveLength(0);
-  });
-
   it("安装非零退出 → ok:false,message 含命令、退出码与 stderr;不跑 ensure", async () => {
     const h = harness(npmDeps);
     const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
@@ -246,7 +252,7 @@ describe("runUpgrade · 失败分支(旧版继续,桥不自杀)", () => {
     const outcome = await promise;
 
     expect(outcome).toMatchObject({ ok: false });
-    if (!outcome.ok) expect(outcome.message).toContain("native crypto binding");
+    if (!outcome.ok) expect(outcome.message).toContain("E2EE 原生库");
   });
 
   it("spawn 同步抛错(ENOENT 等)→ ok:false", async () => {
@@ -396,6 +402,15 @@ describe("buildUpgradePlan · 桥与 CLI 共用的顺序", () => {
       cmd: "npm",
       args: ["install", "-g", "pi-courier@latest", "--ignore-scripts"],
     });
+  });
+});
+
+describe("taskkillArgs · Windows 杀进程树判定(纯函数)", () => {
+  it("only returns taskkill args on win32 with a pid", () => {
+    expect(taskkillArgs("win32", 123)).toEqual(["/T", "/F", "/PID", "123"]);
+    expect(taskkillArgs("win32", undefined)).toBeUndefined();
+    expect(taskkillArgs("linux", 123)).toBeUndefined();
+    expect(taskkillArgs("darwin", 123)).toBeUndefined();
   });
 });
 

@@ -106,6 +106,9 @@ export interface UpdateOrchestratorDeps {
   /** 当前版本缝(默认 readBridgeVersion:每次现读磁盘,npm 升级后返回新值
    *  —— from 必须在 installing 开始前捕获,不得事后重读,§11.1)。 */
   readVersion?: () => string | undefined;
+  /** 进程启动时加载的版本(默认构造时读一次)。磁盘可能被失败的升级改写,
+   *  不能用磁盘版本冒充“当前进程版本”;/update check 与失败回执都用它。 */
+  runningVersion?: string;
   /** root 判定缝(默认 process.getuid?.();Windows 无 getuid → undefined
    *  自然放行,§5.1)。 */
   getuid?: () => number | undefined;
@@ -176,8 +179,15 @@ export class UpdateOrchestrator {
   private to?: string;
   private startedAt = 0;
   private lastProgressAt = 0;
+  /**
+   * 进程启动时加载的版本:构造时读一次。磁盘可能在一次失败的升级里被
+   * 改写,`readVersion()` 之后返回的是磁盘版本,不能拿它冒充“当前进程版本”。
+   */
+  private readonly runningVersion: string | undefined;
 
-  constructor(private readonly deps: UpdateOrchestratorDeps) {}
+  constructor(private readonly deps: UpdateOrchestratorDeps) {
+    this.runningVersion = deps.runningVersion ?? (deps.readVersion ?? readBridgeVersion)();
+  }
 
   /** 当前状态(组合根日志与测试断言用)。 */
   get currentState(): UpdateState {
@@ -228,7 +238,7 @@ export class UpdateOrchestrator {
     this.state = "checking";
     this.generation += 1;
     const myGen = this.generation;
-    const from = (this.deps.readVersion ?? readBridgeVersion)(); // 现读磁盘,fetch 前先取并判空(§5.2)
+    const from = this.runningVersion; // 进程启动时加载的版本,fetch 前先取并判空(§5.2)
     this.startedAt = Date.now();
     // ── 占位后的 await 段:一切异常先同步复位 idle 再上抛(占位释放契约)──
     try {
@@ -287,7 +297,7 @@ export class UpdateOrchestrator {
       // 升级/等待重启期间读磁盘会说“已是最新”,但内存进程仍是旧版 ——
       // 明确报告两边的版本,别让用户误判(#320)。
       if (this.state === "installing") {
-        const disk = (this.deps.readVersion ?? readBridgeVersion)();
+        const disk = this.readDiskVersion();
         await io.reply(
           t("cmd.update.check.installing", {
             disk: disk ?? "unknown",
@@ -297,7 +307,7 @@ export class UpdateOrchestrator {
         return true;
       }
       if (this.state === "restart-pending") {
-        const disk = (this.deps.readVersion ?? readBridgeVersion)();
+        const disk = this.readDiskVersion();
         await io.reply(
           t("cmd.update.check.restartPending", {
             disk: disk ?? this.to ?? "unknown",
@@ -306,7 +316,7 @@ export class UpdateOrchestrator {
         );
         return true;
       }
-      const from = (this.deps.readVersion ?? readBridgeVersion)();
+      const from = this.runningVersion;
       if (from === undefined) {
         await io.reply(t("cmd.update.check.failed", { message: "current bridge version unavailable" }));
         return true;
@@ -434,12 +444,7 @@ export class UpdateOrchestrator {
       // 磁盘可能已经被换血(npm 先替换文件、后跑脚本;脚本失败也会走到这里)。
       // 进程仍是 from —— 明确告诉用户两边版本,别把“旧版继续运行”误读成
       // “磁盘也是旧版”,更不要直接重启(#320)。
-      let diskVersion: string | undefined;
-      try {
-        diskVersion = (this.deps.readVersion ?? readBridgeVersion)();
-      } catch {
-        diskVersion = undefined;
-      }
+      const diskVersion = this.readDiskVersion();
       const base = t("cmd.update.npmFailed", { message: outcome.message });
       const text =
         diskVersion !== undefined && diskVersion !== from
@@ -605,6 +610,15 @@ export class UpdateOrchestrator {
   }
 
   // ── 缝与小件 ───────────────────────────────────────────────────────────
+
+  /** 读磁盘版本(安全:任何失败返回 undefined;只用于回执文案/诊断)。 */
+  private readDiskVersion(): string | undefined {
+    try {
+      return (this.deps.readVersion ?? readBridgeVersion)();
+    } catch {
+      return undefined;
+    }
+  }
 
   private async fetchLatest(): Promise<string | undefined> {
     const fetchRegistry = this.deps.fetchRegistry ?? defaultRegistryFetch;

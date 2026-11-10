@@ -754,6 +754,7 @@ const zh = {
   "cli.update.gitUpgrade": "🔄 更新 pi-courier(git)…",
   "cli.update.cmdFailed": "❌ {cmd} 失败:{status}",
   "cli.update.nativeMissing": "❌ 升级后未找到 E2EE 原生库(.node)。请勿启动服务;检查网络/代理后重试,或手动运行 node scripts/ensure-crypto-native.mjs。",
+  "update.nativeBindingMissing": "❌ 升级后未找到 E2EE 原生库(.node):{path}。旧进程继续运行;确认依赖完整后再重启。",
   "cli.update.serviceSkipped": "ℹ️ 非 Linux 平台:跳过 systemd 服务检查(本机无 systemctl),直接升级。",
   "cli.update.restarting": "🔄 重新启动服务…",
   "cli.update.restarted": "✅ 服务已重新启动。",

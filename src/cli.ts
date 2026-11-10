@@ -38,7 +38,7 @@ import { projectLabelOf } from "./project-labels.js";
 import { proxyChildEnv, resolveProxySettings } from "./proxy.js";
 import { beginManualStopIntent, type ManualStopIntent } from "./resilience/manual-stop.js";
 import { busFailureHint, dirOwnerUid, serviceManagementSupported } from "./systemd-hint.js";
-import { buildUpgradePlan, UPGRADE_TIMEOUT_MS } from "./update/upgrade.js";
+import { buildUpgradePlan, detectInstalledViaNpm, UPGRADE_TIMEOUT_MS } from "./update/upgrade.js";
 import { readBridgeVersion } from "./version.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
@@ -350,7 +350,7 @@ function cmdDisable(): void {
 
 function cmdUpdate(): void {
   const projDir = projectDir();
-  const installedViaNpm = !fs.existsSync(path.join(projDir, ".git"));
+  const installedViaNpm = detectInstalledViaNpm(projDir);
 
   // 代理配置先解析/校验,再停服务(spec #320):配置非法(socks5 等)时
   // 直接报双语错误退出,不把正在跑的服务停在半路。
@@ -403,7 +403,12 @@ function cmdUpdate(): void {
     });
     if (res.error || res.status !== 0) {
       const status = res.status ?? res.error?.message ?? "unknown";
-      console.error(t("cli.update.cmdFailed", { cmd: step.cmd, status }));
+      console.error(
+        t("cli.update.cmdFailed", {
+          cmd: `${step.cmd} ${step.args.join(" ")}`,
+          status,
+        }),
+      );
       process.exit(res.status ?? 1);
     }
   }

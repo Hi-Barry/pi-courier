@@ -129,4 +129,8 @@ describe("crypto native binding resolution (package-relative)", () => {
     expect(resolveCryptoPackageDirFrom(appRoot())).toBeUndefined();
     expect(nativeBindingExists(appRoot())).toBe(false);
   });
+
+  it("treats unsupported platforms as fine (no native binding expected)", () => {
+    expect(nativeBindingExists(appRoot(), "freebsd")).toBe(true);
+  });
 });

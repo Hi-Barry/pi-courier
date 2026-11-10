@@ -799,6 +799,7 @@ Note: pi itself is installed and upgraded independently on the system
   "cli.update.gitUpgrade": "🔄 Updating pi-courier (git) …",
   "cli.update.cmdFailed": "❌ {cmd} failed: {status}",
   "cli.update.nativeMissing": "❌ The E2EE native library (.node) is missing after the upgrade. Do not start the service; check the network/proxy and retry, or run node scripts/ensure-crypto-native.mjs manually.",
+  "update.nativeBindingMissing": "❌ The E2EE native library (.node) is missing after the upgrade: {path}. The previous process keeps running; verify dependencies before restarting.",
   "cli.update.serviceSkipped":
     "ℹ️ Not Linux: skipping the systemd service checks (no systemctl on this platform) and updating directly.",
   "cli.update.restarting": "🔄 Restarting the service…",

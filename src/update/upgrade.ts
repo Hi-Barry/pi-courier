@@ -2,13 +2,13 @@
  * 桥内换血(桥自更新 spec §5.4、修复 spec #320):/update 编排的 installing
  * 段调这里,把磁盘代码升到 npm latest(git 安装场景则 pull + install + build)。
  *
- * 与 src/cli.ts cmdUpdate 语义同款(注释交叉引用,两处须同步演进),差异:
- *  - 桥内必须异步 spawn —— cli.ts 的 spawnSync 是 CLI 语境,搬过来会冻结
- *    事件循环、杀掉桥的全部服务能力(升级窗口几分钟,任务要照常服务)。
+ * 与 CLI `pi-courier update` 共用 buildUpgradePlan 的步骤构造;两边的差异只在
+ * 执行方式:
+ *  - 桥内必须异步 spawn —— CLI 的 spawnSync 是同步语境,搬过来会冻结事件
+ *    循环、杀掉桥的全部服务能力(升级窗口几分钟,任务要照常服务)。
  *  - 失败永不 process.exit:返回 UpgradeOutcome,旧版继续运行,桥绝不自杀。
- *  - 不 import cli.ts(它在模块加载即跑 main(),npm-runtime.ts:11 明文
- *    "Kept free of cli.ts imports");安装方式检测与原生库校验在新模块自持,
- *    注释指向 cli.ts 对应实现。
+ *  - 不 import cli.ts(它在模块加载即跑 main(),npm-runtime.ts 明文
+ *    "Kept free of cli.ts imports")。
  *
  * #320 的关键顺序(不变量):
  *  1. npm 路径**始终**带 --ignore-scripts。npm 11 全局安装是 shallow 布局,
@@ -28,6 +28,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { errorMessage } from "../errors.js";
+import { t } from "../i18n/index.js";
 import { logger } from "../logger.js";
 import { nativeBindingExists, resolveNpmCli } from "../npm-runtime.js";
 
@@ -92,24 +93,28 @@ function appendTail(current: string, chunk: string, limit: number): string {
   return combined.length > limit ? combined.slice(-limit) : combined;
 }
 
+/** 单步执行的上下文:spawn 缝 + 合并好的 env + 超时杀进程缝。 */
+interface StepRunner {
+  spawn: NonNullable<UpgradeDeps["spawn"]>;
+  env: NodeJS.ProcessEnv;
+  killTree: (child: UpgradeChild) => void;
+}
+
 /** 单步执行:exit 0 → undefined;非零/超时/spawn 失败 → 失败描述。 */
 function runStep(
-  spawnFn: NonNullable<UpgradeDeps["spawn"]>,
-  cmd: string,
-  args: readonly string[],
-  cwd: string | undefined,
-  timeoutMs: number,
-  env: NodeJS.ProcessEnv,
-  killTree: (child: UpgradeChild) => void,
+  step: UpgradeStep,
+  runner: StepRunner,
+  defaultTimeoutMs: number,
 ): Promise<StepFailure | undefined> {
+  const timeoutMs = step.timeoutMs ?? defaultTimeoutMs;
   return new Promise((resolve) => {
     let child: UpgradeChild;
     try {
-      child = spawnFn(cmd, args, { cwd, env });
+      child = runner.spawn(step.cmd, step.args, { cwd: step.cwd, env: runner.env });
     } catch (err) {
       resolve({
-        cmd,
-        args,
+        cmd: step.cmd,
+        args: step.args,
         detail: `failed to spawn: ${errorMessage(err)}`,
         stderrTail: "",
         stdoutTail: "",
@@ -134,7 +139,7 @@ function runStep(
     const timer = setTimeout(() => {
       timedOut = true;
       try {
-        killTree(child);
+        runner.killTree(child);
       } catch {
         // 已退出则无效
       }
@@ -150,7 +155,13 @@ function runStep(
         (timedOut
           ? `timed out after ${Math.round(timeoutMs / 60_000)} min and was killed`
           : `exited with code ${code ?? "unknown"}`);
-      resolve({ cmd, args, detail: why, stderrTail: stderr, stdoutTail: stdout });
+      resolve({
+        cmd: step.cmd,
+        args: step.args,
+        detail: why,
+        stderrTail: stderr,
+        stdoutTail: stdout,
+      });
     });
   });
 }
@@ -167,12 +178,43 @@ function defaultSpawn(
   });
 }
 
+/** 纯函数:win32 且有 pid 时返回 taskkill 参数;其余平台/无 pid → undefined
+ *  (回落 SIGKILL)。抽成纯函数是为了让 win32 分支在任意 CI runner 可测
+ *  (docs/DEVELOPMENT.md §13.6 的平台分支约定)。 */
+export function taskkillArgs(
+  platform: NodeJS.Platform,
+  pid: number | undefined,
+): string[] | undefined {
+  if (platform !== "win32" || pid === undefined) return undefined;
+  return ["/T", "/F", "/PID", String(pid)];
+}
+
 /** 超时兜底:Windows 上只 kill 直接子进程杀不掉 npm 的 postinstall 孙进程,
- *  用 taskkill /T 杀整棵树;POSIX 保持 SIGKILL。 */
+ *  用 taskkill /T 杀整棵树;POSIX 保持 SIGKILL。taskkill 自身失败(不存在/
+ *  权限不足)时回落到 child.kill,并挂 error listener 防止未处理 error 事件
+ *  击穿桥进程。 */
 function defaultKillTree(child: UpgradeChild): void {
-  if (process.platform === "win32" && child.pid !== undefined) {
+  const args = taskkillArgs(process.platform, child.pid);
+  if (args) {
     try {
-      nodeSpawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore" });
+      const killer = nodeSpawn("taskkill", args, { stdio: "ignore" });
+      killer.on("error", () => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // 已退出
+        }
+      });
+      killer.on("close", (code) => {
+        if (code !== 0) {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // 已退出
+          }
+        }
+      });
+      killer.unref();
       return;
     } catch {
       // 回落 SIGKILL
@@ -185,8 +227,8 @@ function defaultKillTree(child: UpgradeChild): void {
   }
 }
 
-/** npm 全局布局解析(cli.ts 同款):node <npm-cli.js> 优先,
- *  解析失败回落裸 npm —— exotic 布局保持历史行为。 */
+/** npm 全局布局解析:node <npm-cli.js> 优先,解析失败回落裸 npm ——
+ *  exotic 布局保持历史行为。 */
 function npmStep(
   npmCli: string | undefined,
   nodeExecPath: string,
@@ -212,6 +254,19 @@ export interface UpgradePlanOptions {
   ensureTimeoutMs?: number;
 }
 
+/** 原生库恢复脚本的绝对路径:桥与 CLI 共用同一构造。 */
+export function ensureScriptPath(projectDir: string): string {
+  return path.join(projectDir, "scripts", "ensure-crypto-native.mjs");
+}
+
+/** 安装方式检测:项目根有无 .git(npm 全局安装 = 无 .git)。桥与 CLI 共用。 */
+export function detectInstalledViaNpm(
+  projectDir: string,
+  exists: (p: fs.PathLike) => boolean = (p) => fs.existsSync(p),
+): boolean {
+  return !exists(path.join(projectDir, ".git"));
+}
+
 /**
  * 升级步骤的唯一构造点(spec #320):桥内 runUpgrade 与 CLI cmdUpdate 共用,
  * 两边不会再各写一份顺序。固定不变量:
@@ -219,7 +274,7 @@ export interface UpgradePlanOptions {
  *  - git: pull → install --ignore-scripts → build → ensure(包根)
  */
 export function buildUpgradePlan(opts: UpgradePlanOptions): UpgradeStep[] {
-  const ensureScript = path.join(opts.projectDir, "scripts", "ensure-crypto-native.mjs");
+  const ensureScript = ensureScriptPath(opts.projectDir);
   const ensureStep: UpgradeStep = {
     cmd: opts.nodeExecPath,
     args: [ensureScript],
@@ -283,16 +338,8 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
   const verifyNativeBinding = deps.verifyNativeBinding ?? nativeBindingExists;
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...deps.envOverrides };
 
-  const ensureScript = path.join(projDir, "scripts", "ensure-crypto-native.mjs");
-  if (!exists(ensureScript)) {
-    return {
-      ok: false,
-      message: `upgrade aborted: native binding ensure script not found: ${ensureScript}`,
-    };
-  }
-
-  // 安装方式检测(cli.ts 同款):项目根有无 .git。
-  const installedViaNpm = !exists(path.join(projDir, ".git"));
+  // 安装方式检测:项目根有无 .git。
+  const installedViaNpm = detectInstalledViaNpm(projDir, exists);
 
   const steps = buildUpgradePlan({
     projectDir: projDir,
@@ -302,29 +349,17 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
     ensureTimeoutMs,
   });
 
+  const runner: StepRunner = { spawn: spawnFn, env: childEnv, killTree };
   for (const step of steps) {
     logger.info(`[update] $ ${step.cmd} ${step.args.join(" ")}`);
-    const failure = await runStep(
-      spawnFn,
-      step.cmd,
-      step.args,
-      step.cwd,
-      step.timeoutMs ?? timeoutMs,
-      childEnv,
-      killTree,
-    );
+    const failure = await runStep(step, runner, timeoutMs);
     if (failure) return { ok: false, message: formatFailure(failure) };
   }
 
   // 最后一道闸:ensure 脚本即使静默失败(它按 postinstall 语义不抛),也不能
   // 把缺 .node 的新树报成成功 —— 否则下一次重启必崩在 crypto 加载。
   if (!verifyNativeBinding(projDir)) {
-    return {
-      ok: false,
-      message:
-        `native crypto binding is missing after ensure in ${projDir}; refusing to report success. ` +
-        `The previous process keeps running — do not restart until the binding is restored.`,
-    };
+    return { ok: false, message: t("update.nativeBindingMissing", { path: projDir }) };
   }
   return { ok: true };
 }
