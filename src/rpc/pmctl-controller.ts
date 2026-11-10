@@ -608,8 +608,16 @@ export class PmctlController {
       }
       const gone = claims[n - 1]!;
       // 按对象身份过滤(票04 评审整改):不整写入口快照 —— 读写窗内并发
-      // 新增的邀请保留,只移除被拒绝的这一条。
+      // 新增的邀请保留,只移除被拒绝的这一条。拒绝簿记带 URL(任务3 场景
+      // 测试):同房同 URL 不再发卡,URL 后补/变更后允许重新发卡。
       this.updatePendingClaims((list) => list.filter((c) => c !== gone));
+      const fresh = this.opts.store.get().collab;
+      this.opts.store.update({
+        collab: {
+          ...fresh,
+          claimRejectedKeys: [...(fresh?.claimRejectedKeys ?? []), `${gone.roomId}|${gone.url}`].slice(-200),
+        },
+      });
       await reply(t("collab.claim.rejected", { room: gone.roomId }));
       return;
     }

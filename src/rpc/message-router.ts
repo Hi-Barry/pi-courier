@@ -1110,53 +1110,58 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         const config = store.get();
         if (config.collab?.allowUnknownRoomFallback === true) return false;
         if (managementRoomId(config) === msg.chatId) return false;
-        const noticed = config.collab?.unknownNotifiedRooms ?? [];
-        if (!noticed.includes(msg.chatId)) {
-          const mgRoom = managementRoomId(store.get());
-          if (mgRoom) {
-            // 票04(spec #299):房间带项目元数据(含仓库地址)→ 发认领确认卡
-            // 并落簿待认领(collab.pendingClaims,重启不丢);无元数据 → 普通
-            // 提示。两条路都标记已提示(同房不重复刷)。
-            const meta = (await roomOps?.getProjectMeta?.(msg.chatId)) ?? null;
-            if (meta?.gitUrl) {
-              // 目录展示与 /pmctl claim 的落地口径同源(effectiveWorkdir =
-              // resolveProjectPath 的根;评审整改:不再 workdir??"~" 手拼)。
-              const dir = path.join(effectiveWorkdir(store.get()), repoNameFromUrl(meta.gitUrl));
-              const index = (store.get().collab?.pendingClaims ?? []).length + 1;
-              await sendReply(
-                mgRoom,
-                msg.transport,
-                t("collab.claim.card", { room: msg.chatId, name: meta.name, url: meta.gitUrl, dir, index })
-              );
-              // 落盘前重读(spec #299 票04 评审整改):sendReply 是 await 点,
-              // handleIncoming 可并发 —— 读写窗贴紧,写回以当下 store 值为基,
-              // 两陌生房同时发卡互不丢簿记(卡面序号并发下可能重复,以
-              // /pmctl claim 现读清单为准)。
-              const fresh = store.get().collab;
-              store.update({
-                collab: {
-                  ...fresh,
-                  unknownNotifiedRooms: [...(fresh?.unknownNotifiedRooms ?? []), msg.chatId].slice(-200),
-                  pendingClaims: [
-                    ...(fresh?.pendingClaims ?? []),
-                    { roomId: msg.chatId, url: meta.gitUrl, projectName: meta.name, at: Date.now() },
-                  ],
-                },
-              });
-              ctx.log.info(`🚪 陌生房 ${msg.chatId} 带项目元数据,已向管理房发认领卡(#${index})`);
-            } else {
-              await sendReply(mgRoom, msg.transport, t("router.unknownRoom.notice", { room: msg.chatId }));
-              // 落盘前重读(票02 评审整改口径):await 之后的写回以当下值为基。
-              const fresh = store.get().collab;
-              store.update({
-                collab: { ...fresh, unknownNotifiedRooms: [...(fresh?.unknownNotifiedRooms ?? []), msg.chatId].slice(-200) },
-              });
-              ctx.log.info(`🚪 陌生房 ${msg.chatId} 不接活,已向管理房发认领提示`);
-            }
-          } else if (!unknownNoManagementWarned.has(msg.chatId)) {
+        // 票04:带项目元数据(含仓库地址)→ 发认领确认卡并落簿待认领;
+        // 无元数据 → 普通提示(每房一次)。任务3 场景测试修复:两簿记分离 ——
+        // 普通提示过的房在 URL 后补(mv 重探)后仍可升级发卡,后补通道不再死锁;
+        // 认领卡自己的去重 = pendingClaims 挂单或 claimCardRooms 已发过。
+        const mgRoom = managementRoomId(store.get());
+        if (!mgRoom) {
+          // 管理房缺位:提示无处送达 —— 每房 warn 一次(内存簿记,不标记落盘,
+          // 提示送达前不算数)。
+          if (!unknownNoManagementWarned.has(msg.chatId)) {
             unknownNoManagementWarned.add(msg.chatId);
             logger.warn(`🚪 陌生房 ${msg.chatId} 不接活,但本部署尚无管理房,认领提示无法送达`);
           }
+          return true;
+        }
+        const meta = (await roomOps?.getProjectMeta?.(msg.chatId)) ?? null;
+        const fresh = store.get().collab;
+        const hasPendingClaim = (fresh?.pendingClaims ?? []).some((c) => c.roomId === msg.chatId);
+        const rejectedKey = `${msg.chatId}|${meta?.gitUrl ?? ""}`;
+        const rejectedForThisUrl = (fresh?.claimRejectedKeys ?? []).includes(rejectedKey);
+        const noticed = fresh?.unknownNotifiedRooms ?? [];
+        if (meta?.gitUrl && !hasPendingClaim && !rejectedForThisUrl) {
+          // 目录展示与 /pmctl claim 的落地口径同源(effectiveWorkdir =
+          // resolveProjectPath 的根;评审整改:不再 workdir??"~" 手拼)。
+          const dir = path.join(effectiveWorkdir(store.get()), repoNameFromUrl(meta.gitUrl));
+          const index = (fresh?.pendingClaims ?? []).length + 1;
+          await sendReply(
+            mgRoom,
+            msg.transport,
+            t("collab.claim.card", { room: msg.chatId, name: meta.name, url: meta.gitUrl, dir, index })
+          );
+          // 落盘前重读(spec #299 票04 评审整改):sendReply 是 await 点,
+          // handleIncoming 可并发 —— 写回以当下 store 值为基。
+          const freshNow = store.get().collab;
+          store.update({
+            collab: {
+              ...freshNow,
+              unknownNotifiedRooms: [...(freshNow?.unknownNotifiedRooms ?? []), msg.chatId].slice(-200),
+              pendingClaims: [
+                ...(freshNow?.pendingClaims ?? []),
+                { roomId: msg.chatId, url: meta.gitUrl, projectName: meta.name, at: Date.now() },
+              ],
+            },
+          });
+          ctx.log.info(`🚪 陌生房 ${msg.chatId} 带项目元数据,已向管理房发认领卡(#${index})`);
+        } else if (!noticed.includes(msg.chatId) && !hasPendingClaim) {
+          await sendReply(mgRoom, msg.transport, t("router.unknownRoom.notice", { room: msg.chatId }));
+          // 落盘前重读(票02 评审整改口径):await 之后的写回以当下值为基。
+          const freshNow = store.get().collab;
+          store.update({
+            collab: { ...freshNow, unknownNotifiedRooms: [...(freshNow?.unknownNotifiedRooms ?? []), msg.chatId].slice(-200) },
+          });
+          ctx.log.info(`🚪 陌生房 ${msg.chatId} 不接活,已向管理房发认领提示`);
         }
         return true;
       },

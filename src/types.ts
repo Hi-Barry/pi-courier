@@ -161,6 +161,9 @@ export interface MsgBridgeConfig {
     allowUnknownRoomFallback?: boolean;
     /** 已发过认领提示的陌生房间(同房不重复刷,spec #299 票02)。 */
     unknownNotifiedRooms?: string[];
+    /** 已拒绝认领的「房间|仓库地址」键(任务3 场景测试:拒绝后同房同 URL
+     *  不再发卡;URL 后补/变更(mv 重探)则允许重新发卡)。 */
+    claimRejectedKeys?: string[];
     /** 待认领的协作邀请(spec #299 票04):管理房确认卡背后的持久簿记,
      *  重启不丢 —— /pmctl claim 按 index 确认/拒绝。 */
     pendingClaims?: PendingClaim[];
