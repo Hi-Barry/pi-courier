@@ -284,6 +284,28 @@ export class UpdateOrchestrator {
   /** check 子命令:只读查询,自身不占位、不 CAS(§5.7),任何态都可发。 */
   private async check(io: UpdateCommandIO): Promise<boolean> {
     try {
+      // 升级/等待重启期间读磁盘会说“已是最新”,但内存进程仍是旧版 ——
+      // 明确报告两边的版本,别让用户误判(#320)。
+      if (this.state === "installing") {
+        const disk = (this.deps.readVersion ?? readBridgeVersion)();
+        await io.reply(
+          t("cmd.update.check.installing", {
+            disk: disk ?? "unknown",
+            running: this.from ?? "unknown",
+          }),
+        );
+        return true;
+      }
+      if (this.state === "restart-pending") {
+        const disk = (this.deps.readVersion ?? readBridgeVersion)();
+        await io.reply(
+          t("cmd.update.check.restartPending", {
+            disk: disk ?? this.to ?? "unknown",
+            running: this.from ?? "unknown",
+          }),
+        );
+        return true;
+      }
       const from = (this.deps.readVersion ?? readBridgeVersion)();
       if (from === undefined) {
         await io.reply(t("cmd.update.check.failed", { message: "current bridge version unavailable" }));
@@ -409,8 +431,22 @@ export class UpdateOrchestrator {
       // 安全失败(§5.4):回执错误、旧版继续运行、桥绝不自杀,状态回 idle。
       this.state = "idle";
       this.generation += 1;
+      // 磁盘可能已经被换血(npm 先替换文件、后跑脚本;脚本失败也会走到这里)。
+      // 进程仍是 from —— 明确告诉用户两边版本,别把“旧版继续运行”误读成
+      // “磁盘也是旧版”,更不要直接重启(#320)。
+      let diskVersion: string | undefined;
       try {
-        await io.reply(t("cmd.update.npmFailed", { message: outcome.message }));
+        diskVersion = (this.deps.readVersion ?? readBridgeVersion)();
+      } catch {
+        diskVersion = undefined;
+      }
+      const base = t("cmd.update.npmFailed", { message: outcome.message });
+      const text =
+        diskVersion !== undefined && diskVersion !== from
+          ? `${base}\n${t("cmd.update.partialState", { disk: diskVersion, running: from })}`
+          : base;
+      try {
+        await io.reply(text);
       } catch (err) {
         logger.error(`[update] npmFailed notice failed: ${errorMessage(err)}`);
       }
