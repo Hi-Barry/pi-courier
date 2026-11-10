@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigStore } from "../src/config";
 import { logger } from "../src/logger";
@@ -232,11 +233,23 @@ describe("ProjectManager project presets (issue #119)", () => {
   });
 });
 
+/** 期望路径统一经 path.join 构造 —— Windows CI 上分隔符是反斜杠,
+ *  写死 POSIX 字面量会在 windows-latest 上误报。 */
+function fixedSessionDir(workdir: string): string {
+  return path.join(workdir, PROJECT_SESSION_DIR);
+}
+
+function expectDerivedSessionDir(dir: string | undefined, workdir: string): void {
+  const prefix = path.join(workdir, `${PROJECT_SESSION_DIR}-room-`);
+  expect(dir?.startsWith(prefix)).toBe(true);
+  expect(dir?.slice(prefix.length)).toMatch(/^[0-9a-f]{8}$/);
+}
+
 describe("ProjectManager per-room session dirs (spec #299 票01)", () => {
   it("single room on a workdir keeps the fixed .pi-session path (zero migration)", async () => {
     const { pm, spawnOpts } = makePM({ "!a:s": { name: "ai", workdir: "/w/ai" } });
     await pm.getRpcForRoom("!a:s");
-    expect(spawnOpts[0].args).toEqual(expect.arrayContaining(["--session-dir", `/w/ai/${PROJECT_SESSION_DIR}`]));
+    expect(spawnOpts[0].args).toEqual(expect.arrayContaining(["--session-dir", fixedSessionDir("/w/ai")]));
   });
 
   it("second room on the SAME workdir spawns with a per-room derived dir; the first keeps the fixed path", async () => {
@@ -246,36 +259,36 @@ describe("ProjectManager per-room session dirs (spec #299 票01)", () => {
     });
     await pm.getRpcForRoom("!a:s");
     await pm.getRpcForRoom("!b:s");
-    expect(spawnOpts[0].args).toEqual(expect.arrayContaining(["--session-dir", `/w/shared/${PROJECT_SESSION_DIR}`]));
+    expect(spawnOpts[0].args).toEqual(expect.arrayContaining(["--session-dir", fixedSessionDir("/w/shared")]));
     const argsB = spawnOpts[1].args ?? [];
     const dirB = argsB[argsB.indexOf("--session-dir") + 1];
-    expect(dirB).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
+    expectDerivedSessionDir(dirB, "/w/shared");
   });
 
   it("derived dir depends only on the roomId — stable across repeated resolution and map reshuffles", () => {
     const entry: ProjectConfig = { name: "p", workdir: "/w/shared" };
     const derived = projectSessionDirFor("!b:s", entry, { "!a:s": entry, "!b:s": entry });
     expect(derived).toBe(projectSessionDirFor("!b:s", entry, { "!a:s": entry, "!b:s": entry }));
-    expect(derived).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
+    expectDerivedSessionDir(derived, "/w/shared");
     // 不同房间 → 不同派生目录
     const other = projectSessionDirFor("!c:s", entry, { "!a:s": entry, "!b:s": entry, "!c:s": entry });
     expect(other).not.toBe(derived);
     // 更早兄弟换了 workdir(不同目录)→ 不再触发派生,回固定路径
     const reshuffled = projectSessionDirFor("!b:s", entry, { "!a:s": { name: "z", workdir: "/w/other" }, "!b:s": entry });
-    expect(reshuffled).toBe(`/w/shared/${PROJECT_SESSION_DIR}`);
+    expect(reshuffled).toBe(fixedSessionDir("/w/shared"));
   });
 
   it("insertion order decides who derives: reversing registration swaps the derived room", () => {
     const entry: ProjectConfig = { name: "p", workdir: "/w/shared" };
     const first = projectSessionDirFor("!a:s", entry, { "!a:s": entry, "!b:s": entry });
     const second = projectSessionDirFor("!b:s", entry, { "!a:s": entry, "!b:s": entry });
-    expect(first).toBe(`/w/shared/${PROJECT_SESSION_DIR}`);
-    expect(second).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
+    expect(first).toBe(fixedSessionDir("/w/shared"));
+    expectDerivedSessionDir(second, "/w/shared");
     // 反转登记顺序:原先派生的房间回固定路径,原先固定的改派生
     const flippedFixed = projectSessionDirFor("!b:s", entry, { "!b:s": entry, "!a:s": entry });
     const flippedDerived = projectSessionDirFor("!a:s", entry, { "!b:s": entry, "!a:s": entry });
-    expect(flippedFixed).toBe(`/w/shared/${PROJECT_SESSION_DIR}`);
-    expect(flippedDerived).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
+    expect(flippedFixed).toBe(fixedSessionDir("/w/shared"));
+    expectDerivedSessionDir(flippedDerived, "/w/shared");
   });
 });
 
@@ -285,7 +298,7 @@ describe("ProjectManager binding-event session dirs (spec #299 票01 评审整�
     pm.registerProject("!a:s", "/w/shared", "newcomer");
     const entries = store.get().projects!;
     expect(entries["!b:s"].sessionDir).toBeUndefined(); // 在住者不被改写
-    expect(entries["!a:s"].sessionDir).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
+    expectDerivedSessionDir(entries["!a:s"].sessionDir, "/w/shared");
     await pm.getRpcForRoom("!a:s");
     expect(spawnOpts[0].args).toEqual(expect.arrayContaining(["--session-dir", entries["!a:s"].sessionDir!]));
   });
@@ -299,10 +312,10 @@ describe("ProjectManager binding-event session dirs (spec #299 票01 评审整�
     const entries = store.get().projects!;
     expect(entries["!b:s"].workdir).toBe("/w/shared");
     expect(entries["!b:s"].sessionDir).toBeUndefined(); // 在住者原路径不变
-    expect(entries["!a:s"].sessionDir).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
+    expectDerivedSessionDir(entries["!a:s"].sessionDir, "/w/shared");
     // 会话目录单点访问:搬入者派生、在住者固定 —— /pmctl show 与 spawn 同源
-    expect(pm.sessionDirFor("!a:s")).toMatch(new RegExp(`^/w/shared/${PROJECT_SESSION_DIR}-room-[0-9a-f]{8}$`));
-    expect(pm.sessionDirFor("!b:s")).toBe(`/w/shared/${PROJECT_SESSION_DIR}`);
+    expectDerivedSessionDir(pm.sessionDirFor("!a:s"), "/w/shared");
+    expect(pm.sessionDirFor("!b:s")).toBe(fixedSessionDir("/w/shared"));
   });
 
   it("spawn prefers the persisted sessionDir; legacy entries fall back to the fixed path", async () => {
@@ -313,13 +326,13 @@ describe("ProjectManager binding-event session dirs (spec #299 票01 评审整�
     await pm.getRpcForRoom("!a:s");
     await pm.getRpcForRoom("!b:s");
     expect(spawnOpts[0].args).toEqual(expect.arrayContaining(["--session-dir", "/w/ai/.pi-session-room-deadbeef"]));
-    expect(spawnOpts[1].args).toEqual(expect.arrayContaining(["--session-dir", `/w/legacy/${PROJECT_SESSION_DIR}`]));
+    expect(spawnOpts[1].args).toEqual(expect.arrayContaining(["--session-dir", fixedSessionDir("/w/legacy")]));
   });
 
   it("registerProject into an unoccupied workdir persists the fixed path (zero migration for fresh binds)", async () => {
     const { pm, store } = makePM({});
     pm.registerProject("!a:s", "/w/solo", "solo");
-    expect(store.get().projects!["!a:s"].sessionDir).toBe(`/w/solo/${PROJECT_SESSION_DIR}`);
+    expect(store.get().projects!["!a:s"].sessionDir).toBe(fixedSessionDir("/w/solo"));
   });
 
   it("registerProject persists guest mode alongside the session dir (票04 认领绑定)", async () => {
@@ -327,7 +340,7 @@ describe("ProjectManager binding-event session dirs (spec #299 票01 评审整�
     pm.registerProject("!g:s", "/w/g", "collab", "guest");
     const entry = store.get().projects!["!g:s"];
     expect(entry.mode).toBe("guest");
-    expect(entry.sessionDir).toBe(`/w/g/${PROJECT_SESSION_DIR}`);
+    expect(entry.sessionDir).toBe(fixedSessionDir("/w/g"));
     // 不带 mode 的注册(普通 /pmctl new)不落 mode 键 —— 缺省 owner 语义
     pm.registerProject("!o:s", "/w/o", "own");
     expect(store.get().projects!["!o:s"].mode).toBeUndefined();
