@@ -22,10 +22,8 @@ import { BASH_TIMEOUT_MINUTES_DEFAULT, loadConfig } from "../config.js";
 import { errorMessage } from "../errors.js";
 import { logger } from "../logger.js";
 import {
-  joinNoProxyList,
-  NO_PROXY_ENV_NAMES,
-  PROXY_ENV_NAMES,
   type ProxyConfigInput,
+  proxyChildEnv,
   resolveProxySettings,
 } from "../proxy.js";
 
@@ -474,30 +472,13 @@ export class PiRpc {
   /**
    * 派生 pi 子进程的代理 env 覆写增量(spec #201 票 #204)。上游 spawn 以
    * `{ ...process.env, ...this.options.env }` 合成子进程环境,本方法只产出
-   * 覆写键;决策规则(resolveProxySettings)全项目唯一解释,与桥自身接线
-   * (#203 applyProxySettings)同源。因 merge 语义无法删键,「无豁免」用
-   * 空串压制:
-   *  - 无代理 → undefined:不传 env,子进程环境与旧版逐键一致(现状直连)。
-   *  - 配置出场且未填 noProxy → NO_PROXY/no_proxy 置空串:压掉 shell 遗留,
-   *    「以配置为准,未填即无豁免」在子进程里同样成立。
-   *  - env 兜底且解析不出豁免 → 两键不写:父进程本就无值,不引入意外键。
+   * 覆写键;决策规则(resolveProxySettings)全项目唯一解释,覆写算子
+   * (proxyChildEnv)与升级子进程(spec #320)共用。
    */
   private proxySpawnEnv(): Record<string, string> | undefined {
-    const settings = resolveProxySettings(this.options.proxyConfig ?? loadConfig(), process.env);
-    if (settings.proxy === undefined) return undefined;
-    const env: Record<string, string> = {};
-    // 键集与拼串与桥侧覆写(applyProxySettings)共享自 proxy.ts;第三态
-    // 语义有意不同 —— 见方法注释,不与桥侧的删键分支合并。
-    for (const name of PROXY_ENV_NAMES) {
-      env[name] = settings.proxy;
-    }
-    if (settings.noProxy.length > 0) {
-      const joined = joinNoProxyList(settings.noProxy);
-      for (const name of NO_PROXY_ENV_NAMES) env[name] = joined;
-    } else if (settings.source === "config") {
-      for (const name of NO_PROXY_ENV_NAMES) env[name] = "";
-    }
-    return env;
+    return proxyChildEnv(
+      resolveProxySettings(this.options.proxyConfig ?? loadConfig(), process.env),
+    );
   }
 
   async stop(): Promise<void> {

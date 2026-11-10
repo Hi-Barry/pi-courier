@@ -133,6 +133,28 @@ export function joinNoProxyList(noProxy: readonly string[]): string {
   return noProxy.join(",");
 }
 
+/**
+ * 子进程环境覆写增量(spec #320):升级时 npm/ensure 子进程与 pi 子进程
+ * 共用同一套代理三态语义。上游 spawn 以 `{...process.env, ...overrides}`
+ * 合并,无法删键,因此"配置代理但未填 noProxy"用空串压制 NO_PROXY。
+ *
+ *  - 无代理 → undefined:不传 env,子进程环境与旧版逐键一致(直连)。
+ *  - 配置代理且未填 noProxy → NO_PROXY/no_proxy 置空串:压掉 shell 遗留。
+ *  - env 兜底且无豁免 → 两键不写:父进程本就没有值,不引入意外键。
+ */
+export function proxyChildEnv(settings: ProxySettings): Record<string, string> | undefined {
+  if (settings.proxy === undefined) return undefined;
+  const env: Record<string, string> = {};
+  for (const name of PROXY_ENV_NAMES) env[name] = settings.proxy;
+  if (settings.noProxy.length > 0) {
+    const joined = joinNoProxyList(settings.noProxy);
+    for (const name of NO_PROXY_ENV_NAMES) env[name] = joined;
+  } else if (settings.source === "config") {
+    for (const name of NO_PROXY_ENV_NAMES) env[name] = "";
+  }
+  return env;
+}
+
 /** 调度器装配缝:默认实现真正装配全局调度器并换装 undici fetch;测试注入
  *  spy,断言装配时机(此刻环境已覆写完毕)与装配物(EnvHttpProxyAgent)。 */
 export type DispatcherInstaller = (agent: undici.EnvHttpProxyAgent) => void;

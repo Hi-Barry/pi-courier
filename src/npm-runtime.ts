@@ -11,6 +11,7 @@
  * helpers stay unit-testable in isolation.
  */
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 
 /**
@@ -60,4 +61,38 @@ export function globalNodeModulesDir(env: GlobalNodeModulesEnv): string {
     return path.join(appData, "npm", "node_modules");
   }
   return path.join(path.dirname(env.execPath), "..", "lib", "node_modules");
+}
+
+/**
+ * Resolve the installed crypto package directory from a package root, using
+ * Node's own module resolution instead of guessing a global prefix.
+ *
+ * Why: npm 11 global installs use the shallow layout — dependencies live in
+ * <packageRoot>/node_modules, not at the global prefix root. Hoisted layouts
+ * put them in an ancestor node_modules. `createRequire` from the package's
+ * package.json follows both (and custom prefixes) by construction.
+ *
+ * Returns undefined when the package is not installed / cannot be resolved.
+ */
+export function resolveCryptoPackageDirFrom(packageRoot: string): string | undefined {
+  try {
+    const requireFromPackage = createRequire(path.resolve(packageRoot, "package.json"));
+    const pkgJsonPath = requireFromPackage.resolve(
+      "@matrix-org/matrix-sdk-crypto-nodejs/package.json",
+    );
+    return path.dirname(pkgJsonPath);
+  } catch {
+    return undefined;
+  }
+}
+
+/** True when the crypto package's native binding (.node) exists for this install. */
+export function nativeBindingExists(packageRoot: string): boolean {
+  const cryptoDir = resolveCryptoPackageDirFrom(packageRoot);
+  if (cryptoDir === undefined) return false;
+  try {
+    return fs.readdirSync(cryptoDir).some((entry) => entry.endsWith(".node"));
+  } catch {
+    return false;
+  }
 }
