@@ -15,6 +15,7 @@
 import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ChallengeAuth } from "../auth/challenge-auth.js";
 import {
   cloneRepository,
   gitWorktreeAdd,
@@ -40,7 +41,6 @@ import { buildProjectWelcome, welcomeVersions } from "../project-welcome.js";
 import { applyRoomCustomAvatar, ensureRoomAvatar, poolFilesForProjects } from "../room-branding.js";
 import { pickPoolAvatarFile } from "../space-identity.js";
 import { provisionManagedRoom } from "../space-topology.js";
-import type { ChallengeAuth } from "../auth/challenge-auth.js";
 import type { RoomOps } from "../transports/interface.js";
 import type { PendingClaim } from "../types.js";
 import { win32PathProblem, win32SamePath } from "../win32-path.js";

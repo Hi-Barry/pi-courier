@@ -12,7 +12,7 @@
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 import type { RpcClient, RpcEventListener } from "@earendil-works/pi-coding-agent";
-import { effectiveWorkdir, type ConfigStore, projectFallbackChain } from "../config.js";
+import { type ConfigStore, effectiveWorkdir, projectFallbackChain } from "../config.js";
 import { errorMessage } from "../errors.js";
 import { t } from "../i18n/index.js";
 import { logger } from "../logger.js";
