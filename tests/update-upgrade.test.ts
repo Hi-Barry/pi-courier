@@ -79,6 +79,7 @@ afterEach(() => {
 });
 
 /** npm 路径的共用输入:无 .git(→ npm),校验通过。 */
+const ENSURE_SCRIPT = path.join("/proj", "scripts", "ensure-crypto-native.mjs");
 const npmDeps: Partial<UpgradeDeps> = {
   existsSync: () => false,
   projectDir: "/proj",
@@ -103,7 +104,7 @@ describe("runUpgrade · npm 安装路径", () => {
     await h.closeCurrent(0);
     expect(h.calls[1]).toMatchObject({
       cmd: "/node/bin/node",
-      args: ["/proj/scripts/ensure-crypto-native.mjs"],
+      args: [ENSURE_SCRIPT],
       opts: { cwd: "/proj" },
     });
     expect(h.calls[1]!.opts.env?.HTTPS_PROXY).toBe("http://proxy:1");
@@ -185,7 +186,7 @@ describe("runUpgrade · git 安装路径", () => {
       "git pull",
       "/node/bin/node /npm-cli.js install --ignore-scripts",
       "/node/bin/node /npm-cli.js run build",
-      "/node/bin/node /proj/scripts/ensure-crypto-native.mjs",
+      `/node/bin/node ${ENSURE_SCRIPT}`,
     ]);
     expect(h.calls.every((c) => c.opts.cwd === "/proj")).toBe(true);
   });
@@ -357,7 +358,7 @@ describe("buildUpgradePlan · 桥与 CLI 共用的顺序", () => {
       },
       {
         cmd: "/node/bin/node",
-        args: ["/proj/scripts/ensure-crypto-native.mjs"],
+        args: [ENSURE_SCRIPT],
         cwd: "/proj",
         timeoutMs: ENSURE_TIMEOUT_MS,
       },
@@ -383,7 +384,7 @@ describe("buildUpgradePlan · 桥与 CLI 共用的顺序", () => {
       { cmd: "/node/bin/node", args: ["/npm-cli.js", "run", "build"], cwd: "/proj" },
       {
         cmd: "/node/bin/node",
-        args: ["/proj/scripts/ensure-crypto-native.mjs"],
+        args: [ENSURE_SCRIPT],
         cwd: "/proj",
         timeoutMs: 1_234,
       },
