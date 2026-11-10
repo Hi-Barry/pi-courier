@@ -66,6 +66,9 @@ const LOG_PREFIX = "[pi-courier]";
 const CACHE_SUBDIR = join("pi-courier", "native-crypto");
 const MANIFEST_FILENAME = "crypto-native-hashes.json";
 const SHA256_HEX = /^[0-9a-f]{64}$/;
+/** 上游 download-lib.js 的挂死兜底:15MB 正常几秒到几分钟,10 分钟仍未完成
+ *  视为卡死(代理/网络挂起时它自身没有超时)。 */
+export const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 
 /** Current platform/arch names as napi-rs names them (no .node suffix). */
 export function nativeBindingBasename() {
@@ -134,8 +137,11 @@ export function isNativeBindingMissing(cryptoDir, basename) {
   return !existsSync(`${cryptoDir}/${basename}.node`);
 }
 
-/** Run the crypto package's own downloader to fetch the native binding. */
-export function runNativeDownloader(cryptoDir) {
+/** Run the crypto package's own downloader to fetch the native binding.
+ *  timeoutMs exists because the upstream downloader (node-downloader-helper)
+ *  defaults to no timeout: a stalled GitHub/proxy connection would hang the
+ *  postinstall (and an upgrade) forever. */
+export function runNativeDownloader(cryptoDir, timeoutMs = DOWNLOAD_TIMEOUT_MS) {
   const script = `${cryptoDir}/download-lib.js`;
   if (!existsSync(script)) {
     throw new Error(`crypto downloader not found: ${script}`);
@@ -145,6 +151,8 @@ export function runNativeDownloader(cryptoDir) {
     stdio: "inherit",
     // Inherit proxy env so machines behind a proxy still reach GitHub.
     env: process.env,
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
   });
 }
 
@@ -463,7 +471,7 @@ export function ensureCryptoNative(options = {}) {
     `${LOG_PREFIX} crypto native binding (${basename}.node) missing — downloading (POSTINSTALL due to npm 11 allow-scripts).`
   );
   try {
-    runDownloader(cryptoDir);
+    runDownloader(cryptoDir, DOWNLOAD_TIMEOUT_MS);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(
