@@ -39,7 +39,7 @@ import { setLocale, t } from "./i18n/index.js";
 import { buildLegacyMigrationPlan, runLegacyMigration } from "./legacy-migration.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { logger, parseLogLevel, setLogLevel } from "./logger.js";
-import { applyProxySettings } from "./proxy.js";
+import { applyProxySettings, proxyChildEnv } from "./proxy.js";
 import { ReminderClock } from "./reminders/reminder-clock.js";
 import type { ReminderEntry } from "./reminders/reminder-store.js";
 import { ReminderStore } from "./reminders/reminder-store.js";
@@ -67,6 +67,7 @@ import { MatrixProvider } from "./transports/matrix.js";
 import { createMatrixClient } from "./transports/matrix-client.js";
 import { consumePendingUpdate, PendingUpdateStore } from "./update/pending-update.js";
 import { UpdateOrchestrator } from "./update/updater.js";
+import { runUpgrade } from "./update/upgrade.js";
 import { suppressKnownWarnings } from "./warnings.js";
 import { resolveWorkdir } from "./workdir.js";
 
@@ -575,8 +576,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // ---- /update 编排器(spec §8 组合根):进程内单例状态机 ----------------------
   // 全部执行缝用模块默认实现(undici fetch / 真实 spawn / process.getuid /
   // process.platform / command-map 的全实例探测与等待);唯一必填的 pendingUpdate
-  // 指向 stateDir。测试缝在 tests/update-orchestrator.test.ts 单独构造。
-  const updateOrchestrator = new UpdateOrchestrator({ pendingUpdate: pendingUpdateStore });
+  // 指向 stateDir。升级子进程显式带上生效代理增量(桥进程 env 已覆写,#320
+  // 再做一层可测的接线;CLI 路径同样注入)。测试缝在
+  // tests/update-orchestrator.test.ts 单独构造。
+  const updateProxyEnv = proxyChildEnv(proxySettings);
+  const updateOrchestrator = new UpdateOrchestrator({
+    pendingUpdate: pendingUpdateStore,
+    upgrade: () => runUpgrade({ envOverrides: updateProxyEnv }),
+  });
 
   // ---- audit log (issue #124):敏感动作的追加式证据 ----------------------------
   // audit.jsonl 只追加不改写(排查即证据),10MB 轮转留 2 份;写失败计数到

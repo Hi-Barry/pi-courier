@@ -7,10 +7,15 @@
  * `node <npm-cli.js>` instead works on every platform, and resolving the
  * same npm that ships with the running node keeps POSIX behavior identical.
  *
+ * Also resolves the crypto native-binding package from a package root (#320):
+ * `createRequire` follows npm 11's shallow global layout (deps nested under
+ * the package) and hoisted layouts, instead of guessing a global prefix.
+ *
  * Kept free of cli.ts imports (cli.ts runs main() at module load) so these
  * helpers stay unit-testable in isolation.
  */
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 
 /**
@@ -36,28 +41,46 @@ export function resolveNpmCli(nodeExecPath: string): string | undefined {
   return undefined;
 }
 
-/** Environment inputs for {@link globalNodeModulesDir} (injectable for tests). */
-export interface GlobalNodeModulesEnv {
-  platform: NodeJS.Platform;
-  /** process.execPath of the running node binary */
-  execPath: string;
-  /** %APPDATA% (Windows only; falls back to <home>/AppData/Roaming when unset) */
-  appData?: string;
-  /** os.homedir() */
-  homeDir: string;
+/**
+ * Resolve the installed crypto package directory from a package root, using
+ * Node's own module resolution instead of guessing a global prefix.
+ *
+ * Why: npm 11 global installs use the shallow layout — dependencies live in
+ * <packageRoot>/node_modules, not at the global prefix root. Hoisted layouts
+ * put them in an ancestor node_modules. `createRequire` from the package's
+ * package.json follows both (and custom prefixes) by construction.
+ *
+ * Returns undefined when the package is not installed / cannot be resolved.
+ */
+export function resolveCryptoPackageDirFrom(packageRoot: string): string | undefined {
+  try {
+    const requireFromPackage = createRequire(path.resolve(packageRoot, "package.json"));
+    const pkgJsonPath = requireFromPackage.resolve(
+      "@matrix-org/matrix-sdk-crypto-nodejs/package.json",
+    );
+    return path.dirname(pkgJsonPath);
+  } catch {
+    return undefined;
+  }
 }
 
-/**
- * npm's global node_modules directory:
- *  - win32: `%APPDATA%\npm\node_modules` (npm's default prefix on Windows;
- *    historically this code hard-coded the POSIX prefix and never matched)
- *  - POSIX: `<nodeDir>/../lib/node_modules` — the long-standing Unix global
- *    layout, unchanged.
- */
-export function globalNodeModulesDir(env: GlobalNodeModulesEnv): string {
-  if (env.platform === "win32") {
-    const appData = env.appData ?? path.join(env.homeDir, "AppData", "Roaming");
-    return path.join(appData, "npm", "node_modules");
+/** Platforms where matrix-sdk-crypto-nodejs publishes a native binding.
+ *  Other platforms legitimately run without E2EE; the ensure script treats
+ *  them as "fine", so verification must not fail the upgrade there. */
+const NATIVE_BINDING_PLATFORMS = new Set<NodeJS.Platform>(["win32", "darwin", "linux"]);
+
+/** True when the crypto package's native binding (.node) exists for this install.
+ *  Unsupported platforms return true (no binding is expected there). */
+export function nativeBindingExists(
+  packageRoot: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (!NATIVE_BINDING_PLATFORMS.has(platform)) return true;
+  const cryptoDir = resolveCryptoPackageDirFrom(packageRoot);
+  if (cryptoDir === undefined) return false;
+  try {
+    return fs.readdirSync(cryptoDir).some((entry) => entry.endsWith(".node"));
+  } catch {
+    return false;
   }
-  return path.join(path.dirname(env.execPath), "..", "lib", "node_modules");
 }

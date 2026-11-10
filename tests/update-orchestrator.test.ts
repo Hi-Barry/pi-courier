@@ -136,6 +136,22 @@ describe("§10 用例 1 · /update check(只读,不占位不 CAS)", () => {
     }
   });
 
+  it("磁盘已新但进程仍旧 → check 报发现新版本,不谎报已是最新", async () => {
+    const h = makeHarness({
+      runningVersion: "1.5.0",
+      readVersion: () => "1.7.0", // 半升级后的磁盘
+      fetchRegistry: vi.fn().mockResolvedValue({ version: "1.7.0" }),
+    });
+    try {
+      await h.orch.handleCommand("check", h.io());
+      expect(h.replies[0]).toContain("发现新版本");
+      expect(h.replies[0]).toContain("v1.5.0");
+      expect(h.replies[0]).toContain("v1.7.0");
+    } finally {
+      h.cleanup();
+    }
+  });
+
   it("有新版 → check.hasNew(from/to 均过格式校验后才拼入文案)", async () => {
     const h = makeHarness({ fetchRegistry: vi.fn().mockResolvedValue({ version: "1.3.0" }) });
     try {
@@ -484,6 +500,63 @@ describe("§10 用例 5 · /update cancel 分态语义", () => {
     }
   });
 
+  it("installing 状态下 check 报“升级进行中”,且不重复读 registry", async () => {
+    const gate = deferred<{ ok: true } | { ok: false; message: string }>();
+    let diskVersion = "1.2.0";
+    const fetchRegistry = vi.fn().mockResolvedValue({ version: "1.3.0" });
+    const h = makeHarness({
+      fetchRegistry,
+      readVersion: () => diskVersion,
+      upgrade: vi.fn().mockReturnValue(gate.promise),
+    });
+    try {
+      await h.orch.handleCommand("", h.io()); // from=1.2.0 → installing
+      expect(h.orch.currentState).toBe("installing");
+      diskVersion = "1.3.0"; // npm 已把新文件放上磁盘
+      await h.orch.handleCommand("check", h.io());
+      expect(h.replies.at(-1)).toBe(
+        "⏳ 升级进行中:磁盘已是 v1.3.0,当前进程仍是 v1.2.0;完成后会自动重启。",
+      );
+      expect(fetchRegistry).toHaveBeenCalledTimes(1); // 只有发起更新时那次
+      gate.resolve({ ok: false, message: "npm exited with code 1" });
+      await until(() => h.orch.currentState === "idle");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("restart-pending 状态下 check 报“等待空闲重启”,且不重复读 registry", async () => {
+    const gate = deferred<void>();
+    let diskVersion = "1.2.0";
+    const fetchRegistry = vi.fn().mockResolvedValue({ version: "1.3.0" });
+    const h = makeHarness({
+      fetchRegistry,
+      readVersion: () => diskVersion,
+      probe: vi
+        .fn()
+        .mockResolvedValueOnce({ streaming: 0, unreachable: 0 })
+        .mockResolvedValueOnce({ streaming: 1, unreachable: 0 }),
+      waitForIdle: vi.fn(() => gate.promise),
+      upgrade: vi.fn().mockImplementation(async () => {
+        diskVersion = "1.3.0"; // 换血成功
+        return { ok: true };
+      }),
+    });
+    try {
+      await h.orch.handleCommand("", h.io());
+      await until(() => h.orch.currentState === "restart-pending");
+      await h.orch.handleCommand("check", h.io());
+      expect(h.replies.at(-1)).toBe(
+        "⏳ 代码已更新到 v1.3.0,正在等待空闲重启(当前进程仍是 v1.2.0)。",
+      );
+      expect(fetchRegistry).toHaveBeenCalledTimes(1);
+      await h.orch.handleCommand("cancel", h.io());
+      gate.resolve();
+    } finally {
+      h.cleanup();
+    }
+  });
+
   it("restart-pending → 文件照写 + manualRestartHint + audit + idle(不回滚,§5.7)", async () => {
     const gate = deferred<void>();
     const h = makeHarness({
@@ -650,6 +723,34 @@ describe("§10 用例 6 · npm 升级失败(安全失败,桥绝不自杀)", () =
       await until(() => h.replies.some((r) => r.includes("升级失败")));
       expect(h.replies.find((r) => r.includes("升级失败"))).toContain("spawn exploded");
       expect(h.orch.currentState).toBe("idle");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("失败时磁盘已是新版本 → npmFailed 附半升级警示(磁盘 vX / 进程 vY)", async () => {
+    let diskVersion = "1.2.0";
+    const h = makeHarness({
+      fetchRegistry: vi.fn().mockResolvedValue({ version: "1.3.0" }),
+      readVersion: () => diskVersion,
+      upgrade: vi.fn().mockImplementation(async () => {
+        diskVersion = "1.3.0"; // npm 已替换文件,随后 ensure/校验失败
+        return {
+          ok: false,
+          message: "native crypto binding is missing after ensure",
+        };
+      }),
+    });
+    try {
+      await h.orch.handleCommand("", h.io());
+      await until(() => h.replies.some((r) => r.includes("升级失败")));
+      const failure = h.replies.find((r) => r.includes("升级失败"));
+      expect(failure).toContain("native crypto binding is missing after ensure");
+      expect(failure).toContain("磁盘代码已是 v1.3.0");
+      expect(failure).toContain("当前进程仍是 v1.2.0");
+      expect(h.orch.currentState).toBe("idle");
+      expect(h.deps.triggerRestart).not.toHaveBeenCalled();
+      expect(h.deps.pendingUpdate.read()).toBeUndefined();
     } finally {
       h.cleanup();
     }

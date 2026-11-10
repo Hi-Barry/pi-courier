@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { setLocale } from "../src/i18n/index.js";
-import { resolveProxySettings } from "../src/proxy.js";
+import { proxyChildEnv, resolveProxySettings } from "../src/proxy.js";
 
 describe("resolveProxySettings", () => {
   it("config wins over env, source=config", () => {
@@ -178,5 +178,50 @@ describe("resolveProxySettings 错误信息双语齐全", () => {
     expect(() =>
       resolveProxySettings({}, { HTTPS_PROXY: "socks5://g:1" }),
     ).toThrow(/http\/https/);
+  });
+});
+
+describe("proxyChildEnv", () => {
+  it("returns undefined when no proxy is in effect", () => {
+    expect(proxyChildEnv(resolveProxySettings({}, {}))).toBeUndefined();
+  });
+
+  it("writes both cases for the proxy and the joined noProxy list", () => {
+    const env = proxyChildEnv(
+      resolveProxySettings(
+        { proxy: "http://cfg:1", noProxy: ["a.internal", "10.0.0.0/8"] },
+        {},
+      ),
+    );
+    expect(env).toEqual({
+      HTTP_PROXY: "http://cfg:1",
+      http_proxy: "http://cfg:1",
+      HTTPS_PROXY: "http://cfg:1",
+      https_proxy: "http://cfg:1",
+      NO_PROXY: "a.internal,10.0.0.0/8",
+      no_proxy: "a.internal,10.0.0.0/8",
+    });
+  });
+
+  it("suppresses inherited NO_PROXY with empty strings when config has no noProxy", () => {
+    const env = proxyChildEnv(
+      resolveProxySettings({ proxy: "http://cfg:1" }, { NO_PROXY: "leftover" }),
+    );
+    expect(env?.NO_PROXY).toBe("");
+    expect(env?.no_proxy).toBe("");
+  });
+
+  it("writes the env-derived NO_PROXY and omits it when the env has none", () => {
+    const withList = proxyChildEnv(
+      resolveProxySettings({}, { HTTP_PROXY: "http://env:1", NO_PROXY: " a , b " }),
+    );
+    expect(withList?.NO_PROXY).toBe("a,b");
+    expect(withList?.no_proxy).toBe("a,b");
+
+    const withoutList = proxyChildEnv(resolveProxySettings({}, { HTTP_PROXY: "http://env:1" }));
+    expect(withoutList).toBeDefined();
+    expect(withoutList?.NO_PROXY).toBeUndefined();
+    expect(withoutList?.no_proxy).toBeUndefined();
+    expect(Object.keys(withoutList ?? {})).toHaveLength(4);
   });
 });

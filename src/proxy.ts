@@ -112,16 +112,16 @@ export function resolveProxySettings(
 
 // ── 启动接线(spec #201 票 #203)──────────────────────────────────────────
 // 把生效三元组落到进程上:覆写标准环境变量(request 腿自动认)+ 装配
-// undici 全局调度器(桥自己的 fetch 腿必须代码级装配)。pi 子进程注入
-// (票 #204)与向导默认值(票 #205)各自消费 resolveProxySettings,不走
-// 本函数。
+// undici 全局调度器(桥自己的 fetch 腿必须代码级装配)。子进程注入统一经
+// proxyChildEnv(pi / npm / ensure 共用,spec #201 票 #204 + #320);
+// 向导默认值(票 #205)只消费 resolveProxySettings,不走本函数。
 
 /** 出网代理的标准环境变量名,大小写两套全部写齐 —— request 的
  *  getProxyFromURI 与 undici 都小写优先,只写大写会被 shell 遗留小写变量
  *  抢跑,只写小写则 Windows 等大写惯例的消费方认不到。桥侧进程覆写
- *  (#203 applyProxySettings)与 pi 子进程注入(#204 proxySpawnEnv)共用
- *  此键集;两处的第三态语义有意不同(删键 / 空串压制 / 不写),共享的
- *  只是键集与拼串,不是语义分支。 */
+ *  (#203 applyProxySettings)与子进程注入(proxyChildEnv,pi/npm/ensure
+ *  共用)共享此键集;进程覆写走删键,子进程用空串压制/不写,第三态语义
+ *  有意不同,共享的只是键集与拼串。 */
 export const PROXY_ENV_NAMES = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"] as const;
 
 /** NO_PROXY 的标准键名,大小写两套(理由同 PROXY_ENV_NAMES)。 */
@@ -131,6 +131,28 @@ export const NO_PROXY_ENV_NAMES = ["NO_PROXY", "no_proxy"] as const;
  *  两套时与 NO_PROXY_ENV_NAMES 配对使用。 */
 export function joinNoProxyList(noProxy: readonly string[]): string {
   return noProxy.join(",");
+}
+
+/**
+ * 子进程环境覆写增量(spec #320):升级时 npm/ensure 子进程与 pi 子进程
+ * 共用同一套代理三态语义。上游 spawn 以 `{...process.env, ...overrides}`
+ * 合并,无法删键,因此"配置代理但未填 noProxy"用空串压制 NO_PROXY。
+ *
+ *  - 无代理 → undefined:不传 env,子进程环境与旧版逐键一致(直连)。
+ *  - 配置代理且未填 noProxy → NO_PROXY/no_proxy 置空串:压掉 shell 遗留。
+ *  - env 兜底且无豁免 → 两键不写:父进程本就没有值,不引入意外键。
+ */
+export function proxyChildEnv(settings: ProxySettings): Record<string, string> | undefined {
+  if (settings.proxy === undefined) return undefined;
+  const env: Record<string, string> = {};
+  for (const name of PROXY_ENV_NAMES) env[name] = settings.proxy;
+  if (settings.noProxy.length > 0) {
+    const joined = joinNoProxyList(settings.noProxy);
+    for (const name of NO_PROXY_ENV_NAMES) env[name] = joined;
+  } else if (settings.source === "config") {
+    for (const name of NO_PROXY_ENV_NAMES) env[name] = "";
+  }
+  return env;
 }
 
 /** 调度器装配缝:默认实现真正装配全局调度器并换装 undici fetch;测试注入
