@@ -25,6 +25,8 @@ import {
   restoreBindingFromCache,
   verifyDownloadedBinding,
   ensureCryptoNative,
+  runNativeDownloader,
+  DOWNLOAD_TIMEOUT_MS,
 } from "../scripts/ensure-crypto-native.mjs";
 
 describe("nativeBindingBasename", () => {
@@ -623,6 +625,43 @@ describe("ensureCryptoNative (cache + verification, injected deps, no network)",
     expect(res).toMatchObject({ ok: false, reason: "download-failed" });
     expect(warns.join("\n")).toMatch(/could not auto-download/i);
     expect(existsSync(cacheEntryPaths(cacheRoot, VERSION, BASENAME).nodePath)).toBe(false);
+  });
+
+  it("passes the download timeout to the downloader", () => {
+    const cryptoDir = makeCryptoPkg();
+    const cacheRoot = tempDir("crypto-cache-");
+    const manifestPath = makeManifest({});
+    const s = sandbox({
+      cryptoDir,
+      cacheRoot,
+      manifestPath,
+      runDownloader: () => {
+        // no binding written: the test only asserts the timeout argument
+      },
+    });
+
+    ensureCryptoNative(s);
+
+    expect(s.runDownloader).toHaveBeenCalledWith(cryptoDir, DOWNLOAD_TIMEOUT_MS);
+  });
+});
+
+describe("runNativeDownloader", () => {
+  it("times out a stalled downloader instead of hanging", () => {
+    const cryptoDir = tempDir("crypto-slow-");
+    writeFileSync(join(cryptoDir, "download-lib.js"), "setTimeout(() => {}, 60000);\n");
+
+    let error: unknown;
+    try {
+      runNativeDownloader(cryptoDir, 150);
+    } catch (e) {
+      error = e;
+    }
+
+    expect(error).toBeTruthy();
+    const code =
+      (error as { code?: string }).code ?? (error as { errno?: string }).errno;
+    expect(code).toBe("ETIMEDOUT");
   });
 });
 

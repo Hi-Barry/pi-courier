@@ -1,15 +1,18 @@
 /**
- * npm global-layout resolution (Windows adaptation for `pi-courier update`,
+ * npm CLI resolution (Windows adaptation for `pi-courier update`,
  * evaluation 2026-10-13): resolveNpmCli finds npm-cli.js beside the running
- * node — two install layouts — and globalNodeModulesDir picks npm's
- * per-platform global prefix: %APPDATA%\npm on win32 (with a home-relative
- * fallback when APPDATA is unset), the historical lib/ layout on POSIX.
+ * node — two install layouts. The crypto-binding tests pin package-relative
+ * resolution for npm 11's shallow global layout (#320).
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { globalNodeModulesDir, resolveNpmCli } from "../src/npm-runtime.js";
+import {
+  nativeBindingExists,
+  resolveCryptoPackageDirFrom,
+  resolveNpmCli,
+} from "../src/npm-runtime.js";
 
 describe("resolveNpmCli", () => {
   let tmpDir: string;
@@ -59,36 +62,75 @@ describe("resolveNpmCli", () => {
   });
 });
 
-describe("globalNodeModulesDir", () => {
-  const homeDir = path.join("/home", "alice");
-  const execPath = path.join("/usr", "local", "bin", "node");
+describe("crypto native binding resolution (package-relative)", () => {
+  let root: string;
 
-  it("uses %APPDATA%\\npm\\node_modules on win32", () => {
-    expect(
-      globalNodeModulesDir({
-        platform: "win32",
-        execPath: "C:\\Program Files\\nodejs\\node.exe",
-        appData: "C:\\Users\\alice\\AppData\\Roaming",
-        homeDir: "C:\\Users\\alice",
-      }),
-    ).toBe(path.join("C:\\Users\\alice\\AppData\\Roaming", "npm", "node_modules"));
-  });
-
-  it("falls back to <home>\\AppData\\Roaming on win32 when APPDATA is unset", () => {
-    expect(
-      globalNodeModulesDir({
-        platform: "win32",
-        execPath: "C:\\Program Files\\nodejs\\node.exe",
-        homeDir: "C:\\Users\\alice",
-      }),
-    ).toBe(
-      path.join("C:\\Users\\alice", "AppData", "Roaming", "npm", "node_modules"),
+  beforeEach(() => {
+    root = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "pi-courier.crypto-")),
     );
   });
 
-  it("keeps the POSIX prefix unchanged (<nodeDir>/../lib/node_modules)", () => {
-    expect(globalNodeModulesDir({ platform: "linux", execPath, homeDir })).toBe(
-      path.join(path.dirname(execPath), "..", "lib", "node_modules"),
-    );
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  /** Materialize <base>/node_modules/@matrix-org/...; returns the package dir. */
+  function putCryptoPackage(base: string, withNode: boolean): string {
+    const dir = path.join(base, "node_modules", "@matrix-org", "matrix-sdk-crypto-nodejs");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "package.json"), "{}");
+    if (withNode) {
+      fs.writeFileSync(path.join(dir, "matrix-sdk-crypto.fake.node"), "stub");
+    }
+    return dir;
+  }
+
+  function appRoot(): string {
+    const app = path.join(root, "app");
+    fs.mkdirSync(app, { recursive: true });
+    fs.writeFileSync(path.join(app, "package.json"), "{}");
+    return app;
+  }
+
+  it("finds a nested crypto package (npm 11 shallow global layout)", () => {
+    const app = appRoot();
+    const pkg = putCryptoPackage(app, true);
+
+    expect(resolveCryptoPackageDirFrom(app)).toBe(pkg);
+    expect(nativeBindingExists(app)).toBe(true);
+  });
+
+  it("finds a hoisted crypto package in an ancestor node_modules", () => {
+    const app = appRoot();
+    const pkg = putCryptoPackage(root, true);
+
+    expect(resolveCryptoPackageDirFrom(app)).toBe(pkg);
+    expect(nativeBindingExists(app)).toBe(true);
+  });
+
+  it("prefers the package-local copy over the hoisted one", () => {
+    const app = appRoot();
+    const nested = putCryptoPackage(app, true);
+    putCryptoPackage(root, true);
+
+    expect(resolveCryptoPackageDirFrom(app)).toBe(nested);
+  });
+
+  it("reports the package dir but no binding when the .node file is absent", () => {
+    const app = appRoot();
+    const pkg = putCryptoPackage(app, false);
+
+    expect(resolveCryptoPackageDirFrom(app)).toBe(pkg);
+    expect(nativeBindingExists(app)).toBe(false);
+  });
+
+  it("returns undefined / false when the crypto package is not installed", () => {
+    expect(resolveCryptoPackageDirFrom(appRoot())).toBeUndefined();
+    expect(nativeBindingExists(appRoot())).toBe(false);
+  });
+
+  it("treats unsupported platforms as fine (no native binding expected)", () => {
+    expect(nativeBindingExists(appRoot(), "freebsd")).toBe(true);
   });
 });

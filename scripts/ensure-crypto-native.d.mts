@@ -16,7 +16,7 @@ export interface EnsureCryptoNativeOptions {
   basename?: string | null;
   cacheRoot?: string;
   manifestPath?: string;
-  runDownloader?: (cryptoDir: string) => void;
+  runDownloader?: (cryptoDir: string, timeoutMs?: number) => void;
 }
 
 /** Cache entry layout under the cache root. */
@@ -50,7 +50,9 @@ export function resolveCryptoPackageDir(): string | null;
 
 export function isNativeBindingMissing(cryptoDir: string, basename: string | null): boolean;
 
-export function runNativeDownloader(cryptoDir: string): void;
+export const DOWNLOAD_TIMEOUT_MS: number;
+
+export function runNativeDownloader(cryptoDir: string, timeoutMs?: number): void;
 
 export function defaultCacheRoot(
   env?: Record<string, string | undefined>,
