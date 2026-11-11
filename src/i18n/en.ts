@@ -358,6 +358,9 @@ const en: Record<MessageKey, string> = {
   "cmd.update.check.installing": "⏳ Upgrade in progress: disk is already v{disk}, the running process is still v{running}; it restarts automatically when done.",
   "cmd.update.check.restartPending": "⏳ Code is updated to v{disk}, waiting for an idle window to restart (the running process is still v{running}).",
   "cmd.update.started": "🚀 Update started: v{from} → v{to} (tasks keep running during the upgrade; an idle restart follows).",
+  "cmd.update.progress.step": "🔄 Upgrade in progress: step {index}/{total}…",
+  "cmd.update.progress.done": "✅ Step {index}/{total} done.",
+  "cmd.update.progress.retry": "⚠️ Attempt {attempt}/{max} made no progress and was killed; retrying (npm cache resumes)…",
   "cmd.update.busyWaiting": "⏳ {count} task(s) running; the update starts automatically once idle (cancelled after {minutes} min; queued messages keep flowing).",
   "cmd.update.unreachableNote": "({count} instance(s) not queryable right now — pi restart window; waiting for them too.)",
   "cmd.update.waitProgress": "⏳ Still waiting for the update: {count} task(s) running ({minutes} min elapsed).",
@@ -798,6 +801,7 @@ Note: pi itself is installed and upgraded independently on the system
   "cli.update.npmUpgrade": "🔄 Upgrading pi-courier via npm …",
   "cli.update.gitUpgrade": "🔄 Updating pi-courier (git) …",
   "cli.update.cmdFailed": "❌ {cmd} failed: {status}",
+  "cli.update.stepRetry": "⚠️ Previous attempt made no progress; retry {attempt}/{max} (npm cache resumes)…",
   "cli.update.nativeMissing": "❌ The E2EE native library (.node) is missing after the upgrade. Do not start the service; check the network/proxy and retry, or run node scripts/ensure-crypto-native.mjs manually.",
   "update.nativeBindingMissing": "❌ The E2EE native library (.node) is missing after the upgrade: {path}. The previous process keeps running; verify dependencies before restarting.",
   "cli.update.serviceSkipped":

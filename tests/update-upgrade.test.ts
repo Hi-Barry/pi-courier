@@ -451,6 +451,55 @@ describe("runUpgrade · 无进展看门狗(#326 代理卡死防护)", () => {
   });
 });
 
+describe("runUpgrade · 进度事件(#326 票 #328)", () => {
+  it("成功路径:每步 start/done 各一条,序号与总数正确", async () => {
+    const h = harness(npmDeps);
+    const events: string[] = [];
+    const promise = runUpgrade({
+      ...h.deps,
+      spawn: h.spawn,
+      onProgress: (ev) => events.push(`${ev.kind}#${ev.stepIndex}/${ev.totalSteps}`),
+    });
+
+    await h.closeCurrent(0);
+    await h.closeCurrent(0);
+    await expect(promise).resolves.toEqual({ ok: true });
+
+    expect(events).toEqual([
+      "step-start#1/2",
+      "step-done#1/2",
+      "step-start#2/2",
+      "step-done#2/2",
+    ]);
+  });
+
+  it("重试路径:stall-retry 的 attempt 从 2 起,先于重试的 step-start", async () => {
+    vi.useFakeTimers();
+    const h = harness({ ...npmDeps, stallTimeoutMs: 60_000 });
+    type Ev = Parameters<NonNullable<UpgradeDeps["onProgress"]>>[0];
+    const events: Ev[] = [];
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn, onProgress: (ev) => events.push(ev) });
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await h.closeCurrent(null); // 第一次尝试被杀
+    await h.closeCurrent(0); // 第二次尝试成功
+    await h.closeCurrent(0); // ensure 成功
+    await expect(promise).resolves.toEqual({ ok: true });
+
+    expect(events.map((e) => e.kind)).toEqual([
+      "step-start",
+      "stall-retry",
+      "step-start",
+      "step-done",
+      "step-start",
+      "step-done",
+    ]);
+    const retry = events.find((e) => e.kind === "stall-retry");
+    expect(retry).toMatchObject({ attempt: 2, maxAttempts: 3, stepIndex: 1, totalSteps: 2 });
+  });
+});
+
 describe("buildUpgradePlan · 桥与 CLI 共用的顺序", () => {
   it("npm: install --ignore-scripts(带网络参数,可重试) → ensure(包根,不可重试)", () => {
     expect(

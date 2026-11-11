@@ -38,7 +38,7 @@ import { projectLabelOf } from "./project-labels.js";
 import { proxyChildEnv, resolveProxySettings } from "./proxy.js";
 import { beginManualStopIntent, type ManualStopIntent } from "./resilience/manual-stop.js";
 import { busFailureHint, dirOwnerUid, serviceManagementSupported } from "./systemd-hint.js";
-import { buildUpgradePlan, detectInstalledViaNpm, UPGRADE_TIMEOUT_MS } from "./update/upgrade.js";
+import { buildUpgradePlan, detectInstalledViaNpm, UPGRADE_MAX_ATTEMPTS, UPGRADE_TIMEOUT_MS } from "./update/upgrade.js";
 import { readBridgeVersion } from "./version.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
@@ -394,22 +394,34 @@ function cmdUpdate(): void {
   });
   for (const step of steps) {
     console.log(`\n$ ${step.cmd} ${step.args.join(" ")}`);
-    const res = spawnSync(step.cmd, step.args, {
-      cwd: step.cwd,
-      stdio: "inherit",
-      env: childEnv,
-      timeout: step.timeoutMs ?? UPGRADE_TIMEOUT_MS,
-      killSignal: "SIGKILL",
-    });
-    if (res.error || res.status !== 0) {
-      const status = res.status ?? res.error?.message ?? "unknown";
+    // CLI 是同步执行(stdio inherit),没有桥内的无进展看门狗可挂;重试只能
+    // 挂在 spawnSync 的超时上(绝对上限内,spec #326):卡死 → SIGKILL →
+    // ETIMEDOUT → 重试,npm 缓存续传。真实报错(status!==0 且无 error)不重试。
+    const attempts = step.retriable === true ? UPGRADE_MAX_ATTEMPTS : 1;
+    let res: ReturnType<typeof spawnSync> | undefined;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      if (attempt > 1) {
+        console.warn(t("cli.update.stepRetry", { attempt, max: attempts }));
+      }
+      res = spawnSync(step.cmd, step.args, {
+        cwd: step.cwd,
+        stdio: "inherit",
+        env: childEnv,
+        timeout: step.timeoutMs ?? UPGRADE_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+      });
+      const timedOut = res.error !== undefined && res.status === null;
+      if (!timedOut || attempt === attempts) break;
+    }
+    if (!res || res.error || res.status !== 0) {
+      const status = res?.status ?? res?.error?.message ?? "unknown";
       console.error(
         t("cli.update.cmdFailed", {
           cmd: `${step.cmd} ${step.args.join(" ")}`,
           status,
         }),
       );
-      process.exit(res.status ?? 1);
+      process.exit(res?.status ?? 1);
     }
   }
   if (!nativeBindingExists(projDir)) {

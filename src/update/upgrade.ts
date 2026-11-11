@@ -65,6 +65,23 @@ const STDOUT_TAIL_LIMIT = 2_048;
 
 export type UpgradeOutcome = { ok: true } | { ok: false; message: string };
 
+/** 单步进度事件(#326 票 #328):桥侧据此向房间发进度回执,CLI 侧打印里程碑。
+ *  stepIndex/totalSteps 从 1 起计;stall-retry 的 attempt 是「即将开始的尝试
+ *  序号」(2 起)。cmd 仅用于日志/终端,房间回执文案不含(太长且含路径)。 */
+export type UpgradeProgressEvent =
+  | { kind: "step-start"; stepIndex: number; totalSteps: number; cmd: string }
+  | { kind: "step-done"; stepIndex: number; totalSteps: number; cmd: string }
+  | {
+      kind: "stall-retry";
+      stepIndex: number;
+      totalSteps: number;
+      cmd: string;
+      attempt: number;
+      maxAttempts: number;
+    };
+
+export type UpgradeProgressListener = (event: UpgradeProgressEvent) => void;
+
 /** spawn 缝的最小子进程形状(真实 ChildProcess 天然满足;测试用假件)。 */
 export interface UpgradeChild {
   /** Windows 超时杀整棵树需要 PID;假件可省略,回落到 child.kill。 */
@@ -99,6 +116,9 @@ export interface UpgradeDeps {
   stallTimeoutMs?: number;
   /** 可重试步骤的最大尝试次数(默认 UPGRADE_MAX_ATTEMPTS)。 */
   maxAttempts?: number;
+  /** 进度事件缝(#326 票 #328):每步开始/完成与卡死重试各发一条;同步
+   *  回调,只做轻活(桥侧转成 io.reply 的 void promise,不 await)。 */
+  onProgress?: UpgradeProgressListener;
   /** 代理等环境增量:每次 spawn 以 {...process.env, ...envOverrides} 合并。 */
   envOverrides?: NodeJS.ProcessEnv;
   /** 超时杀进程缝(默认:win32 有 pid 时 taskkill /T /F,否则 SIGKILL)。 */
@@ -407,6 +427,7 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
   const maxAttempts = deps.maxAttempts ?? UPGRADE_MAX_ATTEMPTS;
   const killTree = deps.killTree ?? defaultKillTree;
   const verifyNativeBinding = deps.verifyNativeBinding ?? nativeBindingExists;
+  const onProgress = deps.onProgress;
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...deps.envOverrides };
 
   // 安装方式检测:项目根有无 .git。
@@ -421,7 +442,9 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
   });
 
   const runner: StepRunner = { spawn: spawnFn, env: childEnv, killTree };
-  for (const step of steps) {
+  const total = steps.length;
+  for (const [stepOffset, step] of steps.entries()) {
+    const stepIndex = stepOffset + 1;
     // 重试只服务「卡死被杀」(#326):npm 缓存让重试从断点附近继续;真实
     // 报错(非零退出)重试也不会好,立即失败如实上报。绝对上限 30 分钟仍在。
     const attempts = step.retriable === true ? maxAttempts : 1;
@@ -431,11 +454,31 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
         logger.warn(
           `[update] 第 ${attempt}/${attempts} 次重试(上次无进展被杀,继续):${step.cmd} ${step.args.join(" ")}`,
         );
+        onProgress?.({
+          kind: "stall-retry",
+          stepIndex,
+          totalSteps: total,
+          cmd: `${step.cmd} ${step.args.join(" ")}`,
+          attempt,
+          maxAttempts: attempts,
+        });
       }
+      onProgress?.({
+        kind: "step-start",
+        stepIndex,
+        totalSteps: total,
+        cmd: `${step.cmd} ${step.args.join(" ")}`,
+      });
       failure = await runStep(step, runner, timeoutMs, stallTimeoutMs);
-      if (!failure || !failure.stalled) break;
+      if (!failure?.stalled) break;
     }
     if (failure) return { ok: false, message: formatFailure(failure) };
+    onProgress?.({
+      kind: "step-done",
+      stepIndex,
+      totalSteps: total,
+      cmd: `${step.cmd} ${step.args.join(" ")}`,
+    });
   }
 
   // 最后一道闸:ensure 脚本即使静默失败(它按 postinstall 语义不抛),也不能
