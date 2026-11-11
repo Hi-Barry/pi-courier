@@ -757,6 +757,7 @@ const zh = {
   "cli.update.gitUpgrade": "🔄 更新 pi-courier(git)…",
   "cli.update.cmdFailed": "❌ {cmd} 失败:{status}",
   "cli.update.stepRetry": "⚠️ 上次尝试无进展被终止,重试 {attempt}/{max}(npm 缓存续传)…",
+  "cli.update.watchdogSkip": "⚠️ schtasks {action} pi-courier-watchdog 失败(任务不存在或权限不足),继续升级。",
   "cli.update.nativeMissing": "❌ 升级后未找到 E2EE 原生库(.node)。请勿启动服务;检查网络/代理后重试,或手动运行 node scripts/ensure-crypto-native.mjs。",
   "update.nativeBindingMissing": "❌ 升级后未找到 E2EE 原生库(.node):{path}。旧进程继续运行;确认依赖完整后再重启。",
   "cli.update.serviceSkipped": "ℹ️ 非 Linux 平台:跳过 systemd 服务检查(本机无 systemctl),直接升级。",

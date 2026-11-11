@@ -802,6 +802,7 @@ Note: pi itself is installed and upgraded independently on the system
   "cli.update.gitUpgrade": "🔄 Updating pi-courier (git) …",
   "cli.update.cmdFailed": "❌ {cmd} failed: {status}",
   "cli.update.stepRetry": "⚠️ Previous attempt made no progress; retry {attempt}/{max} (npm cache resumes)…",
+  "cli.update.watchdogSkip": "⚠️ schtasks {action} pi-courier-watchdog failed (task missing or access denied); continuing the upgrade.",
   "cli.update.nativeMissing": "❌ The E2EE native library (.node) is missing after the upgrade. Do not start the service; check the network/proxy and retry, or run node scripts/ensure-crypto-native.mjs manually.",
   "update.nativeBindingMissing": "❌ The E2EE native library (.node) is missing after the upgrade: {path}. The previous process keeps running; verify dependencies before restarting.",
   "cli.update.serviceSkipped":

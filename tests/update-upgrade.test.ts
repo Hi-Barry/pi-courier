@@ -4,10 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildUpgradePlan,
   defaultProjectDir,
+  defaultWatchdogControl,
   ENSURE_TIMEOUT_MS,
   NPM_FETCH_RETRIES,
   NPM_FETCH_TIMEOUT_MS,
   runUpgrade,
+  schtasksArgs,
   STALL_TIMEOUT_MS,
   taskkillArgs,
   UPGRADE_MAX_ATTEMPTS,
@@ -573,6 +575,101 @@ describe("taskkillArgs · Windows 杀进程树判定(纯函数)", () => {
     expect(taskkillArgs("win32", undefined)).toBeUndefined();
     expect(taskkillArgs("linux", 123)).toBeUndefined();
     expect(taskkillArgs("darwin", 123)).toBeUndefined();
+  });
+});
+
+describe("schtasksArgs · 看门狗任务启停参数(纯函数,#326 票 #329)", () => {
+  it("win32 → /Change /TN pi-courier-watchdog /DISABLE|/ENABLE;其他平台 undefined", () => {
+    expect(schtasksArgs("win32", "disable")).toEqual([
+      "/Change",
+      "/TN",
+      "pi-courier-watchdog",
+      "/DISABLE",
+    ]);
+    expect(schtasksArgs("win32", "enable")).toEqual([
+      "/Change",
+      "/TN",
+      "pi-courier-watchdog",
+      "/ENABLE",
+    ]);
+    expect(schtasksArgs("linux", "disable")).toBeUndefined();
+    expect(schtasksArgs("darwin", "enable")).toBeUndefined();
+  });
+
+  it("默认控制实现:非 win32 平台为无操作(undefined,CI 在 linux 上跑)", () => {
+    expect(defaultWatchdogControl()).toBeUndefined();
+  });
+});
+
+describe("runUpgrade · 看门狗暂停/恢复(#326 票 #329)", () => {
+  it("pause 先于第一步 spawn;成功路径 finally 恢复", async () => {
+    const order: string[] = [];
+    const h = harness({
+      ...npmDeps,
+      watchdogControl: {
+        pause: async () => {
+          order.push("pause");
+        },
+        resume: async () => {
+          order.push("resume");
+        },
+      },
+    });
+    const promise = runUpgrade({
+      ...h.deps,
+      spawn: (cmd, args, opts) => {
+        order.push(`spawn:${cmd}`);
+        return h.spawn(cmd, args, opts);
+      },
+    });
+    // pause 被注入 → runUpgrade 首个 await 等它;让两个微任务过去,spawn 才发生。
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await h.closeCurrent(0);
+    await h.closeCurrent(0);
+    await expect(promise).resolves.toEqual({ ok: true });
+
+    expect(order[0]).toBe("pause");
+    expect(order[order.length - 1]).toBe("resume");
+    expect(order.filter((e) => e.startsWith("spawn:"))).toHaveLength(2);
+  });
+
+  it("安装失败也恢复看门狗(finally 语义,不留瘫痪的守护)", async () => {
+    const resume = vi.fn(async () => {});
+    const h = harness({
+      ...npmDeps,
+      watchdogControl: { pause: async () => {}, resume },
+    });
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+
+    h.children[0]?.emit("stderr:data", Buffer.from("fatal: something bad"));
+    await h.closeCurrent(1);
+    expect(await promise).toMatchObject({ ok: false });
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("pause 抛错视为未暂停:升级照常进行且不调用 resume", async () => {
+    const resume = vi.fn(async () => {});
+    const h = harness({
+      ...npmDeps,
+      watchdogControl: {
+        pause: async () => {
+          throw new Error("schtasks access denied");
+        },
+        resume,
+      },
+    });
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    // pause 抛错同样经过 await;冲刷微任务后再关子进程。
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await h.closeCurrent(0);
+    await h.closeCurrent(0);
+    await expect(promise).resolves.toEqual({ ok: true });
+    expect(resume).not.toHaveBeenCalled();
   });
 });
 

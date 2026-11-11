@@ -38,7 +38,7 @@ import { projectLabelOf } from "./project-labels.js";
 import { proxyChildEnv, resolveProxySettings } from "./proxy.js";
 import { beginManualStopIntent, type ManualStopIntent } from "./resilience/manual-stop.js";
 import { busFailureHint, dirOwnerUid, serviceManagementSupported } from "./systemd-hint.js";
-import { buildUpgradePlan, detectInstalledViaNpm, UPGRADE_MAX_ATTEMPTS, UPGRADE_TIMEOUT_MS } from "./update/upgrade.js";
+import { buildUpgradePlan, detectInstalledViaNpm, schtasksArgs, UPGRADE_MAX_ATTEMPTS, UPGRADE_TIMEOUT_MS } from "./update/upgrade.js";
 import { readBridgeVersion } from "./version.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
@@ -392,6 +392,19 @@ function cmdUpdate(): void {
     npmCli: resolveNpmCli(process.execPath),
     installedViaNpm,
   });
+  // Windows 看门狗暂停(#326 票 #329):看门狗的动作脚本恰在包目录内,升级
+  // 重装替换包目录的瞬间触发会报「无法找到脚本文件」;第一步前暂停、finally
+  // 恢复(best-effort,任务不存在/权限不足只警告)。process.exit 不走
+  // finally —— 失败退出码先收集,恢复后再统一退出。
+  let exitCode: number | undefined;
+  const schtasksChange = (action: "disable" | "enable"): void => {
+    const args = schtasksArgs(process.platform, action);
+    if (!args) return;
+    const res = spawnSync("schtasks", args, { stdio: "ignore", timeout: 10_000, killSignal: "SIGKILL" });
+    if (res.status !== 0) console.warn(t("cli.update.watchdogSkip", { action }));
+  };
+  try {
+    schtasksChange("disable");
   for (const step of steps) {
     console.log(`\n$ ${step.cmd} ${step.args.join(" ")}`);
     // CLI 是同步执行(stdio inherit),没有桥内的无进展看门狗可挂;重试只能
@@ -421,13 +434,18 @@ function cmdUpdate(): void {
           status,
         }),
       );
-      process.exit(res?.status ?? 1);
+      exitCode = res?.status ?? 1;
+      break;
     }
   }
-  if (!nativeBindingExists(projDir)) {
+  if (exitCode === undefined && !nativeBindingExists(projDir)) {
     console.error(t("cli.update.nativeMissing"));
-    process.exit(1);
+    exitCode = 1;
   }
+  } finally {
+    schtasksChange("enable");
+  }
+  if (exitCode !== undefined) process.exit(exitCode);
 
   // 3. Start the service again if it was running, so the update takes effect.
   //    If it wasn't running before the update (manually stopped, or a previous
