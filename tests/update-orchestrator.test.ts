@@ -11,6 +11,7 @@ import {
   isNewerVersion,
   parseLatestVersion,
   UpdateOrchestrator,
+  windowsRestartCommand,
   type UpdateCommandIO,
   type UpdateOrchestratorDeps,
 } from "../src/update/updater.js";
@@ -943,10 +944,10 @@ describe("§5.5 · 空闲重启编排(顺序即契约)", () => {
     }
   });
 
-  it("非 Linux → manualRestart 降级(不探测 systemctl、不触发重启)", async () => {
+  it("非 Linux 非 win32 → manualRestart 降级(不探测 systemctl、不触发重启;win32 已有专用自动重启分支 #331)", async () => {
     const h = makeHarness({
       fetchRegistry: vi.fn().mockResolvedValue({ version: "1.3.0" }),
-      platform: "win32",
+      platform: "darwin",
     });
     try {
       await h.orch.handleCommand("", h.io());
@@ -1140,5 +1141,75 @@ describe("#326 票 #328 · 升级进度回执(房间)", () => {
     } finally {
       h.cleanup();
     }
+  });
+});
+
+describe("#331 票A · Windows 自动重启(restart-pending)", () => {
+  it("win32+任务存在 → pending 落盘、重启回执、trigger 被调、状态回 idle,不走 systemd 探测", async () => {
+    const h = makeHarness({
+      fetchRegistry: vi.fn().mockResolvedValue({ version: "1.3.0" }),
+      platform: "win32",
+      scheduledTaskProbe: vi.fn().mockResolvedValue(true),
+      triggerRestart: vi.fn(),
+    });
+    try {
+      await h.orch.handleCommand("", h.io());
+      await until(() => h.orch.currentState === "idle" && restartCalls(h) === 1);
+      expect(h.replies.some((r) => r.includes("正在重启服务"))).toBe(true);
+      expect(h.deps.pendingUpdate.read()).toMatchObject({ from: "1.2.0", to: "1.3.0" });
+      expect(h.deps.systemctlActive).not.toHaveBeenCalled();
+      expect(h.deps.scheduledTaskProbe).toHaveBeenCalled();
+      expect(h.replies.some((r) => r.includes("未能自动重启"))).toBe(false);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("win32+任务不存在 → Windows 版手动提示(不含 pi-courier restart 字样),trigger 不被调,pending 已落盘", async () => {
+    const h = makeHarness({
+      fetchRegistry: vi.fn().mockResolvedValue({ version: "1.3.0" }),
+      platform: "win32",
+      scheduledTaskProbe: vi.fn().mockResolvedValue(false),
+      triggerRestart: vi.fn(),
+    });
+    try {
+      await h.orch.handleCommand("", h.io());
+      await until(() => h.orch.currentState === "idle");
+      const hint = h.replies.find((r) => r.includes("未能自动重启"));
+      expect(hint).toBeTruthy();
+      expect(hint).toContain("计划任务");
+      expect(hint).not.toContain("pi-courier restart");
+      expect(restartCalls(h)).toBe(0);
+      expect(h.deps.pendingUpdate.read()).toMatchObject({ from: "1.2.0", to: "1.3.0" });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("darwin(非 systemd 非 win32)→ 原手动提示,行为不变", async () => {
+    const h = makeHarness({
+      fetchRegistry: vi.fn().mockResolvedValue({ version: "1.3.0" }),
+      platform: "darwin",
+      triggerRestart: vi.fn(),
+    });
+    try {
+      await h.orch.handleCommand("", h.io());
+      await until(() => h.orch.currentState === "idle");
+      expect(h.replies.some((r) => r.includes("未由活动的 systemd 单元管理"))).toBe(true);
+      expect(restartCalls(h)).toBe(0);
+    } finally {
+      h.cleanup();
+    }
+  });
+});
+
+describe("windowsRestartCommand · 树外重启手命令(纯函数,#331 票A)", () => {
+  it("win32 → wscript //nologo <proj>/deploy/windows/restart-hidden.vbs <task>;其他平台 undefined", () => {
+    expect(windowsRestartCommand("win32", "C:\\pkg", "pi-courier")).toEqual({
+      cmd: "wscript.exe",
+      args: ["//nologo", path.join("C:\\pkg", "deploy", "windows", "restart-hidden.vbs"), "pi-courier"],
+    });
+    expect(windowsRestartCommand("linux", "/pkg", "pi-courier")).toBeUndefined();
+    expect(windowsRestartCommand("darwin", "/pkg", "pi-courier")).toBeUndefined();
   });
 });

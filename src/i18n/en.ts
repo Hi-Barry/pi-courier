@@ -379,6 +379,8 @@ const en: Record<MessageKey, string> = {
   "cmd.update.restartFailed": "⚠️ Automatic restart failed ({message}): the new code is on disk — run pi-courier restart manually.",
   "cmd.update.manualRestart":
     "ℹ️ New code is on disk (v{from} → v{to}). This bridge is not managed by an active systemd unit (or no systemd) — run pi-courier restart manually to apply.",
+  "cmd.update.manualRestartWindows":
+    "ℹ️ New code is on disk (v{from} → v{to}) but the automatic restart did not run (the pi-courier scheduled task was not found or is disabled). Restart the pi-courier scheduled task manually, or reboot, to load the new version; the completion notice still arrives after the restart.",
   "cmd.update.manualRestartHint":
     "⚠️ New code is on disk (v{from} → v{to}) but tasks never went idle / the wait was cancelled. Run pi-courier restart when idle (the completion notice still arrives after the restart).",
   "cmd.update.done": "✅ Update complete: v{from} → v{to}.",
@@ -802,6 +804,9 @@ Note: pi itself is installed and upgraded independently on the system
   "cli.update.gitUpgrade": "🔄 Updating pi-courier (git) …",
   "cli.update.cmdFailed": "❌ {cmd} failed: {status}",
   "cli.update.watchdogSkip": "⚠️ schtasks {action} pi-courier-watchdog failed (task missing or access denied); continuing the upgrade.",
+  "cli.update.restartingTask": "🔄 Restarting the pi-courier scheduled task to load the new version…",
+  "cli.update.wasInactiveTask": "ℹ️ The bridge was not running before the update; it was not started. To start it: run the pi-courier scheduled task, or reboot.",
+  "cli.update.manualRestartTask": "ℹ️ Automatic restart unavailable (the pi-courier scheduled task was not found or is disabled): restart the task manually, or reboot, to load the new version.",
   "cli.update.nativeMissing": "❌ The E2EE native library (.node) is missing after the upgrade. Do not start the service; check the network/proxy and retry, or run node scripts/ensure-crypto-native.mjs manually.",
   "update.nativeBindingMissing": "❌ The E2EE native library (.node) is missing after the upgrade: {path}. The previous process keeps running; verify dependencies before restarting.",
   "cli.update.serviceSkipped":
