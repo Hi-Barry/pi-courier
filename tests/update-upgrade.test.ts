@@ -68,9 +68,14 @@ function harness(deps: Partial<UpgradeDeps> = {}) {
   };
   /**
    * 放行当前步骤:emit close 后让出两个微任务,下一步的 spawn 才会发生
-   * (runStep 的 close 回调 → for 循环继续 → 下一步 spawn)。
+   * (runStep 的 close 回调 → for 循环继续 → 下一步 spawn)。emit 前也先冲刷
+   * 两个微任务 —— win32 上 runUpgrade 会在第一步 spawn 前 await 看门狗 pause
+   * (#326 票 #329),不经冲刷就取 children 会拿到空数组(真机 Windows CI
+   * 2026-11-11 的教训);冲刷对「spawn 已同步发生」的路径无副作用。
    */
   const closeCurrent = async (code: number | null = 0) => {
+    await Promise.resolve();
+    await Promise.resolve();
     const child = children[children.length - 1];
     child?.emit("close", code);
     await Promise.resolve();
@@ -99,6 +104,9 @@ const npmDeps: Partial<UpgradeDeps> = {
   nodeExecPath: "/node/bin/node",
   npmCliResolver: () => "/npm-cli.js",
   verifyNativeBinding: () => true,
+  // 基线注入 no-op 看门狗:win32 上默认实现会真 spawn schtasks(CI 无此任务),
+  // 且 pause 的 await 会改变 spawn 时序;看门狗语义由下方专用 describe 用 spy 覆盖。
+  watchdogControl: { pause: async () => {}, resume: async () => {} },
 };
 
 describe("runUpgrade · npm 安装路径", () => {
@@ -185,6 +193,7 @@ describe("runUpgrade · git 安装路径", () => {
       nodeExecPath: "/node/bin/node",
       npmCliResolver: () => "/npm-cli.js",
       verifyNativeBinding: () => true,
+      watchdogControl: { pause: async () => {}, resume: async () => {} },
     });
     const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
 
