@@ -21,6 +21,11 @@
  *     不报成功、不触发重启 —— 避免把"重启即崩"的半成品交给用户。
  *  4. 子进程 stdout/stderr 都消费并保留尾部。Windows 管道约 64KB,旧实现
  *     只读 stderr,下载进度把 stdout 写满后子进程会永久阻塞。
+ *  5. 无进展看门狗(#326):npm 的 fetch-timeout 管不住「代理 CONNECT 成功后
+ *     响应体挂起」(真机实测挂 28 分钟不中止),stdout/stderr 静默超阈值即
+ *     杀树重试(npm 缓存让重试从断点附近继续);npm install 步骤同时固定带
+ *     --loglevel=http(每请求一行输出 = 进度心跳)与显式 --fetch-timeout/
+ *     --fetch-retries,让普通卡顿在 npm 层先自愈。
  */
 
 import { spawn as nodeSpawn } from "node:child_process";
@@ -36,6 +41,24 @@ import { nativeBindingExists, resolveNpmCli } from "../npm-runtime.js";
 export const UPGRADE_TIMEOUT_MS = 30 * 60_000;
 /** ensure 原生库步骤的上限:缓存命中是秒级,miss 时的下载也不该拖过 10 分钟。 */
 export const ENSURE_TIMEOUT_MS = 10 * 60_000;
+/** 无进展阈值(#326):子进程静默超过它即视为卡死(代理挂起响应体时 npm 自身
+ *  不会中止),杀树重试。真机证据:28 分钟零输出 = 彻底挂死;正常安装即使
+ *  慢代理单个请求也在 --loglevel=http 下持续有完成行输出。 */
+export const STALL_TIMEOUT_MS = 10 * 60_000;
+/** 可重试步骤的最大尝试次数(#326):npm 缓存让每次重试都有净进展,3 次
+ *  覆盖「偶发代理抖动」;仍失败则如实上报,交给人决策(如换镜像)。 */
+export const UPGRADE_MAX_ATTEMPTS = 3;
+/** npm install 步骤的显式网络参数(#326):fetch-timeout 单请求上限(真机同一
+ *  代理下 84 秒完成 15MB 下载,3 分钟足够宽裕),retries 让瞬时抖动自愈。 */
+export const NPM_FETCH_TIMEOUT_MS = 180_000;
+export const NPM_FETCH_RETRIES = 3;
+/** 由上面两个常量拼出的固定参数;只加在 install 步骤上(run build 传参会
+ *  透给脚本本身,语义完全不同)。 */
+const NPM_NET_FLAGS = [
+  "--loglevel=http",
+  `--fetch-timeout=${NPM_FETCH_TIMEOUT_MS}`,
+  `--fetch-retries=${NPM_FETCH_RETRIES}`,
+];
 
 const STDERR_TAIL_LIMIT = 600;
 const STDOUT_TAIL_LIMIT = 2_048;
@@ -71,6 +94,11 @@ export interface UpgradeDeps {
   timeoutMs?: number;
   /** ensure 原生库步骤超时(独立于安装步骤)。 */
   ensureTimeoutMs?: number;
+  /** 无进展阈值(默认 STALL_TIMEOUT_MS;测试注入短值)。
+   *  子进程 stdout/stderr 静默超过它即杀树。 */
+  stallTimeoutMs?: number;
+  /** 可重试步骤的最大尝试次数(默认 UPGRADE_MAX_ATTEMPTS)。 */
+  maxAttempts?: number;
   /** 代理等环境增量:每次 spawn 以 {...process.env, ...envOverrides} 合并。 */
   envOverrides?: NodeJS.ProcessEnv;
   /** 超时杀进程缝(默认:win32 有 pid 时 taskkill /T /F,否则 SIGKILL)。 */
@@ -85,6 +113,8 @@ interface StepFailure {
   detail: string;
   stderrTail: string;
   stdoutTail: string;
+  /** 失败因无进展被杀(#326)—— 只有它允许重试,普通报错不重试。 */
+  stalled?: boolean;
 }
 
 /** 保留滚动尾部,避免长时间高输出把内存吃满。 */
@@ -100,11 +130,12 @@ interface StepRunner {
   killTree: (child: UpgradeChild) => void;
 }
 
-/** 单步执行:exit 0 → undefined;非零/超时/spawn 失败 → 失败描述。 */
+/** 单步执行:exit 0 → undefined;非零/超时/无进展/spawn 失败 → 失败描述。 */
 function runStep(
   step: UpgradeStep,
   runner: StepRunner,
   defaultTimeoutMs: number,
+  stallTimeoutMs: number,
 ): Promise<StepFailure | undefined> {
   const timeoutMs = step.timeoutMs ?? defaultTimeoutMs;
   return new Promise((resolve) => {
@@ -124,11 +155,30 @@ function runStep(
     let stderr = "";
     let stdout = "";
     // 两路都必须消费:Windows 管道约 64KB,无人读的一侧会把子进程写阻塞。
+    // 任意一路有输出同时刷新无进展看门狗(#326)—— 进度信号只认输出活动
+    // 本身,不解析 npm 日志文件格式。
+    let stalled = false;
+    let stallTimer: NodeJS.Timeout;
+    const armStallTimer = (): void => {
+      stallTimer = setTimeout(() => {
+        stalled = true;
+        try {
+          runner.killTree(child);
+        } catch {
+          // 已退出则无效
+        }
+      }, stallTimeoutMs);
+    };
+    armStallTimer();
     child.stdout?.on("data", (chunk) => {
       stdout = appendTail(stdout, chunk.toString(), STDOUT_TAIL_LIMIT);
+      clearTimeout(stallTimer);
+      armStallTimer();
     });
     child.stderr?.on("data", (chunk) => {
       stderr = appendTail(stderr, chunk.toString(), STDERR_TAIL_LIMIT);
+      clearTimeout(stallTimer);
+      armStallTimer();
     });
     let spawnError: string | undefined;
     child.on("error", (err) => {
@@ -146,7 +196,8 @@ function runStep(
     }, timeoutMs);
     child.once("close", (code) => {
       clearTimeout(timer);
-      if (code === 0 && !timedOut && spawnError === undefined) {
+      clearTimeout(stallTimer);
+      if (code === 0 && !timedOut && !stalled && spawnError === undefined) {
         resolve(undefined);
         return;
       }
@@ -154,13 +205,16 @@ function runStep(
         spawnError ??
         (timedOut
           ? `timed out after ${Math.round(timeoutMs / 60_000)} min and was killed`
-          : `exited with code ${code ?? "unknown"}`);
+          : stalled
+            ? `no progress for ${Math.round(stallTimeoutMs / 60_000)} min and was killed`
+            : `exited with code ${code ?? "unknown"}`);
       resolve({
         cmd: step.cmd,
         args: step.args,
         detail: why,
         stderrTail: stderr,
         stdoutTail: stdout,
+        stalled,
       });
     });
   });
@@ -238,12 +292,15 @@ function npmStep(
   return { cmd: "npm", args: [...args] };
 }
 
-/** 一条升级命令;cwd 缺省 = 继承调用方,timeoutMs 缺省 = 安装/构建上限。 */
+/** 一条升级命令;cwd 缺省 = 继承调用方,timeoutMs 缺省 = 安装/构建上限;
+ *  retriable = 卡死被杀后允许自动重试(仅 npm install 步骤标记:幂等且
+ *  npm 缓存保证每次重试有净进展;真实报错永远不重试)。 */
 export interface UpgradeStep {
   cmd: string;
   args: string[];
   cwd?: string;
   timeoutMs?: number;
+  retriable?: boolean;
 }
 
 export interface UpgradePlanOptions {
@@ -283,18 +340,30 @@ export function buildUpgradePlan(opts: UpgradePlanOptions): UpgradeStep[] {
   };
   if (opts.installedViaNpm) {
     return [
-      npmStep(opts.npmCli, opts.nodeExecPath, [
-        "install",
-        "-g",
-        "pi-courier@latest",
-        "--ignore-scripts",
-      ]),
+      {
+        ...npmStep(opts.npmCli, opts.nodeExecPath, [
+          "install",
+          "-g",
+          "pi-courier@latest",
+          "--ignore-scripts",
+          ...NPM_NET_FLAGS,
+        ]),
+        retriable: true,
+      },
       ensureStep,
     ];
   }
   return [
     { cmd: "git", args: ["pull"], cwd: opts.projectDir },
-    { ...npmStep(opts.npmCli, opts.nodeExecPath, ["install", "--ignore-scripts"]), cwd: opts.projectDir },
+    {
+      ...npmStep(opts.npmCli, opts.nodeExecPath, [
+        "install",
+        "--ignore-scripts",
+        ...NPM_NET_FLAGS,
+      ]),
+      cwd: opts.projectDir,
+      retriable: true,
+    },
     { ...npmStep(opts.npmCli, opts.nodeExecPath, ["run", "build"]), cwd: opts.projectDir },
     ensureStep,
   ];
@@ -334,6 +403,8 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
   const spawnFn = deps.spawn ?? defaultSpawn;
   const timeoutMs = deps.timeoutMs ?? UPGRADE_TIMEOUT_MS;
   const ensureTimeoutMs = deps.ensureTimeoutMs ?? ENSURE_TIMEOUT_MS;
+  const stallTimeoutMs = deps.stallTimeoutMs ?? STALL_TIMEOUT_MS;
+  const maxAttempts = deps.maxAttempts ?? UPGRADE_MAX_ATTEMPTS;
   const killTree = deps.killTree ?? defaultKillTree;
   const verifyNativeBinding = deps.verifyNativeBinding ?? nativeBindingExists;
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...deps.envOverrides };
@@ -351,8 +422,19 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
 
   const runner: StepRunner = { spawn: spawnFn, env: childEnv, killTree };
   for (const step of steps) {
-    logger.info(`[update] $ ${step.cmd} ${step.args.join(" ")}`);
-    const failure = await runStep(step, runner, timeoutMs);
+    // 重试只服务「卡死被杀」(#326):npm 缓存让重试从断点附近继续;真实
+    // 报错(非零退出)重试也不会好,立即失败如实上报。绝对上限 30 分钟仍在。
+    const attempts = step.retriable === true ? maxAttempts : 1;
+    let failure: StepFailure | undefined;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      if (attempt > 1) {
+        logger.warn(
+          `[update] 第 ${attempt}/${attempts} 次重试(上次无进展被杀,继续):${step.cmd} ${step.args.join(" ")}`,
+        );
+      }
+      failure = await runStep(step, runner, timeoutMs, stallTimeoutMs);
+      if (!failure || !failure.stalled) break;
+    }
     if (failure) return { ok: false, message: formatFailure(failure) };
   }
 
