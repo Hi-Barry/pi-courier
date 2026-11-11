@@ -296,11 +296,8 @@ export function defaultWatchdogControl():
   if (process.platform !== "win32") return undefined;
   const run = (action: "disable" | "enable"): Promise<void> =>
     new Promise((resolve) => {
-      const args = schtasksArgs(process.platform, action);
-      if (!args) {
-        resolve();
-        return;
-      }
+      // 走到这里的进程必然是 win32(函数开头已挡),schtasksArgs 恒返回参数。
+      const args = schtasksArgs(process.platform, action)!;
       let child: ReturnType<typeof nodeSpawn>;
       try {
         child = nodeSpawn("schtasks", args, { stdio: "ignore" });

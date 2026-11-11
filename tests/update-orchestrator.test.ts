@@ -1105,7 +1105,7 @@ describe("#326 票 #328 · 升级进度回执(房间)", () => {
       expect(h.replies).toContain("🔄 升级进行中:第 1/2 步…");
       expect(h.replies).toContain("✅ 第 2/2 步完成。");
       const retry = h.replies.find((r) => r.includes("无进展已终止"));
-      expect(retry).toBe("⚠️ 第 2/3 次尝试无进展已终止,自动重试(npm 缓存续传)…");
+      expect(retry).toBe("⚠️ 上一次尝试无进展已终止,自动重试(第 2/3 次,npm 缓存续传)…");
     } finally {
       h.cleanup();
     }
