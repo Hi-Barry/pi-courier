@@ -37,7 +37,12 @@ import type { PiRpc } from "../rpc/pi-rpc.js";
 import { serviceManagementSupported } from "../systemd-hint.js";
 import { readBridgeVersion } from "../version.js";
 import type { PendingUpdateStore } from "./pending-update.js";
-import { runUpgrade, type UpgradeOutcome } from "./upgrade.js";
+import {
+  runUpgrade,
+  type UpgradeOutcome,
+  type UpgradeProgressEvent,
+  type UpgradeProgressListener,
+} from "./upgrade.js";
 
 export const UPDATE_WAIT_TIMEOUT_MS = 30 * 60_000;
 export const UPDATE_WAIT_PROGRESS_MS = 5 * 60_000;
@@ -118,8 +123,13 @@ export interface UpdateOrchestratorDeps {
   probe?: (rpcs: readonly PiRpc[]) => Promise<AllAgentsProbe>;
   /** 全实例空闲等待缝(默认 command-map 的 waitForAllAgentsIdle)。 */
   waitForIdle?: (rpcs: readonly PiRpc[], options: WaitForAllAgentsIdleOptions) => Promise<void>;
-  /** 升级执行缝(默认 runUpgrade;参数仅为测试断言便利)。 */
-  upgrade?: (from: string, to: string) => Promise<UpgradeOutcome>;
+  /** 升级执行缝(默认 runUpgrade;hooks 参数承载进度回执缝,#326 票 #328 ——
+   *  旧接线只传前两个参数,零破坏)。 */
+  upgrade?: (
+    from: string,
+    to: string,
+    hooks?: { onProgress?: UpgradeProgressListener },
+  ) => Promise<UpgradeOutcome>;
   /** systemctl --user is-active 前置探测缝(默认真实 spawn;任何失败安全
    *  默认 false —— 非 active 单元上 restart 会拉起单元、新实例撞 PID 锁
    *  立即退出,留下 failed 单元而旧版进程继续服务,§5.5 步骤 3)。 */
@@ -431,8 +441,21 @@ export class UpdateOrchestrator {
   private async installAndAwaitRestart(io: UpdateCommandIO, myGen: number, from: string, to: string): Promise<void> {
     let outcome: UpgradeOutcome;
     try {
-      const upgrade = this.deps.upgrade ?? (() => runUpgrade());
-      outcome = await upgrade(from, to);
+      const upgrade =
+        this.deps.upgrade ?? ((_from: string, _to: string, hooks?: { onProgress?: UpgradeProgressListener }) =>
+          runUpgrade({ onProgress: hooks?.onProgress }));
+      outcome = await upgrade(from, to, {
+        // 进度回执(#326 票 #328):每步开始/完成与卡死重试各一条,升级窗口
+        // 不再黑箱。void 发送不阻塞升级;失败仅留痕(retryOnProgressGuard 里
+        // 的代次守卫防 cancel 时代迟到回执)。回执顺序不保证严格串行(io.reply
+        // 是异步的),但事件本身低频,乱序无碍理解。
+        onProgress: (event) => {
+          if (this.generation !== myGen || this.state !== "installing") return;
+          void io.reply(this.progressText(event)).catch((err: unknown) => {
+            logger.warn(`[update] progress notice failed: ${errorMessage(err)}`);
+          });
+        },
+      });
     } catch (err) {
       outcome = { ok: false, message: errorMessage(err) };
     }
@@ -610,6 +633,18 @@ export class UpdateOrchestrator {
   }
 
   // ── 缝与小件 ───────────────────────────────────────────────────────────
+
+  /** 进度事件 → 房间文案(#326 票 #328):以 zh 表为锚,i18n 双表同步。 */
+  private progressText(event: UpgradeProgressEvent): string {
+    switch (event.kind) {
+      case "step-start":
+        return t("cmd.update.progress.step", { index: event.stepIndex, total: event.totalSteps });
+      case "step-done":
+        return t("cmd.update.progress.done", { index: event.stepIndex, total: event.totalSteps });
+      case "stall-retry":
+        return t("cmd.update.progress.retry", { attempt: event.attempt, max: event.maxAttempts });
+    }
+  }
 
   /** 读磁盘版本(安全:任何失败返回 undefined;只用于回执文案/诊断)。 */
   private readDiskVersion(): string | undefined {

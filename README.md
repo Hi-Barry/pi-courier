@@ -719,6 +719,9 @@ Verify with `pi-courier -v`. The `.cmd` / `.ps1` shims npm installs into `%APPDA
 **Q: `npm install` hangs / crawls at 20-60 kB/s?**
 A: The 21 MB E2EE native library downloads from GitHub Releases and ignores npm's proxy. Set `export https_proxy=... http_proxy=...` (add to `~/.bashrc`) and reinstall.
 
+**Q: `/update` stalls for a long time behind a proxy — what's happening, and can I use a mirror?**
+A: Since 1.7.3 the upgrade carries explicit `--fetch-timeout/--fetch-retries` plus a no-progress watchdog (10 min of silent output → kill + retry, up to 3 attempts, npm's cache resumes each retry), so a hung proxy connection self-heals instead of blocking for the full 30-minute cap. If your proxy is still too slow, point npm at a direct mirror on the bridge machine: `npm config set registry https://registry.npmmirror.com` — spawned npm picks it up from your `.npmrc` automatically. Caveat: mirrors sync npm's `latest` dist-tag with a delay (often several minutes), so a brand-new release may not be visible right away; switch back with `npm config delete registry`.
+
 **Q: `Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-…'` (any platform suffix)?**
 A: The native binary didn't download — postinstall was blocked. On npm ≥ 11 machines with the install-scripts gate this is **silent**; re-install once with `npm install -g --allow-scripts=pi-courier,@matrix-org/matrix-sdk-crypto-nodejs pi-courier`. For a source checkout, run `cd node_modules/@matrix-org/matrix-sdk-crypto-nodejs && node download-lib.js`.
 

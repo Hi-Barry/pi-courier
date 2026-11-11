@@ -4,9 +4,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildUpgradePlan,
   defaultProjectDir,
+  defaultWatchdogControl,
   ENSURE_TIMEOUT_MS,
+  NPM_FETCH_RETRIES,
+  NPM_FETCH_TIMEOUT_MS,
   runUpgrade,
+  schtasksArgs,
+  STALL_TIMEOUT_MS,
   taskkillArgs,
+  UPGRADE_MAX_ATTEMPTS,
   UPGRADE_TIMEOUT_MS,
   type UpgradeDeps,
 } from "../src/update/upgrade.js";
@@ -62,9 +68,14 @@ function harness(deps: Partial<UpgradeDeps> = {}) {
   };
   /**
    * 放行当前步骤:emit close 后让出两个微任务,下一步的 spawn 才会发生
-   * (runStep 的 close 回调 → for 循环继续 → 下一步 spawn)。
+   * (runStep 的 close 回调 → for 循环继续 → 下一步 spawn)。emit 前也先冲刷
+   * 两个微任务 —— win32 上 runUpgrade 会在第一步 spawn 前 await 看门狗 pause
+   * (#326 票 #329),不经冲刷就取 children 会拿到空数组(真机 Windows CI
+   * 2026-11-11 的教训);冲刷对「spawn 已同步发生」的路径无副作用。
    */
   const closeCurrent = async (code: number | null = 0) => {
+    await Promise.resolve();
+    await Promise.resolve();
     const child = children[children.length - 1];
     child?.emit("close", code);
     await Promise.resolve();
@@ -80,12 +91,22 @@ afterEach(() => {
 
 /** npm 路径的共用输入:无 .git(→ npm),校验通过。 */
 const ENSURE_SCRIPT = path.join("/proj", "scripts", "ensure-crypto-native.mjs");
+/** install 步骤的固定网络参数(#326):显式钉值,防止单独丢参数。 */
+const NPM_NET_ARGS = [
+  "--ignore-scripts",
+  "--loglevel=http",
+  "--fetch-timeout=180000",
+  "--fetch-retries=3",
+];
 const npmDeps: Partial<UpgradeDeps> = {
   existsSync: () => false,
   projectDir: "/proj",
   nodeExecPath: "/node/bin/node",
   npmCliResolver: () => "/npm-cli.js",
   verifyNativeBinding: () => true,
+  // 基线注入 no-op 看门狗:win32 上默认实现会真 spawn schtasks(CI 无此任务),
+  // 且 pause 的 await 会改变 spawn 时序;看门狗语义由下方专用 describe 用 spy 覆盖。
+  watchdogControl: { pause: async () => {}, resume: async () => {} },
 };
 
 describe("runUpgrade · npm 安装路径", () => {
@@ -96,7 +117,7 @@ describe("runUpgrade · npm 安装路径", () => {
 
     expect(h.calls[0]).toMatchObject({
       cmd: "/node/bin/node",
-      args: ["/npm-cli.js", "install", "-g", "pi-courier@latest", "--ignore-scripts"],
+      args: ["/npm-cli.js", "install", "-g", "pi-courier@latest", ...NPM_NET_ARGS],
     });
     expect(h.calls[0]!.opts.cwd).toBeUndefined();
     expect(h.calls[0]!.opts.env?.HTTPS_PROXY).toBe("http://proxy:1");
@@ -120,7 +141,7 @@ describe("runUpgrade · npm 安装路径", () => {
 
     expect(h.calls[0]).toMatchObject({
       cmd: "npm",
-      args: ["install", "-g", "pi-courier@latest", "--ignore-scripts"],
+      args: ["install", "-g", "pi-courier@latest", ...NPM_NET_ARGS],
     });
 
     await h.closeCurrent(0);
@@ -172,6 +193,7 @@ describe("runUpgrade · git 安装路径", () => {
       nodeExecPath: "/node/bin/node",
       npmCliResolver: () => "/npm-cli.js",
       verifyNativeBinding: () => true,
+      watchdogControl: { pause: async () => {}, resume: async () => {} },
     });
     const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
 
@@ -184,7 +206,7 @@ describe("runUpgrade · git 安装路径", () => {
     expect(outcome).toEqual({ ok: true });
     expect(h.calls.map((c) => `${c.cmd} ${c.args.join(" ")}`)).toEqual([
       "git pull",
-      "/node/bin/node /npm-cli.js install --ignore-scripts",
+      `/node/bin/node /npm-cli.js install ${NPM_NET_ARGS.join(" ")}`,
       "/node/bin/node /npm-cli.js run build",
       `/node/bin/node ${ENSURE_SCRIPT}`,
     ]);
@@ -342,8 +364,155 @@ describe("runUpgrade · 失败分支(旧版继续,桥不自杀)", () => {
   });
 });
 
+describe("runUpgrade · 无进展看门狗(#326 代理卡死防护)", () => {
+  it("默认阈值/尝试次数/fetch 参数钉值", () => {
+    expect(STALL_TIMEOUT_MS).toBe(10 * 60_000);
+    expect(UPGRADE_MAX_ATTEMPTS).toBe(3);
+    expect(NPM_FETCH_TIMEOUT_MS).toBe(180_000);
+    expect(NPM_FETCH_RETRIES).toBe(3);
+  });
+
+  it("静默挂死 → 按 stallTimeoutMs 杀树并自动重试,第二次成功", async () => {
+    vi.useFakeTimers();
+    const killTree = vi.fn();
+    const h = harness({ ...npmDeps, stallTimeoutMs: 600_000, killTree });
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+    expect(h.calls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(killTree).toHaveBeenCalledTimes(1);
+    expect(killTree).toHaveBeenCalledWith(h.children[0]);
+    await h.closeCurrent(null); // 被杀的第一次尝试
+
+    // 重试同一 install 步骤(npm 缓存续传),这次正常完成 → ensure → ok
+    expect(h.calls).toHaveLength(2);
+    expect(h.calls[1]).toMatchObject({
+      args: ["/npm-cli.js", "install", "-g", "pi-courier@latest", ...NPM_NET_ARGS],
+    });
+    await h.closeCurrent(0);
+    await h.closeCurrent(0);
+    await expect(promise).resolves.toEqual({ ok: true });
+  });
+
+  it("持续有输出 → 看门狗不断重置,不会被误杀(9 分钟间隔×3 < 30 分钟绝对上限)", async () => {
+    vi.useFakeTimers();
+    const killTree = vi.fn();
+    const h = harness({ ...npmDeps, stallTimeoutMs: 600_000, killTree });
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(540_000); // 9 分钟
+      h.children[0]?.emit("stdout:data", Buffer.from("npm http fetch GET 200 ok\n"));
+    }
+    expect(killTree).not.toHaveBeenCalled();
+    await h.closeCurrent(0);
+    await h.closeCurrent(0);
+    await expect(promise).resolves.toEqual({ ok: true });
+  });
+
+  it("重试耗尽 → ok:false,信息含无进展语义与命令名,尝试次数恰好封顶", async () => {
+    vi.useFakeTimers();
+    const killTree = vi.fn();
+    const h = harness({ ...npmDeps, stallTimeoutMs: 60_000, maxAttempts: 2, killTree });
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await h.closeCurrent(null);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await h.closeCurrent(null);
+    const outcome = await promise;
+
+    expect(outcome).toMatchObject({ ok: false });
+    if (!outcome.ok) {
+      expect(outcome.message).toContain("no progress for 1 min");
+      expect(outcome.message).toContain("install");
+    }
+    expect(h.calls).toHaveLength(2); // maxAttempts=2,不再多打
+    expect(killTree).toHaveBeenCalledTimes(2);
+  });
+
+  it("非零退出不重试:真实报错第一次就失败返回", async () => {
+    const h = harness(npmDeps);
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+
+    h.children[0]?.emit("stderr:data", Buffer.from("npm error real failure"));
+    await h.closeCurrent(1);
+    const outcome = await promise;
+
+    expect(outcome).toMatchObject({ ok: false });
+    expect(h.calls).toHaveLength(1); // 不重试
+  });
+
+  it("stall 杀树后即使 close 0 也不算成功(卡死状态优先于退出码)", async () => {
+    vi.useFakeTimers();
+    const h = harness({ ...npmDeps, stallTimeoutMs: 60_000, maxAttempts: 1 });
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await h.closeCurrent(0); // 诡异的 0 退出:杀树已发生,不可信
+    const outcome = await promise;
+
+    expect(outcome).toMatchObject({ ok: false });
+    if (!outcome.ok) expect(outcome.message).toContain("no progress");
+  });
+});
+
+describe("runUpgrade · 进度事件(#326 票 #328)", () => {
+  it("成功路径:每步 start/done 各一条,序号与总数正确", async () => {
+    const h = harness(npmDeps);
+    const events: string[] = [];
+    const promise = runUpgrade({
+      ...h.deps,
+      spawn: h.spawn,
+      onProgress: (ev) => events.push(`${ev.kind}#${ev.stepIndex}/${ev.totalSteps}`),
+    });
+
+    await h.closeCurrent(0);
+    await h.closeCurrent(0);
+    await expect(promise).resolves.toEqual({ ok: true });
+
+    expect(events).toEqual([
+      "step-start#1/2",
+      "step-done#1/2",
+      "step-start#2/2",
+      "step-done#2/2",
+    ]);
+  });
+
+  it("重试路径:stall-retry 的 attempt 从 2 起,先于重试的 step-start", async () => {
+    vi.useFakeTimers();
+    const h = harness({ ...npmDeps, stallTimeoutMs: 60_000 });
+    type Ev = Parameters<NonNullable<UpgradeDeps["onProgress"]>>[0];
+    const events: Ev[] = [];
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn, onProgress: (ev) => events.push(ev) });
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await h.closeCurrent(null); // 第一次尝试被杀
+    await h.closeCurrent(0); // 第二次尝试成功
+    await h.closeCurrent(0); // ensure 成功
+    await expect(promise).resolves.toEqual({ ok: true });
+
+    expect(events.map((e) => e.kind)).toEqual([
+      "step-start",
+      "stall-retry",
+      "step-start",
+      "step-done",
+      "step-start",
+      "step-done",
+    ]);
+    const retry = events.find((e) => e.kind === "stall-retry");
+    expect(retry).toMatchObject({ attempt: 2, maxAttempts: 3, stepIndex: 1, totalSteps: 2 });
+  });
+});
+
 describe("buildUpgradePlan · 桥与 CLI 共用的顺序", () => {
-  it("npm: install --ignore-scripts → ensure(包根)", () => {
+  it("npm: install --ignore-scripts(带网络参数,可重试) → ensure(包根,不可重试)", () => {
     expect(
       buildUpgradePlan({
         projectDir: "/proj",
@@ -354,7 +523,8 @@ describe("buildUpgradePlan · 桥与 CLI 共用的顺序", () => {
     ).toEqual([
       {
         cmd: "/node/bin/node",
-        args: ["/npm-cli.js", "install", "-g", "pi-courier@latest", "--ignore-scripts"],
+        args: ["/npm-cli.js", "install", "-g", "pi-courier@latest", ...NPM_NET_ARGS],
+        retriable: true,
       },
       {
         cmd: "/node/bin/node",
@@ -365,7 +535,7 @@ describe("buildUpgradePlan · 桥与 CLI 共用的顺序", () => {
     ]);
   });
 
-  it("git: pull → install --ignore-scripts → build → ensure(包根)", () => {
+  it("git: pull → install --ignore-scripts(可重试) → build → ensure(包根)", () => {
     expect(
       buildUpgradePlan({
         projectDir: "/proj",
@@ -378,8 +548,9 @@ describe("buildUpgradePlan · 桥与 CLI 共用的顺序", () => {
       { cmd: "git", args: ["pull"], cwd: "/proj" },
       {
         cmd: "/node/bin/node",
-        args: ["/npm-cli.js", "install", "--ignore-scripts"],
+        args: ["/npm-cli.js", "install", ...NPM_NET_ARGS],
         cwd: "/proj",
+        retriable: true,
       },
       { cmd: "/node/bin/node", args: ["/npm-cli.js", "run", "build"], cwd: "/proj" },
       {
@@ -401,7 +572,8 @@ describe("buildUpgradePlan · 桥与 CLI 共用的顺序", () => {
       })[0],
     ).toEqual({
       cmd: "npm",
-      args: ["install", "-g", "pi-courier@latest", "--ignore-scripts"],
+      args: ["install", "-g", "pi-courier@latest", ...NPM_NET_ARGS],
+      retriable: true,
     });
   });
 });
@@ -412,6 +584,108 @@ describe("taskkillArgs · Windows 杀进程树判定(纯函数)", () => {
     expect(taskkillArgs("win32", undefined)).toBeUndefined();
     expect(taskkillArgs("linux", 123)).toBeUndefined();
     expect(taskkillArgs("darwin", 123)).toBeUndefined();
+  });
+});
+
+describe("schtasksArgs · 看门狗任务启停参数(纯函数,#326 票 #329)", () => {
+  it("win32 → /Change /TN pi-courier-watchdog /DISABLE|/ENABLE;其他平台 undefined", () => {
+    expect(schtasksArgs("win32", "disable")).toEqual([
+      "/Change",
+      "/TN",
+      "pi-courier-watchdog",
+      "/DISABLE",
+    ]);
+    expect(schtasksArgs("win32", "enable")).toEqual([
+      "/Change",
+      "/TN",
+      "pi-courier-watchdog",
+      "/ENABLE",
+    ]);
+    expect(schtasksArgs("linux", "disable")).toBeUndefined();
+    expect(schtasksArgs("darwin", "enable")).toBeUndefined();
+  });
+
+  it("默认控制实现:非 win32 无操作(undefined),win32 返回 pause/resume(平台分支断言,任意 runner 可跑)", () => {
+    if (process.platform === "win32") {
+      expect(defaultWatchdogControl()).toMatchObject({
+        pause: expect.any(Function),
+        resume: expect.any(Function),
+      });
+    } else {
+      expect(defaultWatchdogControl()).toBeUndefined();
+    }
+  });
+});
+
+describe("runUpgrade · 看门狗暂停/恢复(#326 票 #329)", () => {
+  it("pause 先于第一步 spawn;成功路径 finally 恢复", async () => {
+    const order: string[] = [];
+    const h = harness({
+      ...npmDeps,
+      watchdogControl: {
+        pause: async () => {
+          order.push("pause");
+        },
+        resume: async () => {
+          order.push("resume");
+        },
+      },
+    });
+    const promise = runUpgrade({
+      ...h.deps,
+      spawn: (cmd, args, opts) => {
+        order.push(`spawn:${cmd}`);
+        return h.spawn(cmd, args, opts);
+      },
+    });
+    // pause 被注入 → runUpgrade 首个 await 等它;让两个微任务过去,spawn 才发生。
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await h.closeCurrent(0);
+    await h.closeCurrent(0);
+    await expect(promise).resolves.toEqual({ ok: true });
+
+    expect(order[0]).toBe("pause");
+    expect(order[order.length - 1]).toBe("resume");
+    expect(order.filter((e) => e.startsWith("spawn:"))).toHaveLength(2);
+  });
+
+  it("安装失败也恢复看门狗(finally 语义,不留瘫痪的守护)", async () => {
+    const resume = vi.fn(async () => {});
+    const h = harness({
+      ...npmDeps,
+      watchdogControl: { pause: async () => {}, resume },
+    });
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+
+    h.children[0]?.emit("stderr:data", Buffer.from("fatal: something bad"));
+    await h.closeCurrent(1);
+    expect(await promise).toMatchObject({ ok: false });
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("pause 抛错视为未暂停:升级照常进行且不调用 resume", async () => {
+    const resume = vi.fn(async () => {});
+    const h = harness({
+      ...npmDeps,
+      watchdogControl: {
+        pause: async () => {
+          throw new Error("schtasks access denied");
+        },
+        resume,
+      },
+    });
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    // pause 抛错同样经过 await;冲刷微任务后再关子进程。
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await h.closeCurrent(0);
+    await h.closeCurrent(0);
+    await expect(promise).resolves.toEqual({ ok: true });
+    expect(resume).not.toHaveBeenCalled();
   });
 });
 

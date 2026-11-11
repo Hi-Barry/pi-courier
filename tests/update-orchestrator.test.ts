@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AUDIT_EVENTS } from "../src/audit/audit-log.js";
 import { AllAgentsIdleTimeoutError } from "../src/rpc/command-map.js";
 import { PendingUpdateStore } from "../src/update/pending-update.js";
+import type { UpgradeOutcome, UpgradeProgressEvent } from "../src/update/upgrade.js";
 import {
   classifyUpdateArgs,
   isNewerVersion,
@@ -213,7 +214,12 @@ describe("§10 用例 2 · 有新版且全空闲 → 直接编排(全链后台�
       expect(handled).toBe(true);
       expect(h.replies[0]).toBe("🚀 开始更新:v1.2.0 → v1.3.0(升级期间任务照常服务,完成后自动重启)。");
       await until(() => h.deps.triggerRestart !== undefined && h.replies.some((r) => r.includes("正在重启服务")));
-      expect(h.deps.upgrade).toHaveBeenCalledWith("1.2.0", "1.3.0");
+      // 第三个参数是进度回执缝(#326 票 #328);断言形状存在即可。
+      expect(h.deps.upgrade).toHaveBeenCalledWith(
+        "1.2.0",
+        "1.3.0",
+        expect.objectContaining({ onProgress: expect.any(Function) }),
+      );
       expect(h.deps.systemctlActive).toHaveBeenCalledTimes(1);
       expect(h.deps.triggerRestart).toHaveBeenCalledTimes(1);
       expect(h.replies.some((r) => r.includes("📦 新代码已写入磁盘:v1.2.0 → v1.3.0"))).toBe(true);
@@ -1061,6 +1067,76 @@ describe("§10 用例 11 · 审计事件(命令层取消缝)", () => {
       await h.orch.handleCommand("cancel", h.io());
       expect(h.audits).toHaveLength(2);
       expect(h.audits[1]).toEqual({ event: AUDIT_EVENTS.updateCancel, detail: "waiting cancelled by /update cancel" });
+    } finally {
+      h.cleanup();
+    }
+  });
+});
+
+describe("#326 票 #328 · 升级进度回执(房间)", () => {
+  it("installing 段把 onProgress 事件转成房间回执(zh 文案为锚)", async () => {
+    const h = makeHarness({
+      fetchRegistry: vi.fn().mockResolvedValue({ version: "1.3.0" }),
+      upgrade: vi.fn(
+        async (
+          _from: string,
+          _to: string,
+          hooks?: { onProgress?: (event: UpgradeProgressEvent) => void },
+        ): Promise<UpgradeOutcome> => {
+          hooks?.onProgress?.({ kind: "step-start", stepIndex: 1, totalSteps: 2, cmd: "npm install" });
+          hooks?.onProgress?.({
+            kind: "stall-retry",
+            stepIndex: 1,
+            totalSteps: 2,
+            cmd: "npm install",
+            attempt: 2,
+            maxAttempts: 3,
+          });
+          hooks?.onProgress?.({ kind: "step-done", stepIndex: 2, totalSteps: 2, cmd: "ensure" });
+          return { ok: true };
+        },
+      ),
+    });
+    try {
+      await h.orch.handleCommand("", h.io());
+      // 全空闲 + active:installing → restart-pending → restart 一路走完,
+      // 等最终 idle(进度回执在 installing 段已同步入队)。
+      await until(() => h.orch.currentState === "idle" && restartCalls(h) === 1);
+      expect(h.replies).toContain("🔄 升级进行中:第 1/2 步…");
+      expect(h.replies).toContain("✅ 第 2/2 步完成。");
+      const retry = h.replies.find((r) => r.includes("无进展已终止"));
+      expect(retry).toBe("⚠️ 上一次尝试无进展已终止,自动重试(第 2/3 次,npm 缓存续传)…");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("进度回执发送失败只留痕,不阻断升级闭环", async () => {
+    const h = makeHarness({
+      fetchRegistry: vi.fn().mockResolvedValue({ version: "1.3.0" }),
+      upgrade: vi.fn(
+        async (
+          _from: string,
+          _to: string,
+          hooks?: { onProgress?: (event: UpgradeProgressEvent) => void },
+        ): Promise<UpgradeOutcome> => {
+          hooks?.onProgress?.({ kind: "step-start", stepIndex: 1, totalSteps: 1, cmd: "npm install" });
+          return { ok: true };
+        },
+      ),
+    });
+    try {
+      const io = h.io();
+      const originalReply = io.reply.bind(io);
+      io.reply = async (text: string) => {
+        if (text.includes("第 1/1 步")) throw new Error("matrix down");
+        await originalReply(text);
+      };
+      await h.orch.handleCommand("", io);
+      await until(() => h.orch.currentState === "idle" && restartCalls(h) === 1);
+      // 闭环未受影响:重启触发、installed 回执照常
+      expect(restartCalls(h)).toBe(1);
+      expect(h.replies.some((r) => r.includes("📦 新代码已写入磁盘"))).toBe(true);
     } finally {
       h.cleanup();
     }

@@ -21,6 +21,11 @@
  *     不报成功、不触发重启 —— 避免把"重启即崩"的半成品交给用户。
  *  4. 子进程 stdout/stderr 都消费并保留尾部。Windows 管道约 64KB,旧实现
  *     只读 stderr,下载进度把 stdout 写满后子进程会永久阻塞。
+ *  5. 无进展看门狗(#326):npm 的 fetch-timeout 管不住「代理 CONNECT 成功后
+ *     响应体挂起」(真机实测挂 28 分钟不中止),stdout/stderr 静默超阈值即
+ *     杀树重试(npm 缓存让重试从断点附近继续);npm install 步骤同时固定带
+ *     --loglevel=http(每请求一行输出 = 进度心跳)与显式 --fetch-timeout/
+ *     --fetch-retries,让普通卡顿在 npm 层先自愈。
  */
 
 import { spawn as nodeSpawn } from "node:child_process";
@@ -36,11 +41,50 @@ import { nativeBindingExists, resolveNpmCli } from "../npm-runtime.js";
 export const UPGRADE_TIMEOUT_MS = 30 * 60_000;
 /** ensure 原生库步骤的上限:缓存命中是秒级,miss 时的下载也不该拖过 10 分钟。 */
 export const ENSURE_TIMEOUT_MS = 10 * 60_000;
+/** 无进展阈值(#326):子进程静默超过它即视为卡死(代理挂起响应体时 npm 自身
+ *  不会中止),杀树重试。真机证据:28 分钟零输出 = 彻底挂死;正常安装即使
+ *  慢代理单个请求也在 --loglevel=http 下持续有完成行输出。 */
+export const STALL_TIMEOUT_MS = 10 * 60_000;
+/** 可重试步骤的最大尝试次数(#326):npm 缓存让每次重试都有净进展,3 次
+ *  覆盖「偶发代理抖动」;仍失败则如实上报,交给人决策(如换镜像)。 */
+export const UPGRADE_MAX_ATTEMPTS = 3;
+/** npm install 步骤的显式网络参数(#326):fetch-timeout 单请求上限(真机同一
+ *  代理下 84 秒完成 15MB 下载,3 分钟足够宽裕),retries 让瞬时抖动自愈。 */
+export const NPM_FETCH_TIMEOUT_MS = 180_000;
+export const NPM_FETCH_RETRIES = 3;
+/** Windows 看门狗计划任务名(deploy/windows 安装器创建)。升级重装会整个
+ *  替换包目录,而看门狗的动作脚本恰在包内 —— 触发瞬间可能读到半替换状态
+ *  (真机 2026-11-10:「无法找到脚本文件」弹窗),升级窗口内先暂停它。 */
+export const WATCHDOG_TASK_NAME = "pi-courier-watchdog";
+/** 由上面两个常量拼出的固定参数;只加在 install 步骤上(run build 传参会
+ *  透给脚本本身,语义完全不同)。 */
+const NPM_NET_FLAGS = [
+  "--loglevel=http",
+  `--fetch-timeout=${NPM_FETCH_TIMEOUT_MS}`,
+  `--fetch-retries=${NPM_FETCH_RETRIES}`,
+];
 
 const STDERR_TAIL_LIMIT = 600;
 const STDOUT_TAIL_LIMIT = 2_048;
 
 export type UpgradeOutcome = { ok: true } | { ok: false; message: string };
+
+/** 单步进度事件(#326 票 #328):桥侧据此向房间发进度回执,CLI 侧打印里程碑。
+ *  stepIndex/totalSteps 从 1 起计;stall-retry 的 attempt 是「即将开始的尝试
+ *  序号」(2 起)。cmd 仅用于日志/终端,房间回执文案不含(太长且含路径)。 */
+export type UpgradeProgressEvent =
+  | { kind: "step-start"; stepIndex: number; totalSteps: number; cmd: string }
+  | { kind: "step-done"; stepIndex: number; totalSteps: number; cmd: string }
+  | {
+      kind: "stall-retry";
+      stepIndex: number;
+      totalSteps: number;
+      cmd: string;
+      attempt: number;
+      maxAttempts: number;
+    };
+
+export type UpgradeProgressListener = (event: UpgradeProgressEvent) => void;
 
 /** spawn 缝的最小子进程形状(真实 ChildProcess 天然满足;测试用假件)。 */
 export interface UpgradeChild {
@@ -71,6 +115,18 @@ export interface UpgradeDeps {
   timeoutMs?: number;
   /** ensure 原生库步骤超时(独立于安装步骤)。 */
   ensureTimeoutMs?: number;
+  /** 无进展阈值(默认 STALL_TIMEOUT_MS;测试注入短值)。
+   *  子进程 stdout/stderr 静默超过它即杀树。 */
+  stallTimeoutMs?: number;
+  /** 可重试步骤的最大尝试次数(默认 UPGRADE_MAX_ATTEMPTS)。 */
+  maxAttempts?: number;
+  /** 进度事件缝(#326 票 #328):每步开始/完成与卡死重试各发一条;同步
+   *  回调,只做轻活(桥侧转成 io.reply 的 void promise,不 await)。 */
+  onProgress?: UpgradeProgressListener;
+  /** 看门狗暂停/恢复缝(#326 票 #329):pause 在第一步 spawn 前、resume 在
+   *  finally(pause 正常返回才 resume;pause 抛错视为「未暂停」不 resume)。
+   *  默认 win32 用 schtasks 实现;非 win32 未注入 = undefined = 无操作。 */
+  watchdogControl?: { pause(): Promise<void>; resume(): Promise<void> };
   /** 代理等环境增量:每次 spawn 以 {...process.env, ...envOverrides} 合并。 */
   envOverrides?: NodeJS.ProcessEnv;
   /** 超时杀进程缝(默认:win32 有 pid 时 taskkill /T /F,否则 SIGKILL)。 */
@@ -85,6 +141,8 @@ interface StepFailure {
   detail: string;
   stderrTail: string;
   stdoutTail: string;
+  /** 失败因无进展被杀(#326)—— 只有它允许重试,普通报错不重试。 */
+  stalled?: boolean;
 }
 
 /** 保留滚动尾部,避免长时间高输出把内存吃满。 */
@@ -100,11 +158,12 @@ interface StepRunner {
   killTree: (child: UpgradeChild) => void;
 }
 
-/** 单步执行:exit 0 → undefined;非零/超时/spawn 失败 → 失败描述。 */
+/** 单步执行:exit 0 → undefined;非零/超时/无进展/spawn 失败 → 失败描述。 */
 function runStep(
   step: UpgradeStep,
   runner: StepRunner,
   defaultTimeoutMs: number,
+  stallTimeoutMs: number,
 ): Promise<StepFailure | undefined> {
   const timeoutMs = step.timeoutMs ?? defaultTimeoutMs;
   return new Promise((resolve) => {
@@ -124,11 +183,30 @@ function runStep(
     let stderr = "";
     let stdout = "";
     // 两路都必须消费:Windows 管道约 64KB,无人读的一侧会把子进程写阻塞。
+    // 任意一路有输出同时刷新无进展看门狗(#326)—— 进度信号只认输出活动
+    // 本身,不解析 npm 日志文件格式。
+    let stalled = false;
+    let stallTimer: NodeJS.Timeout;
+    const armStallTimer = (): void => {
+      stallTimer = setTimeout(() => {
+        stalled = true;
+        try {
+          runner.killTree(child);
+        } catch {
+          // 已退出则无效
+        }
+      }, stallTimeoutMs);
+    };
+    armStallTimer();
     child.stdout?.on("data", (chunk) => {
       stdout = appendTail(stdout, chunk.toString(), STDOUT_TAIL_LIMIT);
+      clearTimeout(stallTimer);
+      armStallTimer();
     });
     child.stderr?.on("data", (chunk) => {
       stderr = appendTail(stderr, chunk.toString(), STDERR_TAIL_LIMIT);
+      clearTimeout(stallTimer);
+      armStallTimer();
     });
     let spawnError: string | undefined;
     child.on("error", (err) => {
@@ -146,7 +224,8 @@ function runStep(
     }, timeoutMs);
     child.once("close", (code) => {
       clearTimeout(timer);
-      if (code === 0 && !timedOut && spawnError === undefined) {
+      clearTimeout(stallTimer);
+      if (code === 0 && !timedOut && !stalled && spawnError === undefined) {
         resolve(undefined);
         return;
       }
@@ -154,13 +233,16 @@ function runStep(
         spawnError ??
         (timedOut
           ? `timed out after ${Math.round(timeoutMs / 60_000)} min and was killed`
-          : `exited with code ${code ?? "unknown"}`);
+          : stalled
+            ? `no progress for ${Math.round(stallTimeoutMs / 60_000)} min and was killed`
+            : `exited with code ${code ?? "unknown"}`);
       resolve({
         cmd: step.cmd,
         args: step.args,
         detail: why,
         stderrTail: stderr,
         stdoutTail: stdout,
+        stalled,
       });
     });
   });
@@ -187,6 +269,64 @@ export function taskkillArgs(
 ): string[] | undefined {
   if (platform !== "win32" || pid === undefined) return undefined;
   return ["/T", "/F", "/PID", String(pid)];
+}
+
+/** 纯函数:升级窗口暂停/恢复看门狗任务的 schtasks 参数;仅 win32 提供默认
+ *  实现(其他平台无此任务,undefined = 无操作)。抽纯函数与 taskkillArgs
+ *  同理:win32 分支在任意 CI runner 可测。 */
+export function schtasksArgs(
+  platform: NodeJS.Platform,
+  action: "disable" | "enable",
+): string[] | undefined {
+  if (platform !== "win32") return undefined;
+  return [
+    "/Change",
+    "/TN",
+    WATCHDOG_TASK_NAME,
+    action === "disable" ? "/DISABLE" : "/ENABLE",
+  ];
+}
+
+/** 看门狗控制的默认实现(win32):schtasks /Change,best-effort —— 任务
+ *  不存在/权限不足只 warn 不阻断升级;10 秒兜底防 schtasks 自身挂死。
+ *  导出供测试钉平台门(非 win32 恒 undefined)。 */
+export function defaultWatchdogControl():
+  | { pause(): Promise<void>; resume(): Promise<void> }
+  | undefined {
+  if (process.platform !== "win32") return undefined;
+  const run = (action: "disable" | "enable"): Promise<void> =>
+    new Promise((resolve) => {
+      // 走到这里的进程必然是 win32(函数开头已挡),schtasksArgs 恒返回参数。
+      const args = schtasksArgs(process.platform, action)!;
+      let child: ReturnType<typeof nodeSpawn>;
+      try {
+        child = nodeSpawn("schtasks", args, { stdio: "ignore" });
+      } catch {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // 已退出
+        }
+      }, 10_000);
+      child.on("error", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        if (code !== 0) {
+          logger.warn(
+            `[update] schtasks ${action} ${WATCHDOG_TASK_NAME} exited with code ${code} — 任务不存在或权限不足,继续升级`,
+          );
+        }
+        resolve();
+      });
+    });
+  return { pause: () => run("disable"), resume: () => run("enable") };
 }
 
 /** 超时兜底:Windows 上只 kill 直接子进程杀不掉 npm 的 postinstall 孙进程,
@@ -238,12 +378,15 @@ function npmStep(
   return { cmd: "npm", args: [...args] };
 }
 
-/** 一条升级命令;cwd 缺省 = 继承调用方,timeoutMs 缺省 = 安装/构建上限。 */
+/** 一条升级命令;cwd 缺省 = 继承调用方,timeoutMs 缺省 = 安装/构建上限;
+ *  retriable = 卡死被杀后允许自动重试(仅 npm install 步骤标记:幂等且
+ *  npm 缓存保证每次重试有净进展;真实报错永远不重试)。 */
 export interface UpgradeStep {
   cmd: string;
   args: string[];
   cwd?: string;
   timeoutMs?: number;
+  retriable?: boolean;
 }
 
 export interface UpgradePlanOptions {
@@ -283,18 +426,30 @@ export function buildUpgradePlan(opts: UpgradePlanOptions): UpgradeStep[] {
   };
   if (opts.installedViaNpm) {
     return [
-      npmStep(opts.npmCli, opts.nodeExecPath, [
-        "install",
-        "-g",
-        "pi-courier@latest",
-        "--ignore-scripts",
-      ]),
+      {
+        ...npmStep(opts.npmCli, opts.nodeExecPath, [
+          "install",
+          "-g",
+          "pi-courier@latest",
+          "--ignore-scripts",
+          ...NPM_NET_FLAGS,
+        ]),
+        retriable: true,
+      },
       ensureStep,
     ];
   }
   return [
     { cmd: "git", args: ["pull"], cwd: opts.projectDir },
-    { ...npmStep(opts.npmCli, opts.nodeExecPath, ["install", "--ignore-scripts"]), cwd: opts.projectDir },
+    {
+      ...npmStep(opts.npmCli, opts.nodeExecPath, [
+        "install",
+        "--ignore-scripts",
+        ...NPM_NET_FLAGS,
+      ]),
+      cwd: opts.projectDir,
+      retriable: true,
+    },
     { ...npmStep(opts.npmCli, opts.nodeExecPath, ["run", "build"]), cwd: opts.projectDir },
     ensureStep,
   ];
@@ -334,8 +489,12 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
   const spawnFn = deps.spawn ?? defaultSpawn;
   const timeoutMs = deps.timeoutMs ?? UPGRADE_TIMEOUT_MS;
   const ensureTimeoutMs = deps.ensureTimeoutMs ?? ENSURE_TIMEOUT_MS;
+  const stallTimeoutMs = deps.stallTimeoutMs ?? STALL_TIMEOUT_MS;
+  const maxAttempts = deps.maxAttempts ?? UPGRADE_MAX_ATTEMPTS;
   const killTree = deps.killTree ?? defaultKillTree;
   const verifyNativeBinding = deps.verifyNativeBinding ?? nativeBindingExists;
+  const onProgress = deps.onProgress;
+  const watchdogControl = deps.watchdogControl ?? defaultWatchdogControl();
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...deps.envOverrides };
 
   // 安装方式检测:项目根有无 .git。
@@ -350,16 +509,72 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
   });
 
   const runner: StepRunner = { spawn: spawnFn, env: childEnv, killTree };
-  for (const step of steps) {
-    logger.info(`[update] $ ${step.cmd} ${step.args.join(" ")}`);
-    const failure = await runStep(step, runner, timeoutMs);
-    if (failure) return { ok: false, message: formatFailure(failure) };
-  }
+  // 看门狗暂停(#326 票 #329):先于第一步;pause 抛错 = 未暂停,不 resume。
+  // resume 在 finally —— 失败路径同样恢复,不留永久瘫痪的守护。
+  // 未注入且平台无默认实现时完全跳过,不引入任何 await —— 第一步 spawn 保持
+  // 同步时序(既有测试 harness 依赖「runUpgrade() 返回时 child 已存在」)。
+  let paused = false;
+  try {
+    if (watchdogControl) {
+      try {
+        await watchdogControl.pause();
+        paused = true;
+      } catch (err) {
+        logger.warn(`[update] watchdog pause failed (继续升级): ${errorMessage(err)}`);
+      }
+    }
+    const total = steps.length;
+    for (const [stepOffset, step] of steps.entries()) {
+      const stepIndex = stepOffset + 1;
+      // 重试只服务「卡死被杀」(#326):npm 缓存让重试从断点附近继续;真实
+      // 报错(非零退出)重试也不会好,立即失败如实上报。绝对上限 30 分钟仍在。
+      const attempts = step.retriable === true ? maxAttempts : 1;
+      let failure: StepFailure | undefined;
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        if (attempt > 1) {
+          logger.warn(
+            `[update] 第 ${attempt}/${attempts} 次重试(上次无进展被杀,继续):${step.cmd} ${step.args.join(" ")}`,
+          );
+          onProgress?.({
+            kind: "stall-retry",
+            stepIndex,
+            totalSteps: total,
+            cmd: `${step.cmd} ${step.args.join(" ")}`,
+            attempt,
+            maxAttempts: attempts,
+          });
+        }
+        onProgress?.({
+          kind: "step-start",
+          stepIndex,
+          totalSteps: total,
+          cmd: `${step.cmd} ${step.args.join(" ")}`,
+        });
+        failure = await runStep(step, runner, timeoutMs, stallTimeoutMs);
+        if (!failure?.stalled) break;
+      }
+      if (failure) return { ok: false, message: formatFailure(failure) };
+      onProgress?.({
+        kind: "step-done",
+        stepIndex,
+        totalSteps: total,
+        cmd: `${step.cmd} ${step.args.join(" ")}`,
+      });
+    }
 
-  // 最后一道闸:ensure 脚本即使静默失败(它按 postinstall 语义不抛),也不能
-  // 把缺 .node 的新树报成成功 —— 否则下一次重启必崩在 crypto 加载。
-  if (!verifyNativeBinding(projDir)) {
-    return { ok: false, message: t("update.nativeBindingMissing", { path: projDir }) };
+    // 最后一道闸:ensure 脚本即使静默失败(它按 postinstall 语义不抛),也不能
+    // 把缺 .node 的新树报成成功 —— 否则下一次重启必崩在 crypto 加载。
+    if (!verifyNativeBinding(projDir)) {
+      return { ok: false, message: t("update.nativeBindingMissing", { path: projDir }) };
+    }
+    return { ok: true };
+  } finally {
+    if (paused) {
+      try {
+        await watchdogControl?.resume();
+      } catch (err) {
+        logger.warn(`[update] watchdog resume failed (请手动恢复 pi-courier-watchdog 任务): ${errorMessage(err)}`);
+      }
+    }
   }
-  return { ok: true };
 }

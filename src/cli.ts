@@ -38,7 +38,7 @@ import { projectLabelOf } from "./project-labels.js";
 import { proxyChildEnv, resolveProxySettings } from "./proxy.js";
 import { beginManualStopIntent, type ManualStopIntent } from "./resilience/manual-stop.js";
 import { busFailureHint, dirOwnerUid, serviceManagementSupported } from "./systemd-hint.js";
-import { buildUpgradePlan, detectInstalledViaNpm, UPGRADE_TIMEOUT_MS } from "./update/upgrade.js";
+import { buildUpgradePlan, detectInstalledViaNpm, STALL_TIMEOUT_MS, schtasksArgs, UPGRADE_MAX_ATTEMPTS, UPGRADE_TIMEOUT_MS } from "./update/upgrade.js";
 import { readBridgeVersion } from "./version.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
@@ -392,30 +392,68 @@ function cmdUpdate(): void {
     npmCli: resolveNpmCli(process.execPath),
     installedViaNpm,
   });
-  for (const step of steps) {
-    console.log(`\n$ ${step.cmd} ${step.args.join(" ")}`);
-    const res = spawnSync(step.cmd, step.args, {
-      cwd: step.cwd,
-      stdio: "inherit",
-      env: childEnv,
-      timeout: step.timeoutMs ?? UPGRADE_TIMEOUT_MS,
-      killSignal: "SIGKILL",
-    });
-    if (res.error || res.status !== 0) {
-      const status = res.status ?? res.error?.message ?? "unknown";
-      console.error(
-        t("cli.update.cmdFailed", {
-          cmd: `${step.cmd} ${step.args.join(" ")}`,
-          status,
-        }),
-      );
-      process.exit(res.status ?? 1);
+  // Windows 看门狗暂停(#326 票 #329):看门狗的动作脚本恰在包目录内,升级
+  // 重装替换包目录的瞬间触发会报「无法找到脚本文件」;第一步前暂停、finally
+  // 恢复(best-effort,任务不存在/权限不足只警告)。process.exit 不走
+  // finally —— 失败退出码先收集,恢复后再统一退出。
+  let exitCode: number | undefined;
+  const schtasksChange = (action: "disable" | "enable"): void => {
+    const args = schtasksArgs(process.platform, action);
+    if (!args) return;
+    const res = spawnSync("schtasks", args, { stdio: "ignore", timeout: 10_000, killSignal: "SIGKILL" });
+    if (res.status !== 0) console.warn(t("cli.update.watchdogSkip", { action }));
+  };
+  try {
+    schtasksChange("disable");
+    for (const [stepOffset, step] of steps.entries()) {
+      console.log(`\n$ ${step.cmd} ${step.args.join(" ")}`);
+      // CLI 是同步执行(stdio inherit),读不到子进程输出流,挂不了桥内的
+      // 「无进展看门狗」;对齐两条路径的重试节奏(spec #326 story 9):可重试
+      // 步骤以 STALL_TIMEOUT_MS(10 分钟,= 桥的 stall 阈值)为单次尝试上限,
+      // 3 次共 30 分钟 = 桥的绝对上限;慢而未死的安装靠 npm 缓存在重试间推进。
+      // 真实 spawn 错误(ENOENT 等)不是超时,不重试 —— 超时判定用「被我们的
+      // killSignal(SIGKILL) 杀掉」这一确定性事实,不用 error.code(不同 Node
+      // 版本对超时错误的 code 约定不一致,ENOENT 同样 error!=null)。
+      const attempts = step.retriable === true ? UPGRADE_MAX_ATTEMPTS : 1;
+      const attemptTimeoutMs =
+        step.retriable === true ? STALL_TIMEOUT_MS : (step.timeoutMs ?? UPGRADE_TIMEOUT_MS);
+      let res: ReturnType<typeof spawnSync> | undefined;
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        if (attempt > 1) {
+          console.warn(t("cmd.update.progress.retry", { attempt, max: attempts }));
+        }
+        res = spawnSync(step.cmd, step.args, {
+          cwd: step.cwd,
+          stdio: "inherit",
+          env: childEnv,
+          timeout: attemptTimeoutMs,
+          killSignal: "SIGKILL",
+        });
+        const timedOut = res.status === null && res.signal === "SIGKILL";
+        if (!timedOut || attempt === attempts) break;
+      }
+      if (!res || res.error || res.status !== 0) {
+        const status = res?.status ?? res?.error?.message ?? "unknown";
+        console.error(
+          t("cli.update.cmdFailed", {
+            cmd: `${step.cmd} ${step.args.join(" ")}`,
+            status,
+          }),
+        );
+        exitCode = res?.status ?? 1;
+        break;
+      }
+      // 步完成里程碑(spec #326 票 #328 评审整改):与房间回执同键,CLI 不缺席。
+      console.log(t("cmd.update.progress.done", { index: stepOffset + 1, total: steps.length }));
     }
+    if (exitCode === undefined && !nativeBindingExists(projDir)) {
+      console.error(t("cli.update.nativeMissing"));
+      exitCode = 1;
+    }
+  } finally {
+    schtasksChange("enable");
   }
-  if (!nativeBindingExists(projDir)) {
-    console.error(t("cli.update.nativeMissing"));
-    process.exit(1);
-  }
+  if (exitCode !== undefined) process.exit(exitCode);
 
   // 3. Start the service again if it was running, so the update takes effect.
   //    If it wasn't running before the update (manually stopped, or a previous
