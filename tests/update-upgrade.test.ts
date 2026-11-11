@@ -605,8 +605,15 @@ describe("schtasksArgs · 看门狗任务启停参数(纯函数,#326 票 #329)",
     expect(schtasksArgs("darwin", "enable")).toBeUndefined();
   });
 
-  it("默认控制实现:非 win32 平台为无操作(undefined,CI 在 linux 上跑)", () => {
-    expect(defaultWatchdogControl()).toBeUndefined();
+  it("默认控制实现:非 win32 无操作(undefined),win32 返回 pause/resume(平台分支断言,任意 runner 可跑)", () => {
+    if (process.platform === "win32") {
+      expect(defaultWatchdogControl()).toMatchObject({
+        pause: expect.any(Function),
+        resume: expect.any(Function),
+      });
+    } else {
+      expect(defaultWatchdogControl()).toBeUndefined();
+    }
   });
 });
 
