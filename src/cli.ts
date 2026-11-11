@@ -23,7 +23,7 @@
  * 窗口期(旧桥仍在跑、新实例先行搬迁)的新旧实例并行已被 spec 接受:活锁
  * 保留语义内建(绝不偷活锁),/update 流程(先停旧服务再升级)兜底。
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -38,6 +38,7 @@ import { projectLabelOf } from "./project-labels.js";
 import { proxyChildEnv, resolveProxySettings } from "./proxy.js";
 import { beginManualStopIntent, type ManualStopIntent } from "./resilience/manual-stop.js";
 import { busFailureHint, dirOwnerUid, serviceManagementSupported } from "./systemd-hint.js";
+import { WINDOWS_TASK_NAME, windowsRestartCommand } from "./update/updater.js";
 import { buildUpgradePlan, detectInstalledViaNpm, STALL_TIMEOUT_MS, schtasksArgs, UPGRADE_MAX_ATTEMPTS, UPGRADE_TIMEOUT_MS } from "./update/upgrade.js";
 import { readBridgeVersion } from "./version.js";
 import { suppressKnownWarnings } from "./warnings.js";
@@ -348,6 +349,17 @@ function cmdDisable(): void {
 // update
 // ===========================================================================
 
+/** 桥是否在跑:心跳文件的 mtime 在 90 秒内(= 3 个 30 秒心跳间隔)视为活着。
+ *  只看 mtime 不解析 pid —— 免去平台差异的进程存活探测,误判代价是重启一个
+ *  本已死掉的桥(无害)或漏重启一个僵死桥(看门狗会兜底)。(spec #331 票B) */
+function bridgeHeartbeatFresh(stateDir: string, maxAgeMs = 90_000): boolean {
+  try {
+    return Date.now() - fs.statSync(path.join(stateDir, "heartbeat.json")).mtimeMs < maxAgeMs;
+  } catch {
+    return false;
+  }
+}
+
 function cmdUpdate(): void {
   const projDir = projectDir();
   const installedViaNpm = detectInstalledViaNpm(projDir);
@@ -454,6 +466,27 @@ function cmdUpdate(): void {
     schtasksChange("enable");
   }
   if (exitCode !== undefined) process.exit(exitCode);
+
+  // 2.5 Windows:换血完成后拉起新版桥(spec #331 票B)。桥在跑(心跳 90 秒内
+  // = 3 个心跳间隔)→ 树外 restart-hidden.vbs 重启计划任务;没在跑 → 不代
+  // 启动(尊重有意停止,与 Linux wasActive 同语义),用 Windows 的说法提示;
+  // 计划任务不存在(非任务计划部署)→ 手动提示。probe 失败按不存在处理。
+  if (process.platform === "win32") {
+    const probe = spawnSync("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME], {
+      stdio: "ignore",
+      timeout: 10_000,
+      killSignal: "SIGKILL",
+    });
+    if (probe.status !== 0) {
+      console.log(t("cli.update.manualRestartTask"));
+    } else if (bridgeHeartbeatFresh(LAYOUT.stateDir)) {
+      console.log(t("cli.update.restartingTask"));
+      const win = windowsRestartCommand("win32", projDir, WINDOWS_TASK_NAME);
+      if (win) spawn(win.cmd, win.args, { detached: true, stdio: "ignore" }).unref();
+    } else {
+      console.log(t("cli.update.wasInactiveTask"));
+    }
+  }
 
   // 3. Start the service again if it was running, so the update takes effect.
   //    If it wasn't running before the update (manually stopped, or a previous

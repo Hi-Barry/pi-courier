@@ -21,6 +21,7 @@
  */
 
 import { type ChildProcess, spawn as nodeSpawn } from "node:child_process";
+import * as path from "node:path";
 import { fetch as undiciFetch } from "undici";
 import { AUDIT_EVENTS } from "../audit/audit-log.js";
 import { errorMessage } from "../errors.js";
@@ -38,6 +39,7 @@ import { serviceManagementSupported } from "../systemd-hint.js";
 import { readBridgeVersion } from "../version.js";
 import type { PendingUpdateStore } from "./pending-update.js";
 import {
+  defaultProjectDir,
   runUpgrade,
   type UpgradeOutcome,
   type UpgradeProgressEvent,
@@ -49,6 +51,9 @@ export const UPDATE_WAIT_PROGRESS_MS = 5 * 60_000;
 
 /** systemd 单元名(cli.ts:36 SERVICE_NAME 同款,单元由 pi-courier enable 安装)。 */
 const SERVICE_NAME = "pi-courier";
+/** Windows 桥计划任务名(deploy/windows 安装器创建的默认名,与看门狗
+ *  -TaskName 默认一致;自定义任务名的部署探测不到 → 回落手动提示)。 */
+export const WINDOWS_TASK_NAME = "pi-courier";
 const REGISTRY_LATEST_URL = "https://registry.npmjs.org/pi-courier/latest";
 const REGISTRY_TIMEOUT_MS = 10_000;
 
@@ -134,7 +139,11 @@ export interface UpdateOrchestratorDeps {
    *  默认 false —— 非 active 单元上 restart 会拉起单元、新实例撞 PID 锁
    *  立即退出,留下 failed 单元而旧版进程继续服务,§5.5 步骤 3)。 */
   systemctlActive?: () => Promise<boolean>;
-  /** 重启触发缝(默认 detached systemctl restart,必须脱离父进程存活)。 */
+  /** Windows 计划任务探测缝(spec #331,默认 schtasks /Query,10 秒兜底;
+   *  失败 = 任务不存在 → 回落手动提示)。 */
+  scheduledTaskProbe?: () => Promise<boolean>;
+  /** 重启触发缝(默认平台分派:win32 → 树外 restart-hidden.vbs,其他 →
+   *  detached systemctl restart;两者都必须脱离父进程存活)。 */
   triggerRestart?: () => void;
   /** pending-update.json 落盘缝(回执闭环凭据;写入可感知失败,§5.5)。 */
   pendingUpdate: PendingUpdateStore;
@@ -171,10 +180,68 @@ async function defaultSystemctlActive(): Promise<boolean> {
 function defaultTriggerRestart(): void {
   // 必须 detached + unref:restart 会杀死本进程,spawn 须脱离父进程存活
   // (§11.3 —— 不脱离可能在 kill 到来前抛 EBUSY/中断)。
+  // win32:树外重启手(spec #331)——restart-hidden.vbs 按 watchdog 配方
+  // (taskkill /T /F 心跳 pid → schtasks /end → /run)在 3 秒后重启计划任务;
+  // schtasks /end 单独杀不死 node(真机 2026-11-11),systemctl 在 Windows
+  // 不存在,两者都不能用。
+  const win = windowsRestartCommand(process.platform, defaultProjectDir(import.meta.url), WINDOWS_TASK_NAME);
+  if (win) {
+    nodeSpawn(win.cmd, win.args, { detached: true, stdio: "ignore" }).unref();
+    return;
+  }
   nodeSpawn("systemctl", ["--user", "restart", SERVICE_NAME], {
     detached: true,
     stdio: "ignore",
   }).unref();
+}
+
+/** 纯函数:win32 → 树外重启手(wscript restart-hidden.vbs)的 spawn 描述;
+ *  其余平台 undefined(走 systemd 路径)。抽纯函数与 taskkillArgs/schtasksArgs
+ *  同款:win32 分支在任意 CI runner 可测。 */
+export function windowsRestartCommand(
+  platform: NodeJS.Platform,
+  projectDir: string,
+  taskName: string,
+): { cmd: string; args: string[] } | undefined {
+  if (platform !== "win32") return undefined;
+  return {
+    cmd: "wscript.exe",
+    args: [
+      "//nologo",
+      path.join(projectDir, "deploy", "windows", "restart-hidden.vbs"),
+      taskName,
+    ],
+  };
+}
+
+/** Windows 计划任务探测缝的默认实现(schtasks /Query,10 秒兜底;失败 =
+ *  任务不存在 → 回落手动提示)。非 win32 恒 false。 */
+async function defaultScheduledTaskProbe(): Promise<boolean> {
+  if (process.platform !== "win32") return false;
+  return await new Promise<boolean>((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = nodeSpawn("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME]);
+    } catch {
+      resolve(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // 已退出
+      }
+    }, 10_000);
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve(code === 0);
+    });
+  });
 }
 
 export class UpdateOrchestrator {
@@ -590,7 +657,13 @@ export class UpdateOrchestrator {
       return;
     }
     // 只判平台不判 active 会误伤非单元部署(§5.5 步骤 3):两者都满足才 restart。
+    // Windows 不走 systemd 判定(#331):计划任务存在 → 树外重启手,否则
+    // Windows 版手动提示;systemd 路径(Linux)逐字节不变。
     const platform = this.deps.platform ?? process.platform;
+    if (platform === "win32") {
+      await this.restartWindowsViaTask(io, myGen, from, to);
+      return;
+    }
     let active = false;
     if (serviceManagementSupported(platform)) {
       try {
@@ -629,6 +702,45 @@ export class UpdateOrchestrator {
     // detached spawn 已离开本进程事件循环,进程通常即刻被 systemctl 杀掉;
     // 万一没死(总线失败等),状态回 idle 让 /update 可再次发起 —— 自愈优先,
     // pending-update.json 已在盘上,任何一次重启都会闭环回执。
+    this.state = "idle";
+  }
+
+  /** Windows 自动重启(#331):计划任务存在 → 树外 restart-hidden.vbs 重启;
+   *  探测失败/任务不存在 → Windows 版手动提示。到这里时 pending-update.json
+   *  已落盘、「正在重启」回执已发出(restartNow 步骤①②),桥随时会被 vbs
+   *  杀掉 —— trigger 成功即置 idle 收口,之后不再有本进程的回执;完成回执
+   *  由新进程消费 pending-update.json 闭环。 */
+  private async restartWindowsViaTask(io: UpdateCommandIO, myGen: number, from: string, to: string): Promise<void> {
+    let taskExists = false;
+    try {
+      taskExists = await (this.deps.scheduledTaskProbe ?? defaultScheduledTaskProbe)();
+    } catch (err) {
+      logger.warn(`[update] scheduled task probe failed: ${errorMessage(err)}`);
+    }
+    if (this.generation !== myGen || this.state !== "restart-pending") return; // cancel 先到
+    if (!taskExists) {
+      this.state = "idle";
+      this.generation += 1;
+      try {
+        await io.reply(t("cmd.update.manualRestartWindows", { from, to }));
+      } catch (err) {
+        logger.error(`[update] manualRestartWindows notice failed: ${errorMessage(err)}`);
+      }
+      return;
+    }
+    try {
+      (this.deps.triggerRestart ?? defaultTriggerRestart)();
+    } catch (err) {
+      logger.error(`[update] windows restart trigger failed: ${errorMessage(err)}`);
+      this.state = "idle";
+      this.generation += 1;
+      try {
+        await io.reply(t("cmd.update.manualRestartWindows", { from, to }));
+      } catch (replyErr) {
+        logger.error(`[update] manualRestartWindows notice failed: ${errorMessage(replyErr)}`);
+      }
+      return;
+    }
     this.state = "idle";
   }
 
