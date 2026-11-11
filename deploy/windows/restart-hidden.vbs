@@ -10,11 +10,20 @@
 ' dies with it (the watchdog can bounce the bridge only because it lives in a
 ' DIFFERENT task). This helper runs as a detached wscript and replays the
 ' watchdog's proven recipe:
-'   1. taskkill /T /F on the heartbeat PID  -- schtasks /end alone does NOT
-'      kill node (real machine 2026-11-11: "terminated" reported, node kept
-'      running, single-instance lock held, the new instance died on the lock).
-'   2. schtasks /end /tn <task>   -- best effort, marks the instance stopped.
-'   3. schtasks /run /tn <task>   -- starts the new instance (new code on disk).
+'   1. taskkill /F on the heartbeat PID -- NOTE: deliberately WITHOUT /T.
+'      This wscript IS a child of the bridge process (detached only removes the
+'      console, not the parent-child link); /T would terminate THIS HELPER
+'      before it ever reaches /end and /run, so the bridge would never come
+'      back. Kill the bridge PID alone, then let /end clean up the task
+'      instance and /run start the new one.
+'      schtasks /end alone does NOT kill node (real machine 2026-11-11:
+'      "terminated" reported, node kept running, single-instance lock held,
+'      the new instance died on the lock), hence the explicit taskkill /F.
+'   2. schtasks /change /enable /tn <task> -- best effort; a disabled task
+'      cannot be /run (the upgrade window disables the WATCHDOG, not the
+'      bridge task, but a manually disabled task is a real deployment).
+'   3. schtasks /end /tn <task>   -- marks the instance stopped.
+'   4. schtasks /run /tn <task>   -- starts the new instance (new code on disk).
 '
 ' The heartbeat PID kill is best effort: a dead/stale PID just fails the
 ' taskkill and the sequence continues; PID reuse inside the ~30s heartbeat
@@ -51,8 +60,11 @@ If fso.FileExists(heartbeatPath) Then
 End If
 
 If pid <> "" Then
-  shell.Run "taskkill /T /F /PID " & pid, 0, True
+  shell.Run "taskkill /F /PID " & pid, 0, True
 End If
 
+' /change /enable is best effort: without it a task that was disabled
+' (manually, or by an operator during maintenance) fails /run silently.
+shell.Run "schtasks /change /enable /tn " & taskName, 0, True
 shell.Run "schtasks /end /tn " & taskName, 0, True
 shell.Run "schtasks /run /tn " & taskName, 0, True
