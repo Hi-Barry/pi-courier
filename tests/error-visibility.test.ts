@@ -86,7 +86,7 @@ describe("buildTurnReply error turns (issue #52)", () => {
 });
 
 describe("error visibility routing (issue #52)", () => {
-  it("an error turn with no text notifies the bound room and releases the default binding", async () => {
+  it("an error turn with no text notifies the bound room and keeps the default binding", async () => {
     const fx = makeFixtures();
     await fx.router.handleIncoming(makeMsg({ text: "do work" }));
 
@@ -99,8 +99,66 @@ describe("error visibility routing (issue #52)", () => {
     expect(fx.replies[0]).toMatchObject({ chatId: "!dm:server", transport: "matrix" });
     expect(fx.replies[0].text).toContain("❌ 本轮失败: usage limit reached");
 
-    // The failed turn released the unpinned binding: late events go nowhere.
+    // 错误轮保留 unpinned 绑定(spec #335):重试回执与恢复后的终答还要回到
+    // 原房间,迟到事件不再"无处可去"。
     fx.router.handleEvent({ type: "extension_error", error: "late boom" }, fx.rpc);
+    await flush();
+    expect(fx.replies).toHaveLength(2);
+    expect(fx.replies[1]).toMatchObject({ chatId: "!dm:server" });
+    expect(fx.replies[1].text).toContain("late boom");
+  });
+
+  it("an error turn keeps the binding so the post-retry final answer reaches the room (spec #335)", async () => {
+    const fx = makeFixtures();
+    await fx.router.handleIncoming(makeMsg({ text: "do work" }));
+
+    // 429 错误轮:pi 自动重试开始前先到的就是它(上游时序)。
+    fx.router.handleEvent(
+      { type: "turn_end", message: assistantMessage({ stopReason: "error", errorMessage: "429 too many requests" }) },
+      fx.rpc
+    );
+    await flush();
+    expect(fx.replies).toHaveLength(1);
+    expect(fx.replies[0].text).toContain("❌ 本轮失败: 429 too many requests");
+
+    // 重试恢复后的终答:同一进程、没有新的入站消息 —— 绑定必须还在。
+    fx.router.handleEvent({ type: "turn_end", message: assistantMessage({ text: "recovered answer" }) }, fx.rpc);
+    await flush();
+    expect(fx.replies).toHaveLength(2);
+    expect(fx.replies[1]).toMatchObject({ chatId: "!dm:server", transport: "matrix" });
+    expect(fx.replies[1].text).toContain("recovered answer");
+  });
+
+  it("error turn keeps the binding for retry progress and the exhausted receipt (spec #335)", async () => {
+    const fx = makeFixtures();
+    await fx.router.handleIncoming(makeMsg({ text: "do work" }));
+
+    fx.router.handleEvent(
+      { type: "turn_end", message: assistantMessage({ stopReason: "error", errorMessage: "429" }) },
+      fx.rpc
+    );
+    fx.router.handleEvent({ type: "auto_retry_start", attempt: 1, maxAttempts: 15, errorMessage: "429" }, fx.rpc);
+    fx.router.handleEvent({ type: "auto_retry_end", success: false, finalError: "429 gone" }, fx.rpc);
+    await flush();
+    expect(fx.replies).toHaveLength(3);
+    // 失败回复带异步状态脚注,与即时回执的出站先后不保证 —— 按内容断言。
+    const texts = fx.replies.map((reply) => reply.text);
+    expect(texts.some((text) => text.includes("❌ 本轮失败: 429"))).toBe(true);
+    expect(texts.some((text) => text.includes("正在重试 1/15"))).toBe(true);
+    expect(texts.some((text) => text.includes("❌ 自动重试耗尽: 429 gone"))).toBe(true);
+    expect(fx.replies.every((reply) => reply.chatId === "!dm:server")).toBe(true);
+  });
+
+  it("a successful turn still releases the default binding — a stray second turn is dropped", async () => {
+    const fx = makeFixtures();
+    await fx.router.handleIncoming(makeMsg({ text: "do work" }));
+
+    fx.router.handleEvent({ type: "turn_end", message: assistantMessage({ text: "first answer" }) }, fx.rpc);
+    await vi.waitFor(() => expect(fx.replies).toHaveLength(1));
+    expect(fx.replies[0].text).toContain("first answer");
+
+    // 成功轮释放绑定(回归钉):没有新入站消息的第二个 turn 不再有 target。
+    fx.router.handleEvent({ type: "turn_end", message: assistantMessage({ text: "stray answer" }) }, fx.rpc);
     await flush();
     expect(fx.replies).toHaveLength(1);
   });

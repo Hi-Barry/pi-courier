@@ -215,8 +215,10 @@ export interface MessageRouter {
  * recent prompter.
  */
 interface RoomBinding {
-  /** Pinned bindings (project rooms) survive completed turns; the shared
-   *  default rpc's binding releases after one. */
+  /** Pinned bindings (project rooms) survive completed turns. The shared
+   *  default rpc's binding releases on a successful turn; an error turn keeps
+   *  it (spec #335) so auto-retry receipts and the recovered final answer
+   *  still reach the room that asked, until the next message re-binds it. */
   pinned: boolean;
   replyTarget: ReplyTarget;
 }
@@ -408,6 +410,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // FallbackStreak(model-switch.ts);这里只编排链解析、切换与回执/审计。
   // 项目房用项目链,其余走全局链;链空 = 功能关,行为与旧版逐字节一致。
   const fallbackStreak = new FallbackStreak();
+  /** 降级链重启归零钩子每 rpc 只挂一次(spec #335;先例 liveCardRestartWatched)。 */
+  const fallbackRestartWatched = new WeakSet<PiRpc>();
 
   const runFallback = async (rpc: PiRpc, origin: { chatId: string; transport: string }): Promise<void> => {
     if (!fallbackStreak.recordFailure(rpc)) return;
@@ -1870,6 +1874,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
 
       logAgentEvent(event, log);
 
+      // 降级链重启归零(spec #335):/reload 或崩溃拉起会复用同一个 PiRpc
+      // 实例(被杀进程不会补发 auto_retry_end),重试标记若不清会让该进程
+      // 的降级链永久静默。首次见到该进程时挂一次重启钩子,用 clear() 把
+      // 重试标记与连败一并归零(每 rpc 一次,WeakSet 守卫)。
+      if (!fallbackRestartWatched.has(rpc)) {
+        fallbackRestartWatched.add(rpc);
+        rpc.onRestarted?.(() => fallbackStreak.clear(rpc));
+      }
+
       // 票06(spec #299):工具流关闭的房间,回合期间以原生 typing 续期表活
       // (5s 节流;turn_start 已发首拍);turn_end 主动停,不等 10s TTL 尾巴。
       if (target && event.type !== "turn_start") {
@@ -2045,9 +2058,15 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 清卡单一入口含代次递增,作废在途步骤的迟到写回(spec #242)。
         clearLiveCard(rpc);
 
-        // A completed conversational turn releases unpinned bindings (the
+        // A successful conversational turn releases unpinned bindings (the
         // shared default rpc) so late events never reply to a stale chat.
         // Pinned project bindings survive (parity with the old roomId path).
+        //
+        // 错误轮不释放(spec #335):pi 的 auto_retry_start 在错误 turn_end
+        // 之后才到(上游时序),桥无法先验判断本轮会不会重试;释放会让
+        // 重试进度、「重试耗尽」回执与恢复后的终答全部静默丢掉。错误轮
+        // 之后不会再有属于旧聊天的新事件,绑定保留到下一条用户消息重新
+        // 绑定(终态错误同理 —— 耗尽回执本来就该回原房间)。
         //
         // 例外(2026-10-11 真机):steering/followUp 队列非空时不释放 —— 被
         // 折叠进运行中任务的消息,其回复在后续 turn 才到;中间任何一次 turn
@@ -2056,7 +2075,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 中招,4/4 复现)。队列见空才释放:迟事件保护依旧成立 —— 已收敛
         // 且无排队时,不会再有属于旧聊天的事件。
         const binding = bindings.get(rpc);
-        if (!turn.pendingTools && binding && !binding.pinned) {
+        if (!turn.pendingTools && !isErrorTurn && binding && !binding.pinned) {
           const mirror = transient.mirror(rpc);
           const queued = (mirror?.steering.length ?? 0) + (mirror?.followUp.length ?? 0);
           if (queued === 0) bindings.delete(rpc);
@@ -2080,6 +2099,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       }
 
       if (event.type === "auto_retry_start") {
+        // 重试状态属于进程而非房间(spec #335):标记无条件生效,即使此刻
+        // 没有绑定(回执仍按原语义只在有 target 时发)。
+        fallbackStreak.beginRetry(rpc);
         if (target) {
           sendReply(
             target.chatId,
@@ -2097,6 +2119,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // Retries exhausted: the final error goes to the room; a successful
       // retry (success === true) needs no reply — the turn continues normally.
       if (event.type === "auto_retry_end") {
+        // 只清重试标记,连败 runs 保留(跨提示词的连败要继续累计)。
+        fallbackStreak.endRetry(rpc);
         if (event.success !== true && target) {
           sendReply(
             target.chatId,
@@ -2104,6 +2128,14 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             t("router.retry.exhausted", { error: summarizeArg(event.finalError, 300) || t("common.unknownError") })
           ).catch(() => {});
         }
+        return;
+      }
+
+      // 一次 run 结束(含 prompt/continue 抛异常逃出时 finally 的
+      // agent_settled)是重试标记的兜底失效点(spec #335):只清标记,
+      // 不清 runs —— 否则跨提示词的连败永远凑不到阈值。
+      if (event.type === "agent_settled") {
+        fallbackStreak.endRetry(rpc);
         return;
       }
 
