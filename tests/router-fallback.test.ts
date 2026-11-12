@@ -30,11 +30,17 @@ function makeFallbackRouter(options: {
     state.model = { provider, id };
     return { id };
   });
+  // 可驱动重启生命周期的 mock rpc:收集 hooks 供 spec #335 的重启归零用例
+  // 手动触发(与 router-queue-lost.test.ts 同款)。
+  const restartHooks: Array<(r: PiRpc) => void> = [];
   const rpc = {
     prompt: vi.fn().mockResolvedValue(undefined),
     label: undefined,
     onEvent: vi.fn(),
-    onRestarted: vi.fn().mockReturnValue(() => {}),
+    onRestarted: vi.fn((hook: (r: PiRpc) => void) => {
+      restartHooks.push(hook);
+      return () => {};
+    }),
     requireClient: vi.fn().mockReturnValue({
       getState: vi.fn().mockImplementation(async () => ({ ...state })),
       setModel,
@@ -56,7 +62,41 @@ function makeFallbackRouter(options: {
     await fixture.router.handleIncoming(makeMsg({ text: "再来一轮" }));
     fixture.router.handleEvent(okTurn, rpc);
   };
-  return { sendReply: fixture.sendReply, setModel, auditLines: fixture.auditLines, projectFallbacks, failRound, okRound };
+  // spec #335 重试序列驱动:绑定一次后连续送事件,中间不发新入站消息 ——
+  // 正是「错误轮 → auto_retry_start → 重试轮 → auto_retry_end」的生产顺序。
+  const bindRoom = async (chatId = "!dm:server"): Promise<void> => {
+    await fixture.router.handleIncoming(makeMsg({ chatId, text: "同一条提示词" }));
+  };
+  const failEvent = (): void => {
+    fixture.router.handleEvent(failTurn, rpc);
+  };
+  const retryStart = (attempt = 1, maxAttempts = 15): void => {
+    fixture.router.handleEvent({ type: "auto_retry_start", attempt, maxAttempts, errorMessage: "429" }, rpc);
+  };
+  const retryEnd = (success = false): void => {
+    fixture.router.handleEvent({ type: "auto_retry_end", success, finalError: success ? undefined : "429" }, rpc);
+  };
+  const settle = (): void => {
+    fixture.router.handleEvent({ type: "agent_settled" }, rpc);
+  };
+  const restart = (): void => {
+    for (const hook of [...restartHooks]) hook(rpc);
+  };
+  return {
+    sendReply: fixture.sendReply,
+    setModel,
+    auditLines: fixture.auditLines,
+    projectFallbacks,
+    isProjectRoom: fixture.projectManager.isProjectRoom as ReturnType<typeof vi.fn>,
+    failRound,
+    okRound,
+    bindRoom,
+    failEvent,
+    retryStart,
+    retryEnd,
+    settle,
+    restart,
+  };
 }
 
 describe("model fallback chain (issue #121)", () => {
@@ -160,5 +200,88 @@ describe("model fallback chain (issue #121)", () => {
     const texts = sendReply.mock.calls.map((c) => c[2] as string);
     expect(texts.filter((t) => t.includes("model not found"))).toHaveLength(1);
     expect(auditLines).toHaveLength(0);
+  });
+});
+
+describe("auto-retry attempts do not advance the fallback streak (spec #335)", () => {
+  /** 房间收到的降级回执特征(切换/切换失败/耗尽),用于断言重试期间零回执。 */
+  const fallbackReceipts = (sendReply: ReturnType<typeof vi.fn>): string[] =>
+    sendReply.mock.calls
+      .map((c) => c[2] as string)
+      .filter((text) => text.includes("已自动切换模型") || text.includes("降级链") || text.includes("自动切换到"));
+
+  it("one prompt's retry storm never switches; the next prompt-level failure still does", async () => {
+    const { sendReply, setModel, bindRoom, failEvent, retryStart, retryEnd } = makeFallbackRouter({
+      globalChain: ["zai/glm-5.3", "deepseek/d1"],
+    });
+    await bindRoom();
+    failEvent(); // 提示词级第 1 次彻底失败 → 连败 1
+    retryStart(); // pi 自动重试开始
+    failEvent();
+    failEvent();
+    failEvent(); // 3 个重试 attempt:不计连败
+    // 4 条失败回复 + 1 条重试进度回执;重试 attempt 不产生切换/耗尽回执。
+    await vi.waitFor(() => expect(sendReply).toHaveBeenCalledTimes(5));
+    expect(setModel).not.toHaveBeenCalled();
+    expect(fallbackReceipts(sendReply)).toHaveLength(0);
+
+    retryEnd(false); // 重试耗尽回执照发,仍不切换
+    await vi.waitFor(() => expect(sendReply).toHaveBeenCalledTimes(6));
+    expect(setModel).not.toHaveBeenCalled();
+
+    // 新提示词的首个错误轮 = 提示词级第 2 次失败 → 恰好切换一次。
+    await bindRoom();
+    failEvent();
+    await vi.waitFor(() => expect(setModel).toHaveBeenCalledTimes(1));
+    expect(setModel).toHaveBeenCalledWith("zai", "glm-5.3");
+  });
+
+  it("a pinned project room's retry attempts do not advance the streak either", async () => {
+    const { sendReply, setModel, bindRoom, failEvent, retryStart, retryEnd, isProjectRoom } = makeFallbackRouter({
+      globalChain: ["zai/glm-5.3"],
+    });
+    isProjectRoom.mockImplementation((roomId: string) => roomId === "!proj:server");
+    await bindRoom("!proj:server");
+    failEvent(); // 连败 1(pinned 绑定不释放,后续事件照常到达)
+    retryStart();
+    failEvent();
+    failEvent(); // 重试 attempt:不计连败
+    retryEnd(false);
+    // 3 条失败回复 + 重试进度 + 耗尽回执;零切换。
+    await vi.waitFor(() => expect(sendReply).toHaveBeenCalledTimes(5));
+    expect(setModel).not.toHaveBeenCalled();
+
+    await bindRoom("!proj:server");
+    failEvent();
+    await vi.waitFor(() => expect(setModel).toHaveBeenCalledTimes(1));
+  });
+
+  it("a subprocess restart resets the retry flag and the streak", async () => {
+    const { setModel, bindRoom, failEvent, retryStart, restart } = makeFallbackRouter({
+      globalChain: ["zai/glm-5.3"],
+    });
+    await bindRoom();
+    failEvent(); // 连败 1
+    retryStart(); // 重试进行中
+    failEvent(); // 被跳过
+    restart(); // /reload 或崩溃拉起:标记与连败都归零
+    failEvent(); // 重新从 1 开始
+    await new Promise((r) => setTimeout(r, 20));
+    expect(setModel).not.toHaveBeenCalled(); // 若 runs 未清,这一轮就会切换
+    failEvent(); // 第 2 次 → 阈值
+    await vi.waitFor(() => expect(setModel).toHaveBeenCalledTimes(1));
+  });
+
+  it("agent_settled clears only the retry flag — the streak survives", async () => {
+    const { setModel, bindRoom, failEvent, retryStart, settle } = makeFallbackRouter({
+      globalChain: ["zai/glm-5.3"],
+    });
+    await bindRoom();
+    failEvent(); // 连败 1
+    retryStart();
+    failEvent(); // 被跳过
+    settle(); // 异常路径兜底:只清重试标记
+    failEvent(); // 第 2 次 → 阈值(若 settled 误清 runs,这里不会切换)
+    await vi.waitFor(() => expect(setModel).toHaveBeenCalledTimes(1));
   });
 });

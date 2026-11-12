@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { findModelMatch, nextFallbackTarget, sameModel, setModelByRef } from "../src/rpc/model-switch";
+import { FallbackStreak, findModelMatch, nextFallbackTarget, sameModel, setModelByRef } from "../src/rpc/model-switch";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 
 function fakeRpc(models: Array<{ provider: string; id: string }>) {
@@ -74,5 +74,37 @@ describe("nextFallbackTarget (issue #121)", () => {
     expect(nextFallbackTarget(chain, { provider: "opencode", id: "o1" })).toBeUndefined();
     expect(nextFallbackTarget(["not-a-ref", "deepseek/d1"], undefined)).toEqual({ provider: "deepseek", id: "d1" });
     expect(nextFallbackTarget([], undefined)).toBeUndefined();
+  });
+});
+
+describe("FallbackStreak retry guard (spec #335)", () => {
+  const rpc = {} as PiRpc;
+
+  it("retry attempts do not advance the streak — the next prompt-level failure does", () => {
+    const streak = new FallbackStreak();
+    expect(streak.recordFailure(rpc)).toBe(false); // 提示词级第 1 次彻底失败
+    streak.beginRetry(rpc);
+    expect(streak.recordFailure(rpc)).toBe(false); // attempt 2
+    expect(streak.recordFailure(rpc)).toBe(false); // attempt 3
+    expect(streak.recordFailure(rpc)).toBe(false); // attempt 4
+    streak.endRetry(rpc);
+    expect(streak.recordFailure(rpc)).toBe(true); // 提示词级第 2 次失败 → 阈值
+  });
+
+  it("clear resets both the retry flag and the runs", () => {
+    const streak = new FallbackStreak();
+    streak.beginRetry(rpc);
+    streak.clear(rpc);
+    expect(streak.recordFailure(rpc)).toBe(false);
+    expect(streak.recordFailure(rpc)).toBe(true);
+  });
+
+  it("endRetry only clears the flag — the runs survive", () => {
+    const streak = new FallbackStreak();
+    expect(streak.recordFailure(rpc)).toBe(false);
+    streak.beginRetry(rpc);
+    expect(streak.recordFailure(rpc)).toBe(false);
+    streak.endRetry(rpc);
+    expect(streak.recordFailure(rpc)).toBe(true);
   });
 });
