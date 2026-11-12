@@ -66,19 +66,36 @@ export function nextFallbackTarget(
 }
 
 /** 触发自动切换所需的连续彻底失败轮数(stopReason=error,pi 的 auto-retry
- *  已耗尽或未开)。 */
+ *  已耗尽或未开;重试进行中的 attempt 轮不计数,见 beginRetry)。 */
 export const MODEL_FALLBACK_THRESHOLD = 2;
 
 /** 降级链连败记账(issue #121):每进程一份,内存即权威 —— 重启归零可接受
  *  (重启本身常已排除瞬时故障)。阈值判定与「链耗尽只提示一次」都在这里;
  *  链解析、切换与回执 I/O 归调用方。成功(或任何非 error)轮 clear() 清零
- *  并重武装耗尽提示。 */
+ *  并重武装耗尽提示。pi 自动重试(spec #335)期间的 attempt 错误轮不推进
+ *  连败:只有提示词级的彻底失败才累计阈值。 */
 export class FallbackStreak {
   private runs = new WeakMap<PiRpc, { failures: number; exhaustedNotified: boolean }>();
+  /** 重试进行中的进程(spec #335):auto_retry_start → auto_retry_end 之间
+   *  的错误轮是 pi 的 attempt,不是提示词级失败。 */
+  private retrying = new WeakSet<PiRpc>();
+
+  /** pi 自动重试开始:标记重试进行中(不依赖房间绑定 —— 重试状态属于进程)。 */
+  beginRetry(rpc: PiRpc): void {
+    this.retrying.add(rpc);
+  }
+
+  /** 重试结束/一次 run 结束:只清标记,runs 保留 —— 跨提示词的连败还要
+   *  继续累计(与 agent_settled / auto_retry_end 的失效时机对应)。 */
+  endRetry(rpc: PiRpc): void {
+    this.retrying.delete(rpc);
+  }
 
   /** 失败轮喂入:达到阈值 → true(记账已重置,该推进下一跳了);未到 →
-   *  false(保持静默,继续数)。 */
+   *  false(保持静默,继续数)。重试进行中的 attempt 轮直接返回 false,
+   *  既不计数也不触发切换。 */
   recordFailure(rpc: PiRpc): boolean {
+    if (this.retrying.has(rpc)) return false;
     const run = this.runs.get(rpc) ?? { failures: 0, exhaustedNotified: false };
     run.failures += 1;
     this.runs.set(rpc, run);
@@ -95,8 +112,10 @@ export class FallbackStreak {
     return true;
   }
 
-  /** 成功(或任何非 error)轮:整条 streak 清零,耗尽提示重新武装。 */
+  /** 成功(或任何非 error)轮:整条 streak 清零,耗尽提示重新武装。重启
+   *  归零也走这里 —— 连同重试标记一并清掉,避免标记永久卡死。 */
   clear(rpc: PiRpc): void {
+    this.retrying.delete(rpc);
     this.runs.delete(rpc);
   }
 }
