@@ -584,6 +584,7 @@ pi-courier stop           # stop
 pi-courier start          # start
 pi-courier disable        # uninstall the service
 pi-courier update         # update pi-courier itself
+pi-courier doctor         # local health check & report (--fix safe fixes / --json machine-readable / --offline skip network checks)
 pi-courier -v             # show the installed version
 ```
 
@@ -596,6 +597,32 @@ directory's name when the project is unnamed). Filtering runs through
 `journalctl --grep` — it requires journald with PCRE2 support (standard on
 Debian/Ubuntu). The complete conversation is always stored in pi's session
 files (`~/.pi/agent/sessions/`).
+
+### Doctor: one-command health check (and safe fixes)
+
+`pi-courier doctor` answers three questions in one deterministic, offline-friendly run: is this machine's pi-courier healthy, what is broken, and what can be fixed safely. It never talks to a model, never touches the network unless asked, takes no lock and never starts/stops the service — the running bridge is untouched by a check.
+
+```bash
+pi-courier doctor             # report only (default; TTY asks once before fixing)
+pi-courier doctor --fix       # fix the safe & idempotent items without asking
+pi-courier doctor --json      # machine-readable report (same masking; jq-friendly)
+pi-courier doctor --offline   # skip all network checks (offline machines / CI)
+```
+
+Eight check groups (each item carries a stable id like `B1`, rendered in both the human and JSON report):
+
+| Group | Checks |
+|---|---|
+| A · installation | key runtime files (dist entry, package.json, scripts, deploy), peer packages (`pi-ai`, `pi-coding-agent >=0.83`), version consistency (a misplaced dist = half-update), crypto native binding |
+| B · pi resolution chain | configured `cliPath` existence (a stale one is reported as "the configured pi path is broken", fixable: backed up then removed, bridge falls back to auto-discovery), `which pi` → managed layout resolution, pi ↔ Node engine gate, Node ↔ pi-courier `engines` |
+| C · pi-courier config | file presence/valid JSON, key field types, 0600 permission, workdir & sessionDir existence/writability (all `projects`, one bad project never masks the others), proxy scheme |
+| D · state & directories | self-managed dirs (stateDir/dataDir) presence & 0700, stale single-instance lock, manual-stop marker, pending-update leftover, legacy-layout leftovers (report + migration pointer only) |
+| E · network (`--offline` skips) | Matrix whoami, homeserver reachability, proxy reachability — every item capped at 5 s; a timeout is "cannot confirm" (⏭️), never misreported as broken config |
+| F · service (Linux only; ⏭️ on Windows) | systemd unit present/enabled/active, and the node pinned in the unit vs the current `process.execPath` (drift → ⚠️). Read-only: `cat/is-enabled/is-active` queries only — the unit is never written, services never started/stopped |
+| G · disk | free space against the same `diskHardMb` threshold the runtime ResourceGuard enforces |
+| H · pi side (read-only, forbidden zone) | agent dir resolution, settings/auth/models JSON validity, at least one credential or default model — `--fix` never writes anything under pi's directory |
+
+Exit codes: `0` healthy or only ⚠️/⏭️ (risk items do not fail CI), `1` still has ❌, `2` doctor itself crashed. Fix tiers: **safe & idempotent** (`--fix` does them, config is backed up to `<config>.doctor-backup` before any rewrite, diffs printed after), **advisory** (report + next-step command only — a missing workdir is never created), **forbidden** (never touched: re-login, reinstalling pi/Node, `trustedUsers`, session/data deletion, pi's auth/settings/models). Tokens/keys are masked to at most their first 4 characters in both output forms.
 
 Upgrading **pi** is independent — pi-courier always uses the system pi via `which pi`:
 

@@ -30,6 +30,13 @@ export interface PendingUpdateEntry {
 // 防注入(§5.2 同一格式):版本号要拼进回执文案,格式不过 = 视作无更新。
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 
+/** pending-update.json 的绝对路径(stateDir 派生)。组合根、doctor 检查与
+ *  doctor 修复共用这一处拼法 —— 改名只改这里,杜绝「检查报一个路径、修复
+ *  删另一个」的静默分叉。 */
+export function pendingUpdatePath(stateDir: string): string {
+  return path.join(stateDir, "pending-update.json");
+}
+
 export class PendingUpdateStore {
   private readonly file: JsonStateFile<PendingUpdateEntry | null>;
 

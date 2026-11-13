@@ -65,7 +65,7 @@ import { FileEventLedger } from "./transports/event-ledger.js";
 import type { RoomOps } from "./transports/interface.js";
 import { MatrixProvider } from "./transports/matrix.js";
 import { createMatrixClient } from "./transports/matrix-client.js";
-import { consumePendingUpdate, PendingUpdateStore } from "./update/pending-update.js";
+import { consumePendingUpdate, PendingUpdateStore, pendingUpdatePath } from "./update/pending-update.js";
 import { UpdateOrchestrator } from "./update/updater.js";
 import { runUpgrade } from "./update/upgrade.js";
 import { suppressKnownWarnings } from "./warnings.js";
@@ -571,7 +571,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // ---- /update 热更新(桥自更新 spec §5.5/§5.6):pending-update.json ------
   // 换血完成后、触发重启「之前」由编排器写入(可感知成功,写失败放弃自动
   // 重启);新进程启动时经下方启动消费发「更新完成」回执并销账(consume-once)。
-  const pendingUpdateStore = new PendingUpdateStore(path.join(stateDir, "pending-update.json"));
+  const pendingUpdateStore = new PendingUpdateStore(pendingUpdatePath(stateDir));
 
   // ---- /update 编排器(spec §8 组合根):进程内单例状态机 ----------------------
   // 全部执行缝用模块默认实现(undici fetch / 真实 spawn / process.getuid /
