@@ -11,11 +11,11 @@
  */
 
 import { checkGroupA } from "./checks-a.js";
-import { checkGroupE } from "./checks-e.js";
-import { checkGroupF } from "./checks-f.js";
 import { checkGroupB, staleCliPathFix } from "./checks-b.js";
 import { checkGroupC } from "./checks-c.js";
 import { checkGroupD } from "./checks-d.js";
+import { checkGroupE } from "./checks-e.js";
+import { checkGroupF } from "./checks-f.js";
 import { checkGroupG } from "./checks-g.js";
 import { checkGroupH } from "./checks-h.js";
 import type { FixAction } from "./fix.js";

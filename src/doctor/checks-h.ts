@@ -15,12 +15,12 @@
  * 先按 peer 包 engines 与当前 Node 比较,不满足 → H 组整体 ⏭️,绝不触发崩溃。
  */
 
-import { createRequire } from "node:module";
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 import { t } from "../i18n/index.js";
-import { nodeSatisfiesEngine, parseVersionTriple } from "./checks-b.js";
 import { packageRootOf } from "./checks-a.js";
+import { nodeSatisfiesEngine, parseVersionTriple } from "./checks-b.js";
 import type { CheckResult, DoctorCheckEntry, DoctorContext } from "./types.js";
 
 interface PiPaths {
