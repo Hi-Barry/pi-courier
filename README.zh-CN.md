@@ -589,6 +589,32 @@ pi-courier -v                  # 显示当前版本(--version/version 亦可)
 
 日志级别:`debug < info < warn < error`。服务会把全部内容写入日志;`logs` 默认显示 INFO 及以上,`--level debug` 显示完整会话回放(用户消息、思考、工具调用、回复)。多工程模式下,项目相关日志行带有 `[项目名]` 标签,`logs <项目名>` 即可只看该工程(大小写不敏感;项目名 = `/pmctl` 的名称,未命名时为工作目录的目录名)。过滤经 `journalctl --grep` 实现,要求 journald 支持 PCRE2(Debian/Ubuntu 标准支持)。完整对话始终保存在 pi 的会话文件(`~/.pi/agent/sessions/`)。
 
+### Doctor:一条命令的本地体检(与安全修复)
+
+`pi-courier doctor` 用一次确定性的、离线友好的运行回答三个问题:这台机器上的 pi-courier 健康吗、哪里坏了、哪些可以安全地修。它不调模型、不主动碰网络、不拿锁、不启停服务 —— 体检动作对运行中的桥零干扰。
+
+```bash
+pi-courier doctor             # 只报告(默认;TTY 下修复前汇总问一次)
+pi-courier doctor --fix       # 不问,直接修安全幂等项
+pi-courier doctor --json      # 机器可读报告(同样脱敏;jq 可解析)
+pi-courier doctor --offline   # 跳过全部网络检查(离线机器 / CI)
+```
+
+八组检查(每项带稳定 id 如 `B1`,人话与 JSON 报告都用它):
+
+| 组 | 检查项 |
+|---|---|
+| A · 安装完整性 | 关键运行时文件(dist 入口、package.json、scripts、deploy),peer 包(`pi-ai`、`pi-coding-agent >=0.83`),版本一致(dist 错位即半更新),crypto 原生库 |
+| B · pi 解析链 | 配置 `cliPath` 存在性(失效时报「配置里的 pi 路径失效」,可修:先备份后删除,桥回退自动发现),`which pi` → 托管布局解析,pi ↔ Node 引擎门,Node ↔ pi-courier `engines` |
+| C · pi-courier 配置 | 文件存在/JSON 合法,关键字段类型,0600 权限,workdir 与 sessionDir 存在可写(全部 `projects`,一个坏项目不掩盖其他),proxy scheme |
+| D · 状态与目录 | 自管目录(stateDir/dataDir)存在与 0700,陈旧单实例锁,人工停止标记,pending-update 残留,旧布局残留(只报告 + 迁移指引) |
+| E · 网络(`--offline` 跳过) | Matrix whoami、homeserver 可达、代理可达 —— 每项 5 秒上限;超时是「查不出来」(⏭️),绝不误报成配置坏 |
+| F · 服务(仅 Linux;Windows ⏭️) | systemd unit 存在/启用/运行,unit 钉的 node 与当前 `process.execPath` 对比(漂移 ⚠️)。只读:只发 `cat/is-enabled/is-active` 查询 —— 绝不写 unit、绝不启停 |
+| G · 磁盘 | 剩余空间对运行时 ResourceGuard 同一 `diskHardMb` 阈值 |
+| H · pi 侧(只读,禁区) | agent 目录解析,settings/auth/models JSON 合法性,至少一个凭据或默认模型 —— `--fix` 永不写 pi 目录下任何文件 |
+
+退出码:`0` 健康或仅 ⚠️/⏭️(风险项不让 CI 失败),`1` 仍有 ❌,`2` doctor 自身崩溃。修复三档:**安全幂等**(`--fix` 自动做;改配置前先备份到 `<config>.doctor-backup`,修完打印 diff)、**提示**(只报告 + 下一步命令 —— workdir 缺失绝不代建)、**禁区**(永不碰:重新登录、重装 pi/Node、`trustedUsers`、删 session/数据、pi 的 auth/settings/models)。token/key 在两种输出形态里都最多露前 4 位。
+
 **升级 pi** 是独立的事 —— pi-courier 始终通过 `which pi` 连接系统 pi:
 
 ```bash
