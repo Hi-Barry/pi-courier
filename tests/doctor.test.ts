@@ -344,10 +344,11 @@ describe("runDoctor — 最小检查集与降级", () => {
   it("最小检查集(B 组)可跑通:报告产出、无 ❌、报告头带真实版本号与注入时钟", async () => {
     const deps = makeHarness({ platform: "linux", homedir: home });
     const report = await runDoctor(deps, { fix: false, json: false, offline: false });
-    // B/C/D 组已注册(#339/#340):健康基线下 B1 skip(未配置)/其余全部非 ❌
+    // 全部检查组已注册(#339/#340/#341):健康基线下 B1 skip(未配置)/其余全部非 ❌
     // (B2 经 peer 兜底解析;C5 直连;D 组目录已预建)。
     expect(report.results.map((r) => r.id)).toEqual([
-      "B1", "B2", "B3", "B4", "C1", "C2", "C3", "C4", "C5", "C6", "D1", "D2", "D3", "D4", "D5", "D6",
+      "A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4",
+      "C1", "C2", "C3", "C4", "C5", "C6", "D1", "D2", "D3", "D4", "D5", "D6", "G1", "H1", "H2", "H3",
     ]);
     expect(report.results.some((r) => r.severity === "fail")).toBe(false);
     expect(deriveExitCode(report.results)).toBe(0);
@@ -426,7 +427,8 @@ describe("doctorShell — CLI 分发薄壳", () => {
     expect(writes).toHaveLength(1);
     const parsed = JSON.parse(writes[0]!) as DoctorShellResult;
     expect(parsed.results.map((r) => r.id)).toEqual([
-      "B1", "B2", "B3", "B4", "C1", "C2", "C3", "C4", "C5", "C6", "D1", "D2", "D3", "D4", "D5", "D6",
+      "A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4",
+      "C1", "C2", "C3", "C4", "C5", "C6", "D1", "D2", "D3", "D4", "D5", "D6", "G1", "H1", "H2", "H3",
     ]);
     expect(parsed.summary.fail).toBe(0);
     const pkg = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, "../package.json"), "utf-8")) as {

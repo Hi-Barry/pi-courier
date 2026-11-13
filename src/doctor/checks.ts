@@ -5,12 +5,16 @@
  * ⏭️(每组一项「无法确认」),doctor 不崩。已挂组:
  *  - B 组(票 #339):pi 解析链 + 失效 cliPath 修复;
  *  - C/D 组(票 #340):配置与状态目录 + 权限收紧/建目录/清残留修复;
- * 后续票:#341 A/G/H 组,#342 E/F 组。
+ *  - A/G/H 组(票 #341):安装完整性、磁盘水位、pi 侧只读(禁区档);
+ * 后续票:#342 E/F 组。
  */
 
+import { checkGroupA } from "./checks-a.js";
 import { checkGroupB, staleCliPathFix } from "./checks-b.js";
 import { checkGroupC } from "./checks-c.js";
 import { checkGroupD } from "./checks-d.js";
+import { checkGroupG } from "./checks-g.js";
+import { checkGroupH } from "./checks-h.js";
 import type { FixAction } from "./fix.js";
 import {
   chmodConfigFix,
@@ -24,9 +28,12 @@ import type { CheckResult, DoctorCheckEntry, DoctorContext } from "./types.js";
 /** 收集本次运行的检查清单。 */
 export async function collectCheckEntries(ctx: DoctorContext): Promise<DoctorCheckEntry[]> {
   const entries: DoctorCheckEntry[] = [];
+  entries.push(...checkGroupA(ctx));
   entries.push(...checkGroupB(ctx));
   entries.push(...checkGroupC(ctx));
   entries.push(...checkGroupD(ctx));
+  entries.push(...checkGroupG(ctx));
+  entries.push(...checkGroupH(ctx));
   return entries;
 }
 

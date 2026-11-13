@@ -31,8 +31,8 @@ export function nodeSatisfiesEngine(
   return true;
 }
 
-/** 本进程 Node 的 "vX.Y.Z" → [x,y,z](解析失败返回 undefined,B4 降级)。 */
-function runningNodeTriple(version: string): [number, number, number] | undefined {
+/** "vX.Y.Z" 形版本号 → [x,y,z](解析失败返回 undefined;B4 与 A 组 peer 版本门共用)。 */
+export function parseVersionTriple(version: string): [number, number, number] | undefined {
   const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
   if (!match) return undefined;
   return [Number(match[1]), Number(match[2]), Number(match[3])];
@@ -161,7 +161,7 @@ export function checkGroupB(ctx: DoctorContext): DoctorCheckEntry[] {
       const { minNodeVersionOf } = await import("../rpc/pi-rpc.js");
       const range = ownEnginesNode();
       const floor = range ? minNodeVersionOf(range) : undefined;
-      const running = runningNodeTriple(process.version);
+      const running = parseVersionTriple(process.version);
       if (!floor || !running) {
         // 底线或运行版本解析不了(engines 形态不认识/非 vX.Y.Z)→ 无法确认
         return {
