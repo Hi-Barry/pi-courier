@@ -53,6 +53,12 @@ function resultOf(report: { results: CheckResult[] }, id: string): CheckResult |
  * 目录/权限收紧、D3 陈旧锁、D4 manual-stop、D5 pending-update。
  * 提示档(C4 workdir/C6 sessionDir 缺失、D6 旧布局)与不可修复档(C1)永远
  * 不出现在这里;禁区档(trustedUsers/session 数据/pi 侧)更不会。
+ *
+ * 平台说明(spec 用户故事 24:--fix 的安全项在 Windows 行为一致):动作不按
+ * 平台设闸 —— 建目录/清锁/清残留平台无关;唯一 POSIX 专属的 C3 chmod 在
+ * win32 下检查项本身是 ⏭️(checks-c),报告门槛自然放不进来。win32 的目录
+ * 权限不可验证 → D1/D2 的「过松收紧」分支不会触发,「缺失建目录」照常可修
+ * (mkdirSync 的 0700 在 win32 由 libuv 映射为可写,与全仓写侧同语义)。
  */
 export async function collectFixActions(ctx: DoctorContext, report: { results: CheckResult[] }): Promise<FixAction[]> {
   const actions: FixAction[] = [];
@@ -61,18 +67,15 @@ export async function collectFixActions(ctx: DoctorContext, report: { results: C
     const fix = await staleCliPathFix(ctx);
     if (fix) actions.push(fix);
   }
-  const posix = ctx.deps.platform !== "win32";
-  if (posix) {
-    if (resultOf(report, "C3")?.severity === "warn") actions.push(chmodConfigFix(ctx));
-    for (const id of ["D1", "D2"] as const) {
-      if (resultOf(report, id)?.severity === "warn") actions.push(mkdirOrChmodDirFix(ctx, id));
-    }
-    if (resultOf(report, "D3")?.severity === "warn") {
-      const fix = await removeStaleLockFix(ctx);
-      if (fix) actions.push(fix);
-    }
-    if (resultOf(report, "D4")?.severity === "warn") actions.push(clearManualStopFix(ctx));
-    if (resultOf(report, "D5")?.severity === "warn") actions.push(clearPendingUpdateFix(ctx));
+  if (resultOf(report, "C3")?.severity === "warn") actions.push(chmodConfigFix(ctx));
+  for (const id of ["D1", "D2"] as const) {
+    if (resultOf(report, id)?.severity === "warn") actions.push(mkdirOrChmodDirFix(ctx, id));
   }
+  if (resultOf(report, "D3")?.severity === "warn") {
+    const fix = await removeStaleLockFix(ctx);
+    if (fix) actions.push(fix);
+  }
+  if (resultOf(report, "D4")?.severity === "warn") actions.push(clearManualStopFix(ctx));
+  if (resultOf(report, "D5")?.severity === "warn") actions.push(clearPendingUpdateFix(ctx));
   return actions;
 }

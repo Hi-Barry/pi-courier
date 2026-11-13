@@ -196,7 +196,7 @@ describe("C3 — 配置 0600 权限(POSIX)与 win32 ⏭️", () => {
     expect(resultById(again.report, "C3")?.severity).toBe("ok");
   });
 
-  it("win32 注入:权限检查 ⏭️(libuv 报不出 POSIX mode),--fix 不给动作", async () => {
+  it("win32 注入:权限检查 ⏭️,C3 的 chmod 不收集(POSIX 专属);平台无关动作不受牵连", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     writeConfig({ workdir: home }, 0o644);
     const deps = makeHarness({ platform: "win32", homedir: home, env: process.env });
@@ -205,8 +205,11 @@ describe("C3 — 配置 0600 权限(POSIX)与 win32 ⏭️", () => {
     const c3 = resultById(report, "C3");
     expect(c3?.severity).toBe("skip");
     expect(c3?.summary).toContain("无法确认");
-    expect(await collectFixActionsNoCtx(deps, report).then((a) => a.length)).toBe(0);
-    expect(fileMode(configPath())).toBe("644"); // 未被改
+    // 评审必改②:动作不按平台设闸 —— 唯一 POSIX 专属的 C3 chmod 因检查项
+    // ⏭️ 自然不收集;平台无关动作(此处 D1/D2 mkdir 等)不再被整体挡掉。
+    const actions = await collectFixActionsNoCtx(deps, report);
+    expect(actions.filter((a) => a.checkId === "C3")).toHaveLength(0);
+    expect(fileMode(configPath())).toBe("644"); // 配置权限未被改
   });
 });
 
@@ -332,6 +335,29 @@ describe("D1/D2 — 自管目录存在与权限", () => {
     const again = await doctorReport({ workdir: home });
     expect(resultById(again.report, "D1")?.severity).toBe("ok");
     expect(resultById(again.report, "D2")?.severity).toBe("ok");
+  });
+
+  it("win32:目录缺失 ⚠️ → --fix 照常建目录(平台无关动作不设闸,评审必改②)", async () => {
+    // 评审发现:collectFixActions 曾用 platform !== "win32" 把 D1/D2 mkdir 等
+    // 平台无关动作整体挡掉 → Windows 上 --fix 静默空转。目录缺失在 win32
+    // 照报 ⚠️(checks-d 先于权限分支返回),--fix 必须能建。
+    const deps = makeHarness({
+      platform: "win32",
+      homedir: home,
+      layout: makeDoctorLayout("linux", home), // POSIX 形布局(config-win32 先例)
+      env: process.env,
+    });
+    const report = await runDoctor(deps, NO_FIX);
+    expect(resultById(report, "D1")?.severity).toBe("warn");
+    expect(resultById(report, "D1")?.nextStep).toContain("doctor --fix");
+    expect(resultById(report, "D2")?.severity).toBe("warn");
+    const actions = await collectFixActionsNoCtx(deps, report);
+    expect(actions.map((a) => a.checkId).sort()).toEqual(["D1", "D2"]);
+    const printed: string[] = [];
+    await runFixes(actions, (l) => printed.push(l));
+    expect(fs.existsSync(stateDir())).toBe(true);
+    expect(fs.existsSync(layout().dataDir)).toBe(true);
+    expect(printed.join("\n")).toContain("已修复");
   });
 
   it("权限过松(0755)→ ⚠️,--fix 收紧 0700;win32 权限 ⏭️ 存在性照查", async () => {
