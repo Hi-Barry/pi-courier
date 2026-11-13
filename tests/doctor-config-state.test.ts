@@ -151,12 +151,18 @@ describe("C2 — 关键字段类型", () => {
   });
 
   it("字段全好/缺省 → ✅", async () => {
-    const { report } = await doctorReport({
-      matrix: { homeserverUrl: "https://hs.example", accessToken: "tok" },
-      auth: { trustedUsers: ["@a:hs"] },
-      workdir: home,
-      multiProject: false,
-    });
+    // matrix 配置在场会触发 E1 网络检查(#342):注入可应答的 fake fetch,
+    // 让全报告无 ❌(本用例锚 C2,不是网络)。
+    const fetch = (async () => ({ ok: true, status: 200, json: async () => ({ user_id: "@bot:hs" }) })) as never;
+    const { report } = await doctorReport(
+      {
+        matrix: { homeserverUrl: "https://hs.example", accessToken: "tok" },
+        auth: { trustedUsers: ["@a:hs"] },
+        workdir: home,
+        multiProject: false,
+      },
+      { fetch },
+    );
     expect(resultById(report, "C2")?.severity).toBe("ok");
     expect(deriveExitCode(report.results)).toBe(0);
   });

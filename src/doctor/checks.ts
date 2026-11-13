@@ -6,10 +6,13 @@
  *  - B 组(票 #339):pi 解析链 + 失效 cliPath 修复;
  *  - C/D 组(票 #340):配置与状态目录 + 权限收紧/建目录/清残留修复;
  *  - A/G/H 组(票 #341):安装完整性、磁盘水位、pi 侧只读(禁区档);
- * 后续票:#342 E/F 组。
+ *  - E/F 组(票 #342):网络(--offline 跳过整组、5 秒超时 ⏭️)与 systemd
+ *    服务只读对比(win32 整组 ⏭️)。
  */
 
 import { checkGroupA } from "./checks-a.js";
+import { checkGroupE } from "./checks-e.js";
+import { checkGroupF } from "./checks-f.js";
 import { checkGroupB, staleCliPathFix } from "./checks-b.js";
 import { checkGroupC } from "./checks-c.js";
 import { checkGroupD } from "./checks-d.js";
@@ -32,6 +35,8 @@ export async function collectCheckEntries(ctx: DoctorContext): Promise<DoctorChe
   entries.push(...checkGroupB(ctx));
   entries.push(...checkGroupC(ctx));
   entries.push(...checkGroupD(ctx));
+  entries.push(...checkGroupE(ctx));
+  entries.push(...checkGroupF(ctx));
   entries.push(...checkGroupG(ctx));
   entries.push(...checkGroupH(ctx));
   return entries;
