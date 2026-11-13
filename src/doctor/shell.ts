@@ -105,16 +105,19 @@ export async function doctorShell(
       const { collectFixActions } = await import("./checks.js");
       const actions = await collectFixActions(ctx, report);
       if (actions.length > 0) {
+        // --json --fix 组合:修复日志必须走 stderr —— stdout 只印 JSON 本体,
+        // 「jq 可解析」契约(README 中英双语承诺)不许被修复日志污染。
+        const fixLog = options.json ? io.error : io.write;
         let proceed = options.fix;
         if (!proceed) {
           proceed = io.askYesNo
             ? await io.askYesNo(t("doctor.confirmPrompt", { count: actions.length }))
             : false;
-          if (!proceed) io.write(t("doctor.fix.aborted"));
+          if (!proceed) fixLog(t("doctor.fix.aborted"));
         }
         if (proceed) {
           const { runFixes, resolvedCheckIds } = await import("./fix.js");
-          const summary = await runFixes(actions, io.write);
+          const summary = await runFixes(actions, fixLog);
           // 修好重派生:已解决(成功或幂等无操作)的检查项不再抬退出码
           const resolved = resolvedCheckIds(summary);
           exitCode = deriveExitCode(

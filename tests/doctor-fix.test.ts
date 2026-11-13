@@ -373,6 +373,20 @@ describe("doctorShell — 修复交互契约(汇总问一次,不逐项问)", () 
     expect(writes.join("\n")).toContain("配置里的 pi 路径失效");
   });
 
+  it("--json --fix 组合:stdout 只印 JSON 本体(jq 可解析),修复日志走 stderr", async () => {
+    // 评审必改项:该组合曾把修复日志追加进 stdout 污染 JSON 契约(README 承诺
+    // 「--json 机器可读报告 jq 可解析」),且此前零测试覆盖。
+    setupStaleConfig();
+    const { io, writes, errors, exits } = makeDoctorIO({ isTTY: false });
+    await doctorShell(["--json", "--fix"], makeDoctorLayout("linux", home), io);
+    expect(writes).toHaveLength(1); // stdout 只有 JSON 本体一条
+    const parsed = JSON.parse(writes[0]!) as { results: Array<{ id: string; severity: string }> };
+    expect(parsed.results.find((r) => r.id === "B1")?.severity).toBe("fail"); // 报告保持检查时原样
+    expect(errors.join("\n")).toContain("已修复"); // 修复日志在 stderr
+    expect(fs.existsSync(`${configPath()}.doctor-backup`)).toBe(true); // 修复确实发生了
+    expect(exits).toEqual([0]); // B1 已修 → 退出码重派生为 0
+  });
+
   it("--json:纯 JSON 输出,零修复副作用", async () => {
     setupStaleConfig();
     const { io, writes, exits } = makeDoctorIO({ isTTY: true });
