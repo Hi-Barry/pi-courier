@@ -47,10 +47,13 @@ async function fetchWithTimeout(
   }
 }
 
-/** 区分超时(⏭️)与立即失败(❌/⚠️)的统一结果构造。 */
+/** 区分超时(⏭️)、主动跳过(⏭️)与立即失败(❌/⚠️)的统一结果构造。
+ *  skip 与 timeout 同为 ⏭️,但文案由调用方给:超时是「等了 N 秒没响应」,
+ *  「未配置目标」与「配置非法」一个请求都没发,不能套超时模板(评审发现:
+ *  否则报告陈述与事实不符,zh 下还叠成双前缀病句)。 */
 function networkResult(
   id: string,
-  outcome: { kind: "ok"; summary: string; detail?: string } | { kind: "fail" | "warn"; summary: string; detail?: string; nextStep?: string } | { kind: "timeout"; what: string },
+  outcome: { kind: "ok"; summary: string; detail?: string } | { kind: "fail" | "warn" | "skip"; summary: string; detail?: string; nextStep?: string } | { kind: "timeout"; what: string },
 ): CheckResult {
   const base = { id, group: "E" as const };
   if (outcome.kind === "timeout") {
@@ -125,7 +128,8 @@ export function checkGroupE(ctx: DoctorContext): DoctorCheckEntry[] {
     group: "E",
     run: async (): Promise<CheckResult> => {
       if (!homeserver) {
-        return networkResult("E2", { kind: "timeout", what: t("doctor.e.homeserver.unconfigured") });
+        // 一个请求都没发:走 skip(⏭️)而不是 timeout,文案不能声称「等了 5 秒」
+        return networkResult("E2", { kind: "skip", summary: t("doctor.e.homeserver.unconfigured") });
       }
       let res: Response | undefined;
       try {
@@ -157,11 +161,12 @@ export function checkGroupE(ctx: DoctorContext): DoctorCheckEntry[] {
       try {
         proxy = resolveProxySettings(ctx.config ?? {}, ctx.deps.env).proxy;
       } catch (err) {
-        // 代理 scheme 非法:C5 已 ❌ 点名,这里按「无法确认」不重复定级
-        return {
-          ...networkResult("E3", { kind: "timeout", what: t("doctor.e.proxy.invalid") }),
+        // 代理 scheme 非法:C5 已 ❌ 点名,这里按「无法确认」不重复定级;
+        // 一个请求都没发,走 skip 而非 timeout(文案不声称超时)。
+        return networkResult("E3", {
+          kind: "skip",
           summary: t("doctor.degraded", { reason: err instanceof Error ? err.message : String(err) }),
-        };
+        });
       }
       if (!proxy) {
         return networkResult("E3", { kind: "ok", summary: t("doctor.e.proxy.none") });
@@ -170,7 +175,8 @@ export function checkGroupE(ctx: DoctorContext): DoctorCheckEntry[] {
       try {
         origin = new URL(proxy).origin;
       } catch {
-        return networkResult("E3", { kind: "timeout", what: t("doctor.e.proxy.invalid") });
+        // 无可用 origin:一个请求都没发,skip 而非 timeout
+        return networkResult("E3", { kind: "skip", summary: t("doctor.e.proxy.invalid") });
       }
       let res: Response | undefined;
       try {

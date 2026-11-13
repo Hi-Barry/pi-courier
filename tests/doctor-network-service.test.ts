@@ -143,13 +143,31 @@ describe("E 组 — 网络检查(注入 fetch 三态)", () => {
     expect(deriveExitCode(report.results)).toBe(0);
   });
 
-  it("未配置 Matrix → E1 ⚠️ 不发请求;无 homeserver → E2 ⏭️", async () => {
+  it("未配置 Matrix → E1 ⚠️ 不发请求;无 homeserver → E2 ⏭️(文案不谎称超时)", async () => {
     // 基线配置无 matrix 段
     const fetch = fakeFetch(() => jsonResponse(200, {}));
     const { report } = await doctorReport(fetch);
     expect(resultById(report, "E1")?.severity).toBe("warn");
-    expect(resultById(report, "E2")?.severity).toBe("skip");
+    const e2 = resultById(report, "E2");
+    expect(e2?.severity).toBe("skip");
+    // 一个请求都没发:结论是「未配置」,不是「等了 5 秒没响应」;zh 不得出现双前缀
+    expect(e2?.summary).toContain("未配置 homeserver");
+    expect(e2?.summary).not.toContain("无响应");
+    expect(e2?.summary).not.toContain("查不出来");
     expect(fetch.calls).toHaveLength(0); // 没有可查目标就不该发请求
+  });
+
+  it("代理配置非法 → E3 ⏭️ 且文案不谎称超时(一个请求都没发)", async () => {
+    // socks5 不在 scheme 白名单 → resolveProxySettings 抛错,E3 无法探测
+    writeMatrixConfig("socks5://10.0.0.1:1080");
+    const fetch = fakeFetch(() => jsonResponse(200, {}));
+    const { report } = await doctorReport(fetch);
+    const e3 = resultById(report, "E3");
+    expect(e3?.severity).toBe("skip");
+    expect(e3?.summary).not.toContain("无响应");
+    expect(e3?.summary).not.toContain("查不出来");
+    // 代理探测本身一个请求都没发(E1/E2 可能各自发,这里只钉 E3 的语义)
+    expect(e3?.summary).toContain("无法确认");
   });
 
   it("代理:未配置 → ✅ 直连;配置并可达 → ✅;不可达 → ❌;超时 → ⏭️", { timeout: 60_000 }, async () => {
