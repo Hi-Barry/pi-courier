@@ -335,10 +335,14 @@ describe("runDoctor — 空检查集骨架与降级", () => {
     vi.restoreAllMocks();
   });
 
-  it("空检查集:报告产出、退出码 0、报告头带真实版本号与注入时钟", async () => {
+  it("最小检查集(B 组)可跑通:报告产出、无 ❌、报告头带真实版本号与注入时钟", async () => {
     const deps = makeHarness({ platform: "linux", homedir: home });
     const report = await runDoctor(deps, { fix: false, json: false, offline: false });
-    expect(report.results).toEqual([]);
+    // 票 #339 起 B 组已注册:临时空家目录下 B1 skip(未配置)/B2 ok(peer 兜底
+    // 解析)/B3 ok / B4 ok,整份报告无 ❌(空检查集纯骨架路径由 golden 覆盖)。
+    expect(report.results.map((r) => r.id)).toEqual(["B1", "B2", "B3", "B4"]);
+    expect(report.results.some((r) => r.severity === "fail")).toBe(false);
+    expect(deriveExitCode(report.results)).toBe(0);
     expect(report.platform).toBe("linux");
     const pkg = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, "../package.json"), "utf-8")) as {
       version: string;
@@ -398,14 +402,14 @@ describe("doctorShell — CLI 分发薄壳", () => {
     return { io, writes, errors, exits };
   }
 
-  it("--json 空检查集:stdout 是纯 JSON(可 jq 解析)、退出 0、无提问", async () => {
+  it("--json 最小检查集:stdout 是纯 JSON(可 jq 解析)、无 ❌ 退出 0、无提问", async () => {
     const { io, writes, exits } = shellHarness();
     await doctorShell(["--json"], makeDoctorLayout("linux", home), io);
     expect(exits).toEqual([0]);
     expect(writes).toHaveLength(1);
     const parsed = JSON.parse(writes[0]!) as DoctorShellResult;
-    expect(parsed.results).toEqual([]);
-    expect(parsed.summary).toEqual({ ok: 0, warn: 0, fail: 0, skip: 0 });
+    expect(parsed.results.map((r) => r.id)).toEqual(["B1", "B2", "B3", "B4"]);
+    expect(parsed.summary.fail).toBe(0);
     const pkg = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, "../package.json"), "utf-8")) as {
       version: string;
     };
@@ -413,13 +417,14 @@ describe("doctorShell — CLI 分发薄壳", () => {
     // 非 TTY(isTTY=false)下零提问、正常退出:唯一的 stdout 输出就是 JSON 本体。
   });
 
-  it("人话输出(默认):报告头带版本号与日期", async () => {
+  it("人话输出(默认):报告头带版本号与日期,无 ❌", async () => {
     const { io, writes, exits } = shellHarness();
     await doctorShell([], makeDoctorLayout("linux", home), io);
     expect(exits).toEqual([0]);
     expect(writes[0]).toContain("pi-courier doctor v");
     expect(writes[0]).toMatch(/— \d{4}-\d{2}-\d{2}\(linux\)/);
-    expect(writes[0]).toContain("汇总: 0 ✅ · 0 ⚠️ · 0 ❌ · 0 ⏭️");
+    expect(writes[0]).toContain("B · pi 解析链");
+    expect(writes[0]).toContain("0 ❌"); // 无失败项(计数行其他档随环境浮动)
   });
 
   it("未知参数:报错退出 1,不产出报告", async () => {

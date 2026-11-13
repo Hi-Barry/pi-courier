@@ -904,6 +904,33 @@ Note: pi itself is installed and upgraded independently on the system
   "doctor.group.F": "F · Service (systemd)",
   "doctor.group.G": "G · Disk",
   "doctor.group.H": "H · pi-side files (read-only)",
+
+  // ── doctor group B (pi resolution chain, spec #337 ticket #339) ──────
+  "doctor.b1.notConfigured": "no cliPath configured — auto-discovery applies (see B2)",
+  "doctor.b1.ok": "configured cliPath exists",
+  "doctor.b1.stale": "the configured pi path is broken: {path}",
+  "doctor.b2.ok": "pi CLI auto-discovery succeeded",
+  "doctor.b2.dead": "the auto-discovered pi entry does not exist",
+  "doctor.b2.missing": "no usable pi CLI found (auto-discovery failed)",
+  "doctor.b2.skipConfigured": "cliPath is configured; the bridge does not use auto-discovery",
+  "doctor.b3.ok": "pi version satisfies the Node engine requirement",
+  "doctor.b3.detail": "pi@{version}, engines.node {engines}",
+  "doctor.b3.gate": "pi@{version} does not satisfy the current Node engine requirement",
+  "doctor.b3.notPi": "entry is not a recognizable pi package; the engine gate does not apply",
+  "doctor.b3.noEntry": "no resolved pi entry; the engine gate does not apply",
+  "doctor.b4.ok": "Node version satisfies pi-courier's requirement",
+  "doctor.b4.detail": "current {running}, required {required} (from pi-courier's engines.node)",
+  "doctor.b4.old": "Node {running} is below pi-courier's requirement {required}",
+  "doctor.b4.unparsable": "cannot confirm: engines form \"{range}\" cannot be parsed; Node version gate skipped",
+  "doctor.confirmPrompt": "Fix the {count} safe item(s) above? [Y/n]",
+  "doctor.fix.aborted": "Fixes skipped (not confirmed). The report stands; re-run anytime.",
+  "doctor.fix.removeStaleCliPath": "remove the broken cliPath from the config (bridge falls back to auto-discovery)",
+  "doctor.fix.applied": "✅ Fixed {id}: {summary}",
+  "doctor.fix.noop": "ℹ️ {id} needs no change (already in target state): {summary}",
+  "doctor.fix.failed": "❌ {id} fix failed: {message}",
+  "doctor.fix.backup": "config backed up: {path}",
+  "doctor.fix.backupFailed": "cannot back up the config {path}; fix abandoned (no rewrite without a backup)",
+  "doctor.fix.configUnparsable": "config {path} is not valid JSON; fix abandoned (repair it manually or run setup)",
 };
 
 export default en;

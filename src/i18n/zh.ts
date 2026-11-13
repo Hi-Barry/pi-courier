@@ -854,6 +854,33 @@ const zh = {
   "doctor.group.F": "F · 服务(systemd)",
   "doctor.group.G": "G · 磁盘",
   "doctor.group.H": "H · pi 侧文件(只读)",
+
+  // ── doctor B 组(pi 解析链,spec #337 票 #339)──────────────────────
+  "doctor.b1.notConfigured": "未配置 cliPath —— 走自动发现(见 B2)",
+  "doctor.b1.ok": "配置里的 cliPath 存在",
+  "doctor.b1.stale": "配置里的 pi 路径失效:{path}",
+  "doctor.b2.ok": "pi CLI 自动发现成功",
+  "doctor.b2.dead": "自动发现解析到的 pi 入口不存在",
+  "doctor.b2.missing": "找不到可用的 pi CLI(自动发现失败)",
+  "doctor.b2.skipConfigured": "cliPath 已配置,桥不走自动发现",
+  "doctor.b3.ok": "pi 版本满足 Node 引擎要求",
+  "doctor.b3.detail": "pi@{version},engines.node {engines}",
+  "doctor.b3.gate": "pi@{version} 不满足当前 Node 的引擎要求",
+  "doctor.b3.notPi": "入口不是可识别的 pi 包,引擎门不适用",
+  "doctor.b3.noEntry": "没有已解析的 pi 入口,引擎门不适用",
+  "doctor.b4.ok": "Node 版本满足 pi-courier 要求",
+  "doctor.b4.detail": "当前 {running},{required}(来自 pi-courier 的 engines.node)",
+  "doctor.b4.old": "Node {running} 低于 pi-courier 要求 {required}",
+  "doctor.b4.unparsable": "无法确认:engines 形态「{range}」解析不了,跳过 Node 版本门",
+  "doctor.confirmPrompt": "修复以上 {count} 项安全项?[Y/n]",
+  "doctor.fix.aborted": "已跳过修复(未确认)。报告保持原样,可随时再跑。",
+  "doctor.fix.removeStaleCliPath": "删除配置里失效的 cliPath(桥回退自动发现)",
+  "doctor.fix.applied": "✅ 已修复 {id}: {summary}",
+  "doctor.fix.noop": "ℹ️ {id} 无需改动(已是目标状态): {summary}",
+  "doctor.fix.failed": "❌ {id} 修复失败: {message}",
+  "doctor.fix.backup": "配置已备份: {path}",
+  "doctor.fix.backupFailed": "无法备份配置 {path},已放弃修复(宁不修,不可无备份改写)",
+  "doctor.fix.configUnparsable": "配置 {path} 不是合法 JSON,已放弃修复(请先手工修复或跑 setup)",
 } as const;
 
 export type MessageKey = keyof typeof zh;

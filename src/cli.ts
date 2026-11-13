@@ -353,17 +353,29 @@ function cmdDisable(): void {
 /**
  * 本地体检(spec #337):薄壳的薄壳 —— flags 解析、DoctorDeps 拼装、渲染与
  * 退出码全在 src/doctor/ 的 shell 层(交互 IO 也在那层),这里只分发并注入
- * 组合根已有的模块级布局(LAYOUT 与其余子命令同源)。doctor 的退出码契约
- * (0 健康/1 有 ❌/2 doctor 崩溃)由 shell 内部处理,不经 main().catch。
+ * 组合根已有的模块级布局(LAYOUT 与其余子命令同源)与 TTY 提问实现。
+ * doctor 的退出码契约(0 健康/1 有 ❌/2 doctor 崩溃)由 shell 内部处理,
+ * 不经 main().catch。
  */
 async function cmdDoctor(args: string[]): Promise<void> {
-  const { doctorShell } = await import("./doctor/shell.js");
+  const { doctorShell, parseConfirmAnswer } = await import("./doctor/shell.js");
+  const { createInterface } = await import("node:readline/promises");
   await doctorShell(args, LAYOUT, {
     isTTY: () => process.stdin.isTTY === true,
-    write: (text) => process.stdout.write(text),
+    write: (text) => process.stdout.write(`${text}\n`),
     error: (text) => process.stderr.write(`${text}\n`),
     exit: (code) => {
       process.exitCode = code;
+    },
+    // TTY「汇总问一次」:readline 读一行,空串默认 Y;Ctrl+C 交给默认中断。
+    askYesNo: async (question) => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        const answer = await rl.question(question);
+        return parseConfirmAnswer(answer);
+      } finally {
+        rl.close();
+      }
     },
   });
 }

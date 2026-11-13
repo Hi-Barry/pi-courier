@@ -87,12 +87,26 @@ function degradedGroupResults(reason: string): CheckResult[] {
 }
 
 /**
+ * 构建检查上下文(配置快照预载;薄壳与修复动作收集共用同一份,避免二次
+ * 读取的竞态)。公开导出:薄壳层先建 ctx,报告与修复动作都消费它。
+ */
+export async function buildDoctorContext(deps: DoctorDeps, options: DoctorOptions): Promise<DoctorContext> {
+  const config = await loadConfigSnapshot();
+  return { deps, options, config };
+}
+
+/**
  * 跑一次 doctor:返回报告(渲染与退出码在薄壳层)。永不抛 —— 检查清单层面
  * 的失败都折成降级项;真正的崩溃(本函数自身 bug)向上抛给薄壳 → 退出码 2。
+ * context 可注入(薄壳复用同一份 ctx 做修复动作收集;缺省自建)。
  */
-export async function runDoctor(deps: DoctorDeps, options: DoctorOptions): Promise<DoctorReport> {
+export async function runDoctor(
+  deps: DoctorDeps,
+  options: DoctorOptions,
+  context?: DoctorContext,
+): Promise<DoctorReport> {
   const [version, config] = await Promise.all([loadBridgeVersion(), loadConfigSnapshot()]);
-  const ctx: DoctorContext = { deps, options, config };
+  const ctx: DoctorContext = context ?? { deps, options, config };
 
   const results: CheckResult[] = [];
   try {

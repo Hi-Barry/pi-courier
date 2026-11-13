@@ -20,6 +20,9 @@ import { deriveExitCode, renderHuman, renderJson } from "./report.js";
 import type { DoctorArgsParse, DoctorDeps, DoctorExecResult, DoctorOptions } from "./types.js";
 import { parseDoctorArgs, toMessage } from "./types.js";
 
+// cli.ts 的真实 TTY 提问实现消费确认解析(纯函数,随 shell 一并暴露)。
+export { parseConfirmAnswer } from "./fix.js";
+
 /** 薄壳 IO 缝(测试注入;cli.ts 传真实 stdout/stderr/exitCode)。 */
 export interface DoctorShellIO {
   /** stdin 是否 TTY(非 TTY 永不交互)。 */
@@ -30,6 +33,9 @@ export interface DoctorShellIO {
   error: (text: string) => void;
   /** 退出(默认实现只设 process.exitCode,让事件循环自然收尾;测试捕获)。 */
   exit: (code: number) => void;
+  /** TTY「汇总问一次」的提问实现(cli.ts 用 readline;测试注入 fake)。
+   *  仅 TTY 且非 --fix 且有可修项时被调用;非 TTY 永不调用。 */
+  askYesNo?: (question: string) => Promise<boolean>;
 }
 
 /** execFile 缝的真实实现(只读查询用;非零退出 resolve 成结果而非 reject)。 */
@@ -82,26 +88,46 @@ export async function doctorShell(
   const options: DoctorOptions = parse.options;
   try {
     const deps = await realDoctorDeps(layout);
-    const report = await runDoctorWith(options, deps);
+    const { buildDoctorContext, runDoctor } = await import("./run.js");
+    const ctx = await buildDoctorContext(deps, options);
+    const report = await runDoctor(deps, options, ctx);
 
     // —— 渲染输出(--json 时 stdout 只印 JSON,jq 可解析)——————
     if (options.json) io.write(`${renderJson(report)}\n`);
     else io.write(`${renderHuman(report)}\n`);
 
-    // —— CONFIRM 点(TTY「汇总问一次」,票 #339 挂交互):报告已出、
-    //    修复入口未调。契约:--fix 不问;非 TTY 永不问;无可修项不问。
-    //    #338 只留位,此处不产生任何交互。
-    io.exit(deriveExitCode(report.results));
+    // —— 修复入口与 CONFIRM 点(票 #339):报告已出、修复未调。
+    //    契约:--fix 不问直接修;非 TTY 永不问也绝不修(除非 --fix);
+    //    TTY 有可修项时汇总问一次([Y/n]),不逐项问;--json 默认只报告。
+    let exitCode = deriveExitCode(report.results);
+    const wantsFix = options.fix || (!options.json && io.isTTY());
+    if (wantsFix) {
+      const { collectFixActions } = await import("./checks.js");
+      const actions = await collectFixActions(ctx, report);
+      if (actions.length > 0) {
+        let proceed = options.fix;
+        if (!proceed) {
+          proceed = io.askYesNo
+            ? await io.askYesNo(t("doctor.confirmPrompt", { count: actions.length }))
+            : false;
+          if (!proceed) io.write(t("doctor.fix.aborted"));
+        }
+        if (proceed) {
+          const { runFixes, resolvedCheckIds } = await import("./fix.js");
+          const summary = await runFixes(actions, io.write);
+          // 修好重派生:已解决(成功或幂等无操作)的检查项不再抬退出码
+          const resolved = resolvedCheckIds(summary);
+          exitCode = deriveExitCode(
+            report.results.filter((r) => !(r.severity === "fail" && resolved.has(r.id))),
+          );
+        }
+      }
+    }
+    io.exit(exitCode);
   } catch (err) {
     // doctor 自身崩溃(runDoctor/渲染未捕获异常)→ 退出码 2(spec 契约:
     // 2 只留给未捕获崩溃,与「检查发现 ❌」的 1 严格分开)。
     io.error(t("doctor.crashed", { message: toMessage(err) }));
     io.exit(2);
   }
-}
-
-/** 便于测试替换核心的内部拐点(生产路径固定 runDoctor)。 */
-async function runDoctorWith(options: DoctorOptions, deps: DoctorDeps) {
-  const { runDoctor } = await import("./run.js");
-  return runDoctor(deps, options);
 }
