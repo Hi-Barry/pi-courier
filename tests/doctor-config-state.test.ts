@@ -18,6 +18,8 @@ import { collectFixActions } from "../src/doctor/checks.js";
 import { runFixes, resolvedCheckIds } from "../src/doctor/fix.js";
 import { deriveExitCode } from "../src/doctor/report.js";
 import { runDoctor } from "../src/doctor/run.js";
+import { manualStopMarkerPath } from "../src/resilience/manual-stop.js";
+import { pendingUpdatePath } from "../src/update/pending-update.js";
 import { doctorShell } from "../src/doctor/shell.js";
 import type { CheckResult, DoctorDeps, DoctorOptions } from "../src/doctor/types.js";
 import { makeDoctorIO, makeDoctorLayout, makeHarness } from "./doctor-harness.js";
@@ -436,7 +438,8 @@ describe("D3 — 陈旧单实例锁(lockIsStale 同源)", () => {
 describe("D4/D5 — manual-stop 标记与 pending-update 残留", () => {
   it("watchdog-paused 残留 → ⚠️,--fix 清掉,幂等", async () => {
     fs.mkdirSync(stateDir(), { recursive: true, mode: 0o700 });
-    const marker = path.join(stateDir(), "watchdog-paused");
+    // 路径经 manualStopMarkerPath 同源派生(与检查/修复同一拼法)
+    const marker = manualStopMarkerPath(stateDir());
     fs.writeFileSync(marker, new Date().toISOString(), { mode: 0o600 });
     const { report, deps } = await doctorReport({ workdir: home });
     const d4 = resultById(report, "D4");
@@ -451,7 +454,7 @@ describe("D4/D5 — manual-stop 标记与 pending-update 残留", () => {
 
   it("pending-update 残留(有效条目)→ ⚠️,--fix 清掉;畸形条目同样报出;无文件 ✅", async () => {
     fs.mkdirSync(stateDir(), { recursive: true, mode: 0o700 });
-    const pendingPath = path.join(stateDir(), "pending-update.json");
+    const pendingPath = pendingUpdatePath(stateDir());
     fs.writeFileSync(
       pendingPath,
       JSON.stringify({ from: "1.7.4", to: "1.7.5", startedAt: Date.now() }),

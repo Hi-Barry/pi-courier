@@ -17,7 +17,6 @@
  */
 
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { t } from "../i18n/index.js";
 import { backupRequired, diffLines, type FixAction, type FixOutcome } from "./fix.js";
 import type { DoctorContext } from "./types.js";
@@ -84,9 +83,11 @@ export async function removeStaleLockFix(ctx: DoctorContext): Promise<FixAction 
   };
 }
 
-/** D4:清 manual-stop 残留标记(manualStopMarkerPath 同源)。 */
-export function clearManualStopFix(ctx: DoctorContext): FixAction {
-  const marker = path.join(ctx.deps.layout.stateDir, "watchdog-paused");
+/** D4:清 manual-stop 残留标记(路径经 manualStopMarkerPath 同源派生 ——
+ *  动态 import,doctor 依赖红线不静态引入项目模块)。 */
+export async function clearManualStopFix(ctx: DoctorContext): Promise<FixAction> {
+  const { manualStopMarkerPath } = await import("../resilience/manual-stop.js");
+  const marker = manualStopMarkerPath(ctx.deps.layout.stateDir);
   return {
     checkId: "D4",
     summary: t("doctor.fix.clearManualStop", { path: marker }),
@@ -98,9 +99,11 @@ export function clearManualStopFix(ctx: DoctorContext): FixAction {
   };
 }
 
-/** D5:清 pending-update.json 残留(路径与组合根同源:stateDir/pending-update.json)。 */
-export function clearPendingUpdateFix(ctx: DoctorContext): FixAction {
-  const pendingPath = path.join(ctx.deps.layout.stateDir, "pending-update.json");
+/** D5:清 pending-update.json 残留(路径经 pendingUpdatePath 同源派生 ——
+ *  动态 import,doctor 依赖红线不静态引入项目模块)。 */
+export async function clearPendingUpdateFix(ctx: DoctorContext): Promise<FixAction> {
+  const { pendingUpdatePath } = await import("../update/pending-update.js");
+  const pendingPath = pendingUpdatePath(ctx.deps.layout.stateDir);
   return {
     checkId: "D5",
     summary: t("doctor.fix.clearPendingUpdate", { path: pendingPath }),

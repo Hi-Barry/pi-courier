@@ -75,7 +75,7 @@ export async function collectFixActions(ctx: DoctorContext, report: { results: C
     const fix = await removeStaleLockFix(ctx);
     if (fix) actions.push(fix);
   }
-  if (resultOf(report, "D4")?.severity === "warn") actions.push(clearManualStopFix(ctx));
-  if (resultOf(report, "D5")?.severity === "warn") actions.push(clearPendingUpdateFix(ctx));
+  if (resultOf(report, "D4")?.severity === "warn") actions.push(await clearManualStopFix(ctx));
+  if (resultOf(report, "D5")?.severity === "warn") actions.push(await clearPendingUpdateFix(ctx));
   return actions;
 }

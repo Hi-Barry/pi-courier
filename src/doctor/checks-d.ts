@@ -12,7 +12,6 @@
  */
 
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { t } from "../i18n/index.js";
 import type { CheckResult, DoctorCheckEntry, DoctorContext } from "./types.js";
 
@@ -121,13 +120,13 @@ export function checkGroupD(ctx: DoctorContext): DoctorCheckEntry[] {
     id: "D5",
     group: "D",
     run: async () => {
-      // 落盘路径与组合根同源(stateDir/pending-update.json,standalone 组合根
-      // 同款拼法);读侧经 PendingUpdateStore(JsonStateFile 吞错降级)
-      const pendingPath = path.join(layout.stateDir, "pending-update.json");
+      // 落盘路径与组合根同源(pendingUpdatePath,单一拼法);读侧经
+      // PendingUpdateStore(JsonStateFile 吞错降级)
+      const { PendingUpdateStore, pendingUpdatePath } = await import("../update/pending-update.js");
+      const pendingPath = pendingUpdatePath(layout.stateDir);
       if (!fs.existsSync(pendingPath)) {
         return { id: "D5", group: "D", severity: "ok", summary: t("doctor.d.pendingFree") };
       }
-      const { PendingUpdateStore } = await import("../update/pending-update.js");
       const entry = new PendingUpdateStore(pendingPath).read();
       if (entry) {
         return {
