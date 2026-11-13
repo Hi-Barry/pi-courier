@@ -45,8 +45,12 @@ export async function collectStatusFooter(rpc: PiRpc): Promise<StatusFooterInfo>
   if (stateResult.status === "fulfilled") {
     const state = stateResult.value;
     const name = state.model?.name || state.model?.id;
-    // 思考等级缺失时只显示模型;'·' 直连不分隔(如 GLM-5.3·high)。
-    if (name) info.model = state.thinkingLevel ? `${name}·${state.thinkingLevel}` : name;
+    // 厂商前缀(issue #344):同名/近名模型可能挂在多个 provider 下,只给模型名
+    // 无法辨认来源。provider 缺失(旧对端/测试替身)时保持原名,不补孤零零的 '/'。
+    const provider = state.model?.provider;
+    const label = name && provider ? `${provider}/${name}` : name;
+    // 思考等级缺失时只显示模型;'·' 直连不分隔(如 zai/GLM-5.3·high)。
+    if (label) info.model = state.thinkingLevel ? `${label}·${state.thinkingLevel}` : label;
   }
   if (usageResult.status === "fulfilled") {
     const usage = usageResult.value.contextUsage;

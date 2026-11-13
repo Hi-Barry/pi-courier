@@ -67,11 +67,11 @@ describe("appendStatusFooter", () => {
 });
 
 describe("collectStatusFooter", () => {
-  it("collects cwd, context and model segments (happy path)", async () => {
+  it("collects cwd, context and model segments (happy path, provider-prefixed model)", async () => {
     const rpc = {
       cwd: "/tmp/w",
       requireClient: () => ({
-        getState: () => Promise.resolve({ model: { name: "GLM", id: "x" }, thinkingLevel: "high" }),
+        getState: () => Promise.resolve({ model: { provider: "zai", name: "GLM", id: "x" }, thinkingLevel: "high" }),
         getSessionStats: () =>
           Promise.resolve({ contextUsage: { tokens: 123_000, contextWindow: 1_000_000, percent: 12.3 } }),
       }),
@@ -79,8 +79,28 @@ describe("collectStatusFooter", () => {
     await expect(collectStatusFooter(rpc)).resolves.toEqual({
       cwd: "/tmp/w",
       context: "12.3%/1.0M",
-      model: "GLM·high",
+      model: "zai/GLM·high",
     });
+  });
+
+  it("falls back to id under the provider prefix when name is absent", async () => {
+    const rpc = {
+      requireClient: () => ({
+        getState: () => Promise.resolve({ model: { provider: "openrouter", id: "deepseek/v4" }, thinkingLevel: "low" }),
+        getSessionStats: () => Promise.resolve({}),
+      }),
+    } as unknown as PiRpc;
+    await expect(collectStatusFooter(rpc)).resolves.toMatchObject({ model: "openrouter/deepseek/v4·low" });
+  });
+
+  it("a model without provider keeps the bare name (old peers / test doubles)", async () => {
+    const rpc = {
+      requireClient: () => ({
+        getState: () => Promise.resolve({ model: { name: "GLM", id: "x" }, thinkingLevel: "high" }),
+        getSessionStats: () => Promise.resolve({}),
+      }),
+    } as unknown as PiRpc;
+    await expect(collectStatusFooter(rpc)).resolves.toMatchObject({ model: "GLM·high" });
   });
 
   it("a getState failure degrades only the model segment", async () => {
