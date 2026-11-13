@@ -82,7 +82,12 @@ beforeEach(() => {
   tmpRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-courier-fakepi-")));
   savedEnv = { ...process.env };
   // 配置隔离:布局钉进临时家(loadConfig 的 configPath 随之入临时区)。
-  setRuntimeLayoutForTests(makeDoctorLayout("linux", home), home);
+  const pinnedLayout = makeDoctorLayout("linux", home);
+  setRuntimeLayoutForTests(pinnedLayout, home);
+  // 健康基线:自管目录预建(0700),让本文件的用例聚焦 B 组与修复执行器,
+  // 不被票 #340 的 D1/D2「目录缺失 ⚠️ → 建目录动作」扩散(该组归票 #340 测)。
+  fs.mkdirSync(pinnedLayout.stateDir, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(pinnedLayout.dataDir, { recursive: true, mode: 0o700 });
   // PI_CLI_PATH 会被 loadConfig 折进 config.cliPath —— 测试显式清场,
   // 避免开发者/CI 环境污染主用例。
   delete process.env.PI_CLI_PATH;
@@ -488,6 +493,8 @@ describe("降级 — pi-rpc 加载抛错", () => {
   it("未配置 cliPath:B2/B3/B4 全部降级 ⏭️(pi-rpc 不可用),doctor 不崩、退出 0", async () => {
     installFakePi(tmpRoot, { version: "1.0.0", enginesNode: ">=22.19.0" });
     restorePath = withFakePath(path.join(tmpRoot, "bin"));
+    // 最小合法配置:C1 不得因「配置缺失」的 ❌ 干扰本用例的退出码断言
+    writeConfig({ workdir: home });
     const report = await freshDoctor();
     expect(resultById(report, "B1")?.severity).toBe("skip"); // 未配置 → 不适用
     for (const id of ["B2", "B3", "B4"]) {

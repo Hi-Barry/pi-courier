@@ -316,7 +316,7 @@ describe("guardCheck — 检查项抛错降级 ⏭️,退出码按剩余 ❌ 派
 
 // ── runDoctor(注入 fake 依赖;真实 helper)─────────────────────────────
 
-describe("runDoctor — 空检查集骨架与降级", () => {
+describe("runDoctor — 最小检查集与降级", () => {
   let home: string;
   let cleanupLayout: () => void;
 
@@ -326,6 +326,12 @@ describe("runDoctor — 空检查集骨架与降级", () => {
     // 测试不读真实用户配置(先例 tests/config-win32.test.ts 的注入缝)。
     const layout = makeDoctorLayout("linux", home);
     setRuntimeLayoutForTests(layout, home);
+    // 健康基线(票 #340 起 C1 配置缺失是 ❌、D1/D2 缺失是 ⚠️):最小配置 +
+    // 预建自管目录,让「无 ❌ 退出 0」的骨架断言不被环境噪声稀释。
+    fs.mkdirSync(layout.stateDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(layout.dataDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.dirname(layout.configPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(layout.configPath, JSON.stringify({ workdir: home }, null, 2), { mode: 0o600 });
     cleanupLayout = () => setRuntimeLayoutForTests(undefined);
   });
 
@@ -338,9 +344,11 @@ describe("runDoctor — 空检查集骨架与降级", () => {
   it("最小检查集(B 组)可跑通:报告产出、无 ❌、报告头带真实版本号与注入时钟", async () => {
     const deps = makeHarness({ platform: "linux", homedir: home });
     const report = await runDoctor(deps, { fix: false, json: false, offline: false });
-    // 票 #339 起 B 组已注册:临时空家目录下 B1 skip(未配置)/B2 ok(peer 兜底
-    // 解析)/B3 ok / B4 ok,整份报告无 ❌(空检查集纯骨架路径由 golden 覆盖)。
-    expect(report.results.map((r) => r.id)).toEqual(["B1", "B2", "B3", "B4"]);
+    // B/C/D 组已注册(#339/#340):健康基线下 B1 skip(未配置)/其余全部非 ❌
+    // (B2 经 peer 兜底解析;C5 直连;D 组目录已预建)。
+    expect(report.results.map((r) => r.id)).toEqual([
+      "B1", "B2", "B3", "B4", "C1", "C2", "C3", "C4", "C5", "C6", "D1", "D2", "D3", "D4", "D5", "D6",
+    ]);
     expect(report.results.some((r) => r.severity === "fail")).toBe(false);
     expect(deriveExitCode(report.results)).toBe(0);
     expect(report.platform).toBe("linux");
@@ -353,10 +361,12 @@ describe("runDoctor — 空检查集骨架与降级", () => {
   });
 
   it("platform win32 注入:平台分支路径可跑通(F 组跳过逻辑随票 #342)", async () => {
+    // 先例 config-win32.test.ts:平台翻转、布局保持 POSIX 形(同一基线目录)。
+    // C3/D1/D2 的权限档在 win32 落 ⏭️(等价语义缺失),其余照查不误报。
     const deps = makeHarness({
       platform: "win32",
       homedir: home,
-      layout: makeDoctorLayout("win32", home),
+      layout: makeDoctorLayout("linux", home),
     });
     const report = await runDoctor(deps, { fix: false, json: false, offline: false });
     expect(report.platform).toBe("win32");
@@ -372,7 +382,14 @@ describe("doctorShell — CLI 分发薄壳", () => {
 
   beforeEach(() => {
     home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-courier-doctor-shell-")));
-    setRuntimeLayoutForTests(makeDoctorLayout("linux", home), home);
+    // 健康基线(同 runDoctor describe):最小配置 + 预建自管目录,
+    // 「无 ❌ 退出 0」断言不被票 #340 的环境项(C1 配置缺失 ❌)稀释。
+    const layout = makeDoctorLayout("linux", home);
+    setRuntimeLayoutForTests(layout, home);
+    fs.mkdirSync(layout.stateDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(layout.dataDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.dirname(layout.configPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(layout.configPath, JSON.stringify({ workdir: home }, null, 2), { mode: 0o600 });
   });
 
   afterEach(() => {
@@ -408,7 +425,9 @@ describe("doctorShell — CLI 分发薄壳", () => {
     expect(exits).toEqual([0]);
     expect(writes).toHaveLength(1);
     const parsed = JSON.parse(writes[0]!) as DoctorShellResult;
-    expect(parsed.results.map((r) => r.id)).toEqual(["B1", "B2", "B3", "B4"]);
+    expect(parsed.results.map((r) => r.id)).toEqual([
+      "B1", "B2", "B3", "B4", "C1", "C2", "C3", "C4", "C5", "C6", "D1", "D2", "D3", "D4", "D5", "D6",
+    ]);
     expect(parsed.summary.fail).toBe(0);
     const pkg = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, "../package.json"), "utf-8")) as {
       version: string;
@@ -498,7 +517,13 @@ describe("降级 — 既有 helper 动态 import 抛错", () => {
 
   beforeEach(() => {
     home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-courier-doctor-degrade-")));
-    setRuntimeLayoutForTests(makeDoctorLayout("linux", home), home);
+    // 健康基线(票 #340 起 C1 配置缺失是 ❌):避免环境项稀释退出码断言
+    const layout = makeDoctorLayout("linux", home);
+    setRuntimeLayoutForTests(layout, home);
+    fs.mkdirSync(layout.stateDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(layout.dataDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.dirname(layout.configPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(layout.configPath, JSON.stringify({ workdir: home }, null, 2), { mode: 0o600 });
   });
 
   afterEach(() => {
