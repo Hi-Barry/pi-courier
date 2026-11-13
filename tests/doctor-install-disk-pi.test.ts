@@ -147,6 +147,7 @@ describe("A 组 — 关键文件/peer/版本一致/native binding(包根参数�
 
     installFakePackage(path.join(home, "with-binding"), { version: "1.0.0" }, true);
     const withIt = await installChecksForRoot(path.join(home, "with-binding"), "1.7.5");
+    expect(withIt.find((r) => r.id === "A4")?.severity).toBe("ok"); // ✅ 半边此前漏断言(评审)
   });
 
   it("版本一致性表驱动:非空且相等 ✅;读不到(半更新)❌;不匹配 ❌", () => {
