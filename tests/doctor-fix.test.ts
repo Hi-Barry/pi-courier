@@ -21,6 +21,7 @@ import {
   backupConfig,
   diffLines,
   parseConfirmAnswer,
+  resolvedCheckIds,
   runFixes,
   type FixAction,
 } from "../src/doctor/fix.js";
@@ -432,6 +433,31 @@ describe("修复执行器单元", () => {
     expect(parseConfirmAnswer("no")).toBe(false);
     expect(parseConfirmAnswer("否")).toBe(false);
     expect(parseConfirmAnswer("ys")).toBe(false); // 打错字按安全侧(不修)
+  });
+
+  it("配置读失败 → 修复项抛 error 不算已解决(评审建议:退出码不假绿)", async () => {
+    // 场景:检查报出 B1 ❌ 后、修复执行前,配置变得不可读(权限被收走)。
+    // 曾用 changed=false 短路 → resolvedCheckIds 误算「已解决」→ 退出码 0 假绿。
+    installFakePi(tmpRoot, { version: "1.0.0", enginesNode: ">=22.19.0" });
+    restorePath = withFakePath(path.join(tmpRoot, "bin"));
+    writeConfig({ cliPath: path.join(home, "gone", "cli.js") });
+    const deps = makeHarness({ platform: "linux", homedir: home, env: process.env });
+    const { buildDoctorContext } = await import("../src/doctor/run.js");
+    const ctx = await buildDoctorContext(deps, { fix: false, json: false, offline: false });
+    const report = await runDoctor(deps, { fix: false, json: false, offline: false });
+    const actions = await collectFixActions(ctx, report);
+    expect(actions.map((a) => a.checkId)).toEqual(["B1"]);
+    // 检查之后、修复之前:配置文件被删(读失败的确定性模拟)
+    fs.rmSync(configPath());
+    const printed: string[] = [];
+    const summary = await runFixes(actions, (l) => printed.push(l));
+    expect(summary.steps[0]!.error).toBeTruthy(); // 抛错而非短路
+    expect(resolvedCheckIds(summary).has("B1")).toBe(false); // 不算已解决
+    // 薄壳重派生:B1 的 ❌ 保持 → 退出码 1(不假绿)
+    const remaining = report.results.filter(
+      (r) => !(r.severity === "fail" && resolvedCheckIds(summary).has(r.id)),
+    );
+    expect(deriveExitCode(remaining)).toBe(1);
   });
 
   it("runFixes:单项失败不拖垮其余(失败项带 error,成功项照常)", async () => {

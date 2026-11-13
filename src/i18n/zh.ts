@@ -881,6 +881,7 @@ const zh = {
   "doctor.fix.backup": "配置已备份: {path}",
   "doctor.fix.backupFailed": "无法备份配置 {path},已放弃修复(宁不修,不可无备份改写)",
   "doctor.fix.configUnparsable": "配置 {path} 不是合法 JSON,已放弃修复(请先手工修复或跑 setup)",
+  "doctor.fix.configUnreadable": "无法读取配置 {path}:{message},已放弃修复(该项 ❌ 保持,请先恢复文件权限)",
 
   // ── doctor C 组(pi-courier 配置,spec #337 票 #340)────────────────
   "doctor.c1.missing": "配置文件缺失(尚未跑过 setup)",

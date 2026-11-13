@@ -931,6 +931,7 @@ Note: pi itself is installed and upgraded independently on the system
   "doctor.fix.backup": "config backed up: {path}",
   "doctor.fix.backupFailed": "cannot back up the config {path}; fix abandoned (no rewrite without a backup)",
   "doctor.fix.configUnparsable": "config {path} is not valid JSON; fix abandoned (repair it manually or run setup)",
+  "doctor.fix.configUnreadable": "cannot read config {path}: {message}; fix abandoned (the ❌ stands; restore file access first)",
 
   // ── doctor group C (pi-courier configuration, spec #337 ticket #340) ─
   "doctor.c1.missing": "config file missing (setup has never run)",

@@ -213,12 +213,20 @@ export async function staleCliPathFix(ctx: DoctorContext) {
     checkId: "B1",
     summary: t("doctor.fix.removeStaleCliPath"),
     run: async (): Promise<FixOutcome> => {
-      // 幂等重入:文件/键消失、或路径已变有效 → 不动
-      let current: string | undefined;
+      // 幂等重入:文件/键消失、或路径已变有效 → 不动。
+      // 读失败(权限被收走/并发改写)必须抛错而不是 changed=false —— 修复
+      // 实际没做成,短路返回会被 resolvedCheckIds 当「已解决」滤掉 ❌,
+      // 薄壳重派生给出假绿灯(评审意见);抛错 → error 项 → 退出码保持 1。
+      let current: string;
       try {
         current = fs.readFileSync(configPath, "utf-8");
-      } catch {
-        return { changed: false };
+      } catch (err) {
+        throw new Error(
+          t("doctor.fix.configUnreadable", {
+            path: configPath,
+            message: err instanceof Error ? err.message : String(err),
+          }),
+        );
       }
       let parsed: Record<string, unknown>;
       try {
