@@ -29,15 +29,21 @@ async function fetchWithTimeout(
 ): Promise<Response | undefined> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), NETWORK_TIMEOUT_MS);
+  // 竞速败者的计时器必须在 finally 一并清理:胜者确定后败者 timer 仍挂在
+  // 事件循环上,而 cli 的 exit 只设 exitCode 靠事件循环自然收尾 —— 不清的
+  // 话在线跑完 doctor 后进程最多再挂 5 秒(CI 的每次 --json 都被拖慢)。
+  let resolveRace!: (value: undefined) => void;
+  const raceTimer = setTimeout(() => resolveRace(undefined), NETWORK_TIMEOUT_MS);
   try {
     return await Promise.race([
       fetch(url, { ...init, signal: controller.signal }),
       new Promise<undefined>((resolve) => {
-        setTimeout(() => resolve(undefined), NETWORK_TIMEOUT_MS);
+        resolveRace = resolve;
       }),
     ]);
   } finally {
     clearTimeout(timer);
+    clearTimeout(raceTimer);
   }
 }
 
