@@ -153,8 +153,10 @@ describe("主用例:失效 cliPath → --fix 备份删除 → 自动发现 → �
     expect(b1?.nextStep).toContain("doctor --fix");
     expect(deriveExitCode(first.report.results)).toBe(1);
 
-    // ② collectFixActions 给出 B1 的修复动作;执行:备份先于删除、打印 diff
-    const actions = await collectFixActions(first.ctx, first.report);
+    // ② collectFixActions 给出 B1 的修复动作;执行:备份先于删除、打印 diff。
+    // 只取 B1:Windows runner 上 POSIX 权限语义缺失(配置/目录 mode 恒 666/777),
+    // C3/D1/D2 会额外报 ⚠️ 并进入动作列表 —— 与本用例聚焦的 B1 无关。
+    const actions = (await collectFixActions(first.ctx, first.report)).filter((a) => a.checkId === "B1");
     expect(actions).toHaveLength(1);
     expect(actions[0]!.checkId).toBe("B1");
     const printed: string[] = [];
@@ -171,11 +173,13 @@ describe("主用例:失效 cliPath → --fix 备份删除 → 自动发现 → �
     expect(backupRaw).toContain(stalePath);
     expect((JSON.parse(backupRaw) as { cliPath?: string }).cliPath).toBe(stalePath);
 
-    // 修完配置不再含 cliPath;权限保持 0600
+    // 修完配置不再含 cliPath;权限保持 0600(POSIX 宿主才表达 mode)
     const after = JSON.parse(readRawConfig()) as { cliPath?: string };
     expect(after.cliPath).toBeUndefined();
-    const mode = fs.statSync(configPath()).mode & 0o777;
-    expect(mode.toString(8)).toBe("600");
+    if (process.platform !== "win32") {
+      const mode = fs.statSync(configPath()).mode & 0o777;
+      expect(mode.toString(8)).toBe("600");
+    }
 
     // diff 输出显示删除项(改前/改后)
     const diffLines_ = printed.filter((l) => l.trim().startsWith("-") || l.trim().startsWith("+"));
@@ -188,8 +192,12 @@ describe("主用例:失效 cliPath → --fix 备份删除 → 自动发现 → �
     expect(b1After?.severity).toBe("skip"); // 未配置 cliPath,本项不适用
     const b2After = resultById(second.report, "B2");
     expect(b2After?.severity).toBe("ok");
-    expect(b2After?.detail).toContain("install/releases/1.0.0");
-    expect(b2After?.detail).toContain("dist/bundle/cli.js");
+    // 自动发现细节:POSIX 走 `which pi` → fake 托管布局;win32 分支不看 PATH
+    // (resolveCliPath 的 win32 分支用真实家目录),宿主是 Windows 时跳过细节断言。
+    if (process.platform !== "win32") {
+      expect(b2After?.detail).toContain("install/releases/1.0.0");
+      expect(b2After?.detail).toContain("dist/bundle/cli.js");
+    }
     expect(deriveExitCode(second.report.results)).toBe(0);
     expect(fakeEntry).toContain("dist/bundle/cli.js"); // 解析到的就是 fake 当前入口
   });
@@ -200,7 +208,7 @@ describe("主用例:失效 cliPath → --fix 备份删除 → 自动发现 → �
     writeConfig({ cliPath: path.join(home, "gone", "cli.js") });
 
     const first = await doctorReport();
-    const actions = await collectFixActions(first.ctx, first.report);
+    const actions = (await collectFixActions(first.ctx, first.report)).filter((a) => a.checkId === "B1");
     const printed1: string[] = [];
     await runFixes(actions, (l) => printed1.push(l));
     const afterFirst = readRawConfig();
@@ -211,10 +219,12 @@ describe("主用例:失效 cliPath → --fix 备份删除 → 自动发现 → �
     expect(second.steps[0]!.changed).toBe(false);
     expect(readRawConfig()).toBe(afterFirst);
 
-    // 重跑 doctor:B1 不再 fail → 无修复动作
+    // 重跑 doctor:B1 不再 fail → B 组不再产生修复动作(Windows 宿主上 C/D
+    // 仍会因 mode 恒 666/777 报 ⚠️,与本用例的 B 组语义无关,故只看 B 组)
     const third = await doctorReport();
     expect(resultById(third.report, "B1")?.severity).not.toBe("fail");
-    expect(await collectFixActions(third.ctx, third.report)).toEqual([]);
+    const bActions = (await collectFixActions(third.ctx, third.report)).filter((a) => a.checkId.startsWith("B"));
+    expect(bActions).toEqual([]);
   });
 });
 
@@ -254,7 +264,9 @@ describe("B1 — 配置 cliPath 存在性", () => {
 });
 
 describe("B2 — 自动发现解析链(PiRpc.resolveCliPath 同源)", () => {
-  it("无配置 + fake PATH:解析到托管布局入口(dist/bundle/cli.js)", async () => {
+  // fake PATH 注入只在 POSIX 发现链生效(win32 分支不看 PATH),Windows
+  // runner 上跳过;win32 的解析分支由注入 platform 的用例覆盖。
+  it.skipIf(process.platform === "win32")("无配置 + fake PATH:解析到托管布局入口(dist/bundle/cli.js)", async () => {
     installFakePi(tmpRoot, { version: "1.0.0", enginesNode: ">=22.19.0" });
     restorePath = withFakePath(path.join(tmpRoot, "bin"));
     const { report } = await doctorReport();
@@ -282,7 +294,7 @@ describe("B3 — pi 版本对 Node 引擎门(assertPiEngineSupported 语义)", (
     expect(b3?.detail).toContain("pi@1.0.0");
   });
 
-  it("fake pi engines>=99.0.0 → ❌(引擎门硬要求)", async () => {
+  it.skipIf(process.platform === "win32")("fake pi engines>=99.0.0 → ❌(引擎门硬要求)", async () => {
     installFakePi(tmpRoot, { version: "1.5.0", enginesNode: ">=99.0.0" });
     restorePath = withFakePath(path.join(tmpRoot, "bin"));
     const { report } = await doctorReport();
@@ -412,7 +424,10 @@ describe("修复执行器单元", () => {
     const backup = backupConfig(layout)!;
     expect(backup).toBe(`${layout.configPath}.doctor-backup`);
     expect(fs.readFileSync(backup, "utf-8")).toBe(readRawConfig());
-    expect((fs.statSync(backup).mode & 0o777).toString(8)).toBe("600");
+    // 0600 由 POSIX 表达;Windows 的 libuv 只给 0666/0444,跳过 mode 断言(字节契约仍测)
+    if (process.platform !== "win32") {
+      expect((fs.statSync(backup).mode & 0o777).toString(8)).toBe("600");
+    }
   });
 
   it("diffLines:只出增删行,行尾逗号摆动不算变化(改前 - / 改后 +)", () => {
@@ -446,7 +461,8 @@ describe("修复执行器单元", () => {
     const ctx = await buildDoctorContext(deps, { fix: false, json: false, offline: false });
     const report = await runDoctor(deps, { fix: false, json: false, offline: false });
     const actions = await collectFixActions(ctx, report);
-    expect(actions.map((a) => a.checkId)).toEqual(["B1"]);
+    // Windows 宿主上 C3/D1/D2 会因 mode 恒 666/777 额外入列;本用例只钉 B1
+    expect(actions.map((a) => a.checkId)).toContain("B1");
     // 检查之后、修复之前:配置文件被删(读失败的确定性模拟)
     fs.rmSync(configPath());
     const printed: string[] = [];

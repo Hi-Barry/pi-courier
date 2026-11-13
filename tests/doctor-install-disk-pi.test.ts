@@ -277,8 +277,14 @@ describe("H 组 — pi 侧只读静态(禁区档,--fix 永不写入)", () => {
 
     const after = [authPath, settingsPath, modelsPath].map((p) => fs.readFileSync(p));
     expect(after.map((b) => b.toString("utf-8"))).toEqual(before.map((b) => b.toString("utf-8")));
-    // 配置权限确实被修了(证明 --fix 真跑了),pi 侧却纹丝不动
-    expect(((fs.statSync(makeDoctorLayout("linux", home).configPath).mode ?? 0) & 0o777).toString(8)).toBe("600");
+    // 配置权限确实被修了(证明 --fix 真跑了),pi 侧却纹丝不动。
+    // mode 只在 POSIX 表达;Windows 宿主跳过该断言,「--fix 真跑了」已由
+    // 上方 actions 含 C3 与下方字节断言证明。
+    if (process.platform !== "win32") {
+      expect(((fs.statSync(makeDoctorLayout("linux", home).configPath).mode ?? 0) & 0o777).toString(8)).toBe(
+        "600",
+      );
+    }
   });
 
   it("win32 注入:三组照查(PI_CODING_AGENT_DIR 隔离的路径照走),无 ❌", async () => {

@@ -171,7 +171,9 @@ describe("C2 — 关键字段类型", () => {
 });
 
 describe("C3 — 配置 0600 权限(POSIX)与 win32 ⏭️", () => {
-  it("0600 → ✅;0644 → ⚠️,--fix 收紧(备份先于改、mode diff、0600 落地)", async () => {
+  // POSIX mode 语义:Windows runner 的 libuv 只映射 0666/0444,chmod 不表达
+  // 0600/0644 —— 本用例在 Windows 宿主跳过;win32 分支由下方注入用例覆盖。
+  it.skipIf(process.platform === "win32")("0600 → ✅;0644 → ⚠️,--fix 收紧(备份先于改、mode diff、0600 落地)", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {}); // 压掉 loadConfig 自检告警
     const good = await doctorReport({ workdir: home });
     expect(resultById(good.report, "C3")?.severity).toBe("ok");
@@ -211,7 +213,10 @@ describe("C3 — 配置 0600 权限(POSIX)与 win32 ⏭️", () => {
     // ⏭️ 自然不收集;平台无关动作(此处 D1/D2 mkdir 等)不再被整体挡掉。
     const actions = await collectFixActionsNoCtx(deps, report);
     expect(actions.filter((a) => a.checkId === "C3")).toHaveLength(0);
-    expect(fileMode(configPath())).toBe("644"); // 配置权限未被改
+    // 配置权限未被改(win32 宿主不表达 POSIX mode,跳过该断言)
+    if (process.platform !== "win32") {
+      expect(fileMode(configPath())).toBe("644");
+    }
   });
 });
 
@@ -230,7 +235,8 @@ describe("C4 — workdir 存在且可写(含多项目)", () => {
     expect(deriveExitCode(report.results)).toBe(1);
   });
 
-  it("存在且可写 → ✅;不可写 → ❌", async () => {
+  // chmod 0500 在 Windows 不产生「不可写」,本用例只在 POSIX 宿主有意义
+  it.skipIf(process.platform === "win32")("存在且可写 → ✅;不可写 → ❌", async () => {
     const dir = path.join(home, "work");
     fs.mkdirSync(dir, { recursive: true });
     const ok = await doctorReport({ workdir: dir });
@@ -330,8 +336,11 @@ describe("D1/D2 — 自管目录存在与权限", () => {
     expect(resolved.has("D1") && resolved.has("D2")).toBe(true);
     expect(fs.existsSync(stateDir())).toBe(true);
     expect(fs.existsSync(layout().dataDir)).toBe(true);
-    expect(fileMode(stateDir())).toBe("700");
-    expect(fileMode(layout().dataDir)).toBe("700");
+    // 0700 由 POSIX 表达;Windows 宿主跳过 mode 断言(存在性与幂等语义仍测)
+    if (process.platform !== "win32") {
+      expect(fileMode(stateDir())).toBe("700");
+      expect(fileMode(layout().dataDir)).toBe("700");
+    }
     expect(printed.join("\n")).toContain("已修复");
     // 幂等:再跑一遍全 ✅ 无动作
     const again = await doctorReport({ workdir: home });
@@ -362,7 +371,9 @@ describe("D1/D2 — 自管目录存在与权限", () => {
     expect(printed.join("\n")).toContain("已修复");
   });
 
-  it("权限过松(0755)→ ⚠️,--fix 收紧 0700;win32 权限 ⏭️ 存在性照查", async () => {
+  // 0755→0700 的收紧只在 POSIX 表达;Windows 宿主跳过(win32 ⏭️ 半场由
+  // 注入 platform 的用例在 Linux/Windows 都覆盖)
+  it.skipIf(process.platform === "win32")("权限过松(0755)→ ⚠️,--fix 收紧 0700;win32 权限 ⏭️ 存在性照查", async () => {
     fs.mkdirSync(stateDir(), { recursive: true, mode: 0o755 });
     fs.chmodSync(stateDir(), 0o755);
     const { report, deps } = await doctorReport({ workdir: home });
