@@ -342,10 +342,12 @@ describe("D1/D2 — 自管目录存在与权限", () => {
       expect(fileMode(layout().dataDir)).toBe("700");
     }
     expect(printed.join("\n")).toContain("已修复");
-    // 幂等:再跑一遍全 ✅ 无动作
+    // 幂等:再跑一遍无「缺失」告警。POSIX 宿主为 ok;Windows 宿主不表达
+    // 0700,目录建好后 mode 仍读作过松 → warn(mode 语义,不是缺失)。
     const again = await doctorReport({ workdir: home });
-    expect(resultById(again.report, "D1")?.severity).toBe("ok");
-    expect(resultById(again.report, "D2")?.severity).toBe("ok");
+    const expectedAfterFix = process.platform === "win32" ? "warn" : "ok";
+    expect(resultById(again.report, "D1")?.severity).toBe(expectedAfterFix);
+    expect(resultById(again.report, "D2")?.severity).toBe(expectedAfterFix);
   });
 
   it("win32:目录缺失 ⚠️ → --fix 照常建目录(平台无关动作不设闸,评审必改②)", async () => {

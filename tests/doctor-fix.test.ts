@@ -170,7 +170,8 @@ describe("主用例:失效 cliPath → --fix 备份删除 → 自动发现 → �
     const backupPath = `${configPath()}.doctor-backup`;
     expect(fs.existsSync(backupPath)).toBe(true);
     const backupRaw = fs.readFileSync(backupPath, "utf-8");
-    expect(backupRaw).toContain(stalePath);
+    // 原文里反斜杠被 JSON 转义(Windows 路径),按 JSON 编码后的形态比对
+    expect(backupRaw).toContain(JSON.stringify(stalePath).slice(1, -1));
     expect((JSON.parse(backupRaw) as { cliPath?: string }).cliPath).toBe(stalePath);
 
     // 修完配置不再含 cliPath;权限保持 0600(POSIX 宿主才表达 mode)
