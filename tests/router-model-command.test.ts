@@ -44,4 +44,11 @@ describe("/model 切换回执带厂商 (issue #344)", () => {
     await fx.router.handleIncoming(makeMsg({ text: "/model zai/glm-5.3" }));
     expect(fx.sendReply.mock.calls[0]?.[2]).toBe("✅ 已切换模型: zai/glm-5.3");
   });
+
+  it("empty-string fields also fall back (never an orphan slash)", async () => {
+    const { rpc } = makeModelRpc({ provider: "", id: "" });
+    const fx = makeRouterFixture({ rpc });
+    await fx.router.handleIncoming(makeMsg({ text: "/model zai/glm-5.3" }));
+    expect(fx.sendReply.mock.calls[0]?.[2]).toBe("✅ 已切换模型: zai/glm-5.3");
+  });
 });

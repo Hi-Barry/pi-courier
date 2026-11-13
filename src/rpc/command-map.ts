@@ -1572,14 +1572,14 @@ export async function handleSlashCommand(
           applied = match;
         }
         // 回执带厂商(issue #344):只回裸 id 会丢掉刚选中的 provider;上游返回
-        // 缺字段时回落到请求参数,不影响成功语义。
+        // 缺字段/空串时回落到请求参数(真值判断,避免拼出孤零零的 '/')。
         const result = (await rpc.requireClient().setModel(applied.provider, applied.id)) as {
           provider?: string;
           id?: string;
         };
-        await reply(
-          t("cmd.model.ok", { model: `${result.provider ?? applied.provider}/${result.id ?? applied.id}` })
-        );
+        const provider = result.provider || applied.provider;
+        const id = result.id || applied.id;
+        await reply(t("cmd.model.ok", { model: `${provider}/${id}` }));
         return true;
       }
 
