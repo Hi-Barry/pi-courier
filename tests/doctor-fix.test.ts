@@ -200,7 +200,8 @@ describe("主用例:失效 cliPath → --fix 备份删除 → 自动发现 → �
       expect(b2After?.detail).toContain("dist/bundle/cli.js");
     }
     expect(deriveExitCode(second.report.results)).toBe(0);
-    expect(fakeEntry).toContain("dist/bundle/cli.js"); // 解析到的就是 fake 当前入口
+    // 路径分隔符按宿主归一:Windows 上 fakeEntry 是反斜杠路径
+    expect(fakeEntry.replaceAll(path.sep, "/")).toContain("dist/bundle/cli.js"); // 解析到的就是 fake 当前入口
   });
 
   it("修复幂等:同一动作连跑两次无二次伤害;重跑 doctor 不再产生修复动作", async () => {
