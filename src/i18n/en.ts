@@ -774,6 +774,8 @@ Usage:
                        pi-courier logs <project> [project...] [--level debug|info|warn|error]
   pi-courier disable   uninstall the service (stop + remove from autostart + delete the unit file)
   pi-courier update    update this project (git pull + install deps + rebuild)
+  pi-courier doctor    local health check & report (--fix safe fixes / --json machine-readable /
+                       --offline skip network checks)
   pi-courier -v        show the installed version (--version / version also work)
 
 Note: pi itself is installed and upgraded independently on the system
@@ -884,6 +886,24 @@ Note: pi itself is installed and upgraded independently on the system
     "⚠️ Cleaning up the temporary file {tmp} failed after {label}'s migration failed: {message} (the leftover does not affect the retry on next startup)",
   "migration.summary":
     "✅ Legacy layout migration finished: {moved} moved, {skipped} already in place, {conflicts} both-exist conflicts, {failed} failures",
+
+  // ── doctor (local health check, spec #337) ────────────────────────────
+  "doctor.reportHeader": "pi-courier doctor v{version} — {date} ({platform})",
+  "doctor.offlineNote": "⏭️ --offline: network checks skipped as a group",
+  "doctor.noChecks": "(no checks registered in this build — skeleton run)",
+  "doctor.nextStep": "Next step: {cmd}",
+  "doctor.degraded": "cannot confirm: {reason}",
+  "doctor.crashed": "❌ doctor itself crashed (exit code 2); please report with the following: {message}",
+  "doctor.summary": "Summary: {ok} ✅ · {warn} ⚠️ · {fail} ❌ · {skip} ⏭️",
+  "doctor.unknownArg": "❌ Unrecognized argument \"{arg}\". doctor only accepts --fix / --json / --offline.",
+  "doctor.group.A": "A · Installation integrity",
+  "doctor.group.B": "B · pi resolution chain",
+  "doctor.group.C": "C · pi-courier configuration",
+  "doctor.group.D": "D · State & directories",
+  "doctor.group.E": "E · Network",
+  "doctor.group.F": "F · Service (systemd)",
+  "doctor.group.G": "G · Disk",
+  "doctor.group.H": "H · pi-side files (read-only)",
 };
 
 export default en;

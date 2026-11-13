@@ -583,6 +583,7 @@ pi-courier stop                # 停止
 pi-courier start               # 启动
 pi-courier disable             # 卸载服务
 pi-courier update              # 更新 pi-courier 自身
+pi-courier doctor              # 本地体检与健康报告(--fix 修安全项 / --json 机器可读 / --offline 跳过网络检查)
 pi-courier -v                  # 显示当前版本(--version/version 亦可)
 ```
 

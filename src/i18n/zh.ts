@@ -733,6 +733,8 @@ const zh = {
                        pi-courier logs <项目> [项目...] [--level debug|info|warn|error]
   pi-courier disable   卸载服务(停止 + 取消自启 + 删除 unit 文件)
   pi-courier update    更新本项目(git pull + 安装依赖 + 重新构建)
+  pi-courier doctor    本地体检与健康报告(--fix 修安全项 / --json 机器可读 /
+                       --offline 跳过网络检查)
   pi-courier -v        显示版本号(--version / version 亦可)
 
 说明:pi 由系统独立安装与升级(npm i -g @earendil-works/pi-coding-agent),
@@ -834,6 +836,24 @@ const zh = {
     "⚠️ {label} 迁移失败后清理临时件 {tmp} 也失败:{message}(残件留存不影响下次启动重试)",
   "migration.summary":
     "✅ 旧布局迁移完成:{moved} 项搬移,{skipped} 项已在新家,{conflicts} 项新旧并存,{failed} 项失败",
+
+  // ── doctor(本地体检,spec #337)────────────────────────────────────
+  "doctor.reportHeader": "pi-courier doctor v{version} — {date}({platform})",
+  "doctor.offlineNote": "⏭️ --offline:网络检查已整组跳过",
+  "doctor.noChecks": "(本版本未装配检查项 —— 骨架运行)",
+  "doctor.nextStep": "下一步: {cmd}",
+  "doctor.degraded": "无法确认:{reason}",
+  "doctor.crashed": "❌ doctor 自身崩溃(退出码 2),请附上以下信息报障: {message}",
+  "doctor.summary": "汇总: {ok} ✅ · {warn} ⚠️ · {fail} ❌ · {skip} ⏭️",
+  "doctor.unknownArg": "❌ 无法识别的参数「{arg}」。doctor 只认 --fix / --json / --offline。",
+  "doctor.group.A": "A · 安装完整性",
+  "doctor.group.B": "B · pi 解析链",
+  "doctor.group.C": "C · pi-courier 配置",
+  "doctor.group.D": "D · 状态与目录",
+  "doctor.group.E": "E · 网络",
+  "doctor.group.F": "F · 服务(systemd)",
+  "doctor.group.G": "G · 磁盘",
+  "doctor.group.H": "H · pi 侧文件(只读)",
 } as const;
 
 export type MessageKey = keyof typeof zh;

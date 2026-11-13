@@ -584,6 +584,7 @@ pi-courier stop           # stop
 pi-courier start          # start
 pi-courier disable        # uninstall the service
 pi-courier update         # update pi-courier itself
+pi-courier doctor         # local health check & report (--fix safe fixes / --json machine-readable / --offline skip network checks)
 pi-courier -v             # show the installed version
 ```
 
