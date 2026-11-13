@@ -2,7 +2,7 @@
 
 > issue: https://github.com/Hi-Barry/pi-courier/issues/337
 >
-> 设计共识底稿:/tmp/pi-courier-doctor-consensus.md(grilling 三轮问答收敛稿,v1 已经用户逐条确认)。底稿与仓库现实冲突时以仓库现实为准并在规格中注明差异(核对记录见备注)。
+> 设计共识底稿:docs/specs/337-doctor-consensus.md(grilling 三轮问答收敛稿,v1 已经用户逐条确认;原件曾只在 /tmp,评审后已留档入仓)。底稿与仓库现实冲突时以仓库现实为准并在规格中注明差异(核对记录见备注)。
 
 ## 问题陈述(Problem Statement)
 
