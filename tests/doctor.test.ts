@@ -445,7 +445,9 @@ describe("doctorShell — CLI 分发薄壳", () => {
     await doctorShell([], makeDoctorLayout("linux", home), io);
     expect(exits).toEqual([0]);
     expect(writes[0]).toContain("pi-courier doctor v");
-    expect(writes[0]).toMatch(/— \d{4}-\d{2}-\d{2}\(linux\)/);
+    // 头部平台来自进程真实平台(realDoctorDeps 的 process.platform),断言
+    // 跟随当前 runner —— 写死 linux 会让 Windows CI 误红。
+    expect(writes[0]).toMatch(new RegExp(`— \\d{4}-\\d{2}-\\d{2}\\(${process.platform}\\)`));
     expect(writes[0]).toContain("B · pi 解析链");
     expect(writes[0]).toContain("0 ❌"); // 无失败项(计数行其他档随环境浮动)
   });
