@@ -9,7 +9,7 @@
 ## Solution(第一步,按族渐进)
 
 1. **`CommandPolicy.stage?`**:管线归属声明(值 = 管线阶段名),全部条目标注——`/pmctl`+`/newproject`+`/projects`→"pmctl"、`/login`+`/logout`+`/auth`→"login"、`/toggletools`→"roomToolsToggle"、`/multiproject`→"multiproject"、`/enable`→"groupEnable"、认证/信任面(/trusted /revoke)→"adminCommands"、其余会话命令(/bash /new /clear /compact /model 等)→"slashCommands"。
-2. **契约测试**:①每个 stage 值 ∈ router.pipeline() 阶段名(经 makeRouterFixture 取真实管线);②六个 preAuth 命令族阶段在表中都有条目覆盖;③slashCommands 域条目与 command-map 的 case 域抽查对齐(防标注漂移)。
+2. **契约测试**:①每个 stage 值 ∈ router.pipeline() 阶段名(经 makeRouterFixture 取真实管线);②六个命令族阶段在表中都有条目覆盖;③slashCommands 域条目与 command-map 的 case 域抽查对齐(防标注漂移)。
 3. **pmctl/login 族 handler 迁入 `rpc/command-dispatch.ts`**:两族 stage body(审计+门禁+分派)整体迁出,router 阶段壳变薄调用;审计 helper(normalizeDetailLine/redactLoginDetail)随之归位。第一族示范,handle 全量收编留给后续族迁移。
 4. **头注释**:command-registry 补"加新命令三步"(登记 name/guest/audit/stage → dispatch/阶段写处理器 → i18n 双表)。
 
@@ -23,7 +23,7 @@
 ## Implementation Decisions
 
 - registry 保持**零 import 纯数据**(红线不动):stage 是字符串字面量字段,类型为封闭联合(引用管线阶段名)。
-- command-dispatch.ts 注入 {pmctl, auth, sendReply, auditTrail, multiProject?}(login 的 roomAllowed 判定需 ctx 语义——注入判别闭包而非散数据);normalizeDetailLine/redactLoginDetail 迁入(唯一使用者是这两族+slashCommands 的审计接线——normalizeDetailLine 仍被 router slashCommands 用,保留在 router 导出或复制?**保留在 router,dispatch 引用其导出**)。
+- command-dispatch.ts 注入 {pmctl, auth, sendReply, auditTrail, multiProject?}(login 的 roomAllowed 判定需 ctx 语义——注入判别闭包而非散数据);normalizeDetailLine/redactLoginDetail 迁入(实现决议反转,补评落实:两者定义在 dispatch 并导出,router 的 slashCommands 审计接线反向 import dispatch —— 避免 router→dispatch 后再从 router 导出的反向依赖)。
 - 管线 21 阶段结构、顺序、preAuth 语义零变化;阶段名不变(pipeline() 视图测试零改动)。
 - /bash 实际走 slashCommands 的 command-map case(非 adminCommands),标注以真实执行路径为准(逐一核对六族正则与 command-map case 后落笔)。
 
