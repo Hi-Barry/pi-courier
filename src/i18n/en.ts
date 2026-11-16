@@ -805,7 +805,6 @@ Note: pi itself is installed and upgraded independently on the system
   "cli.update.npmUpgrade": "🔄 Upgrading pi-courier via npm …",
   "cli.update.gitUpgrade": "🔄 Updating pi-courier (git) …",
   "cli.update.cmdFailed": "❌ {cmd} failed: {status}",
-  "cli.update.watchdogSkip": "⚠️ schtasks {action} pi-courier-watchdog failed (task missing or access denied); continuing the upgrade.",
   "cli.update.restartingTask": "🔄 Restarting the pi-courier scheduled task to load the new version…",
   "cli.update.wasInactiveTask": "ℹ️ The bridge was not running before the update; it was not started. To start it: run the pi-courier scheduled task, or reboot.",
   "cli.update.manualRestartTask": "ℹ️ Automatic restart unavailable (the pi-courier scheduled task was not found or is disabled): restart the task manually, or reboot, to load the new version.",

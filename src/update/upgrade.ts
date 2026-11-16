@@ -2,11 +2,13 @@
  * 桥内换血(桥自更新 spec §5.4、修复 spec #320):/update 编排的 installing
  * 段调这里,把磁盘代码升到 npm latest(git 安装场景则 pull + install + build)。
  *
- * 与 CLI `pi-courier update` 共用 buildUpgradePlan 的步骤构造;两边的差异只在
- * 执行方式:
- *  - 桥内必须异步 spawn —— CLI 的 spawnSync 是同步语境,搬过来会冻结事件
- *    循环、杀掉桥的全部服务能力(升级窗口几分钟,任务要照常服务)。
- *  - 失败永不 process.exit:返回 UpgradeOutcome,旧版继续运行,桥绝不自杀。
+ * 与 CLI `pi-courier update` 共用同一个执行循环(spec #346):步骤构造
+ * buildUpgradePlan 与执行策略(重试/看门狗暂停/校验)都住在这里,两边只差
+ * 一个 stdio 执行风格参数:
+ *  - pipe(默认,桥):输出进滚动尾部、挂无进展看门狗;桥内必须异步 spawn,
+ *    失败永不 process.exit —— 返回 UpgradeOutcome,旧版继续运行,桥绝不自杀。
+ *  - inherit(CLI):三条流直通终端,输出实时可见;读不到输出流故无进展
+ *    看门狗退化为单次硬超时,超时被杀视为 stall 可重试(节奏与桥一致)。
  *  - 不 import cli.ts(它在模块加载即跑 main(),npm-runtime.ts 明文
  *    "Kept free of cli.ts imports")。
  *
@@ -67,7 +69,16 @@ const NPM_NET_FLAGS = [
 const STDERR_TAIL_LIMIT = 600;
 const STDOUT_TAIL_LIMIT = 2_048;
 
-export type UpgradeOutcome = { ok: true } | { ok: false; message: string };
+export type UpgradeOutcome =
+  | { ok: true }
+  | {
+      ok: false;
+      message: string;
+      /** 失败步骤的真实退出码(#346,CLI 保真退出码用);超时/spawn 错误不带。 */
+      code?: number;
+      /** 失败步骤的「cmd args」串(#346,CLI 本地化失败行用)。 */
+      failedCommand?: string;
+    };
 
 /** 单步进度事件(#326 票 #328):桥侧据此向房间发进度回执,CLI 侧打印里程碑。
  *  stepIndex/totalSteps 从 1 起计;stall-retry 的 attempt 是「即将开始的尝试
@@ -101,6 +112,8 @@ export interface UpgradeChild {
 export interface UpgradeSpawnOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  /** 执行风格(#346):pipe=捕获输出(默认,桥);inherit=直通终端(CLI)。 */
+  stdio?: "pipe" | "inherit";
 }
 
 export interface UpgradeDeps {
@@ -133,6 +146,10 @@ export interface UpgradeDeps {
   killTree?: (child: UpgradeChild) => void;
   /** 原生库校验缝(默认 npm-runtime 的 nativeBindingExists)。 */
   verifyNativeBinding?: (packageRoot: string) => boolean;
+  /** 执行风格(#346):pipe(默认)= 捕获输出 + 无进展看门狗(桥);inherit =
+   *  直通终端(CLI),读不到输出流故看门狗退化为单次硬超时,超时被杀视为
+   *  stall 可重试。 */
+  stdio?: "pipe" | "inherit";
 }
 
 interface StepFailure {
@@ -141,8 +158,11 @@ interface StepFailure {
   detail: string;
   stderrTail: string;
   stdoutTail: string;
-  /** 失败因无进展被杀(#326)—— 只有它允许重试,普通报错不重试。 */
+  /** 失败因无进展被杀(#326;#346 起 inherit 模式的硬超时同置此标记)——只有
+   *  它允许重试,普通报错不重试。 */
   stalled?: boolean;
+  /** 真实退出的退出码(#346):CLI 保真透传;超时/spawn 错误不带。 */
+  exitCode?: number;
 }
 
 /** 保留滚动尾部,避免长时间高输出把内存吃满。 */
@@ -151,11 +171,12 @@ function appendTail(current: string, chunk: string, limit: number): string {
   return combined.length > limit ? combined.slice(-limit) : combined;
 }
 
-/** 单步执行的上下文:spawn 缝 + 合并好的 env + 超时杀进程缝。 */
+/** 单步执行的上下文:spawn 缝 + 合并好的 env + 超时杀进程缝 + 执行风格(#346)。 */
 interface StepRunner {
   spawn: NonNullable<UpgradeDeps["spawn"]>;
   env: NodeJS.ProcessEnv;
   killTree: (child: UpgradeChild) => void;
+  stdio: "pipe" | "inherit";
 }
 
 /** 单步执行:exit 0 → undefined;非零/超时/无进展/spawn 失败 → 失败描述。 */
@@ -165,11 +186,22 @@ function runStep(
   defaultTimeoutMs: number,
   stallTimeoutMs: number,
 ): Promise<StepFailure | undefined> {
-  const timeoutMs = step.timeoutMs ?? defaultTimeoutMs;
+  // inherit(CLI):可重试步骤的单次尝试上限 = stall 阈值 —— 与桥的 stall
+  // 节奏同一取值,#326 story 9 的「对齐节奏」由此成为编译事实(#346);
+  // 不可重试步骤保持步骤上限。pipe(桥):步骤上限 + 无进展看门狗双保险。
+  const timeoutMs =
+    runner.stdio === "inherit" && step.retriable === true
+      ? stallTimeoutMs
+      : (step.timeoutMs ?? defaultTimeoutMs);
+  const inherit = runner.stdio === "inherit";
   return new Promise((resolve) => {
     let child: UpgradeChild;
     try {
-      child = runner.spawn(step.cmd, step.args, { cwd: step.cwd, env: runner.env });
+      child = runner.spawn(step.cmd, step.args, {
+        cwd: step.cwd,
+        env: runner.env,
+        stdio: runner.stdio,
+      });
     } catch (err) {
       resolve({
         cmd: step.cmd,
@@ -184,9 +216,11 @@ function runStep(
     let stdout = "";
     // 两路都必须消费:Windows 管道约 64KB,无人读的一侧会把子进程写阻塞。
     // 任意一路有输出同时刷新无进展看门狗(#326)—— 进度信号只认输出活动
-    // 本身,不解析 npm 日志文件格式。
+    // 本身,不解析 npm 日志文件格式。inherit(CLI)读不到流:不消费、不挂
+    // 看门狗,卡死探测退化为单次硬超时(超时被杀 ≡ stall,可重试步骤据此
+    // 重试;真实报错/非零退出照旧不重试)。
     let stalled = false;
-    let stallTimer: NodeJS.Timeout;
+    let stallTimer: NodeJS.Timeout | undefined;
     const armStallTimer = (): void => {
       stallTimer = setTimeout(() => {
         stalled = true;
@@ -197,17 +231,19 @@ function runStep(
         }
       }, stallTimeoutMs);
     };
-    armStallTimer();
-    child.stdout?.on("data", (chunk) => {
-      stdout = appendTail(stdout, chunk.toString(), STDOUT_TAIL_LIMIT);
-      clearTimeout(stallTimer);
+    if (!inherit) {
       armStallTimer();
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr = appendTail(stderr, chunk.toString(), STDERR_TAIL_LIMIT);
-      clearTimeout(stallTimer);
-      armStallTimer();
-    });
+      child.stdout?.on("data", (chunk) => {
+        stdout = appendTail(stdout, chunk.toString(), STDOUT_TAIL_LIMIT);
+        clearTimeout(stallTimer);
+        armStallTimer();
+      });
+      child.stderr?.on("data", (chunk) => {
+        stderr = appendTail(stderr, chunk.toString(), STDERR_TAIL_LIMIT);
+        clearTimeout(stallTimer);
+        armStallTimer();
+      });
+    }
     let spawnError: string | undefined;
     child.on("error", (err) => {
       // 无 listener 的 error 事件会击穿进程 —— 必须挂;记录后由 close 收口。
@@ -216,6 +252,7 @@ function runStep(
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
+      if (inherit) stalled = true;
       try {
         runner.killTree(child);
       } catch {
@@ -243,6 +280,7 @@ function runStep(
         stderrTail: stderr,
         stdoutTail: stdout,
         stalled,
+        exitCode: timedOut || stalled || spawnError !== undefined ? undefined : (code ?? undefined),
       });
     });
   });
@@ -256,7 +294,9 @@ function defaultSpawn(
   return nodeSpawn(cmd, args, {
     cwd: opts.cwd,
     env: opts.env,
-    stdio: ["ignore", "pipe", "pipe"],
+    // inherit(CLI):三条流直通终端,输出实时可见;pipe(桥):捕获两路输出
+    // 做滚动尾部 —— stdin 恒 ignore(升级子进程不读输入)。
+    stdio: opts.stdio === "inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
   });
 }
 
@@ -508,7 +548,12 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
     ensureTimeoutMs,
   });
 
-  const runner: StepRunner = { spawn: spawnFn, env: childEnv, killTree };
+  const runner: StepRunner = {
+    spawn: spawnFn,
+    env: childEnv,
+    killTree,
+    stdio: deps.stdio ?? "pipe",
+  };
   // 看门狗暂停(#326 票 #329):先于第一步;pause 抛错 = 未暂停,不 resume。
   // resume 在 finally —— 失败路径同样恢复,不留永久瘫痪的守护。
   // 未注入且平台无默认实现时完全跳过,不引入任何 await —— 第一步 spawn 保持
@@ -553,7 +598,14 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
         failure = await runStep(step, runner, timeoutMs, stallTimeoutMs);
         if (!failure?.stalled) break;
       }
-      if (failure) return { ok: false, message: formatFailure(failure) };
+      if (failure) {
+        return {
+          ok: false,
+          message: formatFailure(failure),
+          code: failure.exitCode,
+          failedCommand: `${failure.cmd} ${failure.args.join(" ")}`,
+        };
+      }
       onProgress?.({
         kind: "step-done",
         stepIndex,
