@@ -1121,7 +1121,8 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 票04:带项目元数据(含仓库地址)→ 发认领确认卡并落簿待认领;
         // 无元数据 → 普通提示(每房一次)。任务3 场景测试修复:两簿记分离 ——
         // 普通提示过的房在 URL 后补(mv 重探)后仍可升级发卡,后补通道不再死锁;
-        // 认领卡自己的去重 = pendingClaims 挂单或 claimCardRooms 已发过。
+        // 认领卡自己的去重 = pendingClaims 挂单存在,或该房同 URL 已被拒绝
+        // (claimRejectedKeys;簿记读写已内化在 ClaimLedger,#352)。
         const mgRoom = managementRoomId(store.get());
         if (!mgRoom) {
           // 管理房缺位:提示无处送达 —— 每房 warn 一次(内存簿记,不标记落盘,
