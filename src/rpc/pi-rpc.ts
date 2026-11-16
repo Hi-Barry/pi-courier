@@ -101,7 +101,13 @@ export const COMPACT_WAIT_TIMEOUT_MS = 10 * 60_000;
  *  `Timeout waiting for response to ${command.type}. Stderr: ...`。compact()
  *  借它区分「慢压缩的必然超时」(吞掉,事件收尾)与「即时校验错误」(立即
  *  failed)。上游改文案时此处同步。 */
-const UPSTREAM_TIMEOUT_SENTINEL = "Timeout waiting for response";
+export const UPSTREAM_TIMEOUT_SENTINEL = "Timeout waiting for response";
+
+/** 上游「已压缩过」的即时校验错误,两通道各一形态(票 #219):应答 error
+ *  为裸串,事件 errorMessage 带 Compaction failed: 前缀。精确集合匹配,
+ *  防真失败消息偶然含该词组被误吞;上游改词时此处同步。(#360:哨兵集中
+ *  COMPAT 层,command-map 改引用。) */
+export const UPSTREAM_ALREADY_COMPACTED = new Set(["Already compacted", "Compaction failed: Already compacted"]);
 
 /** /compact 的收尾形态(spec #218 票 #219)。上游 send() 把应答超时写死
  *  30 秒且迟到的应答被静默丢弃,慢压缩必然「假失败」——但压缩在服务端
