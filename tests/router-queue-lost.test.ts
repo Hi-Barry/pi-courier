@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageRouter } from "../src/rpc/message-router";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
-import { makeMsg, makeRouterFixture } from "./helpers";
+import { makeMsg, makeProjectManagerStub, makeRouterFixture } from "./helpers";
 
 describe("queue lost notice on subprocess restart (issue #115 stage 1)", () => {
   let replies: Array<{ chatId: string; transport: string; text: string }>;
@@ -124,14 +124,14 @@ describe("queue snapshot persistence through the router (issue #115 stage 2)", (
       }) as unknown as PiRpc;
     defaultRpc = makeRpc();
     projectRpc = makeRpc("proj-a");
-    const projectManager = {
+    const projectManager = makeProjectManagerStub(defaultRpc, {
       getRpcForRoom: vi.fn((roomId: string) => (roomId === "!proj:s" ? projectRpc : defaultRpc)),
       isProjectRoom: vi.fn((roomId: string) => roomId === "!proj:s"),
       labelForRoom: vi.fn((roomId: string) => (roomId === "!proj:s" ? "proj-a" : undefined)),
       roomForRpc: vi.fn((rpc: PiRpc) => (rpc === projectRpc ? "!proj:s" : undefined)),
       isMultiProject: true,
       allRpcs: vi.fn().mockReturnValue([defaultRpc, projectRpc]),
-    } as unknown as ProjectManager;
+    });
     router = makeRouterFixture({
       rpc: defaultRpc,
       projectManager,

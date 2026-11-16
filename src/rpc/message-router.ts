@@ -503,15 +503,16 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   // 活卡与 typing 互补不同时开:工具流开的房活卡表活,关的房 typing 表活
   // (活卡房 turn_start 不再发 typing,系本票有意变化,替代 1.6.x 的无条件首拍)。
   const roomToolCallsMode = (roomId: string): "on" | "off" => {
-    const entry = projectManager.projectMap?.()[roomId];
-    const setting = entry?.showToolCalls ?? "auto";
+    // 读侧意图方法(#356):房间设置与 guest 模式都经 ProjectManager 的
+    // 意图方法取 —— projectMap 返回形状不再外泄,可选链退役。
+    const setting = projectManager.showToolCallsForRoom(roomId);
     if (setting === "off") return "off";
     if (setting === "on") {
       return deps.sendLiveCard !== undefined && deps.editReply !== undefined && !store.get().hideToolCalls
         ? "on"
         : "off";
     }
-    const collabRoom = entry?.mode === "guest" || (botRegistry.cached(roomId)?.size ?? 0) > 0;
+    const collabRoom = projectManager.modeForRoom(roomId) === "guest" || (botRegistry.cached(roomId)?.size ?? 0) > 0;
     return collabRoom ? "off" : liveCardAggregation() ? "on" : "off";
   };
 
@@ -797,7 +798,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // owner 房与单项目模式不走本阶段,行为与 1.6.x 一致。
       handle: async (ctx) => {
         if (!ctx.multiProject || !ctx.msg.isGroupChat) return false;
-        if (projectManager.modeForRoom?.(ctx.msg.chatId) !== "guest") return false;
+        if (projectManager.modeForRoom(ctx.msg.chatId) !== "guest") return false;
         if (ctx.msg.wasMentioned === true) return false;
         if (!auth.isTrustedUser(ctx.msg.userId, ctx.msg.transport)) return true; // 未受信静默
         if (ctx.msg.payload.kind === "text" && ctx.text && /^\/compact(\s|$)/i.test(ctx.text)) {
@@ -1419,7 +1420,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         if (
           !restartGapDeclared.has(ctx.msg.chatId) &&
           ctx.multiProject &&
-          projectManager.modeForRoom?.(ctx.msg.chatId) === "guest"
+          projectManager.modeForRoom(ctx.msg.chatId) === "guest"
         ) {
           gapNote = `${t("collab.mailbox.restartGap", { at: bootedAt.toLocaleString() })}\n`;
         }

@@ -22,7 +22,7 @@ import type { ExtensionUIRequestView } from "../src/rpc/extension-questions";
 import type { ExtensionUIResponsePayload, PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
 import { ConfigStore } from "../src/config";
-import { makeMsg, makeRouterFixture } from "./helpers";
+import { makeMsg, makeProjectManagerStub, makeRouterFixture } from "./helpers";
 
 /** A confirm-shaped extension_ui_request (the wire shape per rpc-types.d.ts). */
 function uiRequest(id: string, overrides: Record<string, unknown> = {}): ExtensionUIRequestView {
@@ -65,16 +65,7 @@ function makeFixtures(opts: { extensionUiTimeoutMinutes?: number } = {}) {
     onEvent: vi.fn(),
   } as unknown as PiRpc;
   // 本特性的 PM 面多出 /pmctl 注册族(registerProject 等),整体替换工厂默认件。
-  const projectManager = {
-    getRpcForRoom: vi.fn().mockReturnValue(rpc),
-    isProjectRoom: vi.fn().mockReturnValue(false),
-    labelForRoom: vi.fn().mockReturnValue(undefined),
-    isMultiProject: false,
-    registerProject: vi.fn(),
-    listProjects: vi.fn().mockReturnValue([]),
-    renameProject: vi.fn(),
-    stopAll: vi.fn(),
-  } as unknown as ProjectManager;
+  const projectManager = makeProjectManagerStub(rpc);
   const store = new ConfigStore({
     ...(opts.extensionUiTimeoutMinutes !== undefined
       ? { extensionUiTimeoutMinutes: opts.extensionUiTimeoutMinutes }

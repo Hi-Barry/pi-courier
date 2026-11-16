@@ -16,7 +16,7 @@ import { ConfigStore } from "../src/config";
 import type { ExtensionUIRequestView } from "../src/rpc/extension-questions";
 import type { ExtensionUIResponsePayload, PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
-import { makeMsg, makeRouterFixture } from "./helpers";
+import { makeMsg, makeProjectManagerStub, makeRouterFixture } from "./helpers";
 
 function makeRpc(label: string | undefined, isStreaming = false, onExtensionResponse?: (payload: ExtensionUIResponsePayload) => void) {
   const prompt = vi.fn().mockResolvedValue(undefined);
@@ -64,17 +64,10 @@ function makeFixtures(opts: FixtureOptions = {}, runtime?: LoginRuntime) {
   const busyRpc = busy.rpc;
   const allRpcs = [defaultRpc, busyRpc];
   // 本特性的 PM 面多出 /pmctl 注册族,整体替换工厂默认件。
-  const projectManager = {
-    getRpcForRoom: vi.fn().mockReturnValue(defaultRpc),
-    isProjectRoom: vi.fn().mockReturnValue(false),
-    labelForRoom: vi.fn().mockReturnValue(undefined),
+  const projectManager = makeProjectManagerStub(defaultRpc, {
     isMultiProject: opts.multiProject === true,
-    registerProject: vi.fn(),
-    listProjects: vi.fn().mockReturnValue([]),
-    renameProject: vi.fn(),
-    stopAll: vi.fn(),
     allRpcs: vi.fn().mockReturnValue(allRpcs),
-  } as unknown as ProjectManager;
+  });
   const store = new ConfigStore(opts.multiProject ? { multiProject: true, managementRooms: ["!mgmt:server"] } : {});
   const login = new LoginManager({
     sendReply,

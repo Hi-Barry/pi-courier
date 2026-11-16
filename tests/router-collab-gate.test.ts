@@ -5,7 +5,7 @@ import { createMessageRouter } from "../src/rpc/message-router";
 import { MatrixRoomOps } from "../src/transports/matrix-rooms";
 import { BOT_REGISTRY_EVENT_TYPE, type RoomOps } from "../src/transports/interface";
 import type { MatrixClientPort } from "../src/transports/matrix-client";
-import { makeMsg, makeRouterFixture, makeFakeRpc } from "./helpers";
+import { makeMsg, makeRouterFixture, makeFakeRpc, makeProjectManagerStub } from "./helpers";
 import type { ProjectManager } from "../src/rpc/project-manager";
 
 /**
@@ -24,18 +24,9 @@ function makeCollabFixture(opts: {
   projectMeta?: { name: string; gitUrl?: string; defaultBranch?: string } | null;
 } = {}) {
   const rpc = makeFakeRpc();
-  const projectManager = {
-    getRpcForRoom: vi.fn().mockReturnValue(rpc),
-    isProjectRoom: vi.fn().mockReturnValue(false),
-    labelForRoom: vi.fn().mockReturnValue(undefined),
+  const projectManager = makeProjectManagerStub(rpc, {
     isMultiProject: opts.multiProject ?? true,
-    registerProject: vi.fn(),
-    listProjects: vi.fn().mockReturnValue([]),
-    renameProject: vi.fn(),
-    stopAll: vi.fn(),
-    setRoomShowToolCalls: vi.fn(),
-    sessionDirFor: vi.fn().mockReturnValue("/w/.pi-session"),
-  } as unknown as ProjectManager;
+  });
   const store = new ConfigStore(
     {
       managementRooms: ["!mg:server"],
