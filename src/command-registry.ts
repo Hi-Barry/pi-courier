@@ -17,6 +17,15 @@
  *    钉住「表内事件名 ∈ AUDIT_EVENTS 值集」,防止两处漂移。
  */
 
+/** 加新命令三步(#358 统一登记点):
+ *  1. 在下方登记表落一条(name/guest/auditEvent/stage)—— 访客档与审计面
+ *     在此声明,管线归属(stage)也在此声明;
+ *  2. 处理器写在该 stage 的归属地:pmctl/login 族在 rpc/command-dispatch.ts,
+ *     会话命令族在 command-map 的 case,管理面在 admin-commands;
+ *  3. i18n 双表加文案(zh 为键集基准),契约测试(command-registry-stages)
+ *     会钉 stage 与真实管线一致。
+ */
+
 /** bang 触发规则(与 pi TUI 的 !/!! 同源):1~2 个全/半角感叹号 + 空白 +
  *  非空命令。单一持有:command-map 的 parseBangCommand 与 guest-policy 的
  *  裁决都从这里取。 */
@@ -25,6 +34,16 @@ export const BANG_COMMAND = /^([!！]{1,2})\s+(\S.*)$/;
 /** /pmctl 前缀(单一持有:访客裁决按前缀拦整族 —— 审计工程批 票19)。 */
 export const PMCTL_COMMAND = "/pmctl";
 
+/** 管线命令族的阶段名(封闭联合;契约测试钉住与真实管线一致,#358)。 */
+export type CommandPipelineStage =
+  | "pmctl"
+  | "login"
+  | "adminCommands"
+  | "groupEnable"
+  | "roomToolsToggle"
+  | "multiproject"
+  | "slashCommands";
+
 export interface CommandPolicy {
   /** 主名(小写含斜杠)。 */
   name: string;
@@ -32,56 +51,60 @@ export interface CommandPolicy {
   guest?: "blocked";
   /** 命令经 slashCommands 落账的审计事件名;缺省不落账。 */
   auditEvent?: string;
+  /** 管线归属(#358):这条命令由哪个阶段认领。双归属(如 /enable 群内走
+   *  groupEnable、DM 走 adminCommands;/toggletools 项目房走 roomToolsToggle、
+   *  DM 走 adminCommands)标注 preAuth 主路径,注释说明双面。 */
+  stage?: CommandPipelineStage;
 }
 
 /** 登记表主数据。条目顺序按域分组(与 #120 票面清单同序),判定用查表。 */
 export const COMMAND_REGISTRY: readonly CommandPolicy[] = [
   // shell 执行(访客禁 + 敏感审计)
-  { name: "/bash", guest: "blocked", auditEvent: "bash.exec" },
-  { name: "/bashstop", guest: "blocked", auditEvent: "bash.stop" },
+  { name: "/bash", guest: "blocked", auditEvent: "bash.exec", stage: "slashCommands" },
+  { name: "/bashstop", guest: "blocked", auditEvent: "bash.stop", stage: "slashCommands" },
   // 项目管理(访客禁;/pmctl 前缀族由裁决函数按前缀拦,不入表)
-  { name: "/pmctl", guest: "blocked" },
-  { name: "/newproject", guest: "blocked" },
-  { name: "/projects", guest: "blocked" },
+  { name: "/pmctl", guest: "blocked", stage: "pmctl" },
+  { name: "/newproject", guest: "blocked", stage: "pmctl" },
+  { name: "/projects", guest: "blocked", stage: "pmctl" },
   // 认证(访客禁)
-  { name: "/login", guest: "blocked" },
-  { name: "/logout", guest: "blocked" },
-  { name: "/auth", guest: "blocked" },
+  { name: "/login", guest: "blocked", stage: "login" },
+  { name: "/logout", guest: "blocked", stage: "login" },
+  { name: "/auth", guest: "blocked", stage: "login" },
   // 生命周期(访客禁;reload 另是敏感审计面;/update 是桥自更新的敏感审计面)
-  { name: "/reload", guest: "blocked", auditEvent: "reload" },
-  { name: "/update", guest: "blocked", auditEvent: "update" },
-  { name: "/stop", guest: "blocked" },
-  { name: "/abort", guest: "blocked" },
-  { name: "/interrupt", guest: "blocked" },
-  { name: "/enable", guest: "blocked" },
-  { name: "/disable", guest: "blocked" },
-  { name: "/switch", guest: "blocked" },
-  { name: "/multiproject", guest: "blocked" },
+  { name: "/reload", guest: "blocked", auditEvent: "reload", stage: "slashCommands" },
+  { name: "/update", guest: "blocked", auditEvent: "update", stage: "slashCommands" },
+  { name: "/stop", guest: "blocked", stage: "slashCommands" },
+  { name: "/abort", guest: "blocked", stage: "slashCommands" },
+  { name: "/interrupt", guest: "blocked", stage: "slashCommands" },
+  { name: "/enable", guest: "blocked", stage: "groupEnable" },
+  { name: "/disable", guest: "blocked", stage: "adminCommands" },
+  { name: "/switch", guest: "blocked", stage: "slashCommands" },
+  { name: "/multiproject", guest: "blocked", stage: "multiproject" },
   // 名单与显示(访客禁)
-  { name: "/trusted", guest: "blocked" },
-  { name: "/revoke", guest: "blocked" },
-  { name: "/toggletools", guest: "blocked" },
+  { name: "/trusted", guest: "blocked", stage: "adminCommands" },
+  { name: "/revoke", guest: "blocked", stage: "adminCommands" },
+  { name: "/toggletools", guest: "blocked", stage: "roomToolsToggle" },
   // 主动外发(访客禁)
-  { name: "/remind", guest: "blocked" },
+  { name: "/remind", guest: "blocked", stage: "slashCommands" },
   // MCP 服务器管理(spec #246,访客禁:配 MCP = 给 agent 加工具/外发通道,
   // add 还能带 --env 密钥)。审计不经本表 —— 事件按真实结果由命令层经
   // ctx.audit 缝上报(mcp.add/remove/login/logout),这里只拦访客。
-  { name: "/mcp", guest: "blocked" },
+  { name: "/mcp", guest: "blocked", stage: "slashCommands" },
   // 会话镜像(访客禁:动共享会话)
-  { name: "/attach", guest: "blocked" },
-  { name: "/detach", guest: "blocked" },
+  { name: "/attach", guest: "blocked", stage: "slashCommands" },
+  { name: "/detach", guest: "blocked", stage: "slashCommands" },
   // 会话与代理状态(访客禁:全部动共享会话/代理运行状态,#156 按表头
   // 既定登记规则补齐;这些命令由 pi 会话侧消费,桥只拦访客)
-  { name: "/new", guest: "blocked" },
-  { name: "/clear", guest: "blocked" },
-  { name: "/compact", guest: "blocked" },
-  { name: "/model", guest: "blocked" },
-  { name: "/thinking", guest: "blocked" },
-  { name: "/cyclemodel", guest: "blocked" },
-  { name: "/cyclethinking", guest: "blocked" },
-  { name: "/autocompact", guest: "blocked" },
-  { name: "/autoretry", guest: "blocked" },
-  { name: "/name", guest: "blocked" },
+  { name: "/new", guest: "blocked", stage: "slashCommands" },
+  { name: "/clear", guest: "blocked", stage: "slashCommands" },
+  { name: "/compact", guest: "blocked", stage: "slashCommands" },
+  { name: "/model", guest: "blocked", stage: "slashCommands" },
+  { name: "/thinking", guest: "blocked", stage: "slashCommands" },
+  { name: "/cyclemodel", guest: "blocked", stage: "slashCommands" },
+  { name: "/cyclethinking", guest: "blocked", stage: "slashCommands" },
+  { name: "/autocompact", guest: "blocked", stage: "slashCommands" },
+  { name: "/autoretry", guest: "blocked", stage: "slashCommands" },
+  { name: "/name", guest: "blocked", stage: "slashCommands" },
 ];
 
 /** 只读命令清单(纯文档,无判定语义:未登记命令一律默认放行)。快照测试
