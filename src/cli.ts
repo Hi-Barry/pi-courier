@@ -441,7 +441,7 @@ async function cmdUpdate(): Promise<void> {
         console.log(`\n$ ${event.cmd}`);
       } else if (event.kind === "stall-retry") {
         console.warn(t("cmd.update.progress.retry", { attempt: event.attempt, max: event.maxAttempts }));
-      } else {
+      } else if (event.kind === "step-done") {
         // 步完成里程碑(spec #326 票 #328 评审整改):与房间回执同键,CLI 不缺席。
         console.log(t("cmd.update.progress.done", { index: event.stepIndex, total: event.totalSteps }));
       }

@@ -158,7 +158,8 @@ interface StepFailure {
   detail: string;
   stderrTail: string;
   stdoutTail: string;
-  /** 失败因无进展被杀(#326)—— 只有它允许重试,普通报错不重试。 */
+  /** 失败因无进展被杀(#326;#346 起 inherit 模式的硬超时同置此标记)——只有
+   *  它允许重试,普通报错不重试。 */
   stalled?: boolean;
   /** 真实退出的退出码(#346):CLI 保真透传;超时/spawn 错误不带。 */
   exitCode?: number;
@@ -230,8 +231,8 @@ function runStep(
         }
       }, stallTimeoutMs);
     };
-    if (!inherit) armStallTimer();
     if (!inherit) {
+      armStallTimer();
       child.stdout?.on("data", (chunk) => {
         stdout = appendTail(stdout, chunk.toString(), STDOUT_TAIL_LIMIT);
         clearTimeout(stallTimer);
