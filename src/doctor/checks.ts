@@ -53,7 +53,14 @@ export async function collectCheckEntries(ctx: DoctorContext): Promise<DoctorChe
  */
 export async function collectFixActions(ctx: DoctorContext, report: { results: CheckResult[] }): Promise<FixAction[]> {
   const actions: FixAction[] = [];
-  const entries = await collectCheckEntries(ctx);
+  // 清单重建抛错(模块损坏/依赖断)= 报告已走降级 ⏭️ 占位:与旧字符串门槛
+  // 在降级报告上优雅返回空动作同语义,不把修复收集变成退出码 2。
+  let entries: DoctorCheckEntry[];
+  try {
+    entries = await collectCheckEntries(ctx);
+  } catch {
+    return actions;
+  }
   for (const entry of entries) {
     const { fix } = entry;
     if (!fix) continue;
