@@ -4,7 +4,7 @@ import { buildTurnReply } from "../src/rpc/message-router";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
-import { makeMsg, makeRouterFixture } from "./helpers";
+import { makeMsg, makeProjectManagerStub, makeRouterFixture } from "./helpers";
 
 /**
  * Error visibility (issue #52, spec #51 票1): failed turns and auto-retry
@@ -34,16 +34,10 @@ function makeFixtures(opts: { projectRoom?: boolean } = {}) {
     prompt: vi.fn().mockResolvedValue(undefined),
     onEvent: vi.fn(),
   } as unknown as PiRpc;
-  const projectManager = {
-    getRpcForRoom: vi.fn().mockReturnValue(rpc),
+  const projectManager = makeProjectManagerStub(rpc, {
     isProjectRoom: vi.fn().mockReturnValue(opts.projectRoom ?? false),
-    labelForRoom: vi.fn().mockReturnValue(undefined),
     isMultiProject: true,
-    registerProject: vi.fn(),
-    listProjects: vi.fn().mockReturnValue([] as Array<[string, { name?: string; workdir: string }]>),
-    renameProject: vi.fn(),
-    stopAll: vi.fn(),
-  } as unknown as ProjectManager;
+  });
   // Pre-seeded managementRooms keep adoption (and its store.update disk write) off.
   const { router } = makeRouterFixture({
     rpc,

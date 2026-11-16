@@ -118,20 +118,43 @@ export interface RouterFixture {
   auditLines: AuditEntry[];
 }
 
+/** ProjectManager 全形状假件(#356):router 消费面 10 方法 + isMultiProject
+ *  + pmctl 面注册方法的全集 —— 测试不再手搓局部假件(漏方法 = 运行时
+ *  undefined is not a function 或静默走错分支)。`as unknown as` 收敛到本单点;
+ *  新测试禁止手搓局部假件,按需行为经 overrides 覆写。 */
+export function makeProjectManagerStub(
+  rpc: ReturnType<typeof makeFakeRpc>,
+  overrides: Record<string, unknown> = {},
+): ProjectManager {
+  const base: Record<string, unknown> = {
+    getRpcForRoom: vi.fn().mockReturnValue(rpc),
+    isProjectRoom: vi.fn().mockReturnValue(false),
+    labelForRoom: vi.fn().mockReturnValue(undefined),
+    isMultiProject: false,
+    allRpcs: vi.fn().mockReturnValue([rpc]),
+    roomForRpc: vi.fn().mockReturnValue(undefined),
+    projectFallbacks: vi.fn().mockReturnValue(undefined),
+    projectMap: vi.fn().mockReturnValue({}),
+    listProjects: vi.fn().mockReturnValue([]),
+    isRunning: vi.fn().mockReturnValue(false),
+    registerProject: vi.fn(),
+    sessionDirFor: vi.fn().mockReturnValue("/w/.pi-session"),
+    modeForRoom: vi.fn().mockReturnValue(undefined),
+    showToolCallsForRoom: vi.fn().mockReturnValue("auto"),
+    isGuestRoom: vi.fn().mockReturnValue(false),
+    setRoomShowToolCalls: vi.fn(),
+    renameProject: vi.fn(),
+    updateProjectWorkdir: vi.fn().mockResolvedValue(undefined),
+    removeProject: vi.fn().mockResolvedValue(undefined),
+    stopAll: vi.fn().mockResolvedValue(undefined),
+  };
+  return { ...base, ...overrides } as unknown as ProjectManager;
+}
+
 /** Assemble a router over fakes — the one place router test wiring lives. */
 export function makeRouterFixture(options: RouterFixtureOptions = {}): RouterFixture {
   const rpc = options.rpc ?? makeFakeRpc();
-  const projectManager =
-    options.projectManager ??
-    ({
-      getRpcForRoom: vi.fn().mockReturnValue(rpc),
-      isProjectRoom: vi.fn().mockReturnValue(false),
-      labelForRoom: vi.fn().mockReturnValue(undefined),
-      isMultiProject: false,
-      allRpcs: vi.fn().mockReturnValue([rpc]),
-      roomForRpc: vi.fn().mockReturnValue(undefined),
-      projectFallbacks: vi.fn().mockReturnValue(undefined),
-    } as unknown as ProjectManager);
+  const projectManager = options.projectManager ?? makeProjectManagerStub(rpc);
   // 夹具默认内存 store:update() 不落盘 —— 测试绝不写真实用户配置
   // (saveConfig 的持久化路径只由安装/向导与显式注入的 store 触达)。
   const store = options.store ?? new ConfigStore({}, () => {});

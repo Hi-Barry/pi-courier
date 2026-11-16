@@ -11,7 +11,7 @@ import { buildTurnReply, createMessageRouter } from "../src/rpc/message-router";
 import { clearedQueuesView } from "../src/rpc/command-map";
 import { PmctlController } from "../src/rpc/pmctl-controller";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { captureConsole, makeMsg, makeRouterFixture } from "./helpers";
+import { captureConsole, makeMsg, makeProjectManagerStub, makeRouterFixture } from "./helpers";
 import type { PiRpc } from "../src/rpc/pi-rpc";
 import type { ProjectManager } from "../src/rpc/project-manager";
 import type { RoomOps } from "../src/transports/interface";
@@ -57,16 +57,9 @@ function makeFixtures(opts: { multiProject?: boolean; managementRoomAdoptionAllo
     sessionDir: undefined as string | undefined,
     cwd: "/tmp/w",
   } as unknown as PiRpc;
-  const projectManager = {
-    getRpcForRoom: vi.fn().mockReturnValue(rpc),
-    isProjectRoom: vi.fn().mockReturnValue(false),
-    labelForRoom: vi.fn().mockReturnValue(undefined),
+  const projectManager = makeProjectManagerStub(rpc, {
     isMultiProject: opts.multiProject ?? true,
-    registerProject: vi.fn(),
-    listProjects: vi.fn().mockReturnValue([] as Array<[string, { name?: string; workdir: string }]>),
-    renameProject: vi.fn(),
-    stopAll: vi.fn(),
-  } as unknown as ProjectManager;
+  });
   // 内存 store(不落盘):夹具的 store.update 绝不写真实用户配置;
   // 需要断言落盘的用例(票2/票3)各自用 mocked 路径下的 IsoConfigStore。
   const store = new ConfigStore({
