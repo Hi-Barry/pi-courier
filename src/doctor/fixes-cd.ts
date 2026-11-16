@@ -1,6 +1,7 @@
 /**
  * doctor C/D 组的安全幂等修复动作(spec #337 票 #340,复用票 #339 的修复
- * 执行器)。只有 collectFixActions 的报告门槛会放行这些动作;全部自证幂等:
+ * 执行器)。工厂只产动作体(#348:checkId 由 collectFixActions 以 entry.id
+ * 统一改写);触发档位声明在对应检查项的 fix.on 上。全部自证幂等:
  *
  *  - chmodConfigFix(C3):配置 0600 收紧 —— 备份先于 chmod(复用票 2 的
  *    备份→改→diff 顺序契约),打印 mode 改前/改后;
@@ -18,14 +19,14 @@
 
 import * as fs from "node:fs";
 import { t } from "../i18n/index.js";
-import { backupRequired, diffLines, type FixAction, type FixOutcome } from "./fix.js";
+import { backupRequired, diffLines, type FixActionBody, type FixOutcome } from "./fix.js";
 import type { DoctorContext } from "./types.js";
 
-/** C3:配置 0600 收紧(备份先于 chmod,mode diff)。 */
-export function chmodConfigFix(ctx: DoctorContext): FixAction {
+/** C3 动作体:配置 0600 收紧(备份先于 chmod,mode diff)。checkId 由
+ *  collectFixActions 以 entry.id 统一改写(#348)。 */
+export function chmodConfigFix(ctx: DoctorContext): FixActionBody {
   const configPath = ctx.deps.layout.configPath;
   return {
-    checkId: "C3",
     summary: t("doctor.fix.chmodConfig"),
     run: async (): Promise<FixOutcome> => {
       if (!fs.existsSync(configPath)) return { changed: false };
@@ -44,11 +45,11 @@ export function chmodConfigFix(ctx: DoctorContext): FixAction {
   };
 }
 
-/** D1/D2:自管目录 —— 缺失则建(0700),存在但过松则收紧(0700)。 */
-export function mkdirOrChmodDirFix(ctx: DoctorContext, checkId: "D1" | "D2"): FixAction {
-  const dir = checkId === "D1" ? ctx.deps.layout.stateDir : ctx.deps.layout.dataDir;
+/** D1/D2 动作体:自管目录 —— 缺失则建(0700),存在但过松则收紧(0700)。
+ *  target 按 dir 语义选(D1=stateDir / D2=dataDir),与 id 解耦(#348)。 */
+export function mkdirOrChmodDirFix(ctx: DoctorContext, target: "stateDir" | "dataDir"): FixActionBody {
+  const dir = target === "stateDir" ? ctx.deps.layout.stateDir : ctx.deps.layout.dataDir;
   return {
-    checkId,
     summary: t("doctor.fix.selfManagedDir", { dir }),
     run: async (): Promise<FixOutcome> => {
       if (!fs.existsSync(dir)) {
@@ -63,12 +64,11 @@ export function mkdirOrChmodDirFix(ctx: DoctorContext, checkId: "D1" | "D2"): Fi
   };
 }
 
-/** D3:删陈旧锁。只在 lockIsStale 仍判定陈旧时 unlink(活锁/已消失不动)。 */
-export async function removeStaleLockFix(ctx: DoctorContext): Promise<FixAction | undefined> {
+/** D3 动作体:删陈旧锁。只在 lockIsStale 仍判定陈旧时 unlink(活锁/已消失不动)。 */
+export async function removeStaleLockFix(ctx: DoctorContext): Promise<FixActionBody | undefined> {
   const lockPath = ctx.deps.layout.lockPath;
   if (!fs.existsSync(lockPath)) return undefined;
   return {
-    checkId: "D3",
     summary: t("doctor.fix.removeStaleLock", { path: lockPath }),
     run: async (): Promise<FixOutcome> => {
       if (!fs.existsSync(lockPath)) return { changed: false };
@@ -83,13 +83,12 @@ export async function removeStaleLockFix(ctx: DoctorContext): Promise<FixAction 
   };
 }
 
-/** D4:清 manual-stop 残留标记(路径经 manualStopMarkerPath 同源派生 ——
+/** D4 动作体:清 manual-stop 残留标记(路径经 manualStopMarkerPath 同源派生 ——
  *  动态 import,doctor 依赖红线不静态引入项目模块)。 */
-export async function clearManualStopFix(ctx: DoctorContext): Promise<FixAction> {
+export async function clearManualStopFix(ctx: DoctorContext): Promise<FixActionBody> {
   const { manualStopMarkerPath } = await import("../resilience/manual-stop.js");
   const marker = manualStopMarkerPath(ctx.deps.layout.stateDir);
   return {
-    checkId: "D4",
     summary: t("doctor.fix.clearManualStop", { path: marker }),
     run: async (): Promise<FixOutcome> => {
       if (!fs.existsSync(marker)) return { changed: false };
@@ -99,13 +98,12 @@ export async function clearManualStopFix(ctx: DoctorContext): Promise<FixAction>
   };
 }
 
-/** D5:清 pending-update.json 残留(路径经 pendingUpdatePath 同源派生 ——
+/** D5 动作体:清 pending-update.json 残留(路径经 pendingUpdatePath 同源派生 ——
  *  动态 import,doctor 依赖红线不静态引入项目模块)。 */
-export async function clearPendingUpdateFix(ctx: DoctorContext): Promise<FixAction> {
+export async function clearPendingUpdateFix(ctx: DoctorContext): Promise<FixActionBody> {
   const { pendingUpdatePath } = await import("../update/pending-update.js");
   const pendingPath = pendingUpdatePath(ctx.deps.layout.stateDir);
   return {
-    checkId: "D5",
     summary: t("doctor.fix.clearPendingUpdate", { path: pendingPath }),
     run: async (): Promise<FixOutcome> => {
       if (!fs.existsSync(pendingPath)) return { changed: false };

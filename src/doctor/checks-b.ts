@@ -16,8 +16,11 @@
 
 import * as fs from "node:fs";
 import { t } from "../i18n/index.js";
-import { backupRequired, diffLines, type FixOutcome } from "./fix.js";
+import { backupRequired, diffLines, type FixActionBody, type FixOutcome } from "./fix.js";
 import type { DoctorCheckEntry, DoctorContext } from "./types.js";
+
+/** B 组检查项 id 表(#348):文件内 id 字面量收口,拼错变编译错误。 */
+const ID = { B1: "B1", B2: "B2", B3: "B3", B4: "B4" } as const;
 
 /** 与 pi-courier package.json engines 的 >=x.y.z 底线比较(B4 纯决策;
  *  底线解析复用 pi-rpc 的 minNodeVersionOf)。 */
@@ -64,17 +67,19 @@ export function checkGroupB(ctx: DoctorContext): DoctorCheckEntry[] {
   const configured = ctx.config?.cliPath;
 
   const b1: DoctorCheckEntry = {
-    id: "B1",
+    id: ID.B1,
     group: "B",
+    // B1 修复:删除失效 cliPath(fail 档触发;备份先于删除,#348 挂 entry)
+    fix: { on: "fail", make: staleCliPathFix },
     run: async () => {
       if (!configured) {
-        return { id: "B1", group: "B", severity: "skip", summary: t("doctor.b1.notConfigured") };
+        return { id: ID.B1, group: "B", severity: "skip", summary: t("doctor.b1.notConfigured") };
       }
       if (fs.existsSync(configured)) {
-        return { id: "B1", group: "B", severity: "ok", summary: t("doctor.b1.ok"), detail: configured };
+        return { id: ID.B1, group: "B", severity: "ok", summary: t("doctor.b1.ok"), detail: configured };
       }
       return {
-        id: "B1",
+        id: ID.B1,
         group: "B",
         severity: "fail",
         summary: t("doctor.b1.stale", { path: configured }),
@@ -84,11 +89,11 @@ export function checkGroupB(ctx: DoctorContext): DoctorCheckEntry[] {
   };
 
   const b2: DoctorCheckEntry = {
-    id: "B2",
+    id: ID.B2,
     group: "B",
     run: async () => {
       if (configured) {
-        return { id: "B2", group: "B", severity: "skip", summary: t("doctor.b2.skipConfigured"), detail: configured };
+        return { id: ID.B2, group: "B", severity: "skip", summary: t("doctor.b2.skipConfigured"), detail: configured };
       }
       // 桥同源解析链(which pi → 托管布局 → node_modules);找不到会抛错
       // → guardCheck 降级?不 —— 「确认坏了」(机器上没有任何 pi)应报 ❌,
@@ -99,7 +104,7 @@ export function checkGroupB(ctx: DoctorContext): DoctorCheckEntry[] {
         entry = await PiRpc.resolveCliPath();
       } catch (err) {
         return {
-          id: "B2",
+          id: ID.B2,
           group: "B",
           severity: "fail",
           summary: t("doctor.b2.missing"),
@@ -108,14 +113,14 @@ export function checkGroupB(ctx: DoctorContext): DoctorCheckEntry[] {
         };
       }
       if (!fs.existsSync(entry)) {
-        return { id: "B2", group: "B", severity: "fail", summary: t("doctor.b2.dead"), detail: entry };
+        return { id: ID.B2, group: "B", severity: "fail", summary: t("doctor.b2.dead"), detail: entry };
       }
-      return { id: "B2", group: "B", severity: "ok", summary: t("doctor.b2.ok"), detail: entry };
+      return { id: ID.B2, group: "B", severity: "ok", summary: t("doctor.b2.ok"), detail: entry };
     },
   };
 
   const b3: DoctorCheckEntry = {
-    id: "B3",
+    id: ID.B3,
     group: "B",
     run: async () => {
       const { piPackageEngines, assertPiEngineSupported } = await import("../rpc/pi-rpc.js");
@@ -127,17 +132,17 @@ export function checkGroupB(ctx: DoctorContext): DoctorCheckEntry[] {
         entry = await PiRpc.resolveCliPath();
       }
       if (!entry || !fs.existsSync(entry)) {
-        return { id: "B3", group: "B", severity: "skip", summary: t("doctor.b3.noEntry") };
+        return { id: ID.B3, group: "B", severity: "skip", summary: t("doctor.b3.noEntry") };
       }
       const pkg = piPackageEngines(entry);
       if (!pkg) {
-        return { id: "B3", group: "B", severity: "ok", summary: t("doctor.b3.notPi"), detail: entry };
+        return { id: ID.B3, group: "B", severity: "ok", summary: t("doctor.b3.notPi"), detail: entry };
       }
       try {
         assertPiEngineSupported(entry);
       } catch (err) {
         return {
-          id: "B3",
+          id: ID.B3,
           group: "B",
           severity: "fail",
           summary: t("doctor.b3.gate", { version: pkg.version }),
@@ -145,7 +150,7 @@ export function checkGroupB(ctx: DoctorContext): DoctorCheckEntry[] {
         };
       }
       return {
-        id: "B3",
+        id: ID.B3,
         group: "B",
         severity: "ok",
         summary: t("doctor.b3.ok"),
@@ -155,7 +160,7 @@ export function checkGroupB(ctx: DoctorContext): DoctorCheckEntry[] {
   };
 
   const b4: DoctorCheckEntry = {
-    id: "B4",
+    id: ID.B4,
     group: "B",
     run: async () => {
       const { minNodeVersionOf } = await import("../rpc/pi-rpc.js");
@@ -165,7 +170,7 @@ export function checkGroupB(ctx: DoctorContext): DoctorCheckEntry[] {
       if (!floor || !running) {
         // 底线或运行版本解析不了(engines 形态不认识/非 vX.Y.Z)→ 无法确认
         return {
-          id: "B4",
+          id: ID.B4,
           group: "B",
           severity: "skip",
           summary: t("doctor.b4.unparsable", { range: range ?? "-" }),
@@ -173,7 +178,7 @@ export function checkGroupB(ctx: DoctorContext): DoctorCheckEntry[] {
       }
       if (!nodeSatisfiesEngine(running, floor)) {
         return {
-          id: "B4",
+          id: ID.B4,
           group: "B",
           severity: "fail",
           summary: t("doctor.b4.old", {
@@ -184,7 +189,7 @@ export function checkGroupB(ctx: DoctorContext): DoctorCheckEntry[] {
         };
       }
       return {
-        id: "B4",
+        id: ID.B4,
         group: "B",
         severity: "ok",
         summary: t("doctor.b4.ok"),
@@ -204,13 +209,12 @@ export function checkGroupB(ctx: DoctorContext): DoctorCheckEntry[] {
  * 路径已变有效或 cliPath 已被移除时 changed=false 不再动文件)。配置改写
  * 走 saveConfig(config.js 同源原子写),diff 基于两侧规范序列化。
  */
-export async function staleCliPathFix(ctx: DoctorContext) {
+export async function staleCliPathFix(ctx: DoctorContext): Promise<FixActionBody | undefined> {
   const configPath = ctx.deps.layout.configPath;
   if (!fs.existsSync(configPath)) {
     return undefined; // 配置不存在(对应检查项不可修复档,另有 ❌ 报告)
   }
   return {
-    checkId: "B1",
     summary: t("doctor.fix.removeStaleCliPath"),
     run: async (): Promise<FixOutcome> => {
       // 幂等重入:文件/键消失、或路径已变有效 → 不动。

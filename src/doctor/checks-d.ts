@@ -13,7 +13,16 @@
 
 import * as fs from "node:fs";
 import { t } from "../i18n/index.js";
+import {
+  clearManualStopFix,
+  clearPendingUpdateFix,
+  mkdirOrChmodDirFix,
+  removeStaleLockFix,
+} from "./fixes-cd.js";
 import type { CheckResult, DoctorCheckEntry, DoctorContext } from "./types.js";
+
+/** D 组检查项 id 表(#348):文件内 id 字面量收口,拼错变编译错误。 */
+const ID = { D1: "D1", D2: "D2", D3: "D3", D4: "D4", D5: "D5", D6: "D6" } as const;
 
 /** POSIX 权限判松:group/other 任意位非 0 → 过松(0700 契约)。 */
 function modeLoose(path: string): string | undefined {
@@ -63,28 +72,34 @@ export function checkGroupD(ctx: DoctorContext): DoctorCheckEntry[] {
   const { layout, platform } = ctx.deps;
 
   const d1: DoctorCheckEntry = {
-    id: "D1",
+    id: ID.D1,
     group: "D",
-    run: async () => selfManagedDirResult("D1", layout.stateDir, platform),
+    // D1 修复:stateDir 建目录/收紧(warn 档触发,#348 挂 entry)
+    fix: { on: "warn", make: (ctx) => mkdirOrChmodDirFix(ctx, "stateDir") },
+    run: async () => selfManagedDirResult(ID.D1, layout.stateDir, platform),
   };
 
   const d2: DoctorCheckEntry = {
-    id: "D2",
+    id: ID.D2,
     group: "D",
-    run: async () => selfManagedDirResult("D2", layout.dataDir, platform),
+    // D2 修复:dataDir 建目录/收紧(warn 档触发,#348 挂 entry)
+    fix: { on: "warn", make: (ctx) => mkdirOrChmodDirFix(ctx, "dataDir") },
+    run: async () => selfManagedDirResult(ID.D2, layout.dataDir, platform),
   };
 
   const d3: DoctorCheckEntry = {
-    id: "D3",
+    id: ID.D3,
     group: "D",
+    // D3 修复:删陈旧锁(warn 档触发;绝不偷活锁,#348 挂 entry)
+    fix: { on: "warn", make: removeStaleLockFix },
     run: async () => {
       if (!fs.existsSync(layout.lockPath)) {
-        return { id: "D3", group: "D", severity: "ok", summary: t("doctor.d.lockFree") };
+        return { id: ID.D3, group: "D", severity: "ok", summary: t("doctor.d.lockFree") };
       }
       const { lockIsStale } = await import("../lock.js");
       if (lockIsStale(layout.lockPath)) {
         return {
-          id: "D3",
+          id: ID.D3,
           group: "D",
           severity: "warn",
           summary: t("doctor.d.lockStale", { path: layout.lockPath }),
@@ -92,21 +107,23 @@ export function checkGroupD(ctx: DoctorContext): DoctorCheckEntry[] {
         };
       }
       // 活锁 = 有实例持有(桥在跑):健康态,doctor 不拿锁不偷锁
-      return { id: "D3", group: "D", severity: "ok", summary: t("doctor.d.lockHeld"), detail: layout.lockPath };
+      return { id: ID.D3, group: "D", severity: "ok", summary: t("doctor.d.lockHeld"), detail: layout.lockPath };
     },
   };
 
   const d4: DoctorCheckEntry = {
-    id: "D4",
+    id: ID.D4,
     group: "D",
+    // D4 修复:清 manual-stop 残留(warn 档触发,#348 挂 entry)
+    fix: { on: "warn", make: clearManualStopFix },
     run: async () => {
       const { manualStopMarkerPath } = await import("../resilience/manual-stop.js");
       const marker = manualStopMarkerPath(layout.stateDir);
       if (!fs.existsSync(marker)) {
-        return { id: "D4", group: "D", severity: "ok", summary: t("doctor.d.markerFree") };
+        return { id: ID.D4, group: "D", severity: "ok", summary: t("doctor.d.markerFree") };
       }
       return {
-        id: "D4",
+        id: ID.D4,
         group: "D",
         severity: "warn",
         summary: t("doctor.d.markerStale", { path: marker }),
@@ -117,20 +134,22 @@ export function checkGroupD(ctx: DoctorContext): DoctorCheckEntry[] {
   };
 
   const d5: DoctorCheckEntry = {
-    id: "D5",
+    id: ID.D5,
     group: "D",
+    // D5 修复:清 pending-update 残留(warn 档触发,#348 挂 entry)
+    fix: { on: "warn", make: clearPendingUpdateFix },
     run: async () => {
       // 落盘路径与组合根同源(pendingUpdatePath,单一拼法);读侧经
       // PendingUpdateStore(JsonStateFile 吞错降级)
       const { PendingUpdateStore, pendingUpdatePath } = await import("../update/pending-update.js");
       const pendingPath = pendingUpdatePath(layout.stateDir);
       if (!fs.existsSync(pendingPath)) {
-        return { id: "D5", group: "D", severity: "ok", summary: t("doctor.d.pendingFree") };
+        return { id: ID.D5, group: "D", severity: "ok", summary: t("doctor.d.pendingFree") };
       }
       const entry = new PendingUpdateStore(pendingPath).read();
       if (entry) {
         return {
-          id: "D5",
+          id: ID.D5,
           group: "D",
           severity: "warn",
           summary: t("doctor.d.pendingStale", { from: entry.from, to: entry.to }),
@@ -139,7 +158,7 @@ export function checkGroupD(ctx: DoctorContext): DoctorCheckEntry[] {
         };
       }
       return {
-        id: "D5",
+        id: ID.D5,
         group: "D",
         severity: "warn",
         summary: t("doctor.d.pendingMalformed"),
@@ -150,7 +169,7 @@ export function checkGroupD(ctx: DoctorContext): DoctorCheckEntry[] {
   };
 
   const d6: DoctorCheckEntry = {
-    id: "D6",
+    id: ID.D6,
     group: "D",
     run: async () => {
       const { buildLegacyMigrationPlan } = await import("../legacy-migration.js");
@@ -160,10 +179,10 @@ export function checkGroupD(ctx: DoctorContext): DoctorCheckEntry[] {
         remnants.push(plan.legacyLockPath);
       }
       if (remnants.length === 0) {
-        return { id: "D6", group: "D", severity: "ok", summary: t("doctor.d.legacyFree") };
+        return { id: ID.D6, group: "D", severity: "ok", summary: t("doctor.d.legacyFree") };
       }
       return {
-        id: "D6",
+        id: ID.D6,
         group: "D",
         severity: "warn",
         summary: t("doctor.d.legacyRemnants", { count: remnants.length }),
