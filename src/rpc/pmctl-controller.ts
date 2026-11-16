@@ -16,6 +16,7 @@ import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
+import { ClaimLedger } from "../collab/claim-ledger.js";
 import {
   cloneRepository,
   gitWorktreeAdd,
@@ -42,7 +43,6 @@ import { applyRoomCustomAvatar, ensureRoomAvatar, poolFilesForProjects } from ".
 import { pickPoolAvatarFile } from "../space-identity.js";
 import { provisionManagedRoom } from "../space-topology.js";
 import type { RoomOps } from "../transports/interface.js";
-import type { PendingClaim } from "../types.js";
 import { win32PathProblem, win32SamePath } from "../win32-path.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { ProjectEntry, ProjectManager } from "./project-manager.js";
@@ -568,24 +568,13 @@ export class PmctlController {
 
   // ---- 票04(spec #299):客座认领流 -----------------------------------------
 
-  /** 待认领邀请(collab.pendingClaims)的单一写路径:落盘前重读,
-   *  防多房间并发发卡时丢更新(与票02 陌生房簿记同一口径)。 */
-  private updatePendingClaims(mutate: (claims: PendingClaim[]) => PendingClaim[]): void {
-    const fresh = this.opts.store.get().collab;
-    this.opts.store.update({
-      // 上限 50(任务2 审计整改):恶意批量拉房不再无限膨胀配置文件。
-      collab: { ...fresh, pendingClaims: mutate(fresh?.pendingClaims ?? []).slice(-50) },
-    });
-  }
-
-  private pendingClaims(): PendingClaim[] {
-    return this.opts.store.get().collab?.pendingClaims ?? [];
-  }
-
   /** /pmctl claim — 认领确认卡的指令面:空参列清单,`reject <n>` 拒绝,
    *  `<n> [子目录]` 确认(clone 落地 → guest 绑定 → 双向 bot 登记 → 上岗通报)。 */
   private async claim(rest: string, reply: Reply, roomOps: RoomOps): Promise<void> {
-    const claims = this.pendingClaims();
+    // 认领簿记域入口(#352):读写纪律(并发重读/上限/身份过滤)内化在
+    // ClaimLedger,collab 落盘形状不变。
+    const ledger = new ClaimLedger(this.opts.store);
+    const claims = ledger.claims();
     const [first, second] = splitFirst(rest);
     if (!first) {
       if (claims.length === 0) {
@@ -606,18 +595,14 @@ export class PmctlController {
         await reply(t("collab.claim.indexOOB", { max: claims.length }));
         return;
       }
-      const gone = claims[n - 1]!;
-      // 按对象身份过滤(票04 评审整改):不整写入口快照 —— 读写窗内并发
-      // 新增的邀请保留,只移除被拒绝的这一条。拒绝簿记带 URL(任务3 场景
-      // 测试):同房同 URL 不再发卡,URL 后补/变更后允许重新发卡。
-      this.updatePendingClaims((list) => list.filter((c) => c !== gone));
-      const fresh = this.opts.store.get().collab;
-      this.opts.store.update({
-        collab: {
-          ...fresh,
-          claimRejectedKeys: [...(fresh?.claimRejectedKeys ?? []), `${gone.roomId}|${gone.url}`].slice(-200),
-        },
-      });
+      // 拒绝:按对象身份过滤(票04 评审整改)+ 拒绝键带 URL(任务3 场景
+      // 测试:同房同 URL 不再发卡,URL 后补/变更后允许重新发卡)—— 纪律
+      // 内化在 ledger(#352),此处单次写。
+      const gone = ledger.rejectClaimAt(n);
+      if (!gone) {
+        await reply(t("collab.claim.indexOOB", { max: claims.length }));
+        return;
+      }
       await reply(t("collab.claim.rejected", { room: gone.roomId }));
       return;
     }
@@ -674,8 +659,8 @@ export class PmctlController {
         this.opts.auth.enableChannel(pending.roomId, "mentions");
         this.opts.store.update({ auth: this.opts.auth.exportConfig() });
       }
-      // 从待认领簿记移除(以函数式过滤走单点写路径)。
-      this.updatePendingClaims((list) => list.filter((c) => c.roomId !== pending.roomId));
+      // 从待认领簿记移除(并发重读内化在 ledger,#352)。
+      ledger.removeClaimForRoom(pending.roomId);
       // 双向 bot 登记:guest 写自己的 MXID 进房间登记簿 —— owner 侧的
       // botFilter/信箱由此识别"谁是 bot"。失败不致命:只影响对端识别,本侧无碍。
       try {
