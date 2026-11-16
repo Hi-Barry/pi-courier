@@ -13,7 +13,10 @@ import { handleAdminCommand } from "../auth/admin-commands.js";
 import { type ChallengeAuth } from "../auth/challenge-auth.js";
 import { guestCommandVerdict } from "../auth/guest-policy.js";
 import { LoginManager } from "../auth/headless-login.js";
+import { BotRegistry } from "../collab/bot-registry.js";
+import { ClaimLedger } from "../collab/claim-ledger.js";
 import { repoNameFromUrl } from "../collab/git-info.js";
+import { RoomMailbox } from "../collab/mailbox.js";
 import { commandPolicy } from "../command-registry.js";
 import { aggregateToolTurns, bashOutputLimit, type ConfigStore, effectiveWorkdir, managementRoomId, modelFallbackChain, recapOnNew, toolCallArgLimit, WORKFLOW_CARD_DEGRADED_RETRY_MS_DEFAULT, workflowCardThrottleMs, workflowProgressCard } from "../config.js";
 import { errorMessage } from "../errors.js";
@@ -44,7 +47,6 @@ import { isTerminal, type WorkflowProgressIR, type WorkflowRunStatus } from "../
 import type { PersistedAttachmentEntry } from "./attachment-ledger.js";
 import { AttachmentLedger } from "./attachment-ledger.js";
 import { BacklogInbox } from "./backlog-inbox.js";
-import { BotRegistry } from "./bot-registry.js";
 import {
   type BashTracker,
   bashTimeoutText,
@@ -58,7 +60,6 @@ import {
   resolveSessionDir,
 } from "./command-map.js";
 import { ExtensionQuestions, type ExtensionUIRequestView, extensionUiTimeoutMs } from "./extension-questions.js";
-import { RoomMailbox } from "./mailbox.js";
 import { FallbackStreak, MODEL_FALLBACK_THRESHOLD, nextFallbackTarget } from "./model-switch.js";
 import type { PiRpc } from "./pi-rpc.js";
 import type { PmctlController } from "./pmctl-controller.js";
@@ -1010,6 +1011,9 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const unknownNoManagementWarned = new Set<string>();
   // 票05(spec #299):房间增量信箱 —— 未触发的可见文本在此攒,触发时并入 prompt。
   const mailbox = new RoomMailbox();
+  // 认领簿记域入口(#352):三个落盘簿记的读写纪律(并发重读/上限/身份过滤)
+  // 内化在 ClaimLedger,本阶段只调 API。
+  const claimLedger = new ClaimLedger(store);
   // 票06(spec #299):工具流关闭房间的 typing 续期节流(5s)与回合停止簿记。
   // sendTyping 缝兼容旧假件(可能不返回 Promise):统一 Promise.resolve 包裹。
   const TYPING_RENEW_INTERVAL_MS = 5_000;
@@ -1129,42 +1133,27 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           return true;
         }
         const meta = (await roomOps?.getProjectMeta?.(msg.chatId)) ?? null;
-        const fresh = store.get().collab;
-        const hasPendingClaim = (fresh?.pendingClaims ?? []).some((c) => c.roomId === msg.chatId);
-        const rejectedKey = `${msg.chatId}|${meta?.gitUrl ?? ""}`;
-        const rejectedForThisUrl = (fresh?.claimRejectedKeys ?? []).includes(rejectedKey);
-        const noticed = fresh?.unknownNotifiedRooms ?? [];
-        if (meta?.gitUrl && !hasPendingClaim && !rejectedForThisUrl) {
+        if (
+          meta?.gitUrl &&
+          !claimLedger.hasPendingClaim(msg.chatId) &&
+          !claimLedger.isRejectedFor(msg.chatId, meta.gitUrl)
+        ) {
           // 目录展示与 /pmctl claim 的落地口径同源(effectiveWorkdir =
           // resolveProjectPath 的根;评审整改:不再 workdir??"~" 手拼)。
           const dir = path.join(effectiveWorkdir(store.get()), repoNameFromUrl(meta.gitUrl));
-          const index = (fresh?.pendingClaims ?? []).length + 1;
+          const index = claimLedger.claims().length + 1;
           await sendReply(
             mgRoom,
             msg.transport,
             t("collab.claim.card", { room: msg.chatId, name: meta.name, url: meta.gitUrl, dir, index })
           );
-          // 落盘前重读(spec #299 票04 评审整改):sendReply 是 await 点,
-          // handleIncoming 可并发 —— 写回以当下 store 值为基。
-          const freshNow = store.get().collab;
-          store.update({
-            collab: {
-              ...freshNow,
-              unknownNotifiedRooms: [...(freshNow?.unknownNotifiedRooms ?? []), msg.chatId].slice(-200),
-              pendingClaims: [
-                ...(freshNow?.pendingClaims ?? []),
-                { roomId: msg.chatId, url: meta.gitUrl, projectName: meta.name, at: Date.now() },
-              ],
-            },
-          });
+          // 落盘前重读与上限收敛内化在 ledger(#352):sendReply 是 await 点,
+          // handleIncoming 可并发。
+          claimLedger.recordClaimCard(msg.chatId, meta.gitUrl, meta.name);
           ctx.log.info(`🚪 陌生房 ${msg.chatId} 带项目元数据,已向管理房发认领卡(#${index})`);
-        } else if (!noticed.includes(msg.chatId) && !hasPendingClaim) {
+        } else if (!claimLedger.hasNoticed(msg.chatId) && !claimLedger.hasPendingClaim(msg.chatId)) {
           await sendReply(mgRoom, msg.transport, t("router.unknownRoom.notice", { room: msg.chatId }));
-          // 落盘前重读(票02 评审整改口径):await 之后的写回以当下值为基。
-          const freshNow = store.get().collab;
-          store.update({
-            collab: { ...freshNow, unknownNotifiedRooms: [...(freshNow?.unknownNotifiedRooms ?? []), msg.chatId].slice(-200) },
-          });
+          claimLedger.recordNotice(msg.chatId);
           ctx.log.info(`🚪 陌生房 ${msg.chatId} 不接活,已向管理房发认领提示`);
         }
         return true;

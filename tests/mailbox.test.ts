@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAILBOX_MAX_ITEMS, RoomMailbox } from "../src/rpc/mailbox";
+import { MAILBOX_MAX_ITEMS, RoomMailbox } from "../src/collab/mailbox";
 
 describe("RoomMailbox (spec #299 票05)", () => {
   it("drain returns items in arrival order and clears the queue; empty drain is a no-op", () => {
