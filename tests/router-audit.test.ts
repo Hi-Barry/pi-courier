@@ -6,7 +6,8 @@
  * source labels (attachment header + quote prefix) as pure-function pins.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { redactLoginDetail, withAttachmentPrefix, withQuotePrefix } from "../src/rpc/message-router";
+import { redactLoginDetail } from "../src/rpc/command-dispatch";
+import { withAttachmentPrefix, withQuotePrefix } from "../src/rpc/message-router";
 import { makeMsg, makeRouterFixture } from "./helpers";
 
 /** login 切片走逃生舱注入;其余装配全在共享工厂,不用的特性缺省即关。 */

@@ -46,6 +46,7 @@ import type { PersistedAttachmentEntry } from "./attachment-ledger.js";
 import { AttachmentLedger } from "./attachment-ledger.js";
 import { BacklogInbox } from "./backlog-inbox.js";
 import { ToolTurnCards, WorkflowProgressCards } from "./card-session.js";
+import { handleLoginFamily, handlePmctlFamily, normalizeDetailLine } from "./command-dispatch.js";
 import {
   type BashTracker,
   bashTimeoutText,
@@ -318,43 +319,6 @@ function attachmentErrorReply(reason: string): string {
 }
 
 /** 审计 detail 的单行化契约:空白归一 + 120 截断(上限只在这里出现)。 */
-const normalizeDetailLine = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 120);
-
-/**
- * provider 位按内容判定(sec-redact-login-detail):形如 provider id 才
- * 原样保留 —— 全小写 kebab(字母开头、段内字母数字)、长度 ≤ 32、且不以
- * `sk-` 开头(密钥生态最常见前缀)。其余一律按潜在密钥折叠为 `***`:
- * 宁可掩掉一个命名怪异的 provider,也不让密钥落进审计 JSONL。已拦下的
- * 常见形态:oc_sk_*、sk-* 系、ghp_*、xox*、JWT(eyJ…)、含下划线/大写/
- * 数字开头的随机串、超长串。
- */
-const looksLikeProviderId = (token: string): boolean =>
-  token.length <= 32 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(token) && !token.startsWith("sk-");
-
-/**
- * /login 族(/login /logout /auth)审计 detail 的脱敏(spec #211 / 票
- * sec-redact-login-detail):按「指令名 provider [方式词] [密钥…]」的结构
- * 脱敏,且每个保留位都按内容判定 —— 指令名固定保留;provider 位仅当形如
- * provider id(looksLikeProviderId)才保留,否则视为漏输 provider 段而顶到
- * 该位的密钥,折叠为 `***`;第 3 个 token 仅当是方式词(oauth|api_key,
- * 忽略大小写)时保留,其余 token 连同其后所有内容折叠为单个 `***`。
- * 掩码必须发生在截断之前,超长密钥才不会因截断漏出前半截。
- */
-export function redactLoginDetail(text: string): string {
-  const tokens = text.replace(/\s+/g, " ").trim().split(" ");
-  const kept = tokens.slice(0, 1);
-  if (tokens.length > 1) kept.push(looksLikeProviderId(tokens[1]!) ? tokens[1]! : "***");
-  const rest = tokens.slice(2);
-  if (rest.length > 0) {
-    if (/^(oauth|api_key)$/i.test(rest[0]!)) {
-      kept.push(rest[0]!);
-      if (rest.length > 1) kept.push("***");
-    } else {
-      kept.push("***");
-    }
-  }
-  return normalizeDetailLine(kept.join(" "));
-}
 
 export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
   const { projectManager, auth, sendReply, sendTyping, roomOps, store, pmctl, managementRoomAdoptionAllowed } = deps;
@@ -1161,16 +1125,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // /pmctl family: gates + actions live in the controller. The invite
       // target arrives pre-resolved (transport-native MXID). No pi process
       // is started for management commands.
-      handle: async (ctx) => {
-        // 审计(issue #124):项目删除是最重的一刀,确认链的每一步都留痕
-        //(/pmctl rm 与其确认词都命中这里);其余子命令 v1 不记。
-        if (/^\/pmctl\s+rm(\s|$)/i.test(ctx.text.trim())) {
-          auditTrail(AUDIT_EVENTS.pmctlRemove, ctx.msg, normalizeDetailLine(ctx.text));
-        }
-        // 工单 sec-pmctl-admin-gate:isAdmin 按 /login 同款口径在此计算
-        //(auth.isAdminUser),控制器只收判定结果 —— 门禁决策仍在控制器。
-        return await pmctl.handle(ctx.text, { chatId: ctx.msg.chatId, senderMxid: ctx.msg.userId, isManagementRoom: ctx.isManagementRoom, isAdmin: auth.isAdminUser(ctx.msg.userId, ctx.msg.transport) }, async (replyText) => sendReply(ctx.msg.chatId, ctx.msg.transport, replyText));
-      },
+      // 处理器住址(#358):审计+门禁+分派在 command-dispatch,阶段壳只编排。
+      handle: async (ctx) =>
+        await handlePmctlFamily(
+          { pmctl, auth, audit: auditTrail, reply: sendReply },
+          { text: ctx.text, msg: ctx.msg, isManagementRoom: ctx.isManagementRoom },
+        ),
     },
     {
       name: "login",
@@ -1180,46 +1140,17 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       // Headless login (issue #55): /login /logout /auth — admin + management
       // room only. Single-project mode has no management room: a DM counts as
       // one (that is where the admin talks to the bot there).
-      handle: async (ctx) => {
-        const { msg, text } = ctx;
-        if (!/^\/(login|logout|auth)(\s|$)/.test(text)) return false;
-        // 审计(issue #124):认证面 —— 放行与否都记(被拒的尝试更要留痕)。
-        auditTrail(AUDIT_EVENTS.loginFlow, msg, redactLoginDetail(text));
-        const loginRoomAllowed = ctx.multiProject
-          ? ctx.isManagementRoom
-          : !msg.isGroupChat;
-        if (!auth.isAdminUser(msg.userId, msg.transport)) {
-          await sendReply(msg.chatId, msg.transport, t("router.login.forbidden"));
-          return true;
-        }
-        if (!loginRoomAllowed) {
-          await sendReply(msg.chatId, msg.transport, t("router.login.roomRestricted"));
-          return true;
-        }
-        const loginCmd = text.split(/\s+/)[0]!.toLowerCase();
-        const loginArgs = text.slice(loginCmd.length).trim();
-        if (loginCmd === "/login") {
-          if (!loginArgs) {
-            await login.listProviders(msg.chatId, msg.transport);
-          } else {
-            const [providerId, method] = loginArgs.split(/\s+/);
-            // starterId(sec-login-sender-guard):流程绑定发起者,只有 TA 的
-            // 后续消息能作答/取消 —— 管理房内其他受信成员无权代答。
-            await login.startLogin(msg.chatId, msg.transport, providerId!, msg.userId, method);
-          }
-          return true;
-        }
-        if (loginCmd === "/logout") {
-          if (!loginArgs) {
-            await sendReply(msg.chatId, msg.transport, t("router.login.logoutUsage"));
-            return true;
-          }
-          await login.logout(msg.chatId, msg.transport, loginArgs.split(/\s+/)[0]!);
-          return true;
-        }
-        await login.authStatus(msg.chatId, msg.transport);
-        return true;
-      },
+      // 处理器住址(#358):审计+门禁+三命令分派在 command-dispatch。
+      handle: async (ctx) =>
+        await handleLoginFamily(
+          { auth, login, audit: auditTrail, reply: sendReply },
+          {
+            text: ctx.text,
+            msg: ctx.msg,
+            multiProject: ctx.multiProject,
+            isManagementRoom: ctx.isManagementRoom,
+          },
+        ),
     },
     {
       name: "slashCommands",
