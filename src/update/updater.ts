@@ -247,9 +247,10 @@ async function defaultScheduledTaskProbe(): Promise<boolean> {
 export class UpdateOrchestrator {
   private state: UpdateState = "idle";
   /**
-   * 编排代次:状态机每发生一次转移 +1;后台循环闭包捕获自己进入时的代次,
-   * 后续每次转移/取消都使旧循环自废 —— cancel(同步置位)与后台超时回执的
-   * 仲裁依据,防止迟到置位打回 idle 造出双编排窗口(§5.7)。
+   * 编排代次:状态机每发生一次转移 +1(由 transition 原语保证,#350);
+   * 后台循环闭包捕获自己进入时的代次,后续每次转移/取消都使旧循环自废
+   * (isStale 原语)—— cancel(同步置位)与后台超时回执的仲裁依据,防止
+   * 迟到置位打回 idle 造出双编排窗口(§5.7)。
    */
   private generation = 0;
   private from?: string;
@@ -284,6 +285,24 @@ export class UpdateOrchestrator {
   }
 
   /**
+   * 状态转移原语(#350,§5.7):转移与代次推进一次写就 —— 「每次转移 +1」
+   * 由构造保证,新后台循环不可能捕获到未推进的代次;此前 20+ 处手写对、
+   * 漏一处 = 双编排窗口(§5.7 注释自述)。
+   */
+  private transition(next: UpdateState): void {
+    this.state = next;
+    this.generation += 1;
+  }
+
+  /**
+   * 迟到守卫原语(#350):后台循环闭包捕获自己进入时的代次,判定失败即自废
+   * —— cancel(同步置位)与后台超时/回执的仲裁依据;此前 10 处手写收敛于此。
+   */
+  private isStale(myGen: number, expected: UpdateState): boolean {
+    return this.generation !== myGen || this.state !== expected;
+  }
+
+  /**
    * /update 命令处理(含 §5.3 同步段固定顺序)。返回 true = 已处理
    * (含 unavailable/守卫拒绝);同步守卫拒绝与占位失败零残留。
    */
@@ -312,15 +331,14 @@ export class UpdateOrchestrator {
       await io.reply(t("cmd.update.inProgress"));
       return true;
     }
-    this.state = "checking";
-    this.generation += 1;
+    this.transition("checking");
     const myGen = this.generation;
     const from = this.runningVersion; // 进程启动时加载的版本,fetch 前先取并判空(§5.2)
     this.startedAt = Date.now();
     // ── 占位后的 await 段:一切异常先同步复位 idle 再上抛(占位释放契约)──
     try {
       if (from === undefined) {
-        this.state = "idle";
+        this.transition("idle");
         await io.reply(t("cmd.update.check.failed", { message: "current bridge version unavailable" }));
         return true;
       }
@@ -329,17 +347,17 @@ export class UpdateOrchestrator {
       try {
         latest = await this.fetchLatest();
       } catch (err) {
-        this.state = "idle";
+        this.transition("idle");
         await io.reply(t("cmd.update.check.failed", { message: errorMessage(err) }));
         return true;
       }
       if (latest === undefined) {
-        this.state = "idle";
+        this.transition("idle");
         await io.reply(t("cmd.update.check.failed", { message: "registry latest version missing or malformed" }));
         return true;
       }
       if (!isNewerVersion(latest, from)) {
-        this.state = "idle";
+        this.transition("idle");
         await io.reply(t("cmd.update.check.upToDate", { version: from }));
         return true;
       }
@@ -347,6 +365,8 @@ export class UpdateOrchestrator {
       const probe = await this.probe(io.allRpcs());
       if (sub !== "force" && (probe.streaming > 0 || probe.unreachable > 0)) {
         // 忙(或查不动)且非 force → waiting:预告 + 后台等待(§5.3)。
+        // 例外(不推进代次,#350):waiting 是同一编排的延续 —— CAS 占位时
+        // 已推进并捕获 myGen,这里再推进会立即自废刚要启动的后台等待。
         this.state = "waiting";
         await io.reply(this.waitingAnnouncement(probe));
         void this.waitThenInstall(io, myGen, from, latest);
@@ -354,16 +374,14 @@ export class UpdateOrchestrator {
       }
       // 真全空闲,或 force(force 恒跳过等待直接 installing;重启另有
       // restart-pending 空闲确认兜底)。
-      this.state = "installing";
-      this.generation += 1;
+      this.transition("installing");
       await io.reply(t("cmd.update.started", { from, to: latest }));
       void this.installAndAwaitRestart(io, this.generation, from, latest);
       return true;
     } catch (err) {
       // 占位释放契约(§5.3):先同步复位 idle 再上抛,让 generic catch 接手
       // 本条消息的回执 —— 漏复位会让状态机永久卡 checking(防线 7 反向锁死)。
-      this.state = "idle";
-      this.generation += 1;
+      this.transition("idle");
       throw err;
     }
   }
@@ -437,8 +455,7 @@ export class UpdateOrchestrator {
         // 换血窗口不可中断、无回滚路径,状态不变(§5.7)。
         return this.replyTrue(io, t("cmd.update.inProgress"));
       case "waiting": {
-        this.state = "idle";
-        this.generation += 1;
+        this.transition("idle");
         return (async () => {
           await io.reply(t("cmd.update.cancelled"));
           io.audit?.(AUDIT_EVENTS.updateCancel, "waiting cancelled by /update cancel");
@@ -449,8 +466,7 @@ export class UpdateOrchestrator {
         // 已换血,取消的只是自动重启这半步,不回滚:文件照写(手动重启后
         // 照样闭环回执)+ manualRestartHint + audit → idle(§5.5 失败分支
         // 同一出口)。此处写失败不阻断任何事,manualRestartHint 照发。
-        this.state = "idle";
-        this.generation += 1;
+        this.transition("idle");
         return (async () => {
           this.writePendingUpdateBestEffort();
           await io.reply(t("cmd.update.manualRestartHint", { from: this.from ?? "unknown", to: this.to ?? "unknown" }));
@@ -471,16 +487,14 @@ export class UpdateOrchestrator {
       if (!(err instanceof AllAgentsIdleTimeoutError)) {
         // 非超时的等待内部异常:复位可重试,别把它谎报成超时。
         logger.error(`[update] waiting loop failed: ${errorMessage(err)}`);
-        if (this.state === "waiting" && this.generation === myGen) {
-          this.state = "idle";
-          this.generation += 1;
+        if (!this.isStale(myGen, "waiting")) {
+          this.transition("idle");
         }
         return;
       }
-      if (this.generation !== myGen || this.state !== "waiting") return; // cancel 先到
+      if (this.isStale(myGen, "waiting")) return; // cancel 先到
       // 超时(§5.3):回执 + audit update.cancel → idle(可用 force 重试)。
-      this.state = "idle";
-      this.generation += 1;
+      this.transition("idle");
       try {
         await io.reply(t("cmd.update.waitTimeout", { minutes: this.waitMinutes }));
       } catch (replyErr) {
@@ -490,15 +504,13 @@ export class UpdateOrchestrator {
       io.audit?.(AUDIT_EVENTS.updateCancel, "wait timeout");
       return;
     }
-    if (this.generation !== myGen || this.state !== "waiting") return; // cancel 先到
-    this.state = "installing";
-    this.generation += 1;
+    if (this.isStale(myGen, "waiting")) return; // cancel 先到
+    this.transition("installing");
     try {
       await io.reply(t("cmd.update.started", { from, to }));
     } catch (err) {
       logger.error(`[update] started notice failed: ${errorMessage(err)}`);
-      this.state = "idle";
-      this.generation += 1;
+      this.transition("idle");
       return;
     }
     await this.installAndAwaitRestart(io, this.generation, from, to);
@@ -517,7 +529,7 @@ export class UpdateOrchestrator {
         // 的代次守卫防 cancel 时代迟到回执)。回执顺序不保证严格串行(io.reply
         // 是异步的),但事件本身低频,乱序无碍理解。
         onProgress: (event) => {
-          if (this.generation !== myGen || this.state !== "installing") return;
+          if (this.isStale(myGen, "installing")) return;
           void io.reply(this.progressText(event)).catch((err: unknown) => {
             logger.warn(`[update] progress notice failed: ${errorMessage(err)}`);
           });
@@ -526,11 +538,10 @@ export class UpdateOrchestrator {
     } catch (err) {
       outcome = { ok: false, message: errorMessage(err) };
     }
-    if (this.generation !== myGen || this.state !== "installing") return;
+    if (this.isStale(myGen, "installing")) return;
     if (!outcome.ok) {
       // 安全失败(§5.4):回执错误、旧版继续运行、桥绝不自杀,状态回 idle。
-      this.state = "idle";
-      this.generation += 1;
+      this.transition("idle");
       // 磁盘可能已经被换血(npm 先替换文件、后跑脚本;脚本失败也会走到这里)。
       // 进程仍是 from —— 明确告诉用户两边版本,别把“旧版继续运行”误读成
       // “磁盘也是旧版”,更不要直接重启(#320)。
@@ -556,8 +567,7 @@ export class UpdateOrchestrator {
       // manualRestartHint,与 finishRestartPendingManually / restartNow 写失败
       // 降级同构,§5.5 失败分支):先同步置位,再尽力写文件,最后补 hint 回执。
       logger.error(`[update] installed notice failed: ${errorMessage(err)}`);
-      this.state = "idle";
-      this.generation += 1;
+      this.transition("idle");
       this.writePendingUpdateBestEffort();
       try {
         await io.reply(t("cmd.update.manualRestartHint", { from, to }));
@@ -568,12 +578,11 @@ export class UpdateOrchestrator {
     }
     // restart-pending(§5.5):换血已完成,只剩第二段空闲确认(npm 窗口
     // 期间可能有新任务进来)。
-    this.state = "restart-pending";
-    this.generation += 1;
+    this.transition("restart-pending");
     const myRestartGen = this.generation;
     try {
       const probe = await this.probe(io.allRpcs());
-      if (this.generation !== myRestartGen || this.state !== "restart-pending") return;
+      if (this.isStale(myRestartGen, "restart-pending")) return;
       if (probe.streaming > 0 || probe.unreachable > 0) {
         // 忙 → 本态专用预告与进度(restartWait/restartProgress:换血已完成、
         // 只剩等空闲重启,busyWaiting/waitProgress 的「开始更新」措辞在本态
@@ -585,7 +594,7 @@ export class UpdateOrchestrator {
         try {
           await this.waitIdleWithProgress(io, myRestartGen, "restart-pending");
         } catch (err) {
-          if (this.generation !== myRestartGen || this.state !== "restart-pending") return;
+          if (this.isStale(myRestartGen, "restart-pending")) return;
           const detail =
             err instanceof AllAgentsIdleTimeoutError
               ? "restart wait timeout"
@@ -596,15 +605,14 @@ export class UpdateOrchestrator {
           this.finishRestartPendingManually(io, from, to, detail);
           return;
         }
-        if (this.generation !== myRestartGen || this.state !== "restart-pending") return;
+        if (this.isStale(myRestartGen, "restart-pending")) return;
       }
       await this.restartNow(io, myRestartGen, from, to);
     } catch (err) {
       // 后台循环兜底:绝不外抛(进度回执等 await 的意外失败);状态复位可重试。
       logger.error(`[update] restart-pending phase failed: ${errorMessage(err)}`);
-      if (this.state === "restart-pending" && this.generation === myRestartGen) {
-        this.state = "idle";
-        this.generation += 1;
+      if (!this.isStale(myRestartGen, "restart-pending")) {
+        this.transition("idle");
       }
     }
   }
@@ -613,8 +621,7 @@ export class UpdateOrchestrator {
    *  manualRestartHint + audit → idle。此处写失败不阻断任何事(该路径本就
    *  不自动重启),闭环静默缺失仅 warn 留痕(§5.5 失败分支)。 */
   private finishRestartPendingManually(io: UpdateCommandIO, from: string, to: string, detail: string): void {
-    this.state = "idle";
-    this.generation += 1;
+    this.transition("idle");
     this.writePendingUpdateBestEffort();
     void io
       .reply(t("cmd.update.manualRestartHint", { from, to }))
@@ -639,8 +646,7 @@ export class UpdateOrchestrator {
       // 写失败 = 完成回执会静默丢失 → 放弃自动重启:降级手动重启,状态回 idle
       // (代码已在磁盘,手动重启加载新版,仅丢完成回执;§5.5 步骤 1)。
       logger.warn(`pending-update.json write failed, automatic restart abandoned: ${errorMessage(err)}`);
-      this.state = "idle";
-      this.generation += 1;
+      this.transition("idle");
       try {
         await io.reply(t("cmd.update.manualRestart", { from, to }));
       } catch (replyErr) {
@@ -652,8 +658,7 @@ export class UpdateOrchestrator {
       await io.reply(t("cmd.update.restarting"));
     } catch (err) {
       logger.error(`[update] restarting notice failed: ${errorMessage(err)}`);
-      this.state = "idle";
-      this.generation += 1;
+      this.transition("idle");
       return;
     }
     // 只判平台不判 active 会误伤非单元部署(§5.5 步骤 3):两者都满足才 restart。
@@ -673,12 +678,11 @@ export class UpdateOrchestrator {
         logger.warn(`[update] systemctl is-active probe failed, degrading to manual restart: ${errorMessage(err)}`);
       }
     }
-    if (this.generation !== myGen || this.state !== "restart-pending") return; // cancel 先到
+    if (this.isStale(myGen, "restart-pending")) return; // cancel 先到
     if (!active) {
       // 非 Linux / 单元非 active / is-active 探测失败(安全默认)→ 降级回执,
       // 不报错(§5.5 步骤 4)。
-      this.state = "idle";
-      this.generation += 1;
+      this.transition("idle");
       try {
         await io.reply(t("cmd.update.manualRestart", { from, to }));
       } catch (replyErr) {
@@ -690,8 +694,7 @@ export class UpdateOrchestrator {
       (this.deps.triggerRestart ?? defaultTriggerRestart)();
     } catch (err) {
       // spawn 出错:文件已写,手动 restart 即可(重启后回执闭环);状态复位。
-      this.state = "idle";
-      this.generation += 1;
+      this.transition("idle");
       try {
         await io.reply(t("cmd.update.restartFailed", { message: errorMessage(err) }));
       } catch (replyErr) {
@@ -702,6 +705,7 @@ export class UpdateOrchestrator {
     // detached spawn 已离开本进程事件循环,进程通常即刻被 systemctl 杀掉;
     // 万一没死(总线失败等),状态回 idle 让 /update 可再次发起 —— 自愈优先,
     // pending-update.json 已在盘上,任何一次重启都会闭环回执。
+    // 终点位:只置态不推进代次(#350)—— 触发已成功,无需再自废任何闭包。
     this.state = "idle";
   }
 
@@ -717,10 +721,9 @@ export class UpdateOrchestrator {
     } catch (err) {
       logger.warn(`[update] scheduled task probe failed: ${errorMessage(err)}`);
     }
-    if (this.generation !== myGen || this.state !== "restart-pending") return; // cancel 先到
+    if (this.isStale(myGen, "restart-pending")) return; // cancel 先到
     if (!taskExists) {
-      this.state = "idle";
-      this.generation += 1;
+      this.transition("idle");
       try {
         await io.reply(t("cmd.update.manualRestartWindows", { from, to }));
       } catch (err) {
@@ -732,8 +735,7 @@ export class UpdateOrchestrator {
       (this.deps.triggerRestart ?? defaultTriggerRestart)();
     } catch (err) {
       logger.error(`[update] windows restart trigger failed: ${errorMessage(err)}`);
-      this.state = "idle";
-      this.generation += 1;
+      this.transition("idle");
       try {
         await io.reply(t("cmd.update.manualRestartWindows", { from, to }));
       } catch (replyErr) {
@@ -741,6 +743,7 @@ export class UpdateOrchestrator {
       }
       return;
     }
+    // 终点位:只置态不推进代次(#350)—— 触发已成功,无需再自废任何闭包。
     this.state = "idle";
   }
 
@@ -810,7 +813,7 @@ export class UpdateOrchestrator {
     await waitForIdle(io.allRpcs(), {
       timeoutMs: this.waitTimeoutMs,
       onTick: (probe) => {
-        if (this.generation !== myGen || this.state !== phase) return;
+        if (this.isStale(myGen, phase)) return;
         const elapsed = Date.now() - this.lastProgressAt;
         if (elapsed < this.waitProgressMs) return;
         this.lastProgressAt = Date.now();
@@ -821,7 +824,7 @@ export class UpdateOrchestrator {
           logger.warn(`[update] progress notice failed: ${errorMessage(err)}`);
         });
       },
-      shouldAbort: () => this.generation !== myGen || this.state !== phase,
+      shouldAbort: () => this.isStale(myGen, phase),
     });
   }
 
