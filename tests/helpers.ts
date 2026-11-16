@@ -141,6 +141,7 @@ export function makeProjectManagerStub(
     sessionDirFor: vi.fn().mockReturnValue("/w/.pi-session"),
     modeForRoom: vi.fn().mockReturnValue(undefined),
     showToolCallsForRoom: vi.fn().mockReturnValue("auto"),
+    isGuestRoom: vi.fn().mockReturnValue(false),
     setRoomShowToolCalls: vi.fn(),
     renameProject: vi.fn(),
     updateProjectWorkdir: vi.fn().mockResolvedValue(undefined),

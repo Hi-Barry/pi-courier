@@ -512,7 +512,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         ? "on"
         : "off";
     }
-    const collabRoom = projectManager.modeForRoom(roomId) === "guest" || (botRegistry.cached(roomId)?.size ?? 0) > 0;
+    const collabRoom = projectManager.isGuestRoom(roomId) || (botRegistry.cached(roomId)?.size ?? 0) > 0;
     return collabRoom ? "off" : liveCardAggregation() ? "on" : "off";
   };
 

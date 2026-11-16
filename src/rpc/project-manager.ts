@@ -297,14 +297,22 @@ export class ProjectManager {
     return entry.sessionDir ?? projectSessionDirFor(roomId, entry, this.projectMap());
   }
 
-  /** 房间绑定模式(spec #299 票05):guest = 认领绑定的协作房(仅 @触发);
-   *  undefined/owner = 自建房,行为与 1.6.x 一致。单项目模式恒 undefined。 */
   /** 房间级工具流设置的读侧意图方法(#356):router 停止 projectMap() 直读
    *  —— 消费面收窄到意图方法,返回形状不再外泄。 */
   showToolCallsForRoom(roomId: string): "auto" | "on" | "off" {
     return this.projectMap()[roomId]?.showToolCalls ?? "auto";
   }
 
+  /** 房间是否为 guest 绑定(直读条目,**不带 multiProject 门**):协作房
+   *  工具流判定用 —— 与原 roomToolCallsMode 的 projectMap 直读逐字节同
+   *  语义(#356 评审:modeForRoom 的单项目门会让「单项目 + 残留 guest 条目」
+   *  的工具流判定漂移,不可用)。 */
+  isGuestRoom(roomId: string): boolean {
+    return this.projectMap()[roomId]?.mode === "guest";
+  }
+
+  /** 房间绑定模式(spec #299 票05):guest = 认领绑定的协作房(仅 @触发);
+   *  undefined/owner = 自建房,行为与 1.6.x 一致。单项目模式恒 undefined。 */
   modeForRoom(roomId: string): "owner" | "guest" | undefined {
     if (!this.multiProject) return undefined;
     return this.projectMap()[roomId]?.mode;
