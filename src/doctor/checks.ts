@@ -11,7 +11,7 @@
  */
 
 import { checkGroupA } from "./checks-a.js";
-import { checkGroupB, staleCliPathFix } from "./checks-b.js";
+import { checkGroupB } from "./checks-b.js";
 import { checkGroupC } from "./checks-c.js";
 import { checkGroupD } from "./checks-d.js";
 import { checkGroupE } from "./checks-e.js";
@@ -19,13 +19,6 @@ import { checkGroupF } from "./checks-f.js";
 import { checkGroupG } from "./checks-g.js";
 import { checkGroupH } from "./checks-h.js";
 import type { FixAction } from "./fix.js";
-import {
-  chmodConfigFix,
-  clearManualStopFix,
-  clearPendingUpdateFix,
-  mkdirOrChmodDirFix,
-  removeStaleLockFix,
-} from "./fixes-cd.js";
 import type { CheckResult, DoctorCheckEntry, DoctorContext } from "./types.js";
 
 /** 收集本次运行的检查清单。 */
@@ -42,40 +35,39 @@ export async function collectCheckEntries(ctx: DoctorContext): Promise<DoctorChe
   return entries;
 }
 
-/** 报告里对应 id 的结果(修复动作收集的门槛:只修报告报出的问题)。 */
-function resultOf(report: { results: CheckResult[] }, id: string): CheckResult | undefined {
-  return report.results.find((r) => r.id === id);
-}
-
 /**
- * 收集本次报告对应的修复动作(只对报告里已报出的可修项;动作内还会自证
- * 幂等重入)。#339:B1 失效 cliPath。#340:C3 配置权限收紧、D1/D2 建自管
- * 目录/权限收紧、D3 陈旧锁、D4 manual-stop、D5 pending-update。
- * 提示档(C4 workdir/C6 sessionDir 缺失、D6 旧布局)与不可修复档(C1)永远
- * 不出现在这里;禁区档(trustedUsers/session 数据/pi 侧)更不会。
+ * 从检查清单派生本次报告对应的修复动作(#348):门槛(checkId/severity 配对)
+ * 声明在每个检查项的 fix.on 上,这里只做机械派生 —— 报告里该 entry.id 的
+ * 结果 severity === fix.on 才 make,checkId 统一改写为 entry.id。此前"同一
+ * id 三处硬编码"(checks 字符串门槛/工厂字面量/报告结果)的静默失配面消灭:
+ * severity 改档必同文件,checkId 以 entry.id 为唯一权威。
  *
- * 平台说明(spec 用户故事 24:--fix 的安全项在 Windows 行为一致):动作不按
- * 平台设闸 —— 建目录/清锁/清残留平台无关;唯一 POSIX 专属的 C3 chmod 在
- * win32 下检查项本身是 ⏭️(checks-c),报告门槛自然放不进来。win32 的目录
- * 权限不可验证 → D1/D2 的「过松收紧」分支不会触发,「缺失建目录」照常可修
- * (mkdirSync 的 0700 在 win32 由 libuv 映射为可写,与全仓写侧同语义)。
+ * 提示档(C4 workdir/C6 sessionDir 缺失、D6 旧布局)与不可修复档(C1)的
+ * 检查项没有 fix 字段 —— 「不存在的动作」就是提示档/禁区档的硬边界。
+ *
+ * 平台说明(spec #337 用户故事 24:--fix 的安全项在 Windows 行为一致):动作
+ * 不按平台设闸 —— 建目录/清锁/清残留平台无关;唯一 POSIX 专属的 C3 chmod
+ * 在 win32 下检查项本身是 ⏭️(checks-c),报告门槛自然放不进来。win32 的
+ * 目录权限不可验证 → D1/D2 的「过松收紧」分支不会触发,「缺失建目录」照常
+ * 可修(mkdirSync 的 0700 在 win32 由 libuv 映射为可写,与全仓写侧同语义)。
  */
 export async function collectFixActions(ctx: DoctorContext, report: { results: CheckResult[] }): Promise<FixAction[]> {
   const actions: FixAction[] = [];
-  const failing = new Set(report.results.filter((r) => r.severity === "fail").map((r) => r.id));
-  if (failing.has("B1")) {
-    const fix = await staleCliPathFix(ctx);
-    if (fix) actions.push(fix);
+  // 清单重建抛错(模块损坏/依赖断)= 报告已走降级 ⏭️ 占位:与旧字符串门槛
+  // 在降级报告上优雅返回空动作同语义,不把修复收集变成退出码 2。
+  let entries: DoctorCheckEntry[];
+  try {
+    entries = await collectCheckEntries(ctx);
+  } catch {
+    return actions;
   }
-  if (resultOf(report, "C3")?.severity === "warn") actions.push(chmodConfigFix(ctx));
-  for (const id of ["D1", "D2"] as const) {
-    if (resultOf(report, id)?.severity === "warn") actions.push(mkdirOrChmodDirFix(ctx, id));
+  for (const entry of entries) {
+    const { fix } = entry;
+    if (!fix) continue;
+    const result = report.results.find((r) => r.id === entry.id);
+    if (!result || result.severity !== fix.on) continue;
+    const body = await fix.make(ctx);
+    if (body) actions.push({ checkId: entry.id, summary: body.summary, run: body.run });
   }
-  if (resultOf(report, "D3")?.severity === "warn") {
-    const fix = await removeStaleLockFix(ctx);
-    if (fix) actions.push(fix);
-  }
-  if (resultOf(report, "D4")?.severity === "warn") actions.push(await clearManualStopFix(ctx));
-  if (resultOf(report, "D5")?.severity === "warn") actions.push(await clearPendingUpdateFix(ctx));
   return actions;
 }

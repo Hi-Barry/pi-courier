@@ -12,19 +12,11 @@
  */
 
 import { t } from "../i18n/index.js";
-import type {
-  CheckGroup,
-  CheckResult,
-  DoctorCheckEntry,
-  DoctorContext,
-  DoctorDeps,
-  DoctorOptions,
-  DoctorReport,
-} from "./types.js";
-import { toMessage } from "./types.js";
+import { CHECK_GROUPS, type CheckGroup, type CheckResult, type DoctorCheckEntry, type DoctorContext, type DoctorDeps, type DoctorOptions, type DoctorReport, toMessage } from "./types.js";
 
-/** 组字母全集(清单模块整体加载失败时的降级占位,按组各出一项)。 */
-const ALL_GROUPS: CheckGroup[] = ["A", "B", "C", "D", "E", "F", "G", "H"];
+/** 组字母全集(#348 单点:types.ts 的 CHECK_GROUPS,类型与运行时同源)——
+ *  清单模块整体加载失败时的降级占位,按组各出一项。 */
+const ALL_GROUPS: readonly CheckGroup[] = CHECK_GROUPS;
 
 /** 单条检查项守卫:抛错 = 无法确认,降级 ⏭️(id 保留、原因入文案),
  *  绝不向上抛 —— 一项查不出来不许拖垮整份报告。 */

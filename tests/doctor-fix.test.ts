@@ -502,6 +502,82 @@ describe("修复执行器单元", () => {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
+// ── #348:修复动作从检查清单派生(门槛挂 entry、checkId 权威 = entry.id)────
+
+describe("collectFixActions · 派生语义(#348)", () => {
+  it("warn 档触发:配置 0644 → C3 动作;checkId 恒等于报告里该检查结果的 id", async () => {
+    writeConfig({ workdir: home });
+    fs.chmodSync(configPath(), 0o644); // 过松 → C3 ⚠️
+    const first = await doctorReport();
+    expect(resultById(first.report, "C3")?.severity).toBe("warn");
+
+    const actions = await collectFixActions(first.ctx, first.report);
+    const c3 = actions.find((a) => a.checkId === "C3");
+    expect(c3).toBeDefined();
+    // checkId 权威 = entry.id(#348):派生动作的 id 与报告结果 id 严格同源
+    expect(resultById(first.report, c3!.checkId)?.id).toBe("C3");
+    // 执行:0600 收紧生效(工厂只产动作体,执行语义不变)
+    const outcome = await c3!.run();
+    expect(outcome.changed).toBe(true);
+    expect(fs.statSync(configPath()).mode & 0o777).toBe(0o600);
+  });
+
+  it("不触发档:配置 0600 且自管目录健在 → 无 C3/D1/D2 动作", async () => {
+    writeConfig({ workdir: home }); // writeConfig 以 0600 落盘
+    const first = await doctorReport();
+    expect(resultById(first.report, "C3")?.severity).toBe("ok");
+
+    const actions = await collectFixActions(first.ctx, first.report);
+    for (const id of ["C3", "D1", "D2"]) {
+      expect(actions.find((a) => a.checkId === id)).toBeUndefined();
+    }
+  });
+
+  it("D1/D2 按 target 选目录:删 stateDir → 只有 D1 动作,执行后目录重建(0700)", async () => {
+    writeConfig({ workdir: home });
+    fs.rmSync(makeDoctorLayout("linux", home).stateDir, { recursive: true, force: true });
+    const first = await doctorReport();
+    expect(resultById(first.report, "D1")?.severity).toBe("warn");
+    expect(resultById(first.report, "D2")?.severity).toBe("ok");
+
+    const actions = await collectFixActions(first.ctx, first.report);
+    expect(actions.find((a) => a.checkId === "D1")).toBeDefined();
+    expect(actions.find((a) => a.checkId === "D2")).toBeUndefined();
+
+    const d1 = actions.find((a) => a.checkId === "D1")!;
+    const outcome = await d1.run();
+    expect(outcome.changed).toBe(true);
+    const stateDir = makeDoctorLayout("linux", home).stateDir;
+    expect(fs.existsSync(stateDir)).toBe(true);
+    expect(fs.statSync(stateDir).mode & 0o777).toBe(0o700);
+  });
+
+  it("dataDir 缺失 → 只有 D2 动作(与 D1 互不串目录)", async () => {
+    writeConfig({ workdir: home });
+    fs.rmSync(makeDoctorLayout("linux", home).dataDir, { recursive: true, force: true });
+    const first = await doctorReport();
+    const actions = await collectFixActions(first.ctx, first.report);
+    expect(actions.find((a) => a.checkId === "D2")).toBeDefined();
+    expect(actions.find((a) => a.checkId === "D1")).toBeUndefined();
+    await actions.find((a) => a.checkId === "D2")!.run();
+    expect(fs.existsSync(makeDoctorLayout("linux", home).dataDir)).toBe(true);
+  });
+});
+
+describe("collectFixActions · fail 档触发(#348)", () => {
+  it("cliPath 指向不存在路径 → B1 fail → B1 动作(checkId = entry.id)", async () => {
+    // workdir 必填(loadConfig 无 workdir 直接失败 → ctx.config=undefined → B1 落 skip)
+    writeConfig({ cliPath: path.join(home, "no-such-pi"), workdir: home });
+    const first = await doctorReport();
+    expect(resultById(first.report, "B1")?.severity).toBe("fail");
+
+    const actions = await collectFixActions(first.ctx, first.report);
+    const b1 = actions.find((a) => a.checkId === "B1");
+    expect(b1).toBeDefined();
+    expect(resultById(first.report, b1!.checkId)?.id).toBe("B1");
+  });
+});
+
 // 降级:pi-rpc helper 动态 import 抛错 → B 组相关项 ⏭️,doctor 不崩
 // ════════════════════════════════════════════════════════════════════════════
 

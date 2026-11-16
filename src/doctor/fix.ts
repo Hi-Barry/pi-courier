@@ -33,6 +33,15 @@ export interface FixAction {
   run: () => Promise<FixOutcome>;
 }
 
+/** 修复动作体(#348):不带 checkId —— checkId 由 collectFixActions 以
+ *  entry.id 统一改写,工厂字面量不再是权威(消灭「同一 id 三处硬编码」的
+ *  静默漂移面)。 */
+export interface FixActionBody {
+  /** 人话描述(修什么;渲染时与 id 一起打印)。 */
+  summary: string;
+  run: () => Promise<FixOutcome>;
+}
+
 /** 单项执行结果(汇总与退出码重派生用)。 */
 export interface FixStepResult {
   checkId: string;

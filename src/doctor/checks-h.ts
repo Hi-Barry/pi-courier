@@ -23,6 +23,10 @@ import { packageRootOf } from "./checks-a.js";
 import { nodeSatisfiesEngine, parseVersionTriple } from "./checks-b.js";
 import type { CheckResult, DoctorCheckEntry, DoctorContext } from "./types.js";
 
+/** H 组检查项 id 表(#348):文件内 id 字面量收口 —— 此前同一 id 在文件内
+ *  重复构造最多 4 次(评审证据),拼错/漂移变编译错误。 */
+const ID = { H1: "H1", H2: "H2", H3: "H3" } as const;
+
 interface PiPaths {
   agentDir: string;
   authPath: string;
@@ -87,12 +91,12 @@ function jsonFileStatus(
 export function checkGroupH(_ctx: DoctorContext): DoctorCheckEntry[] {
   return [
     {
-      id: "H1",
+      id: ID.H1,
       group: "H",
       run: async (): Promise<CheckResult> => {
         if (!(await piImportableByEngine())) {
           return {
-            id: "H1",
+            id: ID.H1,
             group: "H",
             severity: "skip",
             summary: t("doctor.h.engineGate"),
@@ -100,17 +104,17 @@ export function checkGroupH(_ctx: DoctorContext): DoctorCheckEntry[] {
         }
         const { agentDir } = await loadPiPaths();
         if (typeof agentDir !== "string" || agentDir === "") {
-          return { id: "H1", group: "H", severity: "warn", summary: t("doctor.h.agentDirEmpty") };
+          return { id: ID.H1, group: "H", severity: "warn", summary: t("doctor.h.agentDirEmpty") };
         }
-        return { id: "H1", group: "H", severity: "ok", summary: t("doctor.h.agentDirOk"), detail: agentDir };
+        return { id: ID.H1, group: "H", severity: "ok", summary: t("doctor.h.agentDirOk"), detail: agentDir };
       },
     },
     {
-      id: "H2",
+      id: ID.H2,
       group: "H",
       run: async (): Promise<CheckResult> => {
         if (!(await piImportableByEngine())) {
-          return { id: "H2", group: "H", severity: "skip", summary: t("doctor.h.engineGate") };
+          return { id: ID.H2, group: "H", severity: "skip", summary: t("doctor.h.engineGate") };
         }
         const { authPath, settingsPath, modelsPath } = await loadPiPaths();
         const auth = jsonFileStatus(authPath, "auth.json", "fail");
@@ -124,20 +128,20 @@ export function checkGroupH(_ctx: DoctorContext): DoctorCheckEntry[] {
               : "ok";
         const detail = [auth, settings, models].map((s) => s.line).join("\n");
         if (worst === "fail") {
-          return { id: "H2", group: "H", severity: "fail", summary: t("doctor.h.jsonFail"), detail };
+          return { id: ID.H2, group: "H", severity: "fail", summary: t("doctor.h.jsonFail"), detail };
         }
         if (worst === "warn") {
-          return { id: "H2", group: "H", severity: "warn", summary: t("doctor.h.jsonWarn"), detail };
+          return { id: ID.H2, group: "H", severity: "warn", summary: t("doctor.h.jsonWarn"), detail };
         }
-        return { id: "H2", group: "H", severity: "ok", summary: t("doctor.h.jsonOk"), detail };
+        return { id: ID.H2, group: "H", severity: "ok", summary: t("doctor.h.jsonOk"), detail };
       },
     },
     {
-      id: "H3",
+      id: ID.H3,
       group: "H",
       run: async (): Promise<CheckResult> => {
         if (!(await piImportableByEngine())) {
-          return { id: "H3", group: "H", severity: "skip", summary: t("doctor.h.engineGate") };
+          return { id: ID.H3, group: "H", severity: "skip", summary: t("doctor.h.engineGate") };
         }
         const { authPath, modelsPath } = await loadPiPaths();
         // 凭据:auth.json 顶层至少一个 provider 条目;只数名字,绝不携带值
@@ -157,7 +161,7 @@ export function checkGroupH(_ctx: DoctorContext): DoctorCheckEntry[] {
         }
         if (hasCredential) {
           return {
-            id: "H3",
+            id: ID.H3,
             group: "H",
             severity: "ok",
             summary: t("doctor.h.credentialOk"),
@@ -175,10 +179,10 @@ export function checkGroupH(_ctx: DoctorContext): DoctorCheckEntry[] {
           }
         }
         if (hasModel) {
-          return { id: "H3", group: "H", severity: "ok", summary: t("doctor.h.modelOk") };
+          return { id: ID.H3, group: "H", severity: "ok", summary: t("doctor.h.modelOk") };
         }
         return {
-          id: "H3",
+          id: ID.H3,
           group: "H",
           severity: "warn",
           summary: t("doctor.h.noCredentialNoModel"),

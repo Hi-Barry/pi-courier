@@ -19,7 +19,11 @@
 
 import * as fs from "node:fs";
 import { t } from "../i18n/index.js";
+import { chmodConfigFix } from "./fixes-cd.js";
 import type { CheckResult, DoctorCheckEntry, DoctorContext } from "./types.js";
+
+/** C 组检查项 id 表(#348):文件内 id 字面量收口,拼错变编译错误。 */
+const ID = { C1: "C1", C2: "C2", C3: "C3", C4: "C4", C5: "C5", C6: "C6" } as const;
 
 /** C2 的字段类型表(「等」= 表驱动,加字段只改这里)。 */
 const FIELD_TYPES: ReadonlyArray<{ path: string; kind: "string" | "string[]" | "boolean" | "object" }> = [
@@ -115,12 +119,12 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
   const config = ctx.config;
 
   const c1: DoctorCheckEntry = {
-    id: "C1",
+    id: ID.C1,
     group: "C",
     run: async () => {
       if (!fs.existsSync(configPath)) {
         return {
-          id: "C1",
+          id: ID.C1,
           group: "C",
           severity: "fail",
           summary: t("doctor.c1.missing"),
@@ -131,7 +135,7 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
         JSON.parse(fs.readFileSync(configPath, "utf-8"));
       } catch (err) {
         return {
-          id: "C1",
+          id: ID.C1,
           group: "C",
           severity: "fail",
           summary: t("doctor.c1.corrupt"),
@@ -139,12 +143,12 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
           nextStep: t("doctor.c1.corruptNext"),
         };
       }
-      return { id: "C1", group: "C", severity: "ok", summary: t("doctor.c1.ok"), detail: configPath };
+      return { id: ID.C1, group: "C", severity: "ok", summary: t("doctor.c1.ok"), detail: configPath };
     },
   };
 
   const c2: DoctorCheckEntry = {
-    id: "C2",
+    id: ID.C2,
     group: "C",
     run: async () => {
       // 对原始文件做类型表检查(loadConfig 静默丢畸形条目;原始字节才看得到)
@@ -152,7 +156,7 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
       try {
         raw = JSON.parse(fs.readFileSync(configPath, "utf-8")) as Record<string, unknown>;
       } catch {
-        return { id: "C2", group: "C", severity: "skip", summary: t("doctor.c2.skipCorrupt") };
+        return { id: ID.C2, group: "C", severity: "skip", summary: t("doctor.c2.skipCorrupt") };
       }
       const bad: string[] = [];
       for (const { path: fieldPath, kind } of FIELD_TYPES) {
@@ -164,7 +168,7 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
       }
       if (bad.length > 0) {
         return {
-          id: "C2",
+          id: ID.C2,
           group: "C",
           severity: "fail",
           summary: t("doctor.c2.bad", { count: bad.length }),
@@ -172,38 +176,40 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
           nextStep: t("doctor.c2.next"),
         };
       }
-      return { id: "C2", group: "C", severity: "ok", summary: t("doctor.c2.ok") };
+      return { id: ID.C2, group: "C", severity: "ok", summary: t("doctor.c2.ok") };
     },
   };
 
   const c3: DoctorCheckEntry = {
-    id: "C3",
+    id: ID.C3,
     group: "C",
+    // C3 修复:配置 0600 收紧(warn 档触发;备份先于 chmod,#348 挂 entry)
+    fix: { on: "warn", make: chmodConfigFix },
     run: async () => {
       if (ctx.deps.platform === "win32") {
         // libuv 对常规文件只报 0666/0444,0600 契约在 Windows 无意义(config.ts
         // 自检同理由);等价语义缺失 → 如实标 ⏭️,不误报。
-        return { id: "C3", group: "C", severity: "skip", summary: t("doctor.c3.win32") };
+        return { id: ID.C3, group: "C", severity: "skip", summary: t("doctor.c3.win32") };
       }
       if (!fs.existsSync(configPath)) {
-        return { id: "C3", group: "C", severity: "skip", summary: t("doctor.c3.noFile") };
+        return { id: ID.C3, group: "C", severity: "skip", summary: t("doctor.c3.noFile") };
       }
       const mode = fs.statSync(configPath).mode & 0o777;
       if ((mode & 0o077) !== 0) {
         return {
-          id: "C3",
+          id: ID.C3,
           group: "C",
           severity: "warn",
           summary: t("doctor.c3.loose", { mode: mode.toString(8) }),
           nextStep: "pi-courier doctor --fix",
         };
       }
-      return { id: "C3", group: "C", severity: "ok", summary: t("doctor.c3.ok"), detail: mode.toString(8) };
+      return { id: ID.C3, group: "C", severity: "ok", summary: t("doctor.c3.ok"), detail: mode.toString(8) };
     },
   };
 
   const c4: DoctorCheckEntry = {
-    id: "C4",
+    id: ID.C4,
     group: "C",
     run: async () => {
       const results: CheckResult[] = [];
@@ -215,9 +221,9 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
         // 未配置 = 走默认根:运行时 spawn 前会自建,缺失报 ⚠️ 提示(不挡 CI)
         results.push(
           fs.existsSync(defaultDir) && dirWritable(defaultDir)
-            ? { id: "C4", group: "C", severity: "ok", summary: t("doctor.c4.defaultOk"), detail: defaultDir }
+            ? { id: ID.C4, group: "C", severity: "ok", summary: t("doctor.c4.defaultOk"), detail: defaultDir }
             : {
-                id: "C4",
+                id: ID.C4,
                 group: "C",
                 severity: "warn",
                 summary: t("doctor.c4.defaultMissing"),
@@ -228,7 +234,7 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
       } else {
         results.push(
           dirCheckResult(
-            "C4",
+            ID.C4,
             t("doctor.c4.ok"),
             t("doctor.c4.missing"),
             t("doctor.c4.unwritable"),
@@ -244,7 +250,7 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
         const dir = project?.workdir;
         if (typeof dir !== "string" || dir === "") {
           results.push({
-            id: `C4.${index + 1}`,
+            id: `${ID.C4}.${index + 1}`,
             group: "C",
             severity: "fail",
             summary: t("doctor.c4.projectNoDir", { room: roomId }),
@@ -254,7 +260,7 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
         }
         results.push({
           ...dirCheckResult(
-            `C4.${index + 1}`,
+            `${ID.C4}.${index + 1}`,
             t("doctor.c4.ok"),
             t("doctor.c4.missing"),
             t("doctor.c4.unwritable"),
@@ -269,7 +275,7 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
   };
 
   const c5: DoctorCheckEntry = {
-    id: "C5",
+    id: ID.C5,
     group: "C",
     run: async () => {
       const { resolveProxySettings } = await import("../proxy.js");
@@ -281,7 +287,7 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
         settings = resolveProxySettings(config ?? {}, ctx.deps.env);
       } catch (err) {
         return {
-          id: "C5",
+          id: ID.C5,
           group: "C",
           severity: "fail",
           summary: t("doctor.c5.invalid"),
@@ -290,10 +296,10 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
         };
       }
       if (settings.source === "none") {
-        return { id: "C5", group: "C", severity: "ok", summary: t("doctor.c5.none") };
+        return { id: ID.C5, group: "C", severity: "ok", summary: t("doctor.c5.none") };
       }
       return {
-        id: "C5",
+        id: ID.C5,
         group: "C",
         severity: "ok",
         summary: t("doctor.c5.ok", { source: settings.source }),
@@ -303,15 +309,15 @@ export function checkGroupC(ctx: DoctorContext): DoctorCheckEntry[] {
   };
 
   const c6: DoctorCheckEntry = {
-    id: "C6",
+    id: ID.C6,
     group: "C",
     run: async () => {
       const sessionDir = config?.sessionDir;
       if (typeof sessionDir !== "string" || sessionDir === "") {
-        return { id: "C6", group: "C", severity: "ok", summary: t("doctor.c6.unset") };
+        return { id: ID.C6, group: "C", severity: "ok", summary: t("doctor.c6.unset") };
       }
       return dirCheckResult(
-        "C6",
+        ID.C6,
         t("doctor.c6.ok"),
         t("doctor.c6.missing"),
         t("doctor.c6.unwritable"),

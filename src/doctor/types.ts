@@ -15,6 +15,7 @@
 import { t } from "../i18n/index.js";
 import type { Layout } from "../paths.js";
 import type { MsgBridgeConfig } from "../types.js";
+import type { FixActionBody } from "./fix.js";
 
 /** doctor 全代码库唯一新增的测试缝(spec「唯一新测试缝:DoctorDeps」):
  *  CLI 薄壳拼真实实现,测试注入 fake;检查一律复用既有 helper 与缝,不新造
@@ -54,9 +55,13 @@ export interface DoctorExecResult {
 
 // ── 检查项数据结构 ────────────────────────────────────────────────────────────
 
-/** 8 组检查清单的组字母(spec 检查清单表:A 安装完整性 / B pi 解析链 /
- *  C pi-courier 配置 / D 状态与目录 / E 网络 / F 服务 / G 磁盘 / H pi 侧)。 */
-export type CheckGroup = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H";
+/** 8 组检查清单的组字母全集(#348 单点):CheckGroup 类型从数组派生,加组
+ *  字母只改这个数组 —— 组字母双列清单(CheckGroup 联合 + ALL_GROUPS)的
+ *  漂移面消灭。spec 检查清单表:A 安装完整性 / B pi 解析链 / C pi-courier
+ *  配置 / D 状态与目录 / E 网络 / F 服务 / G 磁盘 / H pi 侧。 */
+export const CHECK_GROUPS = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
+
+export type CheckGroup = (typeof CHECK_GROUPS)[number];
 
 /** 严重度(spec 严重度契约):ok=✅ 健康 / warn=⚠️ 能跑但有风险或降级 /
  *  fail=❌ 桥无法正常启动或核心功能不可用 / skip=⏭️ 无法确认或主动跳过。 */
@@ -80,6 +85,14 @@ export interface DoctorCheckEntry {
   id: string;
   group: CheckGroup;
   run: () => Promise<CheckResult | CheckResult[]>;
+  /** 修复动作挂进检查项(#348):on = 触发档位,与 run 产出的 severity 在
+   *  同一处声明 —— severity 改档必同文件,collectFixActions 的字符串门槛
+   *  静默失配从此不可能。make 产动作体(不带 checkId);派生时 checkId
+   *  统一 = entry.id,工厂字面量不再是权威。 */
+  fix?: {
+    on: "fail" | "warn";
+    make: (ctx: DoctorContext) => Promise<FixActionBody | undefined> | FixActionBody | undefined;
+  };
 }
 
 /** 检查上下文:deps + 本次运行的开关 + 预载配置(loadConfig 产物;加载失败
