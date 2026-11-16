@@ -91,8 +91,6 @@ export interface ToolTurnCardsDeps {
   seam?: CardEditSeam;
   /** 降级直发通道(与普通回复同一条 per-room FIFO,顺序由架构保证)。 */
   sendReply: CardDirectSend;
-  /** 聚合启用判定(配置开 + hideToolCalls 关 + 缝齐备;router 现读现判)。 */
-  isEnabled: () => boolean;
   /** 重启失效钩子(键 "tool-turn-card")。 */
   restart: RpcRestartHooks;
 }
@@ -117,7 +115,8 @@ export class ToolTurnCards {
     return gen;
   }
 
-  /** 聚合启用(转述 router 的现读现判;供降级整回合直发的调用方预判)。 */
+  /** 序列级降级标志(turn_end 的降级整回合直发预判;spec #297 评审整改
+   *  —— 「每回合一条」覆盖混合段回合,段落级结算只在非降级态进行)。 */
   isDegraded(rpc: PiRpc): boolean {
     return this.cards.get(rpc)?.degraded === true;
   }

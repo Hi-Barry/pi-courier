@@ -473,7 +473,6 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       ? { seam: { editReply: deps.editReply, sendLiveCard: deps.sendLiveCard } }
       : {}),
     sendReply,
-    isEnabled: () => liveCardAggregation(),
     restart: restartHooks,
   });
   const workflowCards = new WorkflowProgressCards({
