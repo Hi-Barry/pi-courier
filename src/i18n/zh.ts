@@ -759,7 +759,6 @@ const zh = {
   "cli.update.npmUpgrade": "🔄 通过 npm 升级 pi-courier …",
   "cli.update.gitUpgrade": "🔄 更新 pi-courier(git)…",
   "cli.update.cmdFailed": "❌ {cmd} 失败:{status}",
-  "cli.update.watchdogSkip": "⚠️ schtasks {action} pi-courier-watchdog 失败(任务不存在或权限不足),继续升级。",
   "cli.update.restartingTask": "🔄 重启 pi-courier 计划任务以加载新版本…",
   "cli.update.wasInactiveTask": "ℹ️ 更新前桥未在运行,未自动启动。要启动:运行 pi-courier 计划任务,或重启电脑。",
   "cli.update.manualRestartTask": "ℹ️ 未能自动重启(pi-courier 计划任务不存在或已禁用):请手动重启该计划任务,或重启电脑以加载新版本。",

@@ -15,6 +15,7 @@ import {
   UPGRADE_MAX_ATTEMPTS,
   UPGRADE_TIMEOUT_MS,
   type UpgradeDeps,
+  type UpgradeSpawnOptions,
 } from "../src/update/upgrade.js";
 
 interface FakeChild {
@@ -53,14 +54,10 @@ function harness(deps: Partial<UpgradeDeps> = {}) {
   const calls: Array<{
     cmd: string;
     args: readonly string[];
-    opts: { cwd?: string; env?: NodeJS.ProcessEnv };
+    opts: UpgradeSpawnOptions;
   }> = [];
   const children: FakeChild[] = [];
-  const spawn = (
-    cmd: string,
-    args: readonly string[],
-    opts: { cwd?: string; env?: NodeJS.ProcessEnv },
-  ) => {
+  const spawn = (cmd: string, args: readonly string[], opts: UpgradeSpawnOptions) => {
     calls.push({ cmd, args, opts });
     const child = makeFakeChild();
     children.push(child);
@@ -703,5 +700,154 @@ describe("defaultProjectDir · 默认项目根推导(两层,E2E 回归钉)", () 
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
     const srcModuleUrl = new URL("../src/update/upgrade.ts", import.meta.url).href;
     expect(defaultProjectDir(srcModuleUrl)).toBe(repoRoot);
+  });
+});
+
+describe("runUpgrade · inherit 模式(CLI 执行风格,#346)", () => {
+  /** inherit 基线:与 npmDeps 同源,另开 stdio。 */
+  const inheritDeps: Partial<UpgradeDeps> = { ...npmDeps, stdio: "inherit" };
+
+  it("spawn 选项带 stdio:inherit(三条流直通终端)", async () => {
+    const h = harness(inheritDeps);
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+    expect(h.calls[0]?.opts.stdio).toBe("inherit");
+    await h.closeCurrent(0);
+    await h.closeCurrent(0);
+    await expect(promise).resolves.toEqual({ ok: true });
+  });
+
+  it("可重试步骤超时被杀 → 视为 stall 自动重试,第二次成功;事件序与桥 stall 路径一致", async () => {
+    vi.useFakeTimers();
+    const killTree = vi.fn();
+    type Ev = Parameters<NonNullable<UpgradeDeps["onProgress"]>>[0];
+    const events: Ev[] = [];
+    const h = harness({ ...inheritDeps, stallTimeoutMs: 60_000, killTree });
+    const promise = runUpgrade({
+      ...h.deps,
+      spawn: h.spawn,
+      onProgress: (ev) => events.push(ev),
+    });
+    await Promise.resolve();
+    expect(h.calls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(killTree).toHaveBeenCalledTimes(1);
+    expect(killTree).toHaveBeenCalledWith(h.children[0]);
+    await h.closeCurrent(null); // 被硬超时杀掉的第一次尝试
+
+    expect(h.calls).toHaveLength(2); // 重试同一 install 步骤
+    await h.closeCurrent(0);
+    await h.closeCurrent(0); // ensure
+    await expect(promise).resolves.toEqual({ ok: true });
+    expect(events.map((e) => e.kind)).toEqual([
+      "step-start",
+      "stall-retry",
+      "step-start",
+      "step-done",
+      "step-start",
+      "step-done",
+    ]);
+  });
+
+  it("不可重试步骤(ensure)超时一次即失败,不重试;message 含 timed out 语义", async () => {
+    vi.useFakeTimers();
+    const killTree = vi.fn();
+    const h = harness({ ...inheritDeps, ensureTimeoutMs: 45_000, killTree });
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+
+    await h.closeCurrent(0); // install 成功
+    await vi.advanceTimersByTimeAsync(45_000); // ensure 硬超时(= 步骤上限)
+    expect(killTree).toHaveBeenCalledTimes(1);
+    await h.closeCurrent(null);
+    const outcome = await promise;
+
+    expect(outcome).toMatchObject({ ok: false });
+    if (!outcome.ok) {
+      expect(outcome.message).toContain("timed out");
+      expect(outcome.message).toContain("ensure-crypto-native");
+      expect(outcome.code).toBeUndefined();
+      expect(outcome.failedCommand).toContain("ensure-crypto-native");
+    }
+    expect(h.calls).toHaveLength(2); // install + ensure,ensure 不重试
+  });
+
+  it("非零退出 → code/failedCommand 进 outcome,CLI 退出码保真;不重试", async () => {
+    const h = harness(inheritDeps);
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+
+    await h.closeCurrent(3);
+    const outcome = await promise;
+
+    expect(outcome).toMatchObject({ ok: false, code: 3 });
+    if (!outcome.ok) {
+      expect(outcome.failedCommand).toContain("install");
+      expect(outcome.message).toContain("exited with code 3");
+    }
+    expect(h.calls).toHaveLength(1);
+  });
+
+  it("spawn 同步抛错 → ok:false,code 不带,failedCommand 仍标明步骤", async () => {
+    const h = harness(inheritDeps);
+    const outcome = await runUpgrade({
+      ...h.deps,
+      spawn: () => {
+        throw new Error("spawn ENOENT");
+      },
+    });
+    expect(outcome).toMatchObject({ ok: false });
+    if (!outcome.ok) {
+      expect(outcome.message).toContain("failed to spawn");
+      expect(outcome.code).toBeUndefined();
+      expect(outcome.failedCommand).toContain("install");
+    }
+  });
+
+  it("inherit 不挂无进展看门狗:静默超过 stall 阈值不杀,硬超时(步骤上限)才杀", async () => {
+    vi.useFakeTimers();
+    const killTree = vi.fn();
+    const h = harness({ ...inheritDeps, ensureTimeoutMs: 45_000, stallTimeoutMs: 5_000, killTree });
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+
+    await h.closeCurrent(0); // install 成功
+    await vi.advanceTimersByTimeAsync(5_000); // 静默超过 stall 阈值 —— inherit 无看门狗,不杀
+    expect(killTree).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(40_000); // 到 ensure 步骤上限(45s)
+    expect(killTree).toHaveBeenCalledTimes(1);
+    await h.closeCurrent(null);
+    const outcome = await promise;
+    expect(outcome).toMatchObject({ ok: false });
+    if (!outcome.ok) expect(outcome.message).toContain("timed out");
+  });
+
+  it("失败路径看门狗恢复照走:pause 一次,resume 一次", async () => {
+    const pause = vi.fn(async () => {});
+    const resume = vi.fn(async () => {});
+    const h = harness({ ...inheritDeps, watchdogControl: { pause, resume } });
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await h.closeCurrent(1);
+    const outcome = await promise;
+    expect(outcome).toMatchObject({ ok: false });
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runUpgrade · outcome 附带字段(#346,pipe 模式同样携带)", () => {
+  it("pipe 模式非零退出 → code/failedCommand 可供 CLI 消费", async () => {
+    const h = harness(npmDeps);
+    const promise = runUpgrade({ ...h.deps, spawn: h.spawn });
+    await Promise.resolve();
+
+    await h.closeCurrent(2);
+    const outcome = await promise;
+    expect(outcome).toMatchObject({ ok: false, code: 2 });
+    if (!outcome.ok) expect(outcome.failedCommand).toContain("install");
   });
 });

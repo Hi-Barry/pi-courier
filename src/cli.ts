@@ -34,13 +34,13 @@ import { errorMessage } from "./errors.js";
 import { setLocale, t } from "./i18n/index.js";
 import { buildLegacyMigrationPlan, runLegacyMigration } from "./legacy-migration.js";
 import { buildLogFilterArgs } from "./log-filter.js";
-import { nativeBindingExists, resolveNpmCli } from "./npm-runtime.js";
+import { nativeBindingExists } from "./npm-runtime.js";
 import { projectLabelOf } from "./project-labels.js";
 import { proxyChildEnv, resolveProxySettings } from "./proxy.js";
 import { beginManualStopIntent, type ManualStopIntent } from "./resilience/manual-stop.js";
 import { busFailureHint, dirOwnerUid, serviceManagementSupported } from "./systemd-hint.js";
 import { WINDOWS_TASK_NAME, windowsRestartCommand } from "./update/updater.js";
-import { buildUpgradePlan, detectInstalledViaNpm, STALL_TIMEOUT_MS, schtasksArgs, UPGRADE_MAX_ATTEMPTS, UPGRADE_TIMEOUT_MS } from "./update/upgrade.js";
+import { detectInstalledViaNpm, runUpgrade } from "./update/upgrade.js";
 import { readBridgeVersion } from "./version.js";
 import { suppressKnownWarnings } from "./warnings.js";
 
@@ -395,17 +395,13 @@ function bridgeHeartbeatFresh(stateDir: string, maxAgeMs = 90_000): boolean {
   }
 }
 
-function cmdUpdate(): void {
+async function cmdUpdate(): Promise<void> {
   const projDir = projectDir();
   const installedViaNpm = detectInstalledViaNpm(projDir);
 
   // 代理配置先解析/校验,再停服务(spec #320):配置非法(socks5 等)时
   // 直接报双语错误退出,不把正在跑的服务停在半路。
   const proxySettings = resolveProxySettings(loadConfig());
-  const childEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    ...(proxyChildEnv(proxySettings) ?? {}),
-  };
 
   // 1. Stop the service first (if running) so the upgrade happens on a clean
   //    state — the old process never touches partially-replaced files.
@@ -427,80 +423,44 @@ function cmdUpdate(): void {
     console.log(t("cli.update.serviceSkipped"));
   }
 
-  // 2. Upgrade the code(spec #320):与桥内 /update 共用同一套步骤 ——
-  // 固定 install --ignore-scripts → ensure → 校验 .node。CLI 是同步执行,
-  // 不涉及 stdout 管道死锁;超时/进程树杀是尽力而为(用户在场可 Ctrl+C)。
+  // 2. Upgrade the code(#346):与桥内 /update 共用 runUpgrade 执行循环 ——
+  //    步骤构造、重试节奏、看门狗暂停/恢复、原生库校验单点在 upgrade.ts。
+  //    stdio:"inherit" 让三条流直通终端(输出实时可见);执行器把无进展
+  //    看门狗退化为单次硬超时、超时被杀视为 stall 自动重试,节奏与桥一致
+  //    (spec #326 story 9 的「对齐节奏」由注释义务变成编译事实)。失败不在
+  //    此 process.exit:执行器 finally 恢复看门狗后才拿得到 outcome。
   if (installedViaNpm) console.log(t("cli.update.npmUpgrade"));
   else console.log(t("cli.update.gitUpgrade"));
 
-  const steps = buildUpgradePlan({
+  const outcome = await runUpgrade({
     projectDir: projDir,
-    nodeExecPath: process.execPath,
-    npmCli: resolveNpmCli(process.execPath),
-    installedViaNpm,
+    stdio: "inherit",
+    envOverrides: proxyChildEnv(proxySettings) ?? {},
+    onProgress: (event) => {
+      if (event.kind === "step-start") {
+        console.log(`\n$ ${event.cmd}`);
+      } else if (event.kind === "stall-retry") {
+        console.warn(t("cmd.update.progress.retry", { attempt: event.attempt, max: event.maxAttempts }));
+      } else {
+        // 步完成里程碑(spec #326 票 #328 评审整改):与房间回执同键,CLI 不缺席。
+        console.log(t("cmd.update.progress.done", { index: event.stepIndex, total: event.totalSteps }));
+      }
+    },
   });
-  // Windows 看门狗暂停(#326 票 #329):看门狗的动作脚本恰在包目录内,升级
-  // 重装替换包目录的瞬间触发会报「无法找到脚本文件」;第一步前暂停、finally
-  // 恢复(best-effort,任务不存在/权限不足只警告)。process.exit 不走
-  // finally —— 失败退出码先收集,恢复后再统一退出。
-  let exitCode: number | undefined;
-  const schtasksChange = (action: "disable" | "enable"): void => {
-    const args = schtasksArgs(process.platform, action);
-    if (!args) return;
-    const res = spawnSync("schtasks", args, { stdio: "ignore", timeout: 10_000, killSignal: "SIGKILL" });
-    if (res.status !== 0) console.warn(t("cli.update.watchdogSkip", { action }));
-  };
-  try {
-    schtasksChange("disable");
-    for (const [stepOffset, step] of steps.entries()) {
-      console.log(`\n$ ${step.cmd} ${step.args.join(" ")}`);
-      // CLI 是同步执行(stdio inherit),读不到子进程输出流,挂不了桥内的
-      // 「无进展看门狗」;对齐两条路径的重试节奏(spec #326 story 9):可重试
-      // 步骤以 STALL_TIMEOUT_MS(10 分钟,= 桥的 stall 阈值)为单次尝试上限,
-      // 3 次共 30 分钟 = 桥的绝对上限;慢而未死的安装靠 npm 缓存在重试间推进。
-      // 真实 spawn 错误(ENOENT 等)不是超时,不重试 —— 超时判定用「被我们的
-      // killSignal(SIGKILL) 杀掉」这一确定性事实,不用 error.code(不同 Node
-      // 版本对超时错误的 code 约定不一致,ENOENT 同样 error!=null)。
-      const attempts = step.retriable === true ? UPGRADE_MAX_ATTEMPTS : 1;
-      const attemptTimeoutMs =
-        step.retriable === true ? STALL_TIMEOUT_MS : (step.timeoutMs ?? UPGRADE_TIMEOUT_MS);
-      let res: ReturnType<typeof spawnSync> | undefined;
-      for (let attempt = 1; attempt <= attempts; attempt++) {
-        if (attempt > 1) {
-          console.warn(t("cmd.update.progress.retry", { attempt, max: attempts }));
-        }
-        res = spawnSync(step.cmd, step.args, {
-          cwd: step.cwd,
-          stdio: "inherit",
-          env: childEnv,
-          timeout: attemptTimeoutMs,
-          killSignal: "SIGKILL",
-        });
-        const timedOut = res.status === null && res.signal === "SIGKILL";
-        if (!timedOut || attempt === attempts) break;
-      }
-      if (!res || res.error || res.status !== 0) {
-        const status = res?.status ?? res?.error?.message ?? "unknown";
-        console.error(
-          t("cli.update.cmdFailed", {
-            cmd: `${step.cmd} ${step.args.join(" ")}`,
-            status,
-          }),
-        );
-        exitCode = res?.status ?? 1;
-        break;
-      }
-      // 步完成里程碑(spec #326 票 #328 评审整改):与房间回执同键,CLI 不缺席。
-      console.log(t("cmd.update.progress.done", { index: stepOffset + 1, total: steps.length }));
-    }
-    if (exitCode === undefined && !nativeBindingExists(projDir)) {
+  if (!outcome.ok) {
+    // 失败归因:原生库缺失是「升级没留出可启动的树」,比命令失败更优先告知
+    // (现 CLI 只在步骤全过后才查,这里在任意失败后查 —— install 半途死时
+    // 旧 .node 可能已被包目录替换删掉,此时按原生库缺失归因更准确)。
+    if (!nativeBindingExists(projDir)) {
       console.error(t("cli.update.nativeMissing"));
-      exitCode = 1;
+    } else if (outcome.code !== undefined) {
+      console.error(t("cli.update.cmdFailed", { cmd: outcome.failedCommand ?? "unknown", status: outcome.code }));
+    } else {
+      // 超时/spawn 错误没有退出码:技术行(含 timed out 原因)比 unknown 明确。
+      console.error(outcome.message);
     }
-  } finally {
-    schtasksChange("enable");
+    process.exit(outcome.code ?? 1);
   }
-  if (exitCode !== undefined) process.exit(exitCode);
 
   // 2.5 Windows:换血完成后拉起新版桥(spec #331 票B)。桥在跑(心跳 90 秒内
   // = 3 个心跳间隔)→ 树外 restart-hidden.vbs 重启计划任务;没在跑 → 不代
@@ -591,7 +551,7 @@ async function main(): Promise<void> {
       await cmdDoctor(rest);
       break;
     case "update":
-      cmdUpdate();
+      await cmdUpdate();
       break;
     case "help":
     case "--help":
