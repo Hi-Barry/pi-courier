@@ -720,7 +720,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         if (ctx.msg.payload.kind === "text" && ctx.text && !ctx.text.startsWith("/")) {
           mailbox.pushVisible(ctx.msg.chatId, ctx.msg.userId, ctx.text);
         }
-        ctx.log.info(`🤖 对端 bot 消息进增量信箱(不触发): ${ctx.msg.userId} in ${ctx.msg.chatId}`);
+        ctx.log.info(`🤖 peer bot message into incremental mailbox (no trigger): ${ctx.msg.userId} in ${ctx.msg.chatId}`);
         return true;
       },
     },
@@ -803,7 +803,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           // 提示送达前不算数)。
           if (!unknownNoManagementWarned.has(msg.chatId)) {
             unknownNoManagementWarned.add(msg.chatId);
-            logger.warn(`🚪 陌生房 ${msg.chatId} 不接活,但本部署尚无管理房,认领提示无法送达`);
+            logger.warn(`🚪 stranger room ${msg.chatId} not claimed, and this deployment has no management room yet — the claim notice cannot be delivered`);
           }
           return true;
         }
@@ -825,11 +825,11 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           // 落盘前重读与上限收敛内化在 ledger(#352):sendReply 是 await 点,
           // handleIncoming 可并发。
           claimLedger.recordClaimCard(msg.chatId, meta.gitUrl, meta.name);
-          ctx.log.info(`🚪 陌生房 ${msg.chatId} 带项目元数据,已向管理房发认领卡(#${index})`);
+          ctx.log.info(`🚪 stranger room ${msg.chatId} carries project meta, claim card sent to the management room (#${index})`);
         } else if (!claimLedger.hasNoticed(msg.chatId) && !claimLedger.hasPendingClaim(msg.chatId)) {
           await sendReply(mgRoom, msg.transport, t("router.unknownRoom.notice", { room: msg.chatId }));
           claimLedger.recordNotice(msg.chatId);
-          ctx.log.info(`🚪 陌生房 ${msg.chatId} 不接活,已向管理房发认领提示`);
+          ctx.log.info(`🚪 stranger room ${msg.chatId} not claimed, claim notice sent to the management room`);
         }
         return true;
       },
@@ -1242,7 +1242,7 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
           // 命令名进日志(F5 顺手):「谁遭殃」一眼可查 —— 例:登录成功触发的
           // 自动重启连带击杀在途命令时,❌ 回执只有笼统文案,日志必须能对上。
           logger.error(
-            `❌ 命令执行失败 [${ctx.text.trim().split(/\s+/)[0] ?? "?"}]: ${errorMessage(err)}`,
+            `❌ command execution failed [${ctx.text.trim().split(/\s+/)[0] ?? "?"}]: ${errorMessage(err)}`,
           );
           await sendReply(ctx.msg.chatId, ctx.msg.transport, t("cmd.generic.error", { message: errorMessage(err) }));
           return true;

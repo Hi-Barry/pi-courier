@@ -65,7 +65,7 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
         roomId: spaceId,
         invitedUsers: cfg.auth?.trustedUsers ?? [],
       });
-      logger.info(`[space] 空间已创建: ${spaceId}`);
+      logger.info(`[space] space created: ${spaceId}`);
     }
 
     let mgmtRoomId = managementRoomId(cfg);
@@ -92,7 +92,7 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
       mgmtRoomId = provisioned.roomId;
       mgmtRoomCreated = true;
       logger.info(
-        `[space] 管理房间已创建: ${mgmtRoomId}${provisioned.encrypted ? " (E2EE)" : ""}`
+        `[space] management room created: ${mgmtRoomId}${provisioned.encrypted ? " (E2EE)" : ""}`
       );
       // 附注(挂链/品牌失败)由启动路径以 warn 投递;提权失败不在此重复报告
       // —— 紧随启动的 healTrustedPowerLevels 扫描以既有文案警告并下次重试。
@@ -119,7 +119,7 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
     if (!mgmtRoomCreated) {
       try {
         await roomOps.addRoomToSpace(spaceId, mgmtRoomId);
-        logger.debug(`[space] 空间链接就绪: ${mgmtRoomId} → ${spaceId}`);
+        logger.debug(`[space] space link ready: ${mgmtRoomId} → ${spaceId}`);
       } catch (err) {
         logger.warn(`[space] ${spaceLinkNote("management", err)}`);
       }
@@ -142,7 +142,7 @@ export async function ensureSpaceAndManagementRoom(deps: SpaceEnsureDeps): Promi
     return "ready";
   } catch (err) {
     logger.warn(
-      `[space] 空间初始化失败,本次以无空间模式运行(下次启动自动重试): ${errorMessage(err)}`
+      `[space] space initialization failed, running spaceless this start (retried on next startup): ${errorMessage(err)}`
     );
     return "degraded";
   }
@@ -176,11 +176,11 @@ export async function maybeInitManagementRoom(
     // The guards above mean the list was empty — adopt writes the single entry.
     // 域入口(扫描批次 G):读-改-写收进 store,不再持 cfg 快照判定。
     store.adoptManagementRoom(msg.chatId);
-    logger.info(`[project] 管理房间已初始化: ${msg.chatId} (${roomName})`);
+    logger.info(`[project] management room initialized: ${msg.chatId} (${roomName})`);
   } catch (err) {
     // Non-matrix transport or transient failure — skip branding, try again
     // later. 降级必留痕:品牌化/收养哪一步败了、为什么(审计稳定性批 票12)。
-    logger.warn(`[project] 管理房间初始化失败(跳过,下次启动自动重试): ${errorMessage(err)}`);
+    logger.warn(`[project] management room init failed (skipped, retried on next startup): ${errorMessage(err)}`);
   }
 }
 
@@ -339,8 +339,8 @@ function recordInvited(
   });
   logger.info(
     already
-      ? `[space] ${namespacedUser} 已在${where},无需重复邀请`
-      : `[space] 信任用户已邀请进${where}: ${namespacedUser}`
+      ? `[space] ${namespacedUser} already in ${where}, no repeat invite`
+      : `[space] trusted user invited to ${where}: ${namespacedUser}`
   );
   return true;
 }
@@ -366,7 +366,7 @@ async function inviteOnceToRoom(
       // the startup self-heal stops re-inviting (and failing) on every boot.
       return recordInvited(store, target.listKey, namespacedUser, true, target.where);
     }
-    logger.warn(`[space] 邀请 ${namespacedUser} 进${target.where}失败(下次启动自愈): ${errorMessage(err)}`);
+    logger.warn(`[space] failed to invite ${namespacedUser} to ${target.where} (self-heals on next startup): ${errorMessage(err)}`);
     return false;
   }
 }
@@ -385,7 +385,7 @@ export async function inviteUserToSpaceOnce(
   return inviteOnceToRoom(roomOps, store, namespacedUser, {
     roomId: activeSpaceRoomId(store.get()),
     listKey: "invitedUsers",
-    where: "空间",
+    where: "space",
   });
 }
 
@@ -408,7 +408,7 @@ export async function inviteUserToManagementRoomOnce(
   return inviteOnceToRoom(roomOps, store, namespacedUser, {
     roomId: activeSpaceRoomId(cfg) ? managementRoomId(cfg) : undefined,
     listKey: "managementInvitedUsers",
-    where: "管理房间",
+    where: "management room",
   });
 }
 

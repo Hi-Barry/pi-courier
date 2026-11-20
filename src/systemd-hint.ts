@@ -81,7 +81,7 @@ export function dirOwnerUid(dir: string | undefined): number | null {
   try {
     return fs.statSync(dir).uid;
   } catch (err) {
-    logger.debug(`[systemd] 探测失败,按无 systemd 处理: ${errorMessage(err)}`);
+    logger.debug(`[systemd] probe failed, assuming no systemd: ${errorMessage(err)}`);
     return null;
   }
 }

@@ -360,7 +360,7 @@ export function defaultWatchdogControl():
         clearTimeout(timer);
         if (code !== 0) {
           logger.warn(
-            `[update] schtasks ${action} ${WATCHDOG_TASK_NAME} exited with code ${code} — 任务不存在或权限不足,继续升级`,
+            `[update] schtasks ${action} ${WATCHDOG_TASK_NAME} exited with code ${code} — task missing or access denied, continuing upgrade`,
           );
         }
         resolve();
@@ -565,7 +565,7 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
         await watchdogControl.pause();
         paused = true;
       } catch (err) {
-        logger.warn(`[update] watchdog pause failed (继续升级): ${errorMessage(err)}`);
+        logger.warn(`[update] watchdog pause failed (continuing upgrade): ${errorMessage(err)}`);
       }
     }
     const total = steps.length;
@@ -578,7 +578,7 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
       for (let attempt = 1; attempt <= attempts; attempt++) {
         if (attempt > 1) {
           logger.warn(
-            `[update] 第 ${attempt}/${attempts} 次重试(上次无进展被杀,继续):${step.cmd} ${step.args.join(" ")}`,
+            `[update] retry ${attempt}/${attempts} (previous attempt killed on stall, continuing): ${step.cmd} ${step.args.join(" ")}`,
           );
           onProgress?.({
             kind: "stall-retry",
@@ -625,7 +625,7 @@ export async function runUpgrade(deps: UpgradeDeps = {}): Promise<UpgradeOutcome
       try {
         await watchdogControl?.resume();
       } catch (err) {
-        logger.warn(`[update] watchdog resume failed (请手动恢复 pi-courier-watchdog 任务): ${errorMessage(err)}`);
+        logger.warn(`[update] watchdog resume failed (restore the pi-courier-watchdog task manually): ${errorMessage(err)}`);
       }
     }
   }

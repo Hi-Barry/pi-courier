@@ -345,7 +345,7 @@ export class PmctlController {
           const git = await (this.opts.probeGit ?? probeProjectGit)(resolvedWorkdir);
           await roomOps.setProjectMeta(provision.roomId, { name: pname, ...git });
         } catch (err) {
-          logger.warn(`[pmctl] 项目房元数据写入失败(${provision.roomId}): ${errorMessage(err)}`);
+          logger.warn(`[pmctl] project room meta write failed (${provision.roomId}): ${errorMessage(err)}`);
           metaNote = t("pmctl.new.metaFailed", { message: errorMessage(err) });
         }
       }
@@ -356,7 +356,7 @@ export class PmctlController {
         const me = roomOps.getBotUserId();
         if (me) await roomOps.registerRoomBot?.(provision.roomId, me);
       } catch (err) {
-        logger.warn(`[pmctl] owner bot 自登记失败(${provision.roomId}): ${errorMessage(err)}`);
+        logger.warn(`[pmctl] owner bot self-registration failed (${provision.roomId}): ${errorMessage(err)}`);
       }
       // 票 #209:new 出来的项目就是要开发的项目,进程即刻拉起(急启动),
       // 不等首条消息;预设应用照旧走 getRpcForRoom 内部路径。失败不回滚:
@@ -368,7 +368,7 @@ export class PmctlController {
       try {
         rpc = await pm.getRpcForRoom(provision.roomId);
       } catch (err) {
-        logger.warn(`[pmctl] 项目进程急启动失败(${provision.roomId}): ${errorMessage(err)}`);
+        logger.warn(`[pmctl] project process eager start failed (${provision.roomId}): ${errorMessage(err)}`);
         startNote = t("pmctl.new.startFailed", { message: errorMessage(err) });
       }
       // 票 #210:启动成功后读真实会话模型,向新项目房发上线欢迎卡。发送
@@ -385,7 +385,7 @@ export class PmctlController {
             })
           );
         } catch (err) {
-          logger.warn(`[pmctl] 上线欢迎卡发送失败(${provision.roomId}): ${errorMessage(err)}`);
+          logger.warn(`[pmctl] welcome card send failed (${provision.roomId}): ${errorMessage(err)}`);
           welcomeNote = t("pmctl.new.welcomeFailed", { message: errorMessage(err) });
         }
       }
@@ -560,7 +560,7 @@ export class PmctlController {
         const existing = (await this.opts.roomOps.getProjectMeta?.(roomId)) ?? null;
         await this.opts.roomOps.setProjectMeta(roomId, { name: existing?.name ?? projectLabelOf(entry), ...git });
       } catch (err) {
-        logger.warn(`[pmctl] 项目房元数据刷新失败(${roomId}): ${errorMessage(err)}`);
+        logger.warn(`[pmctl] project room meta refresh failed (${roomId}): ${errorMessage(err)}`);
       }
     }
     await reply(t("pmctl.mv.done", { name: projectLabelOf(entry), workdir: resolvedWorkdir, sessionDir: sessionDirName }));
@@ -667,7 +667,7 @@ export class PmctlController {
         const me = roomOps.getBotUserId();
         if (me) await roomOps.registerRoomBot?.(pending.roomId, me);
       } catch (err) {
-        logger.warn(`[pmctl] 客座 bot 自登记失败(${pending.roomId}): ${errorMessage(err)}`);
+        logger.warn(`[pmctl] guest bot self-registration failed (${pending.roomId}): ${errorMessage(err)}`);
       }
       // 上岗通报:发进项目房,让房主可感知客座就绪。失败仅附注,不回滚绑定。
       let onboardNote = "";
@@ -812,7 +812,7 @@ export class PmctlController {
       }
     } catch (err) {
       avatarNote = t("pmctl.rename.avatarFailed", { message: errorMessage(err) });
-      logger.warn(`[identity] /pmctl rename 头像重选失败(${roomId}): ${errorMessage(err)}`);
+      logger.warn(`[identity] /pmctl rename avatar re-pick failed (${roomId}): ${errorMessage(err)}`);
     }
     // 票03(spec #299):元数据里的项目名跟随改名(best-effort —— 读不到旧
     // 元数据或写失败都不致命,元数据本就可后补)。
@@ -823,7 +823,7 @@ export class PmctlController {
           await roomOps.setProjectMeta(roomId, { ...meta, name: newName });
         }
       } catch (err) {
-        logger.warn(`[pmctl] 项目房元数据改名同步失败(${roomId}): ${errorMessage(err)}`);
+        logger.warn(`[pmctl] project room meta rename sync failed (${roomId}): ${errorMessage(err)}`);
       }
     }
     // The project mapping is already renamed; surface room-rename failures

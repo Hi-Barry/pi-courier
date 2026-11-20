@@ -352,7 +352,7 @@ export class LoginManager {
     // already reports to the user; this handler catches ITS failure too
     // (no unhandled rejection — audit stability batch 票13).
     this.run(entry).catch((err: unknown) => {
-      logger.warn(`[login] 登录流程异常退出: ${errorMessage(err)}`);
+      logger.warn(`[login] login flow exited unexpectedly: ${errorMessage(err)}`);
     });
   }
 
@@ -373,7 +373,7 @@ export class LoginManager {
     if (entry.starterId !== senderId) {
       if (isCancelInput(text) || entry.current) {
         logger.warn(
-          `[login] 拒绝非发起者的输入: ${senderId} 不是房间 ${chatId} 登录流程的发起者(${entry.starterId}),消息不作为答案/取消采纳`,
+          `[login] rejected input from a non-starter: ${senderId} is not the starter of the login flow in room ${chatId} (starter: ${entry.starterId}); message not taken as answer/cancel`,
         );
       }
       return false;
@@ -458,7 +458,7 @@ export class LoginManager {
       prompt: (p) => this.promptUser(entry, p),
       notify: (e) => {
         this.deps.sendReply(chatId, transport, translateAuthEvent(e)).catch((err: unknown) => {
-          logger.warn(`[login] 登录事件通知发送失败: ${errorMessage(err)}`);
+          logger.warn(`[login] login event notice send failed: ${errorMessage(err)}`);
         });
       },
     };
@@ -486,7 +486,7 @@ export class LoginManager {
       await this.deps
         .sendReply(chatId, transport, t("login.failed", { id: providerId, message: errorMessage(err) }))
         .catch((sendErr: unknown) => {
-          logger.warn(`[login] 登录失败回执发送失败: ${errorMessage(sendErr)}`);
+          logger.warn(`[login] login-failure notice send failed: ${errorMessage(sendErr)}`);
         });
     }
   }

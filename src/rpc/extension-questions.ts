@@ -235,9 +235,9 @@ export class ExtensionQuestions {
       case "input":
       case "editor": {
         if (!target) {
-          log.warn(`[extension-ui] ${request.method} 请求无绑定房间,已代答取消 (id ${request.id})`);
+          log.warn(`[extension-ui] ${request.method} request has no bound room, auto-cancelled on its behalf (id ${request.id})`);
           this.deps.respond(rpc, { id: request.id, cancelled: true }).catch((err: unknown) => {
-            log.error(`[extension-ui] 代答取消失败 (id ${request.id}): ${errorMessage(err)}`);
+            log.error(`[extension-ui] auto-cancel failed (id ${request.id}): ${errorMessage(err)}`);
           });
           return;
         }
@@ -251,7 +251,7 @@ export class ExtensionQuestions {
         entry.timer.unref?.();
         this.queue(rpc).push(entry);
         this.postQuestion(rpc, entry);
-        log.debug(`[extension-ui] ${request.method} 提问已发往房间 (id ${request.id})`);
+        log.debug(`[extension-ui] ${request.method} question delivered to room (id ${request.id})`);
         return;
       }
       case "notify": {
@@ -263,19 +263,19 @@ export class ExtensionQuestions {
           if (target) {
             const icon = level === "error" ? "🔴" : "⚠️";
             this.deps.sendReply(target.chatId, target.transport, `${icon} ${t("xq.notify", { message })}`).catch((err: unknown) => {
-          logger.warn(`[xq] 问题通知发送失败: ${errorMessage(err)}`);
+          logger.warn(`[xq] question notice send failed: ${errorMessage(err)}`);
         });
           } else {
-            log.warn(`[extension-ui] 扩展通知(${level},无绑定房间): ${message}`);
+            log.warn(`[extension-ui] extension notice (${level}, no bound room): ${message}`);
           }
         } else {
-          log.debug(`[extension-ui] 扩展通知(info): ${message}`);
+          log.debug(`[extension-ui] extension notice (info): ${message}`);
         }
         return;
       }
       default:
         // setStatus / setWidget / setTitle / set_editor_text — TUI-only display.
-        log.debug(`[extension-ui] ${request.method} 为 TUI 专属展示,已忽略`);
+        log.debug(`[extension-ui] ${request.method} is TUI-only display, ignored`);
         return;
     }
   }
@@ -302,7 +302,7 @@ export class ExtensionQuestions {
     const emojis = promptReactions(entry.request);
     const { replyWithId, sendReaction } = this.deps;
     const warnCardSendFailure = (err: unknown): void => {
-      logger.warn(`[xq] 问题卡片发送失败(用户看不到这道题): ${errorMessage(err)}`);
+      logger.warn(`[xq] question card send failed (the user cannot see this question): ${errorMessage(err)}`);
     };
     if (!replyWithId || !sendReaction || emojis.length === 0) {
       void this.deps.sendReply(chatId, transport, text).catch((err: unknown) => warnCardSendFailure(err));
@@ -317,7 +317,7 @@ export class ExtensionQuestions {
         entry.promptEventId = eventId;
         for (const emoji of emojis) {
           sendReaction(chatId, eventId, emoji).catch((err: unknown) =>
-            logger.debug(`[xq] 表情种植失败 (${emoji}): ${errorMessage(err)}`)
+            logger.debug(`[xq] reaction seeding failed (${emoji}): ${errorMessage(err)}`)
           );
         }
       })
@@ -343,7 +343,7 @@ export class ExtensionQuestions {
     // reaction 不走消息管道:回执失败无处上抛,整体 fire-and-forget + debug
     // (与 BacklogInbox.answerByReaction 同一口径)。
     void this.commitParsedAnswer(rpc, queue!, oldest, answer, chatId, oldest.target.transport, oldest.log).catch(
-      (err: unknown) => logger.debug(`[xq] reaction 应答收尾失败: ${errorMessage(err)}`)
+      (err: unknown) => logger.debug(`[xq] reaction answer cleanup failed: ${errorMessage(err)}`)
     );
     return true;
   }
@@ -366,12 +366,12 @@ export class ExtensionQuestions {
     if (!queue || index === -1) return; // answered or cancelled in the meantime
     queue.splice(index, 1);
     const title = truncateLine(entry.request.title ?? t("xq.untitled"), 80);
-    entry.log.info(`[extension-ui] 提问超时未答,已代答取消 (id ${entry.request.id})`);
+    entry.log.info(`[extension-ui] question timed out unanswered, auto-cancelled on its behalf (id ${entry.request.id})`);
     this.deps.respond(rpc, { id: entry.request.id, cancelled: true }).catch((err: unknown) => {
-      entry.log.error(`[extension-ui] 超时代答回写失败 (id ${entry.request.id}): ${errorMessage(err)}`);
+      entry.log.error(`[extension-ui] timeout auto-cancel write-back failed (id ${entry.request.id}): ${errorMessage(err)}`);
     });
     this.deps.sendReply(entry.target.chatId, entry.target.transport, t("xq.expired", { title })).catch((err: unknown) => {
-      logger.warn(`[xq] 过期回执发送失败: ${errorMessage(err)}`);
+      logger.warn(`[xq] stale notice send failed: ${errorMessage(err)}`);
     });
   }
 
@@ -405,7 +405,7 @@ export class ExtensionQuestions {
     try {
       await this.deps.respond(rpc, payload);
     } catch (err) {
-      log.error(`[extension-ui] 应答回写失败 (id ${entry.request.id}): ${errorMessage(err)}`);
+      log.error(`[extension-ui] answer write-back failed (id ${entry.request.id}): ${errorMessage(err)}`);
       await this.deps.sendReply(chatId, transport, t("xq.answer.lost"));
       return;
     }
