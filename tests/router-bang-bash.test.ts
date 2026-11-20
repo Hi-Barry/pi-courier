@@ -413,6 +413,14 @@ describe("formatBashPreview — 流式预览形态(spec #193)", () => {
     expect(text).not.toContain("a".repeat(60));
   });
 
+  it("恰好超一字符(limit+1)才截断,尾部保留 limit 字符", () => {
+    const out = `${"a".repeat(10)}B`; // limit 10,超 1 字符 → 保尾 10 字符
+    const text = formatBashPreview("c", out, false, 10);
+    expect(text).toContain("已截断");
+    expect(text).toContain("a".repeat(9) + "B");
+    expect(text).not.toContain(out);
+  });
+
   it("恰好等于 limit 不截断", () => {
     const out = "x".repeat(10);
     expect(formatBashPreview("c", out, false, 10)).toContain(out);
@@ -543,6 +551,22 @@ describe("bashBang 流式活卡(spec #193)", () => {
     expect(edits).toHaveLength(1);
     expect(edits[0]!.text).toContain("退出码: 0");
     expect(replies).toHaveLength(0);
+  });
+
+  it("开卡失败(reject)与终态竞速 → 终态降级新消息,结果不丢(评审 P1 回归钉)", async () => {
+    const { router, bash, replies, sendLiveCard, editReply } = makeLiveFixtures();
+    let rejectCard!: (err: Error) => void;
+    sendLiveCard.mockImplementation(
+      () => new Promise<string>((_resolve, reject) => { rejectCard = reject; }),
+    );
+    bash.mockResolvedValue({ output: "fast", exitCode: 0, cancelled: false, truncated: false });
+    await router.handleIncoming(makeMsg({ text: "! fast", messageId: "m1" }));
+    await flush();
+    expect(replies).toHaveLength(0); // 卡仍在路上,终态暂存
+    rejectCard(new Error("rate limited"));
+    await flush();
+    expect(replies.join("\n")).toContain("退出码: 0"); // 结果永不丢
+    expect(editReply).not.toHaveBeenCalled(); // 无卡可编辑
   });
 
   it("!! 流式预览同样带 excludedNote 标注", async () => {

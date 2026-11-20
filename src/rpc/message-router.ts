@@ -1321,7 +1321,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
             })
             .catch(() => {
               cardPending = false;
-              if (!settledText) void sendReply(chatId, transport, inProgressText).catch(() => {});
+              if (settledText) {
+                // 开卡失败与命令快速失败竞速:终态已设 → 立即降级新消息(结果永不丢)。
+                settleNow();
+                return;
+              }
+              void sendReply(chatId, transport, inProgressText).catch(() => {});
             });
         } else {
           void sendReply(chatId, transport, inProgressText).catch(() => {});
