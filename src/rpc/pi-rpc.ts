@@ -694,8 +694,11 @@ export class PiRpc {
    * (`!!`:结果不写入上下文)是公开 bash() 不带的参数,走 COMPAT 私有 send;
    * 普通执行(! 语义)直用公开方法。
    */
-  async bash(command: string, opts?: { excludeFromContext?: boolean }): Promise<BashResultView> {
-    return this.bashViaOwnChannel(command, opts?.excludeFromContext ?? false);
+  async bash(
+    command: string,
+    opts?: { excludeFromContext?: boolean; onUpdate?: (delta: string) => void },
+  ): Promise<BashResultView> {
+    return this.bashViaOwnChannel(command, opts?.excludeFromContext ?? false, opts?.onUpdate);
   }
 
   /**
@@ -704,11 +707,17 @@ export class PiRpc {
    * 长命令必被误杀。机制与 upstreamExtensionUIStdinWrite 同款:往子进程
    * stdin 写一条带自定义 id 的 JSONL 命令,在事件流里等按 id 回来的应答
    * (上游 handleLine 对未知 id 的 response 会派发给 eventListeners,上游
-   * 自身的 pendingRequests 不含此 id,零冲突)。应答剥离沿上游 getData 语义
+   * 自身的 pendingRequests 不含此 id,零冲突)。onUpdate 提供时,执行期间
+   * id 匹配的 bash_execution_update 增量同步转发(spec #193 流式预览)。
+   * 应答剥离沿上游 getData 语义
    * (success=false 抛 error)。在途计数手动入账(不经 wrapped 客户端),
    * 重启排水不漏账;超时弃权,报 BashTimeoutError(含已等待分钟数)。
    */
-  private async bashViaOwnChannel(command: string, excludeFromContext: boolean): Promise<BashResultView> {
+  private async bashViaOwnChannel(
+    command: string,
+    excludeFromContext: boolean,
+    onUpdate?: (delta: string) => void,
+  ): Promise<BashResultView> {
     const client = this.requireClient();
     const stdin = upstreamClientStdin(client);
     const id = `bridge_bash_${++bridgeBashSeq}`;
@@ -718,7 +727,15 @@ export class PiRpc {
     try {
       return await new Promise<BashResultView>((resolve, reject) => {
         const offEvent = this.onEvent((event: unknown) => {
-          const data = event as { type?: string; id?: string; success?: boolean; error?: string; data?: unknown };
+          const data = event as { type?: string; id?: string; success?: boolean; error?: string; delta?: unknown; data?: unknown };
+          // 流式增量(spec #193):上游把请求 id 透传进 executeBash,每个输出块
+          // 以 bash_execution_update(id + delta)推到事件流 —— 按自管 id 匹配
+          // 转发给回调;不带 id 或 id 不匹配(旧上游、agent 自己的 bash 工具)
+          // 一律不转发。promise 落定即 cleanup,迟到事件自然停流。
+          if (data.type === "bash_execution_update") {
+            if (onUpdate && data.id === id && typeof data.delta === "string") onUpdate(data.delta);
+            return;
+          }
           if (data.type !== "response" || data.id !== id) return;
           if (data.success) resolve(data.data as BashResultView);
           else reject(new Error(data.error ?? "bash failed"));

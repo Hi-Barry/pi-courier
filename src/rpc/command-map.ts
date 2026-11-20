@@ -345,6 +345,22 @@ export function formatBashReply(
   return reply + winPathHint;
 }
 
+/** 流式预览的回帖形态(spec #193,`!`/`!!` 活卡中间帧):inProgress 头 +
+ *  输出代码块。与终态回帖的保头口径相反,这里保**尾** —— 对齐 TUI 视口
+ *  永远看最新输出的观感;截断标记落在代码块首行(切的是头部)。limit =
+ *  尾部保留上限(字符,config bashOutputLimit 派生);空输出用「无输出」占位。 */
+export function formatBashPreview(
+  command: string,
+  output: string,
+  excluded = false,
+  limit: number = BASH_OUTPUT_LIMIT_DEFAULT,
+): string {
+  const suffix = excluded ? t("cmd.bash.excludedNote") : "";
+  const head = output.length > limit ? `${t("common.truncated")}\n` : "";
+  const tail = output.length > limit ? output.slice(-limit) : output;
+  return `${t("router.bang.inProgress", { command, suffix })}\n\`\`\`\n${head}${tail || t("common.noOutput")}\n\`\`\``;
+}
+
 /** Total queued messages in a snapshot (0 when absent). */
 export function queueTotal(snapshot: QueueSnapshot | undefined): number {
   return (snapshot?.steering.length ?? 0) + (snapshot?.followUp.length ?? 0);

@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ConfigStore } from "../src/config";
 import {
   createBashTracker,
+  formatBashPreview,
   formatBashReply,
   parseBangCommand,
 } from "../src/rpc/command-map";
@@ -389,5 +390,170 @@ describe("formatBashReply — win32 未加引号路径提示(spec #256)", () => 
     const text = formatBashReply("dir d:\\share", winFail, true, 30000, "win32");
     expect(text).toContain("(结果未写入上下文)");
     expect(text).toContain("/d/share/Projects");
+  });
+});
+
+describe("formatBashPreview — 流式预览形态(spec #193)", () => {
+  it("头部 + 代码块输出;空输出用占位", () => {
+    const text = formatBashPreview("ls", "", false, 100);
+    expect(text).toContain("⏳ 正在执行: ls");
+    expect(text).toContain("(无输出)");
+  });
+
+  it("!! 附未写入上下文标注(沿用 excludedNote)", () => {
+    const text = formatBashPreview("ls", "out", true, 100);
+    expect(text).toContain("(结果不写入上下文)");
+    expect(text).toContain("out");
+  });
+
+  it("超限保尾:截断标记在代码块首行,尾部保留", () => {
+    const text = formatBashPreview("build", `${"a".repeat(60)}TAIL`, false, 10);
+    expect(text).toContain("…(已截断)");
+    expect(text).toContain("TAIL");
+    expect(text).not.toContain("a".repeat(60));
+  });
+
+  it("恰好等于 limit 不截断", () => {
+    const out = "x".repeat(10);
+    expect(formatBashPreview("c", out, false, 10)).toContain(out);
+    expect(formatBashPreview("c", out, false, 10)).not.toContain("已截断");
+  });
+});
+
+describe("bashBang 流式活卡(spec #193)", () => {
+  function makeLiveFixtures() {
+    const replies: string[] = [];
+    const edits: Array<{ messageId: string; text: string }> = [];
+    const bash = vi.fn();
+    const rpc = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      bash,
+      label: undefined,
+      onEvent: vi.fn(),
+      requireClient: () => ({ abortBash: vi.fn() }),
+    } as unknown as PiRpc;
+    const sendLiveCard = vi.fn(
+      async (_chatId: string, _transport: string, text: string): Promise<string | undefined> => text,
+    );
+    const editReply = vi.fn(async (_chatId: string, _transport: string, messageId: string, text: string) => {
+      edits.push({ messageId, text });
+    });
+    const { router } = makeRouterFixture({
+      rpc,
+      sendReply: async (_chatId: string, _transport: string, text: string) => {
+        replies.push(text);
+      },
+      extra: { sendLiveCard, editReply },
+    });
+    return { router, bash, replies, edits, sendLiveCard, editReply };
+  }
+
+  /** 微任务 + 一个宏任务:让开卡/编辑/终态链跑完。 */
+  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  /** 挂一手动释放的 bash 假件,捕获 onUpdate 供增量驱动。 */
+  function mockManualBash(bash: ReturnType<typeof vi.fn>) {
+    let onUpdate: ((d: string) => void) | undefined;
+    let release!: (r: BashResultView) => void;
+    bash.mockImplementation((_cmd: string, opts?: { onUpdate?: (d: string) => void }) => {
+      onUpdate = opts?.onUpdate;
+      return new Promise<BashResultView>((resolve) => {
+        release = resolve;
+      });
+    });
+    return {
+      push: (d: string) => onUpdate?.(d),
+      done: (r: BashResultView) => release(r),
+    };
+  }
+
+  it("开卡 → 增量预览编辑 → 终态变形为最终回帖,全程不落新消息", async () => {
+    const { router, bash, replies, edits, sendLiveCard } = makeLiveFixtures();
+    const drive = mockManualBash(bash);
+    await router.handleIncoming(makeMsg({ text: "! tail -f log", messageId: "m1" }));
+    await flush();
+    expect(sendLiveCard).toHaveBeenCalledTimes(1);
+    expect(String(sendLiveCard.mock.calls[0]?.[2])).toContain("⏳ 正在执行: tail -f log");
+    expect(bash).toHaveBeenCalledWith(
+      "tail -f log",
+      expect.objectContaining({ excludeFromContext: false, onUpdate: expect.any(Function) })
+    );
+    expect(replies).toHaveLength(0); // 卡已开,不落 plain 即时回执
+
+    drive.push("chunk1\n");
+    await flush();
+    expect(edits).toHaveLength(1);
+    expect(edits[0]!.text).toContain("⏳ 正在执行: tail -f log");
+    expect(edits[0]!.text).toContain("chunk1");
+
+    drive.done({ output: "chunk1\nchunk2", exitCode: 0, cancelled: false, truncated: false });
+    await flush();
+    expect(edits).toHaveLength(2);
+    expect(edits[1]!.text).toContain("$ tail -f log");
+    expect(edits[1]!.text).toContain("退出码: 0");
+    expect(edits[1]!.text).toContain("chunk2");
+    expect(replies).toHaveLength(0); // 终态走编辑,不落新消息
+  });
+
+  it("节流窗口内的后续增量跳过编辑,终态立即变形", async () => {
+    const { router, bash, edits } = makeLiveFixtures();
+    const drive = mockManualBash(bash);
+    await router.handleIncoming(makeMsg({ text: "! gen", messageId: "m1" }));
+    await flush();
+    drive.push("a\n");
+    drive.push("b\n"); // 同一节流窗口(默认 3s)内 → 跳过
+    await flush();
+    expect(edits).toHaveLength(1);
+    drive.done({ output: "a\nb\ndone", exitCode: 0, cancelled: false, truncated: false });
+    await flush();
+    expect(edits).toHaveLength(2); // 终态不节流
+    expect(edits[1]!.text).toContain("done");
+  });
+
+  it("editReply 失败 → 终态降级新消息回帖,结果永不丢", async () => {
+    const { router, bash, replies, editReply } = makeLiveFixtures();
+    editReply.mockRejectedValue(new Error("rate limited"));
+    bash.mockResolvedValue({ output: "out", exitCode: 0, cancelled: false, truncated: false });
+    await router.handleIncoming(makeMsg({ text: "! ok", messageId: "m1" }));
+    await flush();
+    expect(replies.join("\n")).toContain("$ ok");
+    expect(replies.join("\n")).toContain("退出码: 0");
+  });
+
+  it("开卡失败(resolve undefined)→ 退回旧两条消息路径", async () => {
+    const { router, bash, replies, sendLiveCard } = makeLiveFixtures();
+    sendLiveCard.mockResolvedValue(undefined);
+    bash.mockResolvedValue({ output: "", exitCode: 0, cancelled: false, truncated: false });
+    await router.handleIncoming(makeMsg({ text: "! ls", messageId: "m1" }));
+    await flush();
+    expect(replies.join("\n")).toContain("⏳ 正在执行: ls");
+    expect(replies.join("\n")).toContain("退出码: 0");
+  });
+
+  it("终态先到、卡迟到 → 卡落地后直接变形为终态,不落新消息", async () => {
+    const { router, bash, replies, edits, sendLiveCard } = makeLiveFixtures();
+    let resolveCard!: (id: string) => void;
+    sendLiveCard.mockImplementation(() => new Promise<string>((resolve) => { resolveCard = resolve; }));
+    bash.mockResolvedValue({ output: "fast", exitCode: 0, cancelled: false, truncated: false });
+    await router.handleIncoming(makeMsg({ text: "! fast", messageId: "m1" }));
+    await flush();
+    expect(replies).toHaveLength(0); // 卡在路上,终态等待卡落地
+    resolveCard("$card-1");
+    await flush();
+    expect(edits).toHaveLength(1);
+    expect(edits[0]!.text).toContain("退出码: 0");
+    expect(replies).toHaveLength(0);
+  });
+
+  it("!! 流式预览同样带 excludedNote 标注", async () => {
+    const { router, bash, edits } = makeLiveFixtures();
+    const drive = mockManualBash(bash);
+    await router.handleIncoming(makeMsg({ text: "!! tail -f log", messageId: "m1" }));
+    await flush();
+    drive.push("line\n");
+    await flush();
+    expect(edits[0]!.text).toContain("(结果不写入上下文)");
+    drive.done({ output: "line", exitCode: 0, cancelled: false, truncated: false });
+    await flush();
   });
 });
