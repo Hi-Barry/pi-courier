@@ -39,7 +39,7 @@ export class BotRegistry {
       // 会短暂重开 bot 互聊回环;有旧名单时宁可保守。全无旧名单才真正放行。
       const stale = this.cache.get(roomId);
       if (stale) return stale.bots;
-      logger.warn(`[bot-registry] 读取房间 ${roomId} 的 bot 登记簿失败,按空集处理: ${errorMessage(err)}`);
+      logger.warn(`[bot-registry] failed to read the bot registry for room ${roomId}, treating as empty: ${errorMessage(err)}`);
       return new Set();
     }
   }

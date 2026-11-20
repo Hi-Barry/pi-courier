@@ -306,7 +306,7 @@ export class SessionMirror {
     this.resolveExternal(entry, role, file).catch((err: unknown) => {
       // 判定失败按外部处理的语义在 resolveExternal 内部;这里兜住其外的一切
       // 拒绝(回调/清理),不产生未处理拒绝(审计稳定性批 票13)。
-      logger.warn(`[mirror] 外部判定流程异常(忽略该条): ${errorMessage(err)}`);
+      logger.warn(`[mirror] external verdict flow errored (entry ignored): ${errorMessage(err)}`);
     });
   }
 

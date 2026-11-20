@@ -189,7 +189,7 @@ async function migrateAvatarSet(
       store.update(avatarVersionMarker(set));
     } catch (err) {
       // 记账失败 = 下次启动整组重新品牌化,必须留痕(审计稳定性批 票12 评审修复)
-      logger.warn(`[identity] ${set} 头像版本记账失败(下次启动将重刷): ${errorMessage(err)}`);
+      logger.warn(`[identity] ${set} avatar version bookkeeping failed (will re-brand on next startup): ${errorMessage(err)}`);
     }
   }
 }
@@ -223,20 +223,20 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
     if (name && isLegacySpaceName(name, instanceName)) {
       const renamed = spaceDisplayName(instanceName);
       await roomOps.setRoomName(spaceId, renamed);
-      logger.info(`[identity] 空间名已迁移: ${name} → ${renamed}`);
+      logger.info(`[identity] space name migrated: ${name} → ${renamed}`);
     }
   } catch (err) {
-    logger.warn(`[identity] 空间改名检查失败(跳过,下次启动自动重试): ${spaceId}: ${errorMessage(err)}`);
+    logger.warn(`[identity] space rename check failed (skipped, retried on next startup): ${spaceId}: ${errorMessage(err)}`);
   }
 
   const brandRoom = async (roomId: string, file: string, label: string, rebrand: boolean): Promise<boolean> => {
     try {
       const result = await ensureRoomAvatar(roomOps, roomId, file, { rebrand });
-      if (result === "set") logger.info(`[identity] ${label}头像已设置: ${file}`);
-      if (result === "rebranded") logger.info(`[identity] ${label}头像已升级为新风格: ${file}`);
+      if (result === "set") logger.info(`[identity] ${label} avatar set: ${file}`);
+      if (result === "rebranded") logger.info(`[identity] ${label} avatar upgraded to new style: ${file}`);
       return true;
     } catch (err) {
-      logger.warn(`[identity] ${label}(${roomId})头像设置失败(跳过,下次启动自动重试): ${errorMessage(err)}`);
+      logger.warn(`[identity] ${label} (${roomId}) avatar set failed (skipped, retried on next startup): ${errorMessage(err)}`);
       return false;
     }
   };
@@ -247,16 +247,16 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
   if (spaceCustomPath) {
     try {
       const outcome = await applySpaceCustomAvatar(roomOps, store, spaceId, spaceCustomPath);
-      logger.info(`[identity] 空间自定义头像已维护(${outcome === "kept" ? "保持" : "已上传"}): ${spaceCustomPath}`);
+      logger.info(`[identity] space custom avatar maintained (${outcome === "kept" ? "kept" : "uploaded"}): ${spaceCustomPath}`);
     } catch (err) {
-      logger.warn(`[identity] 空间自定义头像不可用(${errorMessage(err)}),本启动回落内置图池: ${spaceCustomPath}`);
+      logger.warn(`[identity] space custom avatar unavailable (${errorMessage(err)}), falling back to the bundled pool this start: ${spaceCustomPath}`);
       await migrateAvatarSet(store, cfg, "space", (rebrand) =>
-        brandRoom(spaceId, pickPoolAvatarFile(instanceName, "space"), "空间", rebrand),
-      );
+      brandRoom(spaceId, pickPoolAvatarFile(instanceName, "space"), "space", rebrand),
+    );
     }
   } else {
     await migrateAvatarSet(store, cfg, "space", (rebrand) =>
-      brandRoom(spaceId, pickPoolAvatarFile(instanceName, "space"), "空间", rebrand),
+      brandRoom(spaceId, pickPoolAvatarFile(instanceName, "space"), "space", rebrand),
     );
   }
 
@@ -266,13 +266,13 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
   for (const [roomId, project] of Object.entries(cfg.projects ?? {})) {
     const filePath = projectAvatarPath(project);
     if (!filePath) continue;
-    const label = `项目房间 ${project.name ?? roomId}`;
+    const label = `project room ${project.name ?? roomId}`;
     try {
       const outcome = await applyRoomCustomAvatar(roomOps, store, roomId, filePath);
       customOk.add(roomId);
-      logger.info(`[identity] ${label}自定义头像已维护(${outcome === "kept" ? "保持" : "已上传"}): ${filePath}`);
+      logger.info(`[identity] ${label} custom avatar maintained (${outcome === "kept" ? "kept" : "uploaded"}): ${filePath}`);
     } catch (err) {
-      logger.warn(`[identity] ${label}自定义头像不可用(${errorMessage(err)}),本启动回落内置图池: ${filePath}`);
+      logger.warn(`[identity] ${label} custom avatar unavailable (${errorMessage(err)}), falling back to the bundled pool this start: ${filePath}`);
     }
   }
 
@@ -282,7 +282,7 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
   const roomTargets: Array<{ roomId: string; file: string; label: string }> = [];
   const mgmtRoomId = managementRoomId(cfg);
   if (mgmtRoomId) {
-    roomTargets.push({ roomId: mgmtRoomId, file: managementAvatarFile(), label: "管理房间" });
+    roomTargets.push({ roomId: mgmtRoomId, file: managementAvatarFile(), label: "management room" });
   }
   const poolFiles = poolFilesForProjects(cfg, customOk);
   for (const [roomId, project] of Object.entries(cfg.projects ?? {})) {
@@ -290,7 +290,7 @@ export async function healRoomIdentities(roomOps: RoomOps, store: ConfigStore): 
     roomTargets.push({
       roomId,
       file: poolFiles.get(roomId) ?? pickPoolAvatarFile(project.name ?? roomId, "room"),
-      label: `项目房间 ${project.name ?? roomId}`,
+      label: `project room ${project.name ?? roomId}`,
     });
   }
   await migrateAvatarSet(store, cfg, "room", async (rebrand) => {
@@ -344,10 +344,10 @@ export async function healBotAvatar(roomOps: RoomOps, store: ConfigStore): Promi
   if (customPath) {
     try {
       const outcome = await applyBotCustomAvatar(roomOps, store, customPath);
-      logger.info(`[identity] bot 自定义头像已维护(${outcome === "kept" ? "保持" : "已上传"}): ${customPath}`);
+      logger.info(`[identity] bot custom avatar maintained (${outcome === "kept" ? "kept" : "uploaded"}): ${customPath}`);
       return;
     } catch (err) {
-      logger.warn(`[identity] bot 自定义头像不可用(${errorMessage(err)}),本启动回落内置图池: ${customPath}`);
+      logger.warn(`[identity] bot custom avatar unavailable (${errorMessage(err)}), falling back to the bundled pool this start: ${customPath}`);
     }
   }
   await migrateAvatarSet(store, cfg, "agent", async (rebrand) => {
@@ -358,12 +358,12 @@ export async function healBotAvatar(roomOps: RoomOps, store: ConfigStore): Promi
       const data = readAvatarBundled(file);
       const mxcUrl = await roomOps.uploadMedia(data, "image/png");
       await roomOps.setProfileAvatar(mxcUrl);
-      logger.info(`[identity] bot 头像已${had ? "更新" : "设置"}(agent 套): ${file}`);
+      logger.info(`[identity] bot avatar ${had ? "updated" : "set"} (agent pack): ${file}`);
       return true;
     } catch (err) {
       // Failed set: stay pending so the next start retries the whole agent
       // migration — the marker is only ever booked on a confirmed success.
-      logger.warn(`[identity] bot 头像设置失败(跳过,下次启动自动重试): ${errorMessage(err)}`);
+      logger.warn(`[identity] bot avatar set failed (skipped, retried on next startup): ${errorMessage(err)}`);
       return false;
     }
   });

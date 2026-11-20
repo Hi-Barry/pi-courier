@@ -1618,7 +1618,7 @@ export async function handleSlashCommand(
   } catch (err) {
     // 命令名进日志(F5 顺手):「谁遭殃」一眼可查 —— 例:登录成功触发的自动
     // 重启连带击杀在途命令时,回执只有笼统文案,日志必须能对上是哪条命令。
-    logger.error(`❌ 命令执行失败 [${commandWord}]: ${errorMessage(err)}`);
+    logger.error(`❌ command execution failed [${commandWord}]: ${errorMessage(err)}`);
     await reply(t("cmd.generic.error", { message: errorMessage(err) }));
     return true;
   }

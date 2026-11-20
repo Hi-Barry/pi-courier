@@ -88,7 +88,7 @@ export function createStartupState(deps: StartupStateDeps): StartupState {
         try {
           await deliver(sink, text);
         } catch (err) {
-          logger.warn(`[startup] 配对码发出失败,保留缓冲待下次尝试: ${errorMessage(err)}`);
+          logger.warn(`[startup] pairing code delivery failed, kept buffered for the next attempt: ${errorMessage(err)}`);
           return;
         }
         pending.shift();
@@ -102,7 +102,7 @@ export function createStartupState(deps: StartupStateDeps): StartupState {
     sendPairingNotice(text: string): Promise<void> {
       pending.push(text);
       if (!sink) {
-        logger.debug("[startup] 配对码在接线前到达,已缓冲(接线后补发)");
+        logger.debug("[startup] pairing code arrived before wiring, buffered (flushed once wired)");
         return Promise.resolve();
       }
       return drain();

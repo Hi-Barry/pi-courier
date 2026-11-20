@@ -61,7 +61,7 @@ export class RpcTransientState {
         this.onQueueLost?.(rpc, snapshot);
       } catch (err) {
         // 回执失败(发送异常等)不影响作废本身 —— 但用户可见通知丢了,得留痕
-        logger.warn(`[transient] 作废回执发送失败: ${errorMessage(err)}`);
+        logger.warn(`[transient] invalidation notice send failed: ${errorMessage(err)}`);
       }
     }
     this.mirrors.delete(rpc);
@@ -88,7 +88,7 @@ export class RpcTransientState {
       this.onMirrorChanged?.(rpc, snapshot);
     } catch (err) {
       // 落盘失败不影响镜像本身(内存仍是权威)—— 持久化降级留痕
-      logger.warn(`[transient] 瞬态状态落盘失败(内存仍权威): ${errorMessage(err)}`);
+      logger.warn(`[transient] transient state persist failed (memory remains authoritative): ${errorMessage(err)}`);
     }
   }
 }

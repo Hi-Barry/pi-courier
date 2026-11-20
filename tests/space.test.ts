@@ -675,7 +675,7 @@ describe("space ensure", () => {
       },
       { getRoomAvatar: vi.fn().mockResolvedValue("mxc://server/existing") },
     );
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("自定义头像不可用"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("custom avatar unavailable"));
     // Fill-only fallback: the room keeps its existing avatar, nothing uploaded.
     expect(roomOps.uploadMedia).not.toHaveBeenCalled();
     expect(store.get().roomAvatarRefs).toBeUndefined();
@@ -947,7 +947,7 @@ describe("invite-once idempotency (issue #62 — already in the room)", () => {
     const invited = await space.inviteUserToSpaceOnce(roomOps as unknown as RoomOps, store, "matrix:@barry:server");
     expect(invited).toBe(true);
     expect(store.get().space?.invitedUsers).toEqual(["matrix:@barry:server"]);
-    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining("已在空间"));
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining("already in space"));
     expect(warnSpy).not.toHaveBeenCalled();
     // Fire-once holds: a second call is a no-op (no extra homeserver hit).
     const again = await space.inviteUserToSpaceOnce(roomOps as unknown as RoomOps, store, "matrix:@barry:server");
@@ -966,7 +966,7 @@ describe("invite-once idempotency (issue #62 — already in the room)", () => {
     const invited = await space.inviteUserToSpaceOnce(roomOps as unknown as RoomOps, store, "matrix:@barry:server");
     expect(invited).toBe(false);
     expect(store.get().space?.invitedUsers).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("失败(下次启动自愈)"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("self-heals on next startup"));
   });
 
   it("management-room invite: already in the room records the user and logs info", async () => {
@@ -986,7 +986,7 @@ describe("invite-once idempotency (issue #62 — already in the room)", () => {
     );
     expect(invited).toBe(true);
     expect(store.get().space?.managementInvitedUsers).toEqual(["matrix:@barry:server"]);
-    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining("已在管理房间"));
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining("already in management room"));
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
@@ -1006,6 +1006,6 @@ describe("invite-once idempotency (issue #62 — already in the room)", () => {
     );
     expect(invited).toBe(false);
     expect(store.get().space?.managementInvitedUsers).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("失败(下次启动自愈)"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("self-heals on next startup"));
   });
 });

@@ -65,7 +65,7 @@ export async function elevateTrustedUsersInRoom(
         powerElevatedUsers: [...new Set([...(store.get().powerElevatedUsers ?? []), ...elevated])],
       });
       logger.info(
-        `[power] 房间 ${roomId}: ${elevated.length} 名信任用户已提为管理员(PL ${TRUSTED_POWER_LEVEL})`
+        `[power] room ${roomId}: ${elevated.length} trusted user(s) elevated to admin (PL ${TRUSTED_POWER_LEVEL})`
       );
     }
   }
@@ -119,7 +119,7 @@ export async function healTrustedPowerLevels(roomOps: RoomOps, store: ConfigStor
     try {
       await elevateTrustedUsersInRoom(roomOps, store, roomId);
     } catch (err) {
-      logger.warn(`[power] 房间 ${roomId} 信任用户补权失败(跳过,下次启动自动重试): ${errorMessage(err)}`);
+      logger.warn(`[power] trusted-user power restore failed in room ${roomId} (skipped, retried on next startup): ${errorMessage(err)}`);
     }
   }
 }
@@ -145,7 +145,7 @@ export async function demoteTrustedUserEverywhere(
     } catch (err) {
       failed = true;
       logger.warn(
-        `[power] 房间 ${roomId} 撤销降权失败(保留簿记,下次启动自动重试): ${errorMessage(err)}`
+        `[power] demotion failed in room ${roomId} (bookkeeping kept, retried on next startup): ${errorMessage(err)}`
       );
     }
   }
@@ -154,7 +154,7 @@ export async function demoteTrustedUserEverywhere(
   const next = books.filter((u) => u !== namespacedUser);
   if (next.length !== books.length) {
     store.update({ powerElevatedUsers: next });
-    logger.info(`[power] 已撤销信任的用户 ${namespacedUser} 已在全部托管房间降为 PL 0,并移出提权簿记`);
+    logger.info(`[power] revoked trusted user ${namespacedUser} demoted to PL 0 in all managed rooms and removed from the elevation ledger`);
   }
   return true;
 }

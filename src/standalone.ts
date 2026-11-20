@@ -326,9 +326,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // policies an exit(1) here crash-loops the service and makes
     // `pi-courier setup` unreachable (exec fails while restarting).
     // Stay up and wait for configuration instead.
-    logger.warn("⚠️ 未配置 Matrix 连接(缺少 homeserver 或 access token)。");
-    logger.warn("   请运行 `pi-courier setup` 完成配置,然后重启服务。");
-    logger.warn("   等待配置中… (Ctrl+C / SIGTERM 退出)");
+    logger.warn("⚠️ Matrix connection not configured (missing homeserver or access token).");
+    logger.warn("   Run `pi-courier setup` to finish configuration, then restart the service.");
+    logger.warn("   Waiting for configuration… (Ctrl+C / SIGTERM to quit)");
     await new Promise<never>(() => {
       // Keep the event loop alive — a bare promise has no handles, so the
       // process would exit immediately instead of waiting for configuration.
@@ -422,7 +422,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         .withLabel(projectManager.labelForRoom(chatId))
         .debug(`📤 [${transport}] ${truncateLine(text, 500)}`);
     } catch (err) {
-      logger.error(`发送失败 (${transport}): ${errorMessage(err)}`);
+      logger.error(`send failed (${transport}): ${errorMessage(err)}`);
     }
   };
   // Silent no-op when the transport is missing/disconnected (typing is best-effort).

@@ -193,7 +193,7 @@ function runMcpSubcommand(
   const args = [cliPath, "mcp", ...subArgs];
   // 日志只落子命令形状,不落完整 args —— args 里可能有 --env/--header 的
   // 值(密钥),桥日志是持久面,值不能进(spec 回执安全同款纪律)。
-  log.info(`[mcp] spawn: ${nodeExecPath} <pi-cli> mcp ${subArgs[0] ?? ""}(${subArgs.length - 1} 个参数)`);
+  log.info(`[mcp] spawn: ${nodeExecPath} <pi-cli> mcp ${subArgs[0] ?? ""} (${subArgs.length - 1} args)`);
   return new Promise((resolve) => {
     let child: McpChild;
     try {
