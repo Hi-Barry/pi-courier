@@ -91,7 +91,7 @@ describe("ProjectManager project-process labels + lifecycle logs", () => {
     await pm.getRpcForRoom("!a:s");
     expect(rpcs).toHaveLength(1);
     expect(rpcs[0].label).toBe("ai-api");
-    const spawned = lines.find((l) => l.includes("进程"));
+    const spawned = lines.find((l) => l.includes("project pi process"));
     expect(spawned).toBeDefined();
     expect(spawned).toContain("[INFO] [ai-api]");
   });
@@ -120,7 +120,7 @@ describe("ProjectManager project-process labels + lifecycle logs", () => {
     expect(rpcs[0].label).toBe("old-name");
     await pm.updateProjectWorkdir("!a:s", "/w/new-name");
     expect(rpcs[0].stop).toHaveBeenCalled();
-    const stopped = lines.find((l) => l.includes("停止") || l.includes("迁移"));
+    const stopped = lines.find((l) => l.includes("stopped"));
     expect(stopped).toBeDefined();
     expect(stopped).toContain("[old-name]"); // label at stop time = pre-move label
     // The mapping itself now resolves to the new basename for future spawns.
@@ -131,7 +131,7 @@ describe("ProjectManager project-process labels + lifecycle logs", () => {
     const { pm, rpcs } = makePM({ "!a:s": { name: "ai-api", workdir: "/w/ai" } });
     await pm.getRpcForRoom("!a:s");
     await pm.removeProject("!a:s");
-    const stopped = lines.find((l) => l.includes("删除") || l.includes("停止"));
+    const stopped = lines.find((l) => l.includes("stopped"));
     expect(stopped).toContain("[ai-api]");
   });
 });

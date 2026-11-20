@@ -371,7 +371,7 @@ export class ExtensionQuestions {
       entry.log.error(`[extension-ui] timeout auto-cancel write-back failed (id ${entry.request.id}): ${errorMessage(err)}`);
     });
     this.deps.sendReply(entry.target.chatId, entry.target.transport, t("xq.expired", { title })).catch((err: unknown) => {
-      logger.warn(`[xq] stale notice send failed: ${errorMessage(err)}`);
+      logger.warn(`[xq] expired notice send failed: ${errorMessage(err)}`);
     });
   }
 

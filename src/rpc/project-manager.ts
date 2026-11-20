@@ -180,7 +180,7 @@ export class ProjectManager {
   /** 停止并给失败留痕:停不下来 = 可能残留孤儿进程(审计稳定性批 票12)。 */
   private async stopWithWarn(rpc: PiRpc): Promise<void> {
     await rpc.stop().catch((err: unknown) => {
-      logger.withLabel(rpc.label).warn(`⚠️ 项目 pi 进程停止失败(可能残留子进程): ${errorMessage(err)}`);
+      logger.withLabel(rpc.label).warn(`⚠️ project pi process stop failed (child processes may linger): ${errorMessage(err)}`);
     });
   }
 
@@ -191,7 +191,7 @@ export class ProjectManager {
       // never grabs a process that isn't ready yet. 复用失败照旧往下走(后续
       // 发送会再报错),但连接失败本身必须留痕(审计稳定性批 票13)。
       await existing.start().catch((err: unknown) => {
-        logger.withLabel(existing.label).warn(`⚠️ 项目 pi 进程连接失败(沿用现有实例继续): ${errorMessage(err)}`);
+        logger.withLabel(existing.label).warn(`⚠️ project pi process connect failed (continuing with the existing instance): ${errorMessage(err)}`);
       });
       return existing;
     }
@@ -225,7 +225,7 @@ export class ProjectManager {
     this.projectRpcs.set(roomId, rpc);
     // Lazy start: spawn the pi process and wait for the handshake. PiRpc.start
     // is idempotent, so subsequent calls reuse the running process.
-    logger.withLabel(label).info(`🚀 项目 pi 进程启动: ${entry.workdir}`);
+    logger.withLabel(label).info(`🚀 project pi process started: ${entry.workdir}`);
     await rpc.start();
     await this.applyPresets(roomId, rpc);
     return rpc;
@@ -258,11 +258,11 @@ export class ProjectManager {
         applied.push(`thinking ${level}`);
       }
     } catch (err) {
-      logger.withLabel(label).warn(`⚠️ 项目预设应用失败: ${errorMessage(err)}`);
+      logger.withLabel(label).warn(`⚠️ project preset apply failed: ${errorMessage(err)}`);
       this.notifyRoom(roomId, t("router.preset.failed", { message: errorMessage(err) }));
       return;
     }
-    logger.withLabel(label).info(`📋 项目预设已应用: ${applied.join(", ")}`);
+    logger.withLabel(label).info(`📋 project preset applied: ${applied.join(", ")}`);
     this.notifyRoom(roomId, t("router.preset.applied", { items: applied.join(", ") }));
   }
 
@@ -352,7 +352,7 @@ export class ProjectManager {
     // taken up by the next spawn).
     const old = this.projectRpcs.get(roomId);
     if (old) {
-      logger.withLabel(old.label).info(`🛑 项目 pi 进程停止(/pmctl mv 换目录,下次消息在新目录启动)`);
+      logger.withLabel(old.label).info(`🛑 project pi process stopped (/pmctl mv changed workdir; next message starts in the new directory)`);
       await this.stopWithWarn(old);
       this.projectRpcs.delete(roomId);
     }
@@ -376,7 +376,7 @@ export class ProjectManager {
   async removeProject(roomId: string): Promise<void> {
     const rpc = this.projectRpcs.get(roomId);
     if (rpc) {
-      logger.withLabel(rpc.label).info(`🛑 项目 pi 进程停止(/pmctl rm)`);
+      logger.withLabel(rpc.label).info(`🛑 project pi process stopped (/pmctl rm)`);
       await this.stopWithWarn(rpc);
       this.projectRpcs.delete(roomId);
     }

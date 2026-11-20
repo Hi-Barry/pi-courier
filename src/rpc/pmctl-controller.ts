@@ -385,7 +385,7 @@ export class PmctlController {
             })
           );
         } catch (err) {
-          logger.warn(`[pmctl] welcome card send failed (${provision.roomId}): ${errorMessage(err)}`);
+          logger.warn(`[pmctl] startup welcome card send failed (${provision.roomId}): ${errorMessage(err)}`);
           welcomeNote = t("pmctl.new.welcomeFailed", { message: errorMessage(err) });
         }
       }
