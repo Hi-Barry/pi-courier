@@ -52,6 +52,7 @@ import {
   bashTimeoutText,
   clearedQueuesView,
   createBashTracker,
+  formatBashPreview,
   formatBashReply,
   handleSlashCommand,
   type McpOrchestration,
@@ -1254,9 +1255,12 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
       preAuth: false,
       consumesLedger: false,
       needsRpc: true,
-      // `!`/`!!` bash 快捷执行(≈ pi TUI 的 !/!!):收到即回执,完成(或被
-      // /bashstop 中止)后回帖结果。不等待完成 —— 长命令不阻塞管道,后续
-      // 消息照常处理;记账进 bashTracker 供 /bashstop 列出/中止。
+      // `!`/`!!` bash 快捷执行(≈ pi TUI 的 !/!!):收到即回执,执行期间把上游
+      // bash_execution_update 增量流式编辑进同一张活卡(spec #193,节流对齐
+      // 活卡 skip 模式),终态就地变形为最终回帖(替代「完成才回帖」的第二条
+      // 消息);变形失败降级新消息,结果永不丢。活卡缝未注入(非 Matrix)→
+      // 现状逐字节的两条消息路径。不等待完成 —— 长命令不阻塞管道,后续消息
+      // 照常处理;记账进 bashTracker 供 /bashstop 列出/中止。
       handle: async (ctx) => {
         const bang = parseBangCommand(ctx.text);
         if (!bang) return false;
@@ -1264,19 +1268,87 @@ export function createMessageRouter(deps: MessageRouterDeps): MessageRouter {
         // 审计(issue #124):shell 快捷执行是危险面的正门,进出都留痕。
         auditTrail(AUDIT_EVENTS.bashExec, ctx.msg, `${bang.excluded ? "!!" : "!"} ${bang.command}`);
         const release = bashTracker.track(rpc, bang.command);
-        void sendReply(
-          ctx.msg.chatId,
-          ctx.msg.transport,
-          t("router.bang.inProgress", { command: bang.command, suffix: bang.excluded ? t("cmd.bash.excludedNote") : "" })
-        ).catch(() => {});
-        rpc.bash(bang.command, { excludeFromContext: bang.excluded })
-          .then((result) =>
-            sendReply(ctx.msg.chatId, ctx.msg.transport, formatBashReply(bang.command, result, bang.excluded, bashOutputLimit(store.get())))
-          )
-          .catch((err: unknown) =>
+        const { chatId, transport } = ctx.msg;
+        const inProgressText = t("router.bang.inProgress", {
+          command: bang.command,
+          suffix: bang.excluded ? t("cmd.bash.excludedNote") : "",
+        });
+        const limit = bashOutputLimit(store.get());
+        const throttleMs = workflowCardThrottleMs(store.get());
+        // 流式活卡状态(spec #193):sendLiveCard + editReply 双注入才启用。
+        // 卡发送不等待(不阻塞管道)——命令先发;卡迟到/失败与终态竞速由
+        // settledText 收口:卡先到先流式,终态先到则卡落地后直接变形,
+        // 卡彻底失败退回新消息路径。任何顺序下结果都不丢、卡不停在中间帧。
+        const live = Boolean(deps.sendLiveCard && deps.editReply);
+        let cardId: string | undefined;
+        let cardPending = live;
+        let buffer = "";
+        let lastEditAt = 0;
+        let settledText: string | undefined;
+        const pushPreview = () => {
+          if (!cardId || settledText) return;
+          if (Date.now() - lastEditAt < throttleMs) return;
+          lastEditAt = Date.now();
+          void deps.editReply!(chatId, transport, cardId, formatBashPreview(bang.command, buffer, bang.excluded, limit)).catch(() => {});
+        };
+        const settleNow = () => {
+          const text = settledText;
+          if (!text) return;
+          if (cardId) {
+            // 终态变形失败 → 新消息兜底(结果永不丢);再失败则放弃。
+            deps.editReply!(chatId, transport, cardId, text)
+              .catch(() => sendReply(chatId, transport, text))
+              .catch(() => {});
+          } else if (!cardPending) {
+            void sendReply(chatId, transport, text).catch(() => {});
+          }
+          // cardPending:卡还在路上,落地分支(settleIfLate)收口。
+        };
+        if (live) {
+          deps
+            .sendLiveCard!(chatId, transport, inProgressText)
+            .then((id) => {
+              cardId = id || undefined;
+              cardPending = false;
+              if (settledText) {
+                settleNow();
+                return;
+              }
+              if (cardId) {
+                // 卡落地前已有增量在缓冲 → 立即补一帧;空缓冲不发空帧(省一次编辑)。
+                if (buffer) pushPreview();
+              } else void sendReply(chatId, transport, inProgressText).catch(() => {});
+            })
+            .catch(() => {
+              cardPending = false;
+              if (settledText) {
+                // 开卡失败与命令快速失败竞速:终态已设 → 立即降级新消息(结果永不丢)。
+                settleNow();
+                return;
+              }
+              void sendReply(chatId, transport, inProgressText).catch(() => {});
+            });
+        } else {
+          void sendReply(chatId, transport, inProgressText).catch(() => {});
+        }
+        rpc.bash(bang.command, {
+          excludeFromContext: bang.excluded,
+          onUpdate: live
+            ? (delta: string) => {
+                buffer += delta;
+                pushPreview();
+              }
+            : undefined,
+        })
+          .then((result) => {
+            settledText = formatBashReply(bang.command, result, bang.excluded, bashOutputLimit(store.get()));
+            settleNow();
+          })
+          .catch((err: unknown) => {
             // 超时弃权(票 #220)出人话(含已等待时长);其余照旧透传。
-            sendReply(ctx.msg.chatId, ctx.msg.transport, bashTimeoutText(err) ?? t("cmd.bash.error", { message: errorMessage(err) }))
-          )
+            settledText = bashTimeoutText(err) ?? t("cmd.bash.error", { message: errorMessage(err) });
+            settleNow();
+          })
           .catch(() => {})
           .finally(release);
         return true;

@@ -33,7 +33,11 @@ function withFakeChannel(options?: { bashTimeoutMs?: number; brokenStdin?: boole
     send: vi.fn(), // 自管通道不得触碰上游 send()
     onEvent: vi.fn().mockImplementation((listener: (event: unknown) => void) => {
       listeners.push(listener);
-      return vi.fn();
+      // 对齐真实客户端语义:退订真摘除,迟到事件不再派发(spec #193 用例依赖)。
+      return () => {
+        const index = listeners.indexOf(listener);
+        if (index >= 0) listeners.splice(index, 1);
+      };
     }),
     process: {
       stdin: options?.brokenStdin
@@ -189,5 +193,52 @@ describe("PiRpc bash 自管应答通道(票 #220)", () => {
 
   it("未连接时抛 not connected", async () => {
     await expect(new PiRpc().bash("ls")).rejects.toThrow("pi RPC not connected");
+  });
+});
+
+describe("PiRpc bash 流式增量转发(spec #193)", () => {
+  it("id 匹配的 bash_execution_update 增量按序转发给 onUpdate", async () => {
+    const { rpc, client } = withFakeChannel();
+    const deltas: string[] = [];
+    const pending = rpc.bash("tail -f x", { onUpdate: (d) => deltas.push(d) });
+    const id = String(client.written().id);
+    client.fire({ type: "bash_execution_update", id, delta: "one\n" });
+    client.fire({ type: "bash_execution_update", id, delta: "two\n" });
+    client.fire(respond(id));
+    expect(await pending).toEqual(BASH_RESULT);
+    expect(deltas).toEqual(["one\n", "two\n"]);
+  });
+
+  it("id 缺失、他跑 id、非字符串 delta 都不转发(旧上游 / agent 自家 bash 工具)", async () => {
+    const { rpc, client } = withFakeChannel();
+    const deltas: string[] = [];
+    const pending = rpc.bash("ls", { onUpdate: (d) => deltas.push(d) });
+    const id = String(client.written().id);
+    client.fire({ type: "bash_execution_update", delta: "no-id" });
+    client.fire({ type: "bash_execution_update", id: "bridge_bash_999", delta: "other-run" });
+    client.fire({ type: "bash_execution_update", id, delta: 42 });
+    client.fire(respond(id));
+    await pending;
+    expect(deltas).toEqual([]);
+  });
+
+  it("应答落定后迟到的增量不再转发(监听已摘除)", async () => {
+    const { rpc, client } = withFakeChannel();
+    const deltas: string[] = [];
+    const pending = rpc.bash("ls", { onUpdate: (d) => deltas.push(d) });
+    const id = String(client.written().id);
+    client.fire(respond(id));
+    await pending;
+    client.fire({ type: "bash_execution_update", id, delta: "late\n" });
+    expect(deltas).toEqual([]);
+  });
+
+  it("未传 onUpdate:事件照常流转不抛错(向后兼容)", async () => {
+    const { rpc, client } = withFakeChannel();
+    const pending = rpc.bash("ls");
+    const id = String(client.written().id);
+    client.fire({ type: "bash_execution_update", id, delta: "x" });
+    client.fire(respond(id));
+    expect(await pending).toEqual(BASH_RESULT);
   });
 });
